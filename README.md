@@ -7,7 +7,7 @@ It detects a review base, runs `codex review`, treats findings as credible until
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/douglaz/codex-review-loop/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/douglaz/codex-review-loop/master/install.sh | bash
 ```
 
 Or clone and run manually:
