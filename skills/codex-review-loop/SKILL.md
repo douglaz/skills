@@ -6,8 +6,11 @@ description: >-
   disproven, fixes accepted items, validates the changed code, and repeats
   until clean or the pass limit is reached. Use when the user asks to "codex
   review loop", "review and fix", "review until clean", "iterate on codex
-  review", or right before opening a PR or running `/ship`. Does not commit,
-  open a PR, or reject findings without concrete evidence.
+  review", "let's get this PR clean", "fix what codex found", "run codex and
+  fix everything", or right before opening a PR or running `/ship`. Also
+  suggest proactively after substantial implementation work or when a single
+  codex review surfaced issues. Does not commit, open a PR, or reject findings
+  without concrete evidence.
 argument-hint: "[max-passes] [focus instructions]"
 allowed-tools:
   - Bash
@@ -22,6 +25,14 @@ allowed-tools:
 # /codex-review-loop
 
 Drive a tight Codex review loop without bloating Claude's own context.
+
+## Tool dependencies
+
+This skill requires the `codex` CLI on `PATH`. If the binary is missing, stop
+and tell the user to install it. The skill uses `codex review` with flags like
+`--base`, `-c 'model_reasoning_effort="xhigh"'`, and `--enable web_search_cached`.
+If a flag is not recognized, retry without it and note the incompatibility — the
+Codex CLI may have changed between versions.
 Persist full Codex output to files, keep chat summaries short, and only ask the
 user when a finding needs a real product or architecture decision.
 
@@ -164,64 +175,12 @@ Otherwise:
 1. Group related findings before editing. Prefer fixing the root cause once over
    patching each comment independently.
 
-2. Before editing, classify each finding as `FIX`, `DEFER`, or `REJECT`.
-   - `FIX`: default outcome. The finding is plausible, in scope, and can be
-     addressed safely in this loop.
-   - `DEFER`: the finding still looks real or plausible, but the safe fix needs
-     a broader refactor, product decision, policy call, or cross-team
-     coordination. Keep it open. Do not call it a false positive.
-   - `REJECT`: allowed only when you have direct counter-evidence from code,
-     tests, docs, or the diff.
+2. Classify each finding as `FIX`, `DEFER`, or `REJECT` using the rules in
+   [references/disposition-rules.md](references/disposition-rules.md). The key
+   principle: `FIX` is the default, `REJECT` requires concrete counter-evidence,
+   and `DEFER` is for plausible findings that need broader work.
 
-3. The bar for `REJECT` is high. Reject only when you can point to specific
-   evidence for at least one of these:
-   - the issue is already handled by current code or tests
-   - the behavior is explicitly intended by user instructions, repo docs, or
-     nearby code comments
-   - the reported problem is pre-existing in `DIFF_BASE` and unrelated to this
-     branch's changes
-   - the finding depends on an outdated or incorrect assumption about the
-     framework, API, or code path
-
-4. Do not reject a finding for any of these reasons:
-   - it is "only" P2 or P3
-   - you could not reproduce it quickly
-   - the fix feels inconvenient, noisy, or higher churn than you want
-   - the change might be intentional, but you have no proof
-   - CI, lint, typecheck, or tests might catch it later
-   - unrelated validation passed after your edits
-
-5. Priority guidance:
-   - P0/P1: fix unless you can directly disprove the finding.
-   - P2/P3: fix when the issue is concrete and the remedy is low or medium risk.
-     If the finding remains plausible but the fix is broader or riskier, mark it
-     `DEFER` and surface it at the end instead of dismissing it.
-   - Subjective style-only feedback can be skipped only when no project rule,
-     concrete bug risk, or user preference supports it.
-   - Missing validation, missing tests for changed behavior, unhandled enum or
-     state cases, missing error handling, and missing guards are not "subjective"
-     just because they are lower priority.
-
-6. For each finding you `FIX` or `DEFER`:
-   - read the referenced code and nearby context
-   - inspect any claimed safeguard, test, or doc before deciding
-   - make the smallest correct fix when fixing
-   - re-read the edited code
-   - note the disposition and evidence in `"$PASS_NOTES"`
-
-7. For each finding you `REJECT`:
-   - record a one-line rationale plus concrete file or test evidence in
-     `"$PASS_NOTES"`
-   - mention it in chat only if it affects the pass outcome
-
-   If you cannot point to concrete evidence, do not reject it. Leave it as
-   `FIX` or `DEFER`.
-
-8. If a materially identical finding reappears on the next pass after you
-   rejected it, assume your rejection may have been wrong. Re-verify from
-   scratch before calling it a persistent false positive.
-
-9. After edits, run the narrowest useful verification you can find from repo
+3. After edits, run the narrowest useful verification you can find from repo
    guidance:
    - nearby tests for touched behavior
    - targeted lint/typecheck commands for touched files
@@ -237,7 +196,7 @@ Otherwise:
    Passing validation supports a fix, but it does not by itself prove that a
    rejected finding was false.
 
-10. Print a brief disposition summary in chat:
+4. Print a brief disposition summary in chat:
 
    ```text
    PASS N ACTIONS

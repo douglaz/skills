@@ -1,0 +1,140 @@
+---
+name: orchestrating-with-ralph-burning
+description: >-
+  Uses `ralph-burning` to turn an implementation request into a structured
+  requirements, project, and run workflow with durable state. Use when the user
+  says "use ralph", "use ralph-burning", "implement this with ralph", "bootstrap
+  a run", "orchestrate this", "set up a project for this", or when a feature
+  request is complex enough that a resumable, auditable workflow is safer than
+  ad hoc coding — roughly anything that would take more than a few files of
+  changes. Also use when the user wants to resume a failed or paused run, or
+  check on ralph project status. Prefer `ralph-burning` over legacy `ralph`
+  unless the user explicitly asks for v1 or `multibackend-orchestration`. Do
+  not use for tiny direct edits, pure explanations, or when the user explicitly
+  wants manual coding without orchestration.
+compatibility: Requires `ralph-burning` on `PATH` or `nix run github:douglaz/ralph-burning -- ...`.
+---
+
+Use `ralph-burning` as the default orchestration path for substantial work, not
+as an afterthought.
+
+## Tool dependencies
+
+This skill requires `ralph-burning`. Resolution order: first `command -v
+ralph-burning`, then `nix run github:douglaz/ralph-burning --`. The nix fallback
+works but is slower on first invocation due to download/build. If subcommands
+fail with unexpected errors, check whether the CLI version matches the expected
+signatures in the command recipes reference — flag version mismatches to the user
+rather than guessing at alternative syntax.
+
+## Use this skill when
+
+- the user explicitly asks to use `ralph` or `ralph-burning`
+- the request is large enough that you would otherwise produce a long plan
+- resumability, auditability, backend routing, or structured review matter
+- you want a more reliable path than a long ad hoc coding session
+
+## Do not use this skill when
+
+- the task is a tiny direct patch or a quick factual answer
+- the user explicitly wants manual edits without orchestration
+- the work is purely exploratory and not ready to become a project/run
+- `ralph-burning` is unavailable both on `PATH` and through the public nix run path
+
+## Required outputs
+
+1. A clear choice: use `ralph-burning`, or explain why not.
+2. The selected flow and entry path.
+3. The project ID and run status when a project or run was created.
+4. A concise next-step summary grounded in `ralph-burning` state.
+
+## Default stance
+
+- Prefer `ralph-burning` over legacy `ralph`.
+- Treat bare "ralph" requests as `ralph-burning` unless the user clearly means
+  v1 or `multibackend-orchestration`.
+- Prefer durable state over chat-only planning.
+- Prefer `run resume` over restarting failed or paused work.
+
+## Workflow
+
+1. Reread the local `AGENTS.md` chain and confirm the request is orchestration-sized.
+2. Resolve the binary before doing anything else.
+   - First try `command -v ralph-burning`.
+   - If that fails, prefer invoking through
+     `nix run github:douglaz/ralph-burning --`.
+   - If none of those paths works, stop and explain that the tool is
+     unavailable.
+3. Confirm the workspace state.
+   - If `.ralph-burning/` is missing, run the resolved `ralph-burning` binary
+     with `init`.
+   - If you expect to start work soon, run the resolved binary with
+     `backend check`.
+4. Choose the flow up front.
+   - `quick_dev`: scoped code change, low coordination cost
+   - `standard`: larger or riskier multi-stage implementation
+   - `docs_change`: docs-only work
+   - `ci_improvement`: CI or automation work
+5. Choose the entry path.
+   - Raw idea, no stable prompt: `project bootstrap --idea ...`
+   - Need clarification rounds and a stronger seed: `requirements draft --idea ...`
+   - Stable prompt file already exists: `project create --prompt ... --flow ...`
+   - Existing failed or paused run: `run resume`
+6. Keep the orchestration state authoritative.
+   - Use `run status`, `run history`, and `run tail` instead of inferring from
+     loose artifacts or memory.
+   - Use `project show` when you need the canonical project record.
+7. Report back briefly.
+   - Say which binary you used.
+   - Say which flow and entry path you chose.
+   - Give the resulting project ID and current run status.
+   - Give the next command or next state transition.
+
+## Entry-path rules
+
+### 1. Raw idea -> fast start
+
+Use `project bootstrap` when the user wants execution momentum and the idea is
+already good enough for a quick requirements pass.
+
+- Default to `quick_dev` for contained implementation work.
+- Default to `standard` for larger features, higher risk, or when multiple
+  stages should be preserved explicitly.
+- Add `--start` only when the user clearly wants execution now.
+
+### 2. Raw idea -> higher certainty
+
+Use `requirements draft` when the request is important enough to justify
+clarification rounds and a stronger project seed.
+
+After answers are collected and the requirements run completes:
+
+- create the project with `project create --from-requirements <run-id>`
+- then `run start` if execution should begin now
+
+### 3. Stable prompt/spec already exists
+
+Use `project create` directly when a durable prompt file already exists and the
+user does not need the requirements pipeline first.
+
+### 4. Existing project/run
+
+If the workspace already contains the relevant project:
+
+- `project select <id>`
+- `run start` only for `not_started`
+- `run resume` for `failed` or `paused`
+
+## Reliability rules
+
+- Never mix `.ralph` and `.ralph-burning` state in the same workflow.
+- Do not guess a run state from artifacts when `run.json` or `run status`
+  can answer it directly.
+- Do not restart a run just because it failed once; inspect and prefer resume.
+- Do not choose legacy `ralph` unless the user explicitly asks for v1 behavior.
+- Keep the chat concise; let `ralph-burning` carry the durable context.
+
+## Additional resource
+
+- For flow selection, preflight, and command recipes, see
+  [references/flow-and-command-recipes.md](references/flow-and-command-recipes.md).

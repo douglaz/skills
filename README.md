@@ -74,6 +74,24 @@ Codex:
 Use the second-model-bead-audit skill and give me a launch verdict.
 ```
 
+### orchestrating-with-ralph-burning
+
+Uses `ralph-burning` as the default structured workflow for substantial
+implementation work: requirements, project creation, flow selection, run
+start/resume, and canonical status inspection.
+
+Claude Code:
+
+```text
+/orchestrating-with-ralph-burning implement retry-safe daemon lease cleanup
+```
+
+Codex:
+
+```text
+Use the orchestrating-with-ralph-burning skill to implement this with ralph-burning.
+```
+
 ## Install
 
 ```bash
@@ -95,8 +113,8 @@ Install specific skills:
 
 ```bash
 ./install.sh codex-review-loop
-./install.sh --target codex plan-to-beads-transfer bead-polish-loop second-model-bead-audit
-./install.sh --target both plan-to-beads-transfer bead-polish-loop second-model-bead-audit
+./install.sh --target codex plan-to-beads-transfer bead-polish-loop second-model-bead-audit orchestrating-with-ralph-burning
+./install.sh --target both plan-to-beads-transfer bead-polish-loop second-model-bead-audit orchestrating-with-ralph-burning
 ```
 
 ## Uninstall
@@ -114,6 +132,8 @@ Install specific skills:
 - `br` and `bv` on `PATH`, plus a repo that uses `.beads/`, for
   `plan-to-beads-transfer`, `bead-polish-loop`, and
   `second-model-bead-audit`
+- `ralph-burning` on `PATH`, or `nix run github:douglaz/ralph-burning -- ...`,
+  for `orchestrating-with-ralph-burning`
 
 ## License
 

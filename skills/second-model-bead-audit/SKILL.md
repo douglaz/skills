@@ -1,11 +1,28 @@
 ---
 name: second-model-bead-audit
-description: Audits a bead graph against the plan with an independent second opinion, checking coverage gaps, duplicate ownership, weak descriptions, dependency mistakes, and missing verification obligations before implementation starts. Use when another agent already created or polished the beads and you want a launch verdict with exact fixes. Prefer read-only review unless the user explicitly asks for bead edits.
+description: >-
+  Audits a bead graph against the plan with an independent second opinion,
+  checking coverage gaps, duplicate ownership, weak descriptions, dependency
+  mistakes, and missing verification obligations before implementation starts.
+  Use when another agent already created or polished the beads and you want a
+  launch verdict with exact fixes, or when the user says "sanity check the
+  beads", "audit the graph", "give me a second opinion on these beads", "are
+  the beads ready to build?", or "review the bead graph before we start". Also
+  works as a self-audit when no second model is available. Prefer read-only
+  review unless the user explicitly asks for bead edits.
 compatibility: Requires br and bv on PATH and a repo that uses .beads/.
 ---
 
 Provide a second-model audit of the bead graph without inheriting the first
 model's blind spots.
+
+## Tool dependencies
+
+This skill requires `br` (beads_rust) and `bv` (bead viewer) on `PATH`.
+If either command is missing, stop and tell the user. If commands fail with
+unexpected errors, check whether the CLI version matches the expected subcommand
+signatures in the command palette below — flag version mismatches to the user
+rather than guessing at alternative syntax.
 
 ## Default posture
 
@@ -79,6 +96,26 @@ bv --robot-priority
 - collapsing all findings into one severity bucket
 - suggesting implementation changes when the graph itself is the problem
 - editing beads by default when the user asked for a review
+
+## Pipeline context
+
+This skill is the **final check** in the bead lifecycle:
+
+1. **plan-to-beads-transfer** — create beads from a stable plan
+2. **bead-polish-loop** — refine the graph through iterative review rounds
+3. **second-model-bead-audit** (you are here) — independent launch-readiness verdict
+
+Before using this skill, the graph should already have been through at least one
+round of polishing (via `bead-polish-loop` or manual review). Auditing a raw,
+unpolished transfer will produce a long list of issues that polishing would have
+caught — use `bead-polish-loop` first in that case.
+
+After the audit:
+- **Pass**: proceed to implementation.
+- **Conditional pass**: fix the noted conditions (often via a quick
+  `bead-polish-loop` round), then proceed.
+- **Fail**: return to `bead-polish-loop` to address blocking findings before
+  re-auditing.
 
 ## Additional resources
 

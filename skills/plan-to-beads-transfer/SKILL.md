@@ -1,10 +1,26 @@
 ---
 name: plan-to-beads-transfer
-description: Converts a stable spec, PRD, or markdown plan into actual `br` beads with rich self-contained descriptions, explicit dependencies, and verification obligations. Use when a feature plan is approved and needs to become an execution graph, or when a major plan revision means the bead graph must be refreshed. Do not use for implementation, loose brainstorming, or unstable architecture work.
+description: >-
+  Converts a stable spec, PRD, or markdown plan into actual `br` beads with
+  rich self-contained descriptions, explicit dependencies, and verification
+  obligations. Use when a feature plan is approved and needs to become an
+  execution graph, when the user says "break this plan into tasks", "create
+  beads from this spec", "turn this into work items", "the plan is done, let's
+  set up execution", or when a major plan revision means the bead graph must be
+  refreshed. Do not use for implementation, loose brainstorming, or unstable
+  architecture work.
 compatibility: Requires br and bv on PATH and a repo that uses .beads/.
 ---
 
 Turn a stable plan into executable beads without losing meaning.
+
+## Tool dependencies
+
+This skill requires `br` (beads_rust) and `bv` (bead viewer) on `PATH`.
+If either command is missing, stop and tell the user. If commands fail with
+unexpected errors, check whether the CLI version matches the expected subcommand
+signatures in the command palette below — flag version mismatches to the user
+rather than guessing at alternative syntax.
 
 ## Use this skill when
 
@@ -92,6 +108,19 @@ br sync --flush-only
 - creating beads that only make sense if the original plan stays open nearby
 - encoding sequencing in prose without explicit dependencies
 - overusing parent/child depth when ordinary dependencies would be clearer
+
+## Pipeline context
+
+This skill is the **first step** in the bead lifecycle:
+
+1. **plan-to-beads-transfer** (you are here) — create beads from a stable plan
+2. **bead-polish-loop** — refine the graph through iterative review rounds
+3. **second-model-bead-audit** — independent launch-readiness verdict
+
+After completing a transfer, the graph is usually good enough to understand but
+not yet launch-ready. Recommend `bead-polish-loop` as the next step unless the
+transfer was small and clean. For high-stakes work, also recommend
+`second-model-bead-audit` before implementation begins.
 
 ## Additional resources
 
