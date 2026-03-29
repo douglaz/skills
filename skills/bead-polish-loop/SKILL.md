@@ -1,10 +1,26 @@
 ---
 name: bead-polish-loop
-description: Refines an existing bead graph through repeated review-and-revise rounds for coverage, deduplication, dependency repair, sizing, priority, and verification completeness until the graph converges. Use when a bead batch already exists but still feels vague, duplicated, over-broad, or dependency-wrong. Do not use for first-draft planning or ordinary code review.
+description: >-
+  Refines an existing bead graph through repeated review-and-revise rounds for
+  coverage, deduplication, dependency repair, sizing, priority, and verification
+  completeness until the graph converges. Use when a bead batch already exists
+  but still feels vague, duplicated, over-broad, or dependency-wrong. Also use
+  when the user says things like "clean up the beads", "the graph looks rough",
+  "review the beads before we start building", "tighten up the tasks", "these
+  beads need work", or "make the graph launch-ready". Do not use for first-draft
+  planning, ordinary code review, or when no beads exist yet.
 compatibility: Requires br and bv on PATH and a repo that uses .beads/.
 ---
 
 Polish the bead graph until it is launch-ready, not just plausible.
+
+## Tool dependencies
+
+This skill requires `br` (beads_rust) and `bv` (bead viewer) on `PATH`.
+If either command is missing, stop and tell the user. If commands fail with
+unexpected errors, check whether the CLI version matches the expected subcommand
+signatures in the command palette below — flag version mismatches to the user
+rather than guessing at alternative syntax.
 
 ## Use this skill when
 
@@ -130,6 +146,22 @@ br sync --flush-only
 - assuming a big graph is complete because it is verbose
 - oversimplifying and silently deleting functionality or test obligations
 - treating the first decent pass as final
+
+## Pipeline context
+
+This skill is the **second step** in the bead lifecycle:
+
+1. **plan-to-beads-transfer** — create beads from a stable plan
+2. **bead-polish-loop** (you are here) — refine the graph through iterative review rounds
+3. **second-model-bead-audit** — independent launch-readiness verdict
+
+Before using this skill, beads should already exist — typically created by
+`plan-to-beads-transfer` or manually. If there is no graph yet, redirect to
+`plan-to-beads-transfer` first.
+
+After convergence, recommend `second-model-bead-audit` for high-stakes projects,
+or proceed directly to implementation if the graph is clean and the project scope
+is small.
 
 ## Additional resources
 
