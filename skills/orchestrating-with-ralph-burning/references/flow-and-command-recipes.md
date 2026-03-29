@@ -50,16 +50,16 @@ above. Do not default back to v1.
 Fast path:
 
 ```bash
-$RALPH project bootstrap --idea "$IDEA" --flow quick_dev --start
+$RALPH project bootstrap --idea "$IDEA" --flow quick_dev
 ```
 
 Safer multi-stage path:
 
 ```bash
-$RALPH project bootstrap --idea "$IDEA" --flow standard --start
+$RALPH project bootstrap --idea "$IDEA" --flow standard
 ```
 
-Use `--start` only when execution should begin immediately.
+Add `--start` only when the user clearly wants execution to begin immediately.
 
 ## 5. Run requirements first
 
