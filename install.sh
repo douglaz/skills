@@ -8,7 +8,8 @@ shopt -s nullglob
 REPO_URL="https://github.com/douglaz/skills.git"
 DEFAULT_INSTALL_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/claude-skills"
 CLAUDE_SKILLS_DIR="$HOME/.claude/skills"
-CODEX_SKILLS_DIR="$HOME/.agents/skills"
+DEFAULT_CODEX_SKILLS_DIR="${CODEX_HOME:-$HOME/.codex}/skills"
+LEGACY_CODEX_SKILLS_DIR="$HOME/.agents/skills"
 
 usage() {
   cat <<EOF
@@ -54,10 +55,18 @@ case "$target" in
     target_dirs=("$CLAUDE_SKILLS_DIR")
     ;;
   codex)
-    target_dirs=("$CODEX_SKILLS_DIR")
+    if [[ -d "$DEFAULT_CODEX_SKILLS_DIR" || ! -d "$LEGACY_CODEX_SKILLS_DIR" ]]; then
+      target_dirs=("$DEFAULT_CODEX_SKILLS_DIR")
+    else
+      target_dirs=("$LEGACY_CODEX_SKILLS_DIR")
+    fi
     ;;
   both)
-    target_dirs=("$CLAUDE_SKILLS_DIR" "$CODEX_SKILLS_DIR")
+    if [[ -d "$DEFAULT_CODEX_SKILLS_DIR" || ! -d "$LEGACY_CODEX_SKILLS_DIR" ]]; then
+      target_dirs=("$CLAUDE_SKILLS_DIR" "$DEFAULT_CODEX_SKILLS_DIR")
+    else
+      target_dirs=("$CLAUDE_SKILLS_DIR" "$LEGACY_CODEX_SKILLS_DIR")
+    fi
     ;;
   *)
     echo "Unknown target: $target" >&2

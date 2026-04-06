@@ -107,7 +107,9 @@ cd skills
 ```
 
 By default, `install.sh` installs into `~/.claude/skills`. Use `--target
-codex` or `--target both` to install into Codex as well.
+codex` or `--target both` to install into Codex as well. Codex installs go to
+`~/.codex/skills` on current setups, with fallback to the legacy
+`~/.agents/skills` layout when that is the only Codex skills directory present.
 
 Install specific skills:
 
