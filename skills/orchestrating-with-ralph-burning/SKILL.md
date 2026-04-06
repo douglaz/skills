@@ -71,6 +71,7 @@ rather than guessing at alternative syntax.
    - If you expect to start work soon, run the resolved binary with
      `backend check`.
 4. Choose the flow up front.
+   - `minimal`: plan_and_implement + final_review only — ideal for focused beads
    - `quick_dev`: scoped code change, low coordination cost
    - `standard`: larger or riskier multi-stage implementation
    - `docs_change`: docs-only work
@@ -124,6 +125,101 @@ If the workspace already contains the relevant project:
 - `project select <id>`
 - `run start` only for `not_started`
 - `run resume` for `failed` or `paused`
+
+## Monitoring a run
+
+Once a run starts, monitor it periodically rather than blocking on it:
+
+- `run status` for a quick snapshot (stage, cycle, round).
+- `run tail --logs` for the durable journal plus runtime log entries.
+- `run tail --follow` to poll for new events every 2 seconds.
+- `run tail --last 5` to see only the most recent events.
+
+**Convergence tracking.** Each completion round produces amendments from
+reviewers. Track the amendment count per round — a healthy run trends toward
+zero. If counts oscillate (e.g. 4→2→4→3→4) for many rounds, the reviewers may
+be disagreeing in a loop and the run will likely hit `max_completion_rounds`
+and force-complete, which is an acceptable outcome.
+
+**Typical timing.** A single round (plan_and_implement + final_review) takes
+roughly 20–30 minutes. A full run with the `minimal` flow usually completes
+in 1–5 hours depending on complexity and amendment convergence.
+
+**Detecting stuck backends.** If a Codex process shows 0% CPU for 50+ minutes
+while `run tail` shows no new events, the GPT API is likely hung. The 1-hour
+timeout will eventually fire and the run will fail — just resume afterward.
+
+## Failure recovery
+
+Code changes survive backend failures — the backend edits files directly in
+the working tree, and those edits persist even when the structured JSON output
+fails validation. This means `run resume` is almost always the right recovery
+action because it picks up where the code left off.
+
+**Schema validation failures.** The most common failure: Claude does all the
+implementation work but returns a text summary instead of the required JSON
+(`missing field change_summary`). On retry, Claude sees the code is already
+done and usually outputs the JSON correctly in a few minutes. These failures
+resolve themselves — just let retries run.
+
+**Codex API timeouts.** Codex sometimes hangs for 1 hour producing no output
+(GPT API not responding). The run fails with `outcome=failed` and
+`duration_ms=3600000+`. Recovery: `run resume`. The resume starts fresh
+on the stage that failed.
+
+**BackendExhausted (credits/quota).** When a backend hits credit limits or
+persistent rate limits, it's classified as `BackendExhausted` (non-retryable).
+Final review and completion panels degrade gracefully — they proceed with the
+remaining backends. If ALL backends are exhausted, the stage fails.
+
+**General rule:** prefer `run resume` over `run start`. Resume preserves all
+prior progress, rollback points, and session state. Only use `run start` when
+you genuinely need a fresh run.
+
+## Git workflow (bead lifecycle)
+
+Complete one bead per branch through the full lifecycle before starting the
+next. This keeps state clean and avoids cross-branch conflicts.
+
+```
+git checkout master && git pull
+git checkout -b feat/<bead-id>-short-description
+# ... ralph-burning run completes ...
+git push -u origin feat/<bead-id>-short-description
+gh pr create --title "..." --body "..."
+# wait for CI green
+gh pr merge --squash
+git checkout master && git pull
+nix build
+# now start the next bead
+```
+
+Key points:
+- One branch per bead, one bead at a time.
+- Push, PR, wait CI green, merge — then pull master and rebuild before the
+  next bead.
+- ralph-burning creates checkpoint commits (`rb: checkpoint ...`) as it works.
+  These are on the feature branch and get squashed on merge.
+
+## Backend configuration
+
+Check and tune backend settings before or during runs:
+
+```bash
+$RALPH backend check          # verify all backends are reachable
+$RALPH backend show-effective # show resolved backend per role with sources
+$RALPH config show            # full config with sources
+$RALPH config set <key> <val> # change a setting in workspace.toml
+```
+
+Key settings:
+- `workflow.max_completion_rounds` (default 25): max plan→review round trips
+- `final_review.max_restarts` (default 25): max restarts within a single
+  final_review stage
+- `workflow.max_review_iterations` (default 3): max review→fix cycles per round
+- `workflow.max_qa_iterations` (default 3): max QA→fix cycles per round
+
+Per-project overrides live in `.ralph-burning/projects/<id>/config.toml`.
 
 ## Reliability rules
 
