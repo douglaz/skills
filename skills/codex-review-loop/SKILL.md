@@ -7,9 +7,9 @@ description: >-
   until clean or the pass limit is reached. Use when the user asks to "codex
   review loop", "review and fix", "review until clean", "iterate on codex
   review", "let's get this PR clean", "fix what codex found", "run codex and
-  fix everything", or right before opening a PR or running `/ship`. Also
-  suggest proactively after substantial implementation work or when a single
-  codex review surfaced issues. Does not commit, open a PR, or reject findings
+  fix everything", or right before opening a PR or shipping. Also suggest
+  proactively after substantial implementation work or when a single codex
+  review surfaced issues. Does not commit, open a PR, or reject findings
   without concrete evidence.
 argument-hint: "[max-passes] [focus instructions]"
 allowed-tools:
@@ -22,9 +22,9 @@ allowed-tools:
   - AskUserQuestion
 ---
 
-# /codex-review-loop
+# codex-review-loop
 
-Drive a tight Codex review loop without bloating Claude's own context.
+Drive a tight Codex review loop without bloating the agent's own context.
 
 ## Tool dependencies
 
@@ -45,7 +45,9 @@ an argument with the reviewer.
 
 ## Inputs
 
-Interpret `$ARGUMENTS` like this:
+Parse the user's request for arguments. In Claude Code, these arrive via
+`$ARGUMENTS`; in Codex, extract them from the text surrounding the
+`$codex-review-loop` mention.
 
 - No arguments: run up to 6 passes.
 - First token is a positive integer: use it as `MAX_PASSES` and treat the rest as focus text.
@@ -110,8 +112,9 @@ issue.
 
 For each pass `N` from `1` to `MAX_PASSES`:
 
-1. Run Codex review and write full output to that pass's files. Use a 5 minute
-   tool timeout.
+1. Run Codex review and write full output to that pass's files. Allow up to
+   5 minutes for the command to complete (in Claude Code, set a 300000 ms
+   tool timeout; in Codex, the shell will wait naturally).
 
    Define the pass-specific files first:
 
@@ -251,13 +254,14 @@ cp "$PASS_OUT" "$REVIEW_DIR/review.txt"
 cp "$PASS_ERR" "$REVIEW_DIR/review-err.txt"
 ```
 
-## AskUserQuestion
+## When to ask the user
 
-Use `AskUserQuestion` only at the end, or when you hit a genuine decision
-boundary.
+Only ask the user at the end, or when you hit a genuine decision boundary.
+(In Claude Code, use the `AskUserQuestion` tool; in Codex, simply present the
+options as text.)
 
 If clean:
-- A) Run `/ship`
+- A) Ship / open a PR
 - B) Run one more Codex review pass
 - C) Stop here
 
@@ -268,17 +272,17 @@ If issues remain or you are blocked:
 
 ## Proactive suggestion
 
-Suggest `/codex-review-loop` after a substantial implementation, after a single
-`codex review` found issues, or right before opening a PR or running `/ship`.
+Suggest this skill after a substantial implementation, after a single
+`codex review` found issues, or right before opening a PR or shipping.
 
-Suggested phrasing:
-"Want me to run `/codex-review-loop` and iterate until the review is clean or
+Suggested phrasing (adapt the invocation syntax to your environment):
+"Want me to run the codex-review-loop and iterate until the review is clean or
 the remaining items are fixed, deferred, or disproven with evidence?"
 
 ## Guardrails
 
 - Fix issues yourself; do not turn this into a report-only workflow.
-- Keep Claude chat concise; the logs hold the full Codex output.
+- Keep chat concise; the logs hold the full Codex output.
 - Never commit, ship, stash, or reset automatically.
 - Never edit unrelated files just because they are in the working tree.
 - If you decide not to fix a finding, either defer it explicitly or cite the
