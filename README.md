@@ -113,6 +113,12 @@ current setups, with fallback to the legacy `~/.agents/skills` layout when
 that is the only Codex skills directory present. Use `--target claude` or
 `--target codex` to install into only one tool.
 
+If a target skill path already exists as a plain directory instead of a
+symlink, the installer now treats that as a conflict and exits non-zero after
+reporting the partial install. When the directory looks like a copied skill
+from this repo, rerun with `--migrate-existing` to rename it to
+`<skill>.backup.<timestamp>` and replace it with a symlink.
+
 Install specific skills:
 
 ```bash
@@ -120,6 +126,7 @@ Install specific skills:
 ./install.sh --target claude codex-review-loop
 ./install.sh --target codex plan-to-beads-transfer bead-polish-loop second-model-bead-audit orchestrating-with-ralph-burning
 ./install.sh plan-to-beads-transfer bead-polish-loop second-model-bead-audit orchestrating-with-ralph-burning
+./install.sh --target codex --migrate-existing plan-to-beads-transfer bead-polish-loop second-model-bead-audit
 ```
 
 ## Uninstall
@@ -129,6 +136,9 @@ Install specific skills:
 ./install.sh --target both --uninstall
 ./install.sh --target codex --uninstall
 ```
+
+`--uninstall` removes installer-managed symlinks. It does not remove backup
+directories created by `--migrate-existing`.
 
 ## Prerequisites
 
