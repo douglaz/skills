@@ -6,7 +6,7 @@ shopt -s nullglob
 # Clones (or updates) the repo and symlinks skills into Claude and/or Codex.
 
 REPO_URL="https://github.com/douglaz/skills.git"
-DEFAULT_INSTALL_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/claude-skills"
+DEFAULT_INSTALL_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/douglaz-skills"
 CLAUDE_SKILLS_DIR="$HOME/.claude/skills"
 DEFAULT_CODEX_SKILLS_DIR="${CODEX_HOME:-$HOME/.codex}/skills"
 LEGACY_CODEX_SKILLS_DIR="$HOME/.agents/skills"
@@ -22,12 +22,12 @@ If skill names are given, only those skills are installed.
 
 Options:
   --dir DIR    Install to DIR instead of $DEFAULT_INSTALL_DIR
-  --target T   Install into claude, codex, or both (default: claude)
+  --target T   Install into claude, codex, or both (default: both)
   --uninstall  Remove skill symlinks and optionally the cloned repo
   -h, --help   Show this help
 
 Examples:
-  $(basename "$0")                                 # install all skills to Claude
+  $(basename "$0")                                 # install all skills to Claude and Codex
   $(basename "$0") --target codex plan-to-beads-transfer
   $(basename "$0") --target both bead-polish-loop second-model-bead-audit
   $(basename "$0") --target both --uninstall       # remove installed symlinks
@@ -36,7 +36,7 @@ EOF
 
 install_dir="$DEFAULT_INSTALL_DIR"
 uninstall=false
-target="claude"
+target="both"
 skills=()
 
 while [[ $# -gt 0 ]]; do

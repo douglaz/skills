@@ -106,17 +106,20 @@ cd skills
 ./install.sh
 ```
 
-By default, `install.sh` installs into `~/.claude/skills`. Use `--target
-codex` or `--target both` to install into Codex as well. Codex installs go to
-`~/.codex/skills` on current setups, with fallback to the legacy
-`~/.agents/skills` layout when that is the only Codex skills directory present.
+By default, `install.sh` clones this repo into
+`~/.local/share/douglaz-skills` and installs skills into both
+`~/.claude/skills` and Codex. Codex installs go to `~/.codex/skills` on
+current setups, with fallback to the legacy `~/.agents/skills` layout when
+that is the only Codex skills directory present. Use `--target claude` or
+`--target codex` to install into only one tool.
 
 Install specific skills:
 
 ```bash
 ./install.sh codex-review-loop
+./install.sh --target claude codex-review-loop
 ./install.sh --target codex plan-to-beads-transfer bead-polish-loop second-model-bead-audit orchestrating-with-ralph-burning
-./install.sh --target both plan-to-beads-transfer bead-polish-loop second-model-bead-audit orchestrating-with-ralph-burning
+./install.sh plan-to-beads-transfer bead-polish-loop second-model-bead-audit orchestrating-with-ralph-burning
 ```
 
 ## Uninstall
@@ -124,6 +127,7 @@ Install specific skills:
 ```bash
 ./install.sh --uninstall
 ./install.sh --target both --uninstall
+./install.sh --target codex --uninstall
 ```
 
 ## Prerequisites
