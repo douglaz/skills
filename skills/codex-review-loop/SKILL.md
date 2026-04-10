@@ -30,13 +30,14 @@ Drive a tight Codex review loop without bloating the agent's own context.
 
 This skill requires the `codex` CLI on `PATH`. If the binary is missing, stop
 and tell the user to install it. The skill uses `codex review` with flags like
-`--base`, `-c 'model="gpt-5.4"'`, `-c 'model_reasoning_effort="xhigh"'`, and
-`--enable web_search_cached`. Default to `gpt-5.4` at `xhigh` reasoning for
-review passes. If the user or repo explicitly asks for a stronger model, honor
-that instead. If `gpt-5.4` is unavailable, retry once with the environment
-default model and note the fallback. If a flag is not recognized, retry without
-it and note the incompatibility — the Codex CLI may have changed between
-versions.
+`--base`, `-c 'model="gpt-5.4"'`, and
+`-c 'model_reasoning_effort="xhigh"'`. Default to `gpt-5.4` at `xhigh`
+reasoning for review passes. Web search is enabled by default in current Codex
+CLI releases, so do not pass `--enable web_search_cached`. If the user or repo
+explicitly asks for a stronger model, honor that instead. If `gpt-5.4` is
+unavailable, retry once with the environment default model and note the
+fallback. If a flag is not recognized, retry without it and note the
+incompatibility; the Codex CLI may have changed between versions.
 Persist full Codex output to files, keep chat summaries short, and only ask the
 user when a finding needs a real product or architecture decision.
 
@@ -132,16 +133,17 @@ For each pass `N` from `1` to `MAX_PASSES`:
    Default command:
 
    ```bash
-   codex review --base "$DIFF_BASE" -c 'model="gpt-5.4"' -c 'model_reasoning_effort="xhigh"' --enable web_search_cached >"$PASS_OUT" 2>"$PASS_ERR"
+   codex review --base "$DIFF_BASE" -c 'model="gpt-5.4"' -c 'model_reasoning_effort="xhigh"' >"$PASS_OUT" 2>"$PASS_ERR"
    ```
 
    If focus text exists:
 
    ```bash
-   codex review "$FOCUS" --base "$DIFF_BASE" -c 'model="gpt-5.4"' -c 'model_reasoning_effort="xhigh"' --enable web_search_cached >"$PASS_OUT" 2>"$PASS_ERR"
+   codex review "$FOCUS" --base "$DIFF_BASE" -c 'model="gpt-5.4"' -c 'model_reasoning_effort="xhigh"' >"$PASS_OUT" 2>"$PASS_ERR"
    ```
 
-   If `--enable web_search_cached` is not supported, retry once without it.
+   Do not add `--enable web_search_cached`; it is deprecated because web search
+   is enabled by default.
 
 2. Parse findings from `"$PASS_OUT"` using lines whose first non-space token is
    `[P0]`, `[P1]`, `[P2]`, or `[P3]`. Keep separate counts for each priority
