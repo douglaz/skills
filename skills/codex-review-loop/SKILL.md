@@ -118,7 +118,7 @@ issue.
 For each pass `N` from `1` to `MAX_PASSES`:
 
 1. Run Codex review and write full output to that pass's files. Allow up to
-   5 minutes for the command to complete (in Claude Code, set a 300000 ms
+   15 minutes for the command to complete (in Claude Code, set a 900000 ms
    tool timeout; in Codex, the shell will wait naturally).
 
    Define the pass-specific files first:
