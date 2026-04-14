@@ -36,9 +36,9 @@ $RALPH backend show-effective
 
 ## 3. Flow selection
 
-- `minimal`: plan_and_implement + final_review only — best for focused beads
-  and single-concern tasks where QA and separate review stages add overhead
-  without value
+- `minimal` **(default)**: plan_and_implement + final_review only — best for
+  focused beads and single-concern tasks. This is the default when `--flow`
+  is omitted.
 - `quick_dev`: contained feature, bugfix, or refactor
 - `standard`: substantial feature, risky change, or work that benefits from
   explicit planning, QA, review, completion, and resume boundaries
@@ -50,10 +50,10 @@ above. Do not default back to v1.
 
 ## 4. Bootstrap from an idea
 
-Fast path:
+Fast path (uses default `minimal` flow):
 
 ```bash
-$RALPH project bootstrap --idea "$IDEA" --flow quick_dev
+$RALPH project bootstrap --idea "$IDEA"
 ```
 
 Safer multi-stage path:
@@ -96,15 +96,40 @@ Use this when a stable prompt/spec file already exists.
 $RALPH project create \
   --id "$PROJECT_ID" \
   --name "$PROJECT_NAME" \
-  --prompt "$PROMPT_FILE" \
-  --flow standard
+  --prompt "$PROMPT_FILE"
 ```
+
+Note: `--flow` is optional — defaults to `minimal`.
 
 Then:
 
 ```bash
 $RALPH project select "$PROJECT_ID"
 $RALPH run start
+```
+
+### Prompt file template
+
+Always include the orchestration state exclusion and nix build criteria:
+
+```markdown
+# Title of the change
+
+## Problem
+What needs to change and why.
+
+## Implementation hints
+Where to look in the codebase, patterns to follow.
+
+## IMPORTANT: Exclude orchestration state from review scope
+Files under `.ralph-burning/` are live orchestration state and MUST NOT be
+reviewed or flagged. Only review source code under `src/`, `tests/`, `docs/`,
+and config files.
+
+## Acceptance Criteria
+- Description of what done looks like
+- cargo test && cargo clippy -- -D warnings && cargo fmt --check pass
+- nix build passes on the final tree
 ```
 
 ## 7. Inspect and continue
@@ -126,7 +151,14 @@ If execution is already in progress and tmux mode is enabled:
 $RALPH run attach
 ```
 
-## 8. Resume instead of restarting
+## 8. Stop and resume
+
+For orphaned/stale runs (process died, terminal closed):
+
+```bash
+$RALPH run stop         # detects stale process, transitions to failed
+$RALPH run resume       # picks up from where it left off
+```
 
 For failed or paused runs:
 
@@ -180,6 +212,37 @@ A healthy trend: 7→5→3→1→0 (converging). An oscillating pattern like
 4→2→4→3→4 means reviewers disagree and the run will likely hit
 `max_completion_rounds` and force-complete — this is acceptable.
 
+### Detecting orchestration state loops
+
+If the same `.ralph-burning/run.json` or `.ralph-burning/journal.ndjson`
+amendment keeps appearing every round, the Codex reviewers are flagging the
+run's own live state. This never converges because the implementer can't
+modify the running orchestration state. Solutions:
+
+1. Stop the run, add the orchestration state exclusion to the prompt, resume
+2. Stop the run and ship — the code changes are already well-reviewed
+
+The Claude reviewer typically does NOT flag orchestration state; this is
+a Codex-specific behavior.
+
+### Checking amendment sources
+
+```bash
+grep "amendment_queued" .git/ralph-burning-live/projects/<id>/journal.ndjson | \
+  python3 -c "
+import json, sys
+for line in sys.stdin:
+    e = json.loads(line)
+    d = e['details']
+    sources = d.get('reviewer_sources', [])
+    who = ', '.join(s['model_id'] for s in sources)
+    is_rb = '.ralph-burning' in d.get('body','')
+    print(f'{d[\"amendment_id\"]} by={who} orchestration_state={is_rb}')
+    print(f'  {d[\"body\"][:120]}')
+    print()
+"
+```
+
 ### Detecting stuck backends
 
 If `run tail` shows no new events for 50+ minutes and a Codex process is at
@@ -211,15 +274,52 @@ Codex hung for 1 hour with no output. The run fails. Recovery:
 $RALPH run resume
 ```
 
+### Model at capacity
+
+```
+ERROR: Selected model is at capacity.
+```
+
+Transient GPT API overload. Recovery:
+
+```bash
+$RALPH run stop
+$RALPH run resume
+```
+
+### Claude auth failure (401)
+
+```
+API Error: 401 ... Invalid authentication credentials
+```
+
+API key or session expired. The user must re-authenticate first (e.g.
+`/login` in Claude Code), then:
+
+```bash
+$RALPH run stop
+$RALPH run resume
+```
+
 ### Backend credit exhaustion
 
 ```
 BackendExhausted: usage limit / quota exceeded
 ```
 
-Non-retryable. Final review and completion panels degrade gracefully by
-proceeding with remaining backends. If ALL backends are exhausted, the stage
-fails. Check status with `backend check`.
+Non-retryable. Final review panels degrade gracefully by proceeding with
+remaining backends (e.g. if codex-spark exhausts, gpt-5.4 and claude
+continue). If ALL backends are exhausted, the stage fails. Check status
+with `backend check`.
+
+### Orphaned/stale run
+
+The orchestrator process died but `run status` still shows `running`:
+
+```bash
+$RALPH run stop     # detects stale process, transitions to failed
+$RALPH run resume   # continues from checkpoint
+```
 
 ### General recovery rule
 
@@ -266,33 +366,61 @@ git checkout master && git pull
 # 2. Create feature branch
 git checkout -b feat/<bead-id>-short-description
 
-# 3. Claim the bead
-br update <bead-id> --status in_progress
+# 3. Create project and run
+$RALPH project create --id <proj-id> --name "..." --prompt /tmp/prompt.md
+$RALPH project select <proj-id>
+$RALPH run start    # runs in background
 
-# 4. Create project and run
-$RALPH project create --id <bead-id> --name "..." --prompt /tmp/prompt.md --flow minimal
-$RALPH project select <bead-id>
-$RALPH run start --backend claude
+# 4. Monitor until complete (see section 9)
 
-# 5. Monitor until complete (see section 9)
+# 5. Verify locally (all three must pass)
+nix develop -c cargo test
+nix develop -c cargo clippy -- -D warnings
+nix develop -c cargo fmt --check
 
 # 6. Push and PR
 git push -u origin feat/<bead-id>-short-description
 gh pr create --title "..." --body "..."
 
 # 7. Wait for CI green, then merge
-gh pr checks <pr-number>   # repeat until pass
-gh pr merge --squash
+gh pr checks <pr-number> --watch    # or poll manually
+gh pr merge --squash --delete-branch
 
-# 8. Close the bead
-br close <bead-id> --reason "..."
+# 8. Reset local master (squash merge diverges local history)
+git checkout master
+git fetch origin master
+git reset --hard origin/master
 
-# 9. Prepare for next bead
-git checkout master && git pull
-nix build
+# 9. Close the bead
+br update <bead-id> -s closed
+
+# 10. Rebuild and start next bead
+nix develop -c cargo build --release
+nix build   # verify nix sandbox passes
 ```
 
-## 13. Good operator summary
+**Important:** After a squash merge, `git pull` will fail with
+"not possible to fast-forward" because the checkpoint commits on the feature
+branch are different from the squashed merge commit. Always use
+`git fetch origin master && git reset --hard origin/master` instead.
+
+## 13. Verification checklist
+
+Before shipping any bead, verify all of these pass:
+
+```bash
+nix develop -c cargo test           # unit + integration tests
+nix develop -c cargo clippy -- -D warnings  # no clippy warnings
+nix develop -c cargo fmt --check    # formatting
+nix build .                         # nix sandbox (authoritative gate)
+```
+
+`nix build` is the authoritative verification gate. The nix sandbox differs
+from the local dev environment — no real tmux, no network, limited binaries.
+Tests that pass locally may fail in the sandbox. Do not claim "all tests pass"
+unless `nix build` succeeds.
+
+## 14. Good operator summary
 
 After using `ralph-burning`, report these four things:
 
@@ -304,8 +432,8 @@ After using `ralph-burning`, report these four things:
 Example:
 
 ```text
-Using nix run github:douglaz/ralph-burning --.
-Chose flow quick_dev via project bootstrap.
-Created and selected project retry-safe-lease-cleanup; run is running in review.
-Next useful check: nix run github:douglaz/ralph-burning -- run status --json
+Using target/release/ralph-burning (local build).
+Created project xyz-1 with default minimal flow.
+Run started: plan_and_implement cycle 1 round 1.
+Next: monitor with run status, ship when complete.
 ```
