@@ -1,41 +1,36 @@
 # Bead Description Template
 
-Load this file when you are creating or rewriting bead descriptions.
+Load this file when creating or rewriting material beads.
 
-Use this structure when the bead is material enough that future agents could
-misread its purpose. Shorter beads can compress the wording, but they should
-still preserve the same information.
+Use this structure whenever a future agent might otherwise need to reopen the original plan.
 
 ```markdown
 ## Outcome
-What behavior, capability, or user-visible/system-visible result should exist
-after this bead is done?
+Describe the concrete behavior, capability, or operator-visible result that should exist after completion.
 
 ## Why this exists
-Why does the project need this? What user, product, or operational goal does it
-serve?
+State the user, product, architectural, or operational reason.
 
 ## Scope
-What is in scope for this bead?
+List what this bead owns.
 
 ## Non-goals
-What is explicitly not part of this bead?
+State what this bead explicitly does not own.
 
-## Key implementation notes
-Important interfaces, data flows, sequencing assumptions, migration details, or
-tricky constraints that the next agent must not miss.
+## Critical constraints and failure handling
+Record interfaces, data boundaries, migrations, security rules, rollout notes, retry/recovery paths, operator hooks, or edge cases that must survive transfer from the plan.
 
 ## Dependencies / ordering
-What must already exist, and what will this unblock?
+State what must exist first, what this bead depends on, and what it unblocks.
 
 ## Verification
 - Unit tests:
-- Integration or e2e tests:
+- Integration / e2e:
 - Logging / observability / diagnostics:
 - Acceptance signal:
 
 ## Spec refs
-List the relevant plan sections, filenames, or approved deltas.
+List the relevant plan sections, files, or approved deltas.
 ```
 
 ## Compression rules
@@ -47,10 +42,11 @@ You may compress headings into paragraphs for tiny beads, but never omit:
 - dependencies or ordering
 - verification
 
-## Good writing rules
+For user-facing or operationally sensitive work, keep constraints and failure handling explicit too.
 
-- Prefer concrete behavior over generic implementation verbs.
-- Mention failure handling when the plan calls for it.
-- Spell out the decisive test or validation signal.
-- Include gotchas if a future agent would likely make the same mistake without
-  them.
+## Writing rules
+
+- Prefer concrete outcomes over vague implementation verbs.
+- Spell out the decisive test or ship gate.
+- Include the important "future self" context, not every detail from the plan.
+- If one concept spans multiple beads, make one bead the canonical concept carrier and let dependents point back to it.

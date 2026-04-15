@@ -1,125 +1,142 @@
 ---
 name: bead-polish-loop
 description: >-
-  Refines an existing bead graph through repeated review-and-revise rounds for
-  coverage, deduplication, dependency repair, sizing, priority, and verification
-  completeness until the graph converges. Use when a bead batch already exists
-  but still feels vague, duplicated, over-broad, or dependency-wrong. Also use
-  when the user says things like "clean up the beads", "the graph looks rough",
-  "review the beads before we start building", "tighten up the tasks", "these
-  beads need work", or "make the graph launch-ready". Do not use for first-draft
-  planning, ordinary code review, or when no beads exist yet.
-compatibility: Requires br and bv on PATH and a repo that uses .beads/.
+  Refine an existing bead graph through repeated review-and-revise rounds until
+  it converges into launch-ready executable memory with strong coverage,
+  deduplication, dependency shape, sizing, priority, and verification detail.
+  Use when beads already exist but feel vague, duplicated, over-broad,
+  dependency-wrong, or under-tested; when a large transfer from a markdown plan
+  just landed; when a plan revision likely introduced graph drift; or when the
+  user asks to clean up, tighten, review, or launch-ready the beads. Do not use
+  for first-draft planning, direct implementation, or repos that do not yet have
+  meaningful beads to inspect.
 ---
 
-Polish the bead graph until it is launch-ready, not just plausible.
+Polish the bead graph until it is launch-ready, not merely plausible.
 
-## Tool dependencies
+## Core invariants
 
-This skill requires `br` (beads_rust) and `bv` (bead viewer) on `PATH`.
-If either command is missing, stop and tell the user. If commands fail with
-unexpected errors, check whether the CLI version matches the expected subcommand
-signatures in the command palette below — flag version mismatches to the user
-rather than guessing at alternative syntax.
+- Check beads many times, implement once.
+- Preserve functionality and intent; do not oversimplify away features, constraints, or verification.
+- Optimize for fungible agents: clear beads, correct dependencies, and a healthy ready frontier for parallel work.
+- Stop on convergence, not on an arbitrary round count.
 
-## Use this skill when
+## Preflight
 
-- a fresh batch of beads was just created from a plan
-- a large feature slice was added to an existing graph
-- the graph feels vague, duplicated, over-broad, or dependency-wrong
-- you want to improve the graph before implementation starts
+- Confirm `br` and `bv` are on `PATH`. If either is missing, stop and say so.
+- Re-read `AGENTS.md`, `README.md`, and the relevant plan/spec before editing the graph.
+- If there are no meaningful beads yet, redirect to `plan-to-beads-transfer`.
+- If polishing keeps surfacing architecture questions, step back into plan space instead of repeatedly fixing downstream symptoms.
 
-## Do not use this skill when
+## Session shape
 
-- the project still needs plan-level work more than bead-level work
-- the user is asking for implementation rather than graph refinement
-- there are no meaningful beads yet to inspect
-
-## Required outputs for each invocation
-
-1. A refined bead graph, with actual `br` updates when changes are justified.
-2. A concise round report: what changed, what remains risky, and whether to continue.
-3. A convergence judgment: major-change mode, refinement mode, or near-converged.
-
-## Recommended loop shape
-
-- small projects: at least 3 full rounds
-- normal projects: 4 to 6 rounds
-- high-stakes work: keep going while fresh rounds still find meaningful issues
-
-Do not stop because you hit a number. Stop because the changes became small,
-local, and mostly corrective.
+- Expect 2-3 serious polish passes per session before context quality drops.
+- Run multiple sessions for non-trivial graphs.
+- If improvements flatline or the current session feels anchored to stale assumptions, start fresh, reread the context, and do a fresh-eyes pass.
 
 ## Per-round workflow
 
-1. Reread `AGENTS.md`, then load the current graph and relevant plan/spec.
-2. Establish a baseline:
-   - `br list --limit 0 --json -a`
-   - `bv --robot-triage`
-   - `bv --robot-plan`
-   - `bv --robot-suggest`
-   - optionally `bv --robot-insights` and `bv --robot-priority`
-3. Run these passes in order.
+1. Establish the baseline:
 
-### Pass A. Duplicate and overlap detection
+   ```bash
+   br list --limit 0 --json -a
+   bv --robot-triage
+   bv --robot-plan
+   bv --robot-suggest
+   ```
 
-- look for exact duplicates, near-duplicates, and beads with heavily overlapping ownership
-- prefer one canonical survivor when two beads are effectively the same job
-- use [references/dedupe-heuristics.md](references/dedupe-heuristics.md)
+   Optionally add `bv --robot-insights`, `bv --robot-priority`, or `bv --robot-diff --diff-since <ref>` when the graph is large or you need a precise delta since the last round.
 
-### Pass B. Coverage audit
+2. Run these passes in order.
 
-- check plan -> beads and beads -> plan
-- make sure every workflow, constraint, failure path, and verification obligation still lands somewhere
-- split or add beads if coverage is thin
+### Pass A. Detect duplicates and overlap
 
-### Pass C. Quality rewrite
+- Look for exact duplicates, near-duplicates, and beads with heavily overlapping ownership.
+- Pick one canonical survivor when two beads are effectively the same job.
+- Use [references/dedupe-heuristics.md](references/dedupe-heuristics.md).
 
-Score material beads with [references/polish-rubric.md](references/polish-rubric.md). Rewrite low-scoring beads so they become self-contained and testable.
+### Pass B. Audit coverage against the plan
 
-### Pass D. Dependency and launchability repair
+- Walk the plan against the beads and the beads against the plan.
+- Check both open and closed beads when that helps explain where obligations landed.
+- Make sure workflows, constraints, failure paths, and verification obligations still survive in the graph.
 
-- fix missing, reversed, or over-constraining dependencies
-- inspect for cycles, bottlenecks, and unhealthy ready-frontier shape
-- prefer a graph that allows multiple independent agents to proceed safely
+### Pass C. Rewrite low-quality beads
 
-### Pass E. Test and observability completeness
+- Score material beads with [references/polish-rubric.md](references/polish-rubric.md).
+- Rewrite low-scoring beads until a fresh agent can execute without guessing.
+- Preserve rich why/constraints/failure/test context instead of shortening for style.
 
-Make sure the graph names how work will be verified. If the project is
-user-facing or operationally sensitive, insist on explicit unit and integration/e2e
-obligations and useful logging or diagnostics.
+### Pass D. Repair dependencies and launchability
 
-### Pass F. Sizing and priority cleanup
+- Fix missing, reversed, or over-constraining dependencies.
+- Inspect for cycles, bottlenecks, and unhealthy ready-frontier shape.
+- Prefer a graph that allows multiple independent agents to proceed safely.
 
-- split oversized beads that hide multiple deliverables
-- merge tiny beads only when the merge sharpens execution rather than blurring it
-- tighten priority where the graph and plan disagree
+### Pass E. Tighten verification and operational trust
 
-4. Apply only justified changes with `br`.
-5. Flush mutations with `br sync --flush-only`.
-6. Record a round summary:
+- Require explicit unit, integration/e2e, or equivalent verification where relevant.
+- Require logging, metrics, diagnostics, or operator surfaces when the work is user-facing or operationally sensitive.
+- Refuse beads whose acceptance path is still "someone will know it when they see it."
+
+### Pass F. Clean up sizing and priority
+
+- Split oversized umbrella beads that hide multiple deliverables.
+- Merge tiny beads only when the merge sharpens execution instead of blurring it.
+- Reconcile priority with graph reality so critical blockers are obvious.
+
+3. Apply only justified changes with `br`.
+4. Flush mutations with `br sync --flush-only`.
+5. Write a round summary:
    - beads added, rewritten, merged, closed, or reprioritized
    - major risks still open
    - whether another round is warranted
-7. Score convergence with [references/convergence-scorecard.md](references/convergence-scorecard.md).
+6. Score convergence with [references/convergence-scorecard.md](references/convergence-scorecard.md).
 
-## Stop conditions
+If the round summary is suspiciously short relative to the graph size, assume the pass was shallow and run another, more exhaustive pass.
+
+## Convergence model
+
+Expect these phases:
+
+- rounds 1-3: major fixes, wild swings, fundamental changes
+- rounds 4-7: architecture and boundary refinement
+- rounds 8-12: edge cases and nuanced handling
+- rounds 13+: polishing toward steady state
 
 Prefer to stop when most of these are true:
 
 - no major uncovered plan elements remain
 - no obvious duplicate or near-duplicate beads remain
-- no dependency anomalies block understanding of the frontier
-- low-quality beads are now rare and localized
+- dependency anomalies are rare and localized
+- low-quality beads are rare and localized
 - two consecutive rounds make only small, corrective edits
-- convergence score is high enough that another round is likely low yield
+- convergence score is at least `0.75` and nothing strategically important still feels weak
 
-## Escalation rules
+## Red flags and escalation
 
-- If the graph keeps expanding, step back into plan space.
-- If the graph oscillates between two shapes, reframe the decomposition instead of polishing forever.
-- If the current session stops finding subtle issues, start a fresh session and rerun this skill.
-- For a final independent check, hand the graph to the `second-model-bead-audit` skill.
+Stop and reframe instead of polishing harder if you see:
+
+- oscillation between two decompositions
+- graph growth that keeps adding complexity without clarifying ownership
+- plateau at obviously low quality
+
+Use these escalations:
+
+- step back into plan space when the graph keeps expanding because the plan is still undecided
+- restart in a fresh session when current assumptions feel sticky or compaction degraded context
+- hand the graph to `second-model-bead-audit` when you want an independent launch-readiness verdict
+
+## Hard failure modes
+
+Do not:
+
+- polish only titles while leaving descriptions vague
+- deduplicate solely by title similarity
+- change priorities without checking graph impact
+- assume a large graph is complete because it is verbose
+- oversimplify and silently delete functionality or test obligations
+- stop after the first pass that merely feels decent
 
 ## Command palette
 
@@ -127,44 +144,25 @@ Prefer to stop when most of these are true:
 br list --limit 0 --json -a
 br show <id> --json
 br update <id> --description "..."
-br close <id> --reason "merged into ..."
+br close <id> --reason "..."
 br dep add <issue> <depends-on>
 br dep remove <issue> <depends-on>
+br lint
 bv --robot-triage
 bv --robot-plan
 bv --robot-suggest
 bv --robot-insights
 bv --robot-priority
+bv --robot-diff --diff-since <ref>
 br sync --flush-only
 ```
 
-## Common failure patterns to avoid
+## Pipeline position
 
-- polishing only titles while leaving descriptions vague
-- deduplicating solely by title similarity
-- changing priorities without checking graph impact
-- assuming a big graph is complete because it is verbose
-- oversimplifying and silently deleting functionality or test obligations
-- treating the first decent pass as final
+This is the second step in the bead lifecycle:
 
-## Pipeline context
+1. `plan-to-beads-transfer`
+2. `bead-polish-loop`
+3. `second-model-bead-audit`
 
-This skill is the **second step** in the bead lifecycle:
-
-1. **plan-to-beads-transfer** — create beads from a stable plan
-2. **bead-polish-loop** (you are here) — refine the graph through iterative review rounds
-3. **second-model-bead-audit** — independent launch-readiness verdict
-
-Before using this skill, beads should already exist — typically created by
-`plan-to-beads-transfer` or manually. If there is no graph yet, redirect to
-`plan-to-beads-transfer` first.
-
-After convergence, recommend `second-model-bead-audit` for high-stakes projects,
-or proceed directly to implementation if the graph is clean and the project scope
-is small.
-
-## Additional resources
-
-- For scoring bead quality, see [references/polish-rubric.md](references/polish-rubric.md).
-- For convergence decisions, see [references/convergence-scorecard.md](references/convergence-scorecard.md).
-- For dedup rules, see [references/dedupe-heuristics.md](references/dedupe-heuristics.md).
+Before using this skill, beads should already exist. After convergence, recommend `second-model-bead-audit` for high-stakes launches, or proceed to implementation when the graph is genuinely clean.

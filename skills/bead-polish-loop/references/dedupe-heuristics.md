@@ -6,32 +6,32 @@ Load this file during the duplicate pass.
 
 Two beads are probably duplicates if most of these are true:
 
-- same deliverable or same acceptance signal
-- same affected files or same subsystem
-- same user workflow and same failure path
-- one adds no meaningful extra rationale or constraints
+- they own the same deliverable or acceptance signal
+- they affect the same subsystem or workflow slice
+- they cover the same failure path or operator obligation
+- one adds no meaningful extra rationale, constraints, or tests
 
 ## Near-duplicate signals
 
 Two beads may need merging or re-scoping if:
 
 - one is a thin slice of the other with no independent claim value
-- both own the same test obligation
-- both depend on the same predecessor and unblock the same successor
+- both own the same verification obligation
+- both depend on the same predecessors and unblock the same successors
 - the distinction is title-deep but not execution-deep
 
 ## Survivor selection rules
 
-Keep the canonical survivor that has the best combination of:
+Keep the canonical survivor with the best combination of:
 
 - richer rationale
+- richer testing specs
 - clearer verification
 - better dependency placement
 - more precise scope boundaries
 - correct priority
 
-Merge missing strengths from the loser into the survivor before closing the
-loser.
+Merge anything worth keeping from the loser into the survivor before closing the loser.
 
 ## When not to merge
 
