@@ -31,8 +31,25 @@ Polish the bead graph until it is launch-ready, not merely plausible.
 ## Session shape
 
 - Expect 2-3 serious polish passes per session before context quality drops.
+- Treat that as a per-session limit, not a convergence target.
 - Run multiple sessions for non-trivial graphs.
 - If improvements flatline or the current session feels anchored to stale assumptions, start fresh, reread the context, and do a fresh-eyes pass.
+
+## Pass budget and coverage gates
+
+Plan a minimum pass budget before editing:
+
+- tiny graph: at least 3 rounds
+- normal graph: at least 4 rounds
+- large or launch-critical graph: at least 5 rounds and one fresh-session pass
+
+Do not declare convergence before all of these are true:
+
+- the minimum round budget for the graph size is met
+- every epic was inspected at least once
+- every `P0` and `P1` bead was inspected at least once
+- every bead on the critical dependency path was inspected at least once
+- every important unresolved finding is either fixed or explicitly waived with a reason
 
 ## Per-round workflow
 
@@ -47,7 +64,15 @@ Polish the bead graph until it is launch-ready, not merely plausible.
 
    Optionally add `bv --robot-insights`, `bv --robot-priority`, or `bv --robot-diff --diff-since <ref>` when the graph is large or you need a precise delta since the last round.
 
-2. Run these passes in order.
+2. Build a findings ledger before round 1 and keep updating it every round. Track at least:
+   - uncovered plan elements
+   - duplicate or overlap suspects
+   - low-rubric beads
+   - dependency anomalies
+   - weak verification or observability obligations
+   - any `P0`/`P1`, epic, or critical-path beads not yet reviewed
+
+3. Run these passes in order.
 
 ### Pass A. Detect duplicates and overlap
 
@@ -85,15 +110,17 @@ Polish the bead graph until it is launch-ready, not merely plausible.
 - Merge tiny beads only when the merge sharpens execution instead of blurring it.
 - Reconcile priority with graph reality so critical blockers are obvious.
 
-3. Apply only justified changes with `br`.
-4. Flush mutations with `br sync --flush-only`.
-5. Write a round summary:
+4. Apply only justified changes with `br`.
+5. Flush mutations with `br sync --flush-only`.
+6. Write a round summary:
    - beads added, rewritten, merged, closed, or reprioritized
-   - major risks still open
+   - findings ledger entries closed this round
+   - findings ledger entries still open
    - whether another round is warranted
-6. Score convergence with [references/convergence-scorecard.md](references/convergence-scorecard.md).
+7. Score convergence with [references/convergence-scorecard.md](references/convergence-scorecard.md).
 
 If the round summary is suspiciously short relative to the graph size, assume the pass was shallow and run another, more exhaustive pass.
+If a round touches only a narrow subset of the graph, do not count it toward convergence until the untouched high-priority and critical-path areas are reviewed.
 
 ## Convergence model
 
@@ -110,8 +137,10 @@ Prefer to stop when most of these are true:
 - no obvious duplicate or near-duplicate beads remain
 - dependency anomalies are rare and localized
 - low-quality beads are rare and localized
+- every epic, `P0`/`P1`, and critical-path bead has been reviewed at least once
+- the findings ledger is empty or only contains explicitly waived low-risk items
 - two consecutive rounds make only small, corrective edits
-- convergence score is at least `0.75` and nothing strategically important still feels weak
+- convergence score is at least `0.85` and nothing strategically important still feels weak
 
 ## Red flags and escalation
 
@@ -131,6 +160,7 @@ Use these escalations:
 
 Do not:
 
+- treat 2-3 passes in one session as evidence that the graph is done
 - polish only titles while leaving descriptions vague
 - deduplicate solely by title similarity
 - change priorities without checking graph impact
