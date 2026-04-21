@@ -92,6 +92,30 @@ Codex:
 Use the orchestrating-with-ralph-burning skill to implement this with ralph-burning.
 ```
 
+### codex-review-beads-ralph-loop
+
+Composes `codex review` + `br` beads + `ralph-burning` into a harden-until-clean
+loop on a work branch. Each `codex review` finding becomes a tracked bead; each
+bead gets solved via its own `ralph-burning` minimal run on a dedicated
+feature branch, through PR and merge; after every batch of merges the
+review is rerun. Stops when the review is clean or the same finding
+survives two full iterations.
+
+Claude Code:
+
+```text
+/codex-review-beads-ralph-loop harden this branch against main
+```
+
+Codex:
+
+```text
+Use the codex-review-beads-ralph-loop skill to drive codex+beads+ralph until this branch is clean.
+```
+
+Best fit: you want durable, bead-tracked regression sweeps with one PR per
+finding, not the inline-edit style of `codex-review-loop`.
+
 ## Install
 
 ```bash
@@ -144,12 +168,16 @@ directories created by `--migrate-existing`.
 
 - [Claude Code](https://claude.com/claude-code) for Claude installation targets
 - [OpenAI Codex CLI](https://github.com/openai/codex) for Codex installation targets
-- `codex` on `PATH` for `codex-review-loop`
+- `codex` on `PATH` for `codex-review-loop` and
+  `codex-review-beads-ralph-loop`
 - `br` and `bv` on `PATH`, plus a repo that uses `.beads/`, for
-  `plan-to-beads-transfer`, `bead-polish-loop`, and
-  `second-model-bead-audit`
+  `plan-to-beads-transfer`, `bead-polish-loop`,
+  `second-model-bead-audit`, and `codex-review-beads-ralph-loop`
 - `ralph-burning` on `PATH`, or `nix run github:douglaz/ralph-burning -- ...`,
-  for `orchestrating-with-ralph-burning`
+  for `orchestrating-with-ralph-burning` and
+  `codex-review-beads-ralph-loop`
+- `gh` authenticated for `codex-review-beads-ralph-loop` (PR creation and
+  merge)
 
 ## License
 
