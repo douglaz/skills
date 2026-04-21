@@ -29,7 +29,7 @@ triggers:
   - beads from codex
   - ralph-burning from codex review
 metadata:
-  version: 0.1.0
+  version: 0.1.1
 ---
 
 <!-- TOC: Tool Dependencies | Core Loop | Iteration | Finding → Bead | Bead → Ralph Run | Merge & Close | Stop Conditions | Guardrails | References -->
@@ -71,6 +71,33 @@ hardened) and which is the *review base* (usually `main` or the default
 branch, but sometimes an intermediate branch like `replacement-v1-beads`).
 Ask once if either is unclear; the loop runs many subcommands and silent
 misconfiguration is expensive.
+
+The work branch must be a **disposable hardening branch**, not the default or
+protected branch. This loop creates per-bead feature branches, force-resets the
+work branch back to origin after each merge, and may reopen the same finding in
+later iterations. If the user points at `main`/`master` or another shared
+branch, stop and create a dedicated hardening branch first.
+
+Before iteration 1, resolve and export the loop variables once:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+ACTOR="${BR_ACTOR:-assistant}"
+WORK_BRANCH="<branch being hardened>"
+REVIEW_BASE="<review base>"
+DEFAULT_BRANCH="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')"
+
+if [ -n "$DEFAULT_BRANCH" ] && [ "$WORK_BRANCH" = "$DEFAULT_BRANCH" ]; then
+  echo "Refusing to harden the default branch directly; create a dedicated work branch first."
+  exit 1
+fi
+
+if command -v ralph-burning >/dev/null 2>&1; then
+  RALPH=(ralph-burning)
+else
+  RALPH=(nix run github:douglaz/ralph-burning --)
+fi
+```
 
 ## Proactive suggestion
 
@@ -147,6 +174,7 @@ Map Codex priorities to bead priorities:
 
 | Codex tag | Bead priority | Notes |
 |-----------|---------------|-------|
+| `[P0]` | `0` (critical) | Catastrophic correctness, data-loss, or security break; always handle first |
 | `[P1]` labeled security/auth | `0` (critical) | Security findings dominate priority regardless of Codex tag |
 | `[P1]` non-security | `1` | |
 | `[P2]` | `2` | |
@@ -173,12 +201,20 @@ For each bead:
 
 ```bash
 br update --actor "$ACTOR" <bead-id> --status in_progress --json
-git checkout <work_branch>
-git pull
-git checkout -b feat/<bead-id>-<short-slug>
+BRANCH_NAME="feat/<bead-id>-it<N>-<short-slug>"
+
+git checkout "$WORK_BRANCH"
+git pull --ff-only
+if git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
+  git checkout "$BRANCH_NAME"
+else
+  git checkout -b "$BRANCH_NAME"
+fi
 ```
 
-Slug should be kebab-case, 3–6 tokens, derived from the bead title.
+Slug should be kebab-case, 3–6 tokens, derived from the bead title. Include
+the iteration in the branch name so a repeated or reopened finding does not
+collide with an earlier merged branch.
 
 #### 3b. Write the prompt file
 
@@ -209,20 +245,43 @@ A full prompt template lives in
 #### 3c. Create and run the ralph-burning project
 
 ```bash
-nix run github:douglaz/ralph-burning -- project create \
-  --id <bead-id> \
-  --name "<short descriptive name>" \
-  --prompt .ralph-burning/prompts/<bead-id>.md \
-  --flow minimal
-nix run github:douglaz/ralph-burning -- project select <bead-id>
-nix run github:douglaz/ralph-burning -- backend check
+PROJECT_ID="rb-<bead-id>-it<N>"
+
+if ! "${RALPH[@]}" project select "$PROJECT_ID" >/dev/null 2>&1; then
+  "${RALPH[@]}" project create \
+    --id "$PROJECT_ID" \
+    --name "<short descriptive name>" \
+    --prompt .ralph-burning/prompts/<bead-id>.md \
+    --flow minimal
+  "${RALPH[@]}" project select "$PROJECT_ID"
+  "${RALPH[@]}" backend check
+  "${RALPH[@]}" run start
+else
+  "${RALPH[@]}" project select "$PROJECT_ID"
+  "${RALPH[@]}" backend check
+  # Existing project: use `run start` only if it has never been started,
+  # `run resume` for failed/paused work, and leave it alone if already running.
+  "${RALPH[@]}" run status
+fi
 ```
+
+Project IDs also include the iteration to avoid collisions with older runs for
+the same bead. If the same finding reappears later and you intentionally want a
+fresh run, increment `<N>` and create a new project ID; if you are recovering
+the same in-flight bead after a backend or review-loop failure, reuse the same
+`PROJECT_ID` and `BRANCH_NAME`.
+
+For an existing project, choose the next step from `run status`:
+
+- `Status: not_started` → `("${RALPH[@]}" run start)`
+- `Status: failed` or `Status: paused` → `("${RALPH[@]}" run resume)`
+- `Status: running` → do not restart it; just monitor
 
 Start the run in the background; ralph-burning will create rollback checkpoint
 commits on the feature branch as it works. A minimal-flow run takes roughly
 10 minutes (trivial cases, converges round 1) to 1–3 hours (several
 amendment rounds). Do not block on it — schedule periodic status checks with
-`ralph-burning run status` and let the background task notify you on
+`"${RALPH[@]}" run status` and let the background task notify you on
 completion.
 
 While waiting, do not start the next bead's run. Parallel ralph-burning runs
@@ -260,11 +319,11 @@ commit as a plain `rb: final journal snapshot for <bead-id> run` before
 pushing, so the branch tree is clean.
 
 ```bash
-git add .ralph-burning/projects/<bead-id>/journal.ndjson
+git add ".ralph-burning/projects/$PROJECT_ID/journal.ndjson"
 git commit -m "rb: final journal snapshot for <bead-id> run"
-git push -u origin feat/<bead-id>-<short-slug>
+git push -u origin "$BRANCH_NAME"
 
-gh pr create --base <work_branch> --title "<conventional-commit-style title> (<bead-id>)" --body "$(cat <<EOF
+gh pr create --base "$WORK_BRANCH" --title "<conventional-commit-style title> (<bead-id>)" --body "$(cat <<EOF
 ## Summary
 - <1–3 bullets>
 - Implemented via \`ralph-burning\` (minimal flow, <N> rounds; amendments <trend>).
@@ -286,9 +345,9 @@ reports "no checks"), squash-merge directly — but say so explicitly in chat.
 
 ```bash
 gh pr merge <n> --squash --delete-branch
-git checkout <work_branch>
+git checkout "$WORK_BRANCH"
 git fetch origin
-git reset --hard origin/<work_branch>
+git reset --hard "origin/$WORK_BRANCH"
 ```
 
 #### 3f. Close the bead with commit evidence
@@ -331,6 +390,9 @@ End the loop and surface status to the user when any of these trigger:
 - **One bead per branch, serialized.** Do not start bead B's ralph-burning
   run while bead A is still open. Merging two long-lived ralph branches into
   the same base is where conflicts live.
+- **Harden only a disposable work branch.** If the requested work branch is
+  `main`/`master`, protected, or shared with other humans, stop and create a
+  dedicated hardening branch first.
 - **Never skip validation.** "It converged" is not enough — rust-nix repos
   especially have a delta between `cargo test` and `nix build`.
 - **Evidence-first closure.** Closing a bead without a merge SHA means the

@@ -39,6 +39,7 @@ Source: codex review of <work_branch> vs <review_base> (<codex tag, e.g. P1 secu
 
 | Codex tag | Bead priority | When to bump |
 |-----------|---------------|--------------|
+| `[P0]` | `0` | Always — catastrophic findings go first |
 | `[P1]` + security/auth keywords | `0` | Always — security findings take precedence |
 | `[P1]` | `1` | |
 | `[P2]` | `2` | |
