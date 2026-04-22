@@ -10,6 +10,15 @@ this prompt, and missing sections lead to predictable failure modes:
   files as findings on every round; the run never converges.
 - Missing *Acceptance Criteria* → reviewer and implementer disagree on
   "done", amendments oscillate, `max_completion_rounds` hits.
+- Missing *Scope — in/out* fence → the run wanders into unrelated
+  refactors. The worst real case was a one-line "fix default credentials"
+  bead that produced a 5100-line diff across 126 files because the
+  prompt had no scope fence and no reviewer pushed back. Always include
+  an explicit out-of-scope list.
+- Missing *what must keep working* → the fix narrows something legitimate,
+  the next iteration's codex review finds the over-correction, and you
+  spend an extra bead fixing your fix. Always include the legitimate
+  cases the narrow must preserve.
 
 ## Template
 
@@ -23,6 +32,23 @@ anchors from the Codex finding. Explain *why* it breaks — e.g. "the helper
 only handles X, not Y" — so the implementer can reason about edge cases.>
 
 Bead: `<bead-id>` (<priority and type>).
+
+## Scope — keep it narrow
+
+**In scope:**
+- <Function / file / module the fix lives in, by name>
+- <Tests directly on that function / module>
+- <Shared helper you intend to reuse, if any>
+
+**Out of scope:**
+- <Sibling files / modules you might be tempted to refactor>
+- <Anything unrelated to the finding's root cause>
+- <Adding new types, traits, or shared helpers unless the change literally
+  cannot land otherwise>
+
+Target diff size: <rough LOC estimate, e.g. "under 300 lines including
+tests">. If reviewers push for wider refactors, push back and ship the
+narrow fix — cleanups are easier as separate beads.
 
 ## Implementation hints
 - Name the functions and files the fix lives in (e.g. `runtime_monday_*`
@@ -43,9 +69,16 @@ reviewed or flagged. Only review source code under `src/`, `tests/`,
 ## Acceptance Criteria
 - <User-visible behavior the fix must establish>
 - <Every entry point that must be covered>
-- <Regression guards: what must still work>
+- <Regression guards: what must still work — name the legitimate cases
+  explicitly. Narrowing-for-security fixes that forget this line produce
+  over-correction findings in the next iteration.>
 - <Named test cases: at least one unit/integration test for the happy path
   and one for the rejection/failure path>
+- <Test plumbing: the new test file must actually run under the repo's
+  default test command (`npm test`, `cargo test`, `nix flake check` —
+  whatever the repo's CI uses). A test file that exists but is outside
+  the runner's glob is dead. Verify by running the command and looking
+  for the new tests in its output.>
 - `cargo test && cargo clippy --all-targets -- --deny warnings && cargo fmt --check` pass.
 - `nix build` passes on the final tree.                     # if applicable
 - Dashboard typecheck passes (`cd dashboard && npx tsc -p tsconfig.json --noEmit`).  # if frontend touched

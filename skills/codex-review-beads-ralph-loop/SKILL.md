@@ -29,7 +29,7 @@ triggers:
   - beads from codex
   - ralph-burning from codex review
 metadata:
-  version: 0.1.1
+  version: 0.2.0
 ---
 
 <!-- TOC: Tool Dependencies | Core Loop | Iteration | Finding → Bead | Bead → Ralph Run | Merge & Close | Stop Conditions | Guardrails | References -->
@@ -60,9 +60,9 @@ to install.
 
 | Tool | Resolution |
 |------|------------|
-| `codex` | Must be on `PATH` and authenticated. Default to `-c model="gpt-5.4" -c model_reasoning_effort="xhigh"` for reviews; fall back to env default if `gpt-5.4` is unavailable and note the fallback. |
-| `br` | Must be on `PATH` (built from the `beads_rust` repo or installed via `install.sh`). `br where` must point at a `.beads/` workspace. |
-| `ralph-burning` | Resolve in order: `command -v ralph-burning`, then `nix run github:douglaz/ralph-burning --`. |
+| `codex` | Must be on `PATH` and authenticated. Default to `-c model="gpt-5.4" -c model_reasoning_effort="xhigh"` for reviews; fall back to env default if `gpt-5.4` is unavailable and note the fallback. Codex auth can break mid-session (401) — see pitfall #8 in references/orchestration-pitfalls.md. |
+| `br` | Must be on `PATH`, **version ≥ 0.1.45** (built from the `beads_rust` repo or installed via `install.sh`). Older versions have a DB corruption bug where `br update`/`br close` return `ISSUE_NOT_FOUND` after branch resets; `br show`/`br list` still work, which masks it. `br where` must point at a `.beads/` workspace. |
+| `ralph-burning` | Resolve in order: `command -v ralph-burning`, then `nix run github:douglaz/ralph-burning --`. Needs to support the `iterative_minimal` flow (see flow selection below). |
 | `gh` | Authenticated (`gh auth status`). Used for PRs. |
 | `git` | Clean branch selection. The workflow creates per-bead feature branches; the user's working branch stays the base for merges. |
 
@@ -116,13 +116,42 @@ loop:
   beads = [create_bead(f) for f in findings]
   sync_and_commit(beads, work_branch)
   for bead in beads_ordered_by_priority(beads):
-    run_ralph_burning(bead)                             # minimal flow
+    run_ralph_burning(bead)                             # iterative_minimal flow
     merge_and_close(bead)                               # one PR per bead
 ```
 
 The loop is intentionally sequential per bead. Ralph-burning runs can be long
 (minutes to hours) and produce large diffs; running two at once on the same
 branch would guarantee merge conflicts.
+
+**Expected duration.** A real hardening loop on a substantial branch takes
+10–20 iterations and dozens of merged PRs. Set expectations: this is hours,
+possibly a full day, of mostly-autonomous work. Most iterations will find
+2–4 findings, and the majority of iter-2+ findings will be regressions
+introduced by earlier fixes (see **Regression chain awareness** below).
+That is the feature, not a failure mode.
+
+## Flow selection — prefer `iterative_minimal`
+
+Ralph-burning offers two flows that fit this skill: `minimal` and
+`iterative_minimal`. Default to **`iterative_minimal`** unless the repo's
+`AGENTS.md` or the user says otherwise.
+
+Empirically on a 16-iteration run through ~40 beads on a single work branch:
+
+| Metric | `minimal` | `iterative_minimal` |
+|---|---|---|
+| mean rounds | 3.4 | 2.4 |
+| median amendments | 1 | 1 |
+| mean amendments | 4.2 | 2.2 |
+| converged in ≤2 rounds | 67% | 84% |
+| worst case | 16 rounds / 38 amendments (runaway) | 9 rounds (genuinely hard policy problem) |
+
+`iterative_minimal` runs an in-round implementer stabilization pass before
+final review fires, so more reviewer feedback lands as cheap in-round fixes
+rather than cross-round amendments. Net effect: fewer runaways, faster
+median convergence. Use `minimal` only if `iterative_minimal` is unavailable
+on the installed ralph-burning.
 
 ## Iteration N
 
@@ -145,6 +174,32 @@ per-priority counts.
 Reject a finding in-chat (do not create a bead) only when you can point at
 code or existing tests that disprove it. When in doubt, create the bead —
 ralph-burning's review panel will either confirm or reject it with evidence.
+
+**Sibling sweep.** When a finding names one instance of a class —
+"`runtime_monday_*` routes lack authentication" — immediately grep the
+same file for the pattern. If there are sibling handlers with the same
+shape that Codex didn't call out (it looks at the diff, not the whole
+file), create beads for those too. Six separate auth-gap beads became
+one sweep after we stopped pretending Codex would catch every sibling.
+The following classes repeat on real branches:
+
+- Auth gating on newly-added route handlers (grep the file for every
+  `async fn` taking a path param and check which ones call an
+  `authenticated_*` helper).
+- Owner-claim gates on invite-session branches (if one predicate
+  checks `machine_has_claimed_owner_invite`, every sibling predicate
+  on the same object should).
+- Entropy / length caps on user-visible identifiers (if the dashboard
+  cap changed, the CLI cap almost certainly didn't; same for the
+  server validator).
+- Redaction on response payloads (if one status endpoint filters
+  owner-scoped fields, every sibling returning the same struct
+  needs the same filter).
+- Scheme / domain / host scoping on cookies and redirect URLs (a fix
+  that tightens one write site needs to cover every other write site
+  of the same cookie).
+
+Creating the sibling beads up front avoids 2–3 future iterations.
 
 ### 2. Translate findings into beads
 
@@ -252,7 +307,7 @@ if ! "${RALPH[@]}" project select "$PROJECT_ID" >/dev/null 2>&1; then
     --id "$PROJECT_ID" \
     --name "<short descriptive name>" \
     --prompt .ralph-burning/prompts/<bead-id>.md \
-    --flow minimal
+    --flow iterative_minimal
   "${RALPH[@]}" project select "$PROJECT_ID"
   "${RALPH[@]}" backend check
   "${RALPH[@]}" run start
@@ -278,11 +333,12 @@ For an existing project, choose the next step from `run status`:
 - `Status: running` → do not restart it; just monitor
 
 Start the run in the background; ralph-burning will create rollback checkpoint
-commits on the feature branch as it works. A minimal-flow run takes roughly
-10 minutes (trivial cases, converges round 1) to 1–3 hours (several
-amendment rounds). Do not block on it — schedule periodic status checks with
-`"${RALPH[@]}" run status` and let the background task notify you on
-completion.
+commits on the feature branch as it works. An `iterative_minimal` run takes
+roughly 10 minutes (trivial cases, converges round 1) to 1–2 hours (several
+amendment rounds; the 9-round worst case in practice is a genuinely hard
+policy problem, not wheel-spinning). Do not block on it — schedule periodic
+status checks with `"${RALPH[@]}" run status` and let the background task
+notify you on completion.
 
 While waiting, do not start the next bead's run. Parallel ralph-burning runs
 on sibling branches is supported in principle but multiplies merge-conflict
@@ -312,6 +368,36 @@ dashboard-level node tests the prompt's acceptance criteria named.
 
 Stop and investigate if any of these fail — do not push a failing tree.
 
+**Flaky-test policy.** If `cargo test` fails once but a re-run passes, it
+was flake; proceed, and note the flake + rerun in the PR body. If it fails
+twice, treat as real and investigate before pushing.
+
+**Post-run scope check.** Run a diff-stat on the branch against the work
+branch:
+
+```bash
+git diff --stat "$WORK_BRANCH"..HEAD
+```
+
+Compare the touched files to the prompt's *In scope* list. If the run
+edited more than ~300 lines outside the In-scope fence, or touched files
+the prompt explicitly marked out-of-scope, stop and decide one of:
+
+- **Abandon** the branch, tighten the prompt with stricter scope fences,
+  and rerun. Cheap early; expensive once merged.
+- **Inspect then decide.** Look at what changed outside scope; if it's
+  incidental (a shared helper that legitimately needed an extra param),
+  ship. If it's drift (a refactor the run did on its own), abandon.
+- **Ship with an explicit note in the PR body** about the scope overrun,
+  so future readers (and the next iteration's codex review) see it.
+
+The `-425` precedent on the author's real branch: a one-line "fix default
+credentials" prompt produced a 5100-line diff across 126 files. It passed
+all validation and was shipped after a deliberate user call, but it also
+means a smaller review surface for every iteration afterwards is more
+work than it should be. Catching scope drift at this gate saves
+iterations downstream.
+
 #### 3e. Commit leftover journal, push, PR, merge
 
 Ralph-burning typically leaves its final journal uncommitted. Stage it and
@@ -326,7 +412,7 @@ git push -u origin "$BRANCH_NAME"
 gh pr create --base "$WORK_BRANCH" --title "<conventional-commit-style title> (<bead-id>)" --body "$(cat <<EOF
 ## Summary
 - <1–3 bullets>
-- Implemented via \`ralph-burning\` (minimal flow, <N> rounds; amendments <trend>).
+- Implemented via \`ralph-burning\` (\`iterative_minimal\` flow, <N> rounds; amendments <trend>).
 
 ## Test plan
 - [x] cargo fmt --check
@@ -370,6 +456,42 @@ After all beads from iteration N are closed and merged, repeat from step 1
 with a fresh review pass. Increment the iteration counter in chat and in
 commit messages so the history is readable later.
 
+## Regression chain awareness (why the loop keeps finding things)
+
+The outer Codex review and ralph-burning's inner final_review have
+different *diff bases*, and that is the entire point of the outer loop:
+
+| Reviewer | diff base | surface |
+|---|---|---|
+| ralph's final_review | this bead's branch point | just this bead's edits |
+| outer `codex review` | `$REVIEW_BASE` (usually `main`) | every merged bead + original branch work |
+
+When bead A changes a server auth predicate, ralph's final_review sees
+only the server diff and cannot see the clients that are now
+mismatched. The next iteration's codex review sees both, and flags the
+clients. This is not a bug in either reviewer — they have genuinely
+different jobs.
+
+The practical implication: **later iterations will mostly find
+regressions from earlier fixes**. Auth-tightening fixes (bead A adds a
+gate) produce client-mismatch findings (bead B forwards auth). Scope-
+narrowing fixes (bead C rejects X in Y's case) produce
+over-correction findings (bead D: X was also legitimate in Z's case).
+Expect this; it is the loop earning its keep. Do not interpret it as
+"we keep introducing bugs."
+
+To minimize the regression chain length:
+
+- **Acceptance criteria must list what must keep working**, not just
+  what's broken. A fix that narrows access for security should
+  explicitly call out the legitimate cases the narrow is still
+  supposed to allow. Otherwise ralph's final_review signs off on the
+  narrow, and iteration N+1 finds the over-correction.
+- **Sibling sweep** (see Iteration 2) turns 4 iterations into 1 PR.
+- **Tighter scope fences** (see Post-run scope check) reduce the
+  surface of each bead's diff, which reduces the surface of the next
+  iteration's regression findings.
+
 ## Stop conditions
 
 End the loop and surface status to the user when any of these trigger:
@@ -381,6 +503,10 @@ End the loop and surface status to the user when any of these trigger:
   ralph → merge → re-review still shows it). Stop and escalate — either the
   fix is wrong or the finding is a false positive neither side is
   disproving.
+- A *finding class* (e.g. "auth gap on a new handler") reappears three
+  iterations in a row with new siblings each time. The loop is working, but
+  a one-time manual sweep would be faster than N more iterations; pause and
+  do a broad grep with the user.
 - Backends are exhausted in a way that cannot be recovered within the session
   (see `orchestrating-with-ralph-burning` for recovery patterns).
 - The user asks to pause.
