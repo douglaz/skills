@@ -1,0 +1,320 @@
+---
+name: pr-with-codex-bot-review
+description: >-
+  How to open and land a pull request through GitHub's `chatgpt-codex-connector` review bot
+  (the one that auto-comments "Codex Review" on PRs). Covers writing the PR body, running
+  local gates, the bot's actual behavior — auto-fires on substantive code PRs, often
+  silent on docs-only PRs, line-level findings live in PR review comments not the review
+  body — re-triggering with `@codex review`, addressing findings via amend + force-push,
+  knowing when to merge despite bot silence, and the squash-merge + branch-reset pattern.
+  Use this skill whenever the user asks to open a PR, "ship this", "merge it", "let the
+  bot review", "land the change", or right after substantial code work that's ready for
+  review. Also when the user asks why the bot "isn't reviewing" or how to interpret what
+  it left behind.
+argument-hint: "[pr-number-or-branch]"
+allowed-tools:
+  - Bash
+  - Read
+  - Edit
+  - Write
+  - Grep
+---
+
+# pr-with-codex-bot-review
+
+Drive a PR through CI and the `chatgpt-codex-connector` review bot to a clean merge,
+without bouncing off the bot's quirks.
+
+## When this applies
+
+The bot is `chatgpt-codex-connector[bot]` on GitHub. It runs as part of OpenAI's Codex
+GitHub integration: pulls each PR diff, runs a Codex review pass against it, leaves a
+boilerplate "💡 Codex Review" pull-request review plus zero or more **line-level review
+comments** carrying the actual findings. It triggers automatically on PR open, on draft
+mark-ready, and on `@codex review` comments (per the bot's own boilerplate).
+
+Use this skill when you're about to open a PR, just opened one and are wondering why
+the bot is quiet, or got findings back and need to address them.
+
+## What "the bot reviewed" actually means on GitHub
+
+The bot communicates approval and findings through **three distinct channels**, all on
+the same PR:
+
+1. **Reaction on the PR body** — `eyes` (👀) when the bot picks up the PR for review,
+   `+1` (👍) when it approves with no concerns. **This is the authoritative approval
+   signal.** Check it before assuming silence:
+
+   ```bash
+   gh api repos/<owner>/<repo>/issues/<N>/reactions \
+     | jq '.[] | select(.user.login == "chatgpt-codex-connector[bot]") | {content, created_at}'
+   ```
+
+   When the bot has finished and is happy, you'll see `{"content": "+1", ...}`. That's
+   the explicit "approved" signal — don't wait further. (This is what the bot's own
+   boilerplate means by "otherwise it will react with 👍.")
+
+2. **Pull-request review** with `state: COMMENTED` — usually just boilerplate:
+
+   ```
+   ### 💡 Codex Review
+   Here are some automated review suggestions for this pull request.
+   **Reviewed commit:** `<sha>`
+   ```
+
+   The body of this review carries no findings. It's a wrapper that anchors the
+   review to a specific commit SHA.
+
+3. **Line-level review comments** — where actual findings live, separate API:
+
+   ```bash
+   gh api repos/<owner>/<repo>/pulls/<N>/comments      # actual findings
+   ```
+
+When checking whether the bot has weighed in, query reactions FIRST (cheapest signal,
+authoritative for approval), then line comments (for findings if any). Findings are
+encoded with markdown priority badges:
+
+```markdown
+**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Title**
+```
+
+`P0`, `P1`, `P2`, `P3` priorities map to severity. Treat them like the bot is a reviewer
+giving credible hypotheses — verify before agreeing or rejecting.
+
+## Workflow
+
+### 1. Local gates before push
+
+The point of running local gates is to fail fast before CI burns minutes. Use the
+exact commands CI uses (without `--all-targets` for clippy unless CI does):
+
+```bash
+nix develop -c cargo fmt --check
+nix develop -c cargo clippy --locked -- -D warnings    # match CI flags exactly
+nix develop -c cargo test --features test-stub --locked
+nix build                                              # authoritative gate
+```
+
+If the project uses a feature flag for stub backends (common pattern: `test-stub`), pass
+it. Forgetting it can produce phantom test failures in tests that exercise mocked
+backends. CI's exact command lives in the workflow file (`.github/workflows/`); copy it.
+
+If clippy fails on `clippy::items-after-test-module` only when `--all-targets` is set,
+that's a pre-existing artifact and CI doesn't use that flag — confirm against CI before
+reformatting code to fix it.
+
+### 2. Push and open the PR with a structured body
+
+Use a HEREDOC to keep the body readable. The structure that consistently works through
+the bot:
+
+```markdown
+## Summary
+<1-3 sentences: what the change does and why>
+
+## Lineage / context
+<for multi-PR sequences: link the chain. e.g., "Builds on #189 (...). Addresses
+codex-review #193 P1 (...).">
+
+## Trade-offs accepted
+<be honest about what this fix doesn't solve. The bot rewards epistemic
+honesty in commit messages with kinder reviews.>
+
+## Test plan
+- [x] `nix develop -c cargo test --features test-stub --locked` passes
+- [x] `nix develop -c cargo clippy --locked -- -D warnings` clean
+- [x] `nix develop -c cargo fmt --check` clean
+- [x] `nix build` succeeds
+- [ ] CI green
+- [ ] Codex bot review
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+```
+
+Open with `gh pr create --title "<imperative title under 70 chars>" --body "$(cat <<'EOF'
+...
+EOF
+)" --head <branch>`.
+
+### 3. Wait for CI
+
+```bash
+gh pr checks <N>     # one-shot status
+```
+
+Typical lag for ralph-burning's conformance gate: ~7-8 min. While CI runs, work on
+other things — don't sit on the pull. If CI fails on something unrelated to your diff
+(common: signal-timing flakes, log-capture races), `gh run rerun <run-id> --failed`
+and continue. Diagnose the flake into a follow-up bead/issue rather than blocking the
+current PR.
+
+### 4. Wait for the bot's reaction signal
+
+The bot's reaction on the PR body is the authoritative status indicator. Don't fall
+back to "wait some minutes and assume" when this is one API call away:
+
+```bash
+gh api repos/<owner>/<repo>/issues/<N>/reactions \
+  | jq -r '.[] | select(.user.login == "chatgpt-codex-connector[bot]") | "\(.content) at \(.created_at)"'
+```
+
+| Reaction | Meaning | Action |
+|---|---|---|
+| (empty) | Bot hasn't picked up the PR yet | Wait or `@codex review` |
+| `eyes` | Bot is reviewing | Wait |
+| `+1` | Bot approves with no concerns | Merge (after CI green) |
+
+Typical bot timing: 5-30 minutes from open. On docs-only or tiny PRs the bot still
+reacts (saw `+1` on PR #191's pure-docs change about 20 min after open) — there's
+no class of PR the bot reliably skips, only PRs you didn't wait long enough on.
+
+To explicitly trigger or re-trigger (after a force-push, or if the bot appears
+stuck):
+
+```bash
+gh pr comment <N> --body "@codex review"
+```
+
+After a force-push, the bot's prior review and reaction reference the old SHA. The
+bot often re-reviews automatically on a new push, but re-comment `@codex review` if
+you don't see a new reaction or review after ~10 min.
+
+If reaction is `+1`, also check line comments — the bot can approve on the latest
+SHA while older line comments from a prior round are still attached and outdated.
+Look at each comment's `commit_id` to see whether it's against the current head:
+
+```bash
+gh api repos/<owner>/<repo>/pulls/<N>/comments \
+  | jq -r '.[] | "\(.commit_id[0:8]) \(.body | split("\n")[0])"'
+```
+
+When reaction is `+1` AND CI is green, merge. The boilerplate review wrapper plus
+zero outstanding line comments confirms it.
+
+### 5. Address findings, if any
+
+For each P-badge finding:
+
+- **Verify, don't reflexively agree.** The finding is a credible hypothesis. Read the
+  code referenced. If the bot misread the diff, write a follow-up comment with
+  evidence rather than capitulating.
+- **If accepted, fix it AND add a regression test that pins the new behavior.** The
+  test serves as a counter-claim if the bot raises the same concern next round.
+- **Cite the finding in the commit message.** Future readers (and the next bot
+  review) need to know which feedback this commit addressed. Use a phrase like
+  "Addresses codex-review #194 P1 (first round)" — round number matters when the bot
+  re-reviews after force-push.
+- **Amend, don't stack commits, for one-shot fixes.** Cleaner squash-merge history.
+  `git commit --amend --no-edit` then `git push --force-with-lease`. For larger
+  follow-ups, separate commits are fine — the squash absorbs them.
+
+### 6. Decide based on reaction, not on time
+
+Merge when the reaction-based check passes:
+
+- Bot reaction on PR body is `+1`.
+- CI is green.
+- No outstanding line comments against the current head SHA.
+
+Don't merge when:
+
+- Bot reaction is `eyes` (still reviewing) — wait, even if CI is green.
+- Bot has unaddressed line comments (`P0`/`P1`/`P2`/`P3`) referencing the current head.
+- Bot has no reaction yet — `@codex review` to wake it up; don't preemptively merge.
+- CI failed and you haven't determined whether it's flaky or real.
+- You force-pushed and reaction still references the old SHA — wait at least 10 min
+  after the force-push, or `@codex review` to re-trigger.
+
+**The reaction is what matters; clock-time waits are a code smell that suggests
+you're ignoring the actual signal.**
+
+### 7. Squash-merge and clean up
+
+```bash
+gh pr merge <N> --squash --delete-branch
+git checkout master
+git fetch origin master && git reset --hard origin/master
+nix build                                    # confirm master is healthy
+```
+
+`reset --hard` rather than `pull` because squash-merge rewrites history; a normal
+`git pull` would create an unwanted merge commit on local master.
+
+If the project uses `.beads/` issue tracking, close the corresponding bead now:
+
+```bash
+br update <bead-id> -s closed
+```
+
+## Iteration patterns observed
+
+### "Bot found a P1 you introduced while addressing a different P1"
+
+Saw this on PR #194: pass-1 P1 said "add `additionalProperties: false` to the
+injected subschema". I added it. Pass-2 P1 said "now your subschema is
+unsatisfiable because the surrounding `items` schema requires more fields and you
+forbid them." Both findings were correct — the second only became visible after
+the first was fixed.
+
+**Pattern**: when a fix changes the shape of nearby schemas/types, expect a
+follow-up round. Run `@codex review` after force-push and read the new findings
+fresh, not "by analogy" with the prior round.
+
+### "Bot looks silent — but is actually `+1` already"
+
+Saw this repeatedly across this session (PRs #186, #189, #191, #195). I was
+checking `gh pr view --json reviews` (which only shows review wrappers, not
+reactions) and `gh api .../pulls/<N>/comments` (which only shows line comments)
+and concluding "no review yet" when the bot had already left `+1` on the PR
+body.
+
+PR #191 (a README docs PR) had `+1` from the bot 13 minutes BEFORE I merged.
+I'd been waiting another full cycle for nothing.
+
+**Always query `issues/<N>/reactions` first** — it's the cheapest signal and
+the authoritative one for approval.
+
+### "Force-pushing breaks the bot's auto-trigger"
+
+Saw on PR #189 → after `git push --force-with-lease`, the bot stayed on the
+prior commit's review. Comment `@codex review` to point it at the new SHA. The
+bot's behavior is to lock onto a `Reviewed commit:` SHA in its review body —
+force-pushing changes the SHA and the bot doesn't always notice automatically.
+
+### "Body update fails with GitHub Projects classic deprecation warning"
+
+`gh pr edit --title` and `--body` sometimes fail with a GraphQL warning about
+the deprecated Projects classic API. The actual update *did* land in some cases
+and not in others. If `gh pr view <N> --json title,body` shows the new content,
+ignore the warning. If not, retry once. The squash-merge subject defaults to
+the commit message anyway, so the PR title is mostly cosmetic.
+
+## Anti-patterns
+
+- **Don't `gh pr merge --merge`** when the project squashes — creates noise on
+  master. Use `--squash` to match the project's convention.
+- **Don't bypass CI with `--admin`** unless CI is genuinely broken in a way that
+  isn't your fault. The bot review pass is a sanity check, not just bureaucracy.
+- **Don't reply "no it's fine" to a P1 finding without evidence.** If you reject
+  it, link to the specific code/test that disproves the concern.
+- **Don't pile up multiple `@codex review` comments.** One ping is enough; spam
+  doesn't move the bot faster and clutters the PR.
+- **Don't merge while the bot is mid-review** (the boilerplate review is in
+  `state: COMMENTED` but no line comments yet, less than 30 min after a fresh
+  push). Findings often arrive in a second wave.
+
+## Reference: real PR examples from this session
+
+| PR | What happened | Lesson |
+|---|---|---|
+| #186 | Small schema fix; bot reacted `+1` 4 min after merge (raced) | Reaction is the signal; check it before merging |
+| #187 | 9ni.8.5 reconciliation; bot left review wrapper, no findings, no reaction in window | Sometimes the bot doesn't react at all on substantial PRs; line comments are then the source of truth |
+| #189 | Issue #188 first attempt; bot left findings, addressed; final reaction `+1` | Standard happy-path flow |
+| #190 | 9ni.8.6 parsimonious-creation; CI failed on rebase clippy, fixed with amend, second pass green; bot `+1` | Rebase before squash to catch lint regressions |
+| #191 | README docs; bot reacted `+1` 13 min before I merged but I didn't check | I was looking at the wrong API; reactions are cheap |
+| #192 | force-complete amendment loss; bot found P2 about empty-amendment status text → fixed → `+1` | P2 still worth addressing |
+| #193 | Issue #188 reopen attempt; bot pass-2 found P1 about retry session; addressed → `+1` | Saw "addressing P1 introduces new P1" |
+| #194 | `contains` injection; bot's two rounds both flagged subschema issues, merged anyway, then OpenAI rejected the schema in production → reverted | Bot can't catch what local tests don't catch; reality bites |
+| #195 | Revert + replacement (codex-only enum narrowing), CI flake on rerun → green; bot `+1` | Distinguish flake from regression |
+| #196 | Drop `--output-schema` entirely (architectural fix); bot reacted `+1` 30 min after open; I almost waited another cycle for nothing | The reaction signal would have saved a cycle |
