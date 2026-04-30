@@ -1,23 +1,16 @@
 ---
 name: drain-bead-backlog-via-ralph
 description: >-
-  Drain an existing pending-beads backlog one at a time using `ralph-burning`:
-  pick the highest-priority bead from `br ready`, write a focused prompt with a
-  scope guard, run a single-bead `iterative_minimal` ralph-burning task, verify
-  the local gates, push, open a PR, wait for CI green, squash-merge, reset
-  master, `nix build`, close the bead, and repeat. Capture dogfood findings
-  from the runs themselves as fresh beads, and interrupt the queue to fix any
-  P0/P1 dogfood bead so every subsequent run gets the benefit. Use this skill
-  whenever the user says "drain the backlog with ralph", "work through the
-  beads one by one", "solve pending beads via ralph-burning", "keep solving
-  beads until done", "iterative minimal flow on the backlog", "use ralph for
-  the bead queue", or asks to dogfood `ralph-burning` while clearing real
-  work. Use even if the user only names "ralph" and "beads" together — that
-  combination almost always means this loop. Prefer this over
-  `codex-review-beads-ralph-loop` when the user is working from a pre-existing
-  bead backlog rather than asking codex to discover findings on the current
-  branch. Prefer this over plain `orchestrating-with-ralph-burning` when there
-  are multiple beads to chain through, not just one task.
+  Drain an existing `br` pending-beads backlog via `ralph-burning`: repeatedly
+  choose the highest-priority ready bead, run one focused `iterative_minimal`
+  task per branch/PR, verify local gates, push, wait for CI, squash-merge,
+  reset master, build, close the bead, and continue. Capture dogfood findings
+  as beads and interrupt for P0/P1 issues. Use when the user asks to drain,
+  work through, or clear pending beads with ralph; solve beads one by one; use
+  ralph for the bead queue; or dogfood ralph-burning while shipping real work.
+  Prefer this over `codex-review-beads-ralph-loop` when beads already exist,
+  and over `orchestrating-with-ralph-burning` when chaining multiple beads
+  rather than running one task.
 license: MIT
 domain: engineering-workflow
 role: orchestrator
