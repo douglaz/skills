@@ -21,6 +21,24 @@ Runs an iterative Codex review/fix/re-review loop on your current branch. Detect
 Best fit: Claude Code explicit invocation. This skill shells out to `codex
 review` and is most natural when run as a slash command from Claude Code.
 
+### complexity-reducer
+
+Reduces code complexity by deleting, collapsing, inlining, and simplifying code
+while preserving behavior. Rust-first, with guidance that also applies to Bash
+and other languages.
+
+Claude Code:
+
+```text
+/complexity-reducer simplify this Rust module without changing behavior
+```
+
+Codex:
+
+```text
+Use the complexity-reducer skill to reduce ceremony in this code while preserving behavior.
+```
+
 ### plan-to-beads-transfer
 
 Translates a stable spec, PRD, or markdown plan into actual `br` beads with
@@ -151,6 +169,7 @@ Install specific skills:
 ./install.sh --target codex plan-to-beads-transfer bead-polish-loop second-model-bead-audit orchestrating-with-ralph-burning
 ./install.sh plan-to-beads-transfer bead-polish-loop second-model-bead-audit orchestrating-with-ralph-burning
 ./install.sh --target codex --migrate-existing plan-to-beads-transfer bead-polish-loop second-model-bead-audit
+./install.sh --target codex complexity-reducer
 ```
 
 ## Uninstall

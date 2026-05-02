@@ -1,0 +1,4 @@
+interface:
+  display_name: "Complexity Reducer"
+  short_description: "Delete and simplify code safely"
+  default_prompt: "Use $complexity-reducer to simplify this code while preserving behavior."
