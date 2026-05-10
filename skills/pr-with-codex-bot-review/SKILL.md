@@ -2,13 +2,14 @@
 name: pr-with-codex-bot-review
 description: >-
   How to open and land a pull request through GitHub's `chatgpt-codex-connector` review bot
-  (the one that auto-comments "Codex Review" on PRs). Covers writing the PR body, running
-  local gates, the bot's actual behavior — auto-fires on substantive code PRs, often
-  silent on docs-only PRs, line-level findings live in PR review comments not the review
-  body — re-triggering with `@codex review`, addressing findings via amend + force-push,
-  knowing when to merge despite bot silence, and the squash-merge + branch-reset pattern.
-  Use this skill whenever the user asks to open a PR, "ship this", "merge it", "let the
-  bot review", "land the change", or right after substantial code work that's ready for
+  (the one that auto-comments "Codex Review" on PRs), gating also on `coderabbitai[bot]`
+  when it is configured on the repo. Covers writing the PR body, running local gates, the
+  codex bot's actual behavior — auto-fires on substantive code PRs, often silent on
+  docs-only PRs, line-level findings live in PR review comments not the review body —
+  re-triggering with `@codex review`, addressing findings via amend + force-push, knowing
+  when to merge despite bot silence, and the squash-merge + branch-reset pattern. Use
+  this skill whenever the user asks to open a PR, "ship this", "merge it", "let the bot
+  review", "land the change", or right after substantial code work that's ready for
   review. Also when the user asks why the bot "isn't reviewing" or how to interpret what
   it left behind.
 argument-hint: "[pr-number-or-branch]"
@@ -81,6 +82,49 @@ encoded with markdown priority badges:
 
 `P0`, `P1`, `P2`, `P3` priorities map to severity. Treat them like the bot is a reviewer
 giving credible hypotheses — verify before agreeing or rejecting.
+
+## CodeRabbit (parallel reviewer bot, when configured)
+
+Many repos also have `coderabbitai[bot]` enabled. It runs on the same PR as the codex
+bot but communicates differently — never assume codex's `+1` reaction means CodeRabbit
+is also done. CodeRabbit's signals:
+
+1. **Status check on the PR** — `CodeRabbit` shows up in the check rollup with
+   `SUCCESS`, `FAILURE`, or `PENDING`. This is the cheapest gating signal:
+
+   ```bash
+   gh pr view <N> --json statusCheckRollup \
+     --jq '.statusCheckRollup[] | select(.context == "CodeRabbit") | "\(.state) at \(.startedAt)"'
+   ```
+
+   `SUCCESS` with body `Review skipped` is normal on trivial diffs (e.g., the bot
+   decided the PR didn't warrant review). Treat that as a pass.
+
+2. **Issue comment** — `coderabbitai[bot]` posts an auto-summary / walkthrough as a
+   regular PR comment (the `issues/<N>/comments` endpoint, NOT the `pulls/<N>/comments`
+   one). The first such comment is usually `<!-- review in progress -->` and gets
+   replaced once CodeRabbit finishes:
+
+   ```bash
+   gh api repos/<owner>/<repo>/issues/<N>/comments \
+     | jq -r '.[] | select(.user.login == "coderabbitai[bot]") | .body | split("\n") | .[0:3] | join(" / ")'
+   ```
+
+3. **Line-level review comments** — same `pulls/<N>/comments` endpoint as the codex
+   bot, but authored by `coderabbitai[bot]`. Filter by user when triaging findings:
+
+   ```bash
+   gh api repos/<owner>/<repo>/pulls/<N>/comments \
+     | jq -r '.[] | "[\(.user.login) @ \(.commit_id[0:8])] \(.body | split("\n")[0])"'
+   ```
+
+CodeRabbit interactions: `@coderabbitai review` to (re-)trigger, `@coderabbitai resolve`
+to ack findings, `@coderabbitai pause` to silence on a draft. CodeRabbit's findings
+don't carry P0/P1/P2/P3 badges; severity is conveyed in the prose. Treat them like a
+human reviewer's comments — verify, don't reflexively agree.
+
+If the repo doesn't have CodeRabbit enabled at all, the status check simply won't
+appear in the rollup; nothing to wait on. Skip this section.
 
 ## Workflow
 
@@ -213,18 +257,21 @@ For each P-badge finding:
 
 Merge when the reaction-based check passes:
 
-- Bot reaction on PR body is `+1`.
+- Codex bot reaction on PR body is `+1`.
 - CI is green.
-- No outstanding line comments against the current head SHA.
+- CodeRabbit status check is `SUCCESS` (or absent — repo doesn't have it).
+- No outstanding line comments against the current head SHA, from EITHER bot.
 
 Don't merge when:
 
-- Bot reaction is `eyes` (still reviewing) — wait, even if CI is green.
-- Bot has unaddressed line comments (`P0`/`P1`/`P2`/`P3`) referencing the current head.
-- Bot has no reaction yet — `@codex review` to wake it up; don't preemptively merge.
+- Codex bot reaction is `eyes` (still reviewing) — wait, even if CI is green.
+- Codex bot has unaddressed line comments (`P0`/`P1`/`P2`/`P3`) referencing the current head.
+- Codex bot has no reaction yet — `@codex review` to wake it up; don't preemptively merge.
+- CodeRabbit status is `PENDING` — wait, even if codex already approved.
+- CodeRabbit status is `FAILURE` or it left unaddressed line comments on the current head — address.
 - CI failed and you haven't determined whether it's flaky or real.
 - You force-pushed and reaction still references the old SHA — wait at least 10 min
-  after the force-push, or `@codex review` to re-trigger.
+  after the force-push, or `@codex review` (and `@coderabbitai review`) to re-trigger.
 
 **The reaction is what matters; clock-time waits are a code smell that suggests
 you're ignoring the actual signal.**
