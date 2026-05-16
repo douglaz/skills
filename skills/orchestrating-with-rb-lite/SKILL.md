@@ -1,23 +1,20 @@
 ---
 name: orchestrating-with-rb-lite
 description: >-
-  Uses `rb-lite` to drive a small, dependency-free implement → review loop
-  on the current git repository: codex as the implementer, codex + claude as
-  a parallel reviewer panel, automatic stop conditions for review-clean,
-  reviewer-vs-implementer consensus failure, P3-only nit ratchet, and
-  budget-cap exhaustion. Use when the user says "rb-lite", "use rb-lite",
-  "run the rb-lite loop", "iterate on this with rb-lite", "implement this
-  with codex + claude until clean", "review-and-fix loop on this branch", or
-  asks for an iterative codex-and-claude review/fix cycle scoped to the
-  current branch. Also use when the user wants a quick way to harden a
-  feature branch before opening a PR without setting up a full ralph-burning
-  project. Prefer `rb-lite` for single-branch, single-task work where you
-  just want "code → review → fix → repeat → JSON summary." Do NOT use for
-  cross-project orchestration, durable run state, multi-flow stages,
-  resumable failed runs across sessions — for those, prefer
-  `ralph-burning`. Do NOT use for tiny direct edits, pure explanations, or
-  one-shot patches the user could apply themselves in less time than a
-  single rb-lite round.
+  Uses `rb-lite` to drive a small implement → review loop on the current git
+  repo: codex as the implementer, codex + claude as a parallel reviewer
+  panel, with automatic stop on review-clean, consensus failure, P3-only
+  ratchet, or budget exhaustion. Use when the user says "rb-lite", "use
+  rb-lite", "run the rb-lite loop", "iterate on this with rb-lite",
+  "implement this with codex + claude until clean", "review-and-fix loop on
+  this branch", or asks for an iterative codex+claude review/fix cycle
+  scoped to the current branch. Also use to harden a feature branch before
+  opening a PR without setting up a `ralph-burning` project. Prefer
+  `rb-lite` for single-branch, single-task work where you just want "code →
+  review → fix → repeat → JSON summary." Do NOT use for cross-project
+  orchestration, durable resumable state, or multi-flow stages — prefer
+  `ralph-burning` instead. Do NOT use for tiny direct edits, pure
+  explanations, or one-shot patches that are faster to apply by hand.
 compatibility: Requires `rb-lite` on `PATH` or `nix run github:douglaz/rb-lite -- ...`. Both `codex` and `claude` CLIs must be installed and authenticated for the default reviewer panel.
 ---
 
