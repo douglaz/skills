@@ -1,0 +1,4 @@
+interface:
+  display_name: "Voice DNA"
+  short_description: "Enforce a sharp human writing voice"
+  default_prompt: "Use $voice-dna to check this draft and rewrite it in my voice."

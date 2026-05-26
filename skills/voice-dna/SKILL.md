@@ -9,13 +9,6 @@ description: >-
   my writing". Proactively suggest when the user is drafting blog posts, tweets,
   newsletters, landing page copy, READMEs, or any public-facing text where
   sounding like a real person matters.
-voice_triggers:
-  - "voice dna"
-  - "use my voice"
-  - "write in my voice"
-  - "voice check"
-  - "check my writing"
-  - "apply voice style"
 ---
 
 # Voice DNA
@@ -27,12 +20,18 @@ written by a sharp, opinionated human who respects the reader's time.
 
 ### Apply Mode (default)
 
-When the user invokes this skill without providing text to check, activate
-the voice for the rest of the session. Tell them:
+Use Apply Mode when the user wants new writing in this voice, or when they ask
+to turn the voice on for future replies.
+
+If they only ask to activate the voice, tell them exactly:
 
 > Voice DNA active. Everything I write from here follows your voice rules.
 
-Then follow every rule below in all subsequent output. No exceptions.
+Then stop. Don't add explanation.
+
+If they ask for new text, write the requested text directly in the voice.
+Don't announce activation first. The first visible line should be useful copy,
+not meta-commentary about the skill.
 
 ### Check Mode
 
@@ -44,6 +43,10 @@ When the user provides text to review (pastes it, points to a file, or says
    breaks, and a suggested fix. Use a simple list, not a table.
 3. **Rewrite** the full text in the correct voice. Show it under a
    `## Rewritten` heading.
+
+If part of the draft is already strong, say so briefly and preserve it unless
+the surrounding edit forces a small stitch. Concrete metrics, named systems,
+and clean short paragraphs should usually survive the rewrite.
 
 If the text is clean, say so. Don't manufacture problems.
 
@@ -61,8 +64,12 @@ If your opening line could be deleted without losing anything, delete it.
 
 ### Short paragraphs
 
-1-2 sentences is the default. 3 is the max. If a paragraph hits 4 sentences,
-split it.
+1-2 sentences is the default. 3 is a hard ceiling, not a target. Before any
+final answer, count sentences in every prose paragraph. If a paragraph has 4
+or more sentences, split it before the user sees it.
+
+For announcements, landing pages, tweets, and newsletter copy, prefer 1
+sentence per paragraph unless the idea genuinely needs a second sentence.
 
 ### Contractions always
 
@@ -196,14 +203,17 @@ The pattern: negate one framing, then assert a "corrected" one.
 
 Examples:
 - "This isn't a tool. It's a philosophy."
+- "This isn't just a dashboard. It's an operating system."
 - "Not a feature. A paradigm shift."
+- "Not faster, but smarter."
 - "Forget speed. Think reliability."
 - "Less code, more clarity."
+- "No longer reactive. Now predictive."
 
-Every single one of these follows the same template: "Not X. Y." It's a
-rhetorical move that AI models learned from marketing copy, and now it shows
-up everywhere. The problem is that the negation adds nothing. Just state
-the positive claim directly.
+Each example uses the same move: reject one framing so the next framing feels
+more dramatic. AI models learned it from marketing copy, and now it shows up
+everywhere. The problem is that the negation adds nothing. Just state the
+positive claim directly.
 
 **If even one instance of this pattern appears in the output, the entire
 piece fails review.** Delete the negation. State what the thing actually is.
@@ -212,10 +222,12 @@ piece fails review.** Delete the negation. State what the thing actually is.
 
 ## Self-Check
 
-Before delivering any text (in either mode), do a quick mental pass:
+Before delivering any text (in either mode), run this pass on your own final
+answer. In Check Mode, run it on the rewritten text too:
 
 1. Any banned phrases? Ctrl+F your own output mentally.
-2. Any paragraphs over 3 sentences?
+2. Any prose paragraph over 3 sentences? Split it. If a paragraph has exactly
+   3 sentences, check whether it would read better as 2 paragraphs.
 3. Any em dashes or semicolons?
 4. Any uncontracted forms that should be contracted?
 5. Does the opening line carry real information or is it throat-clearing?
