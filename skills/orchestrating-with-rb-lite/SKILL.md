@@ -2,8 +2,8 @@
 name: orchestrating-with-rb-lite
 description: >-
   Uses `rb-lite` to drive a small implement → review loop on the current git
-  repo: codex as the implementer, codex + claude as a parallel reviewer
-  panel, with automatic stop on review-clean, consensus failure, P3-only
+  repo: a chosen codex or claude implementer, with a codex + claude parallel
+  reviewer panel, automatic stop on review-clean, consensus failure, P3-only
   ratchet, or budget exhaustion. Use when the user says "rb-lite", "use
   rb-lite", "run the rb-lite loop", "iterate on this with rb-lite",
   "implement this with codex + claude until clean", "review-and-fix loop on
@@ -15,7 +15,7 @@ description: >-
   orchestration, durable resumable state, or multi-flow stages — prefer
   `ralph-burning` instead. Do NOT use for tiny direct edits, pure
   explanations, or one-shot patches that are faster to apply by hand.
-compatibility: Requires `rb-lite` on `PATH` or `nix run github:douglaz/rb-lite -- ...`. Both `codex` and `claude` CLIs must be installed and authenticated for the default reviewer panel.
+compatibility: Requires `rb-lite` on `PATH` or `nix run github:douglaz/rb-lite -- ...`. rb-lite has no default implementer — pass `--implementer codex|claude` (or `--implement-cmd`). Both `codex` and `claude` CLIs must be installed and authenticated for the default reviewer panel and the matching implementer preset.
 ---
 
 Use `rb-lite` as the default lightweight implement → review loop for
@@ -26,7 +26,8 @@ a real reviewer pass adds value, but small enough that a full
 
 ## What rb-lite is, in one paragraph
 
-`rb-lite` is a Bash CLI that loops `codex exec` (the implementer) until
+`rb-lite` is a Bash CLI that loops a chosen implementer preset
+(`--implementer codex` or `--implementer claude`; there is no default) until
 the git diff stabilizes, then runs `codex review` and `claude -p` in
 parallel against the diff, feeds P0/P1/P2 findings back to the implementer
 for another round, and stops when reviewers go clean, the implementer
@@ -73,6 +74,13 @@ be on PATH and authenticated. If only one is available, the user can
 override the panel with a `.rb-lite-reviewers` file (see "Customizing the
 panel" below) — but the default behavior assumes both.
 
+**Implementer selection.** Recent `rb-lite` has **no default implementer**:
+you must pass `--implementer codex|claude` (or a raw `--implement-cmd`).
+Default to `--implementer codex` unless the user asks for claude. If the
+`rb-lite` on PATH rejects `--implementer` with "unknown run option", it
+predates implementer selection — update it (those older builds default to
+codex, so you can omit the flag there).
+
 ## Required outputs
 
 When you finish a run on the user's behalf, report:
@@ -111,10 +119,14 @@ When you finish a run on the user's behalf, report:
    prefix every invocation with `nix run github:douglaz/rb-lite --`. Note
    the resolved invocation in your plan so the user knows what's running.
 
-3. **Confirm prerequisites.** `command -v codex` and `command -v claude`.
-   If either is missing, stop and tell the user — the default panel won't
-   work, and silently substituting a single-reviewer panel would change
-   the loop's behavior.
+3. **Confirm prerequisites and choose the implementer.** `command -v codex`
+   and `command -v claude`. If either is missing, stop and tell the user —
+   the default panel won't work, and silently substituting a single-reviewer
+   panel would change the loop's behavior. rb-lite has **no default
+   implementer**: choose `--implementer codex` or `--implementer claude` (or a
+   raw `--implement-cmd`). Default to `--implementer codex` unless the user
+   asks for claude — the codex preset reuses its session within a round.
+   Omitting all of these is a usage error (exit 2).
 
 4. **Confirm the git state.** rb-lite refuses to run outside a git repo
    and ignores changes under `.rb-lite/`, `.ralph-burning/`, and
@@ -147,6 +159,7 @@ When you finish a run on the user's behalf, report:
 
    ```bash
    rb-lite run \
+     --implementer codex \
      --task "<self-contained task instruction>" \
      --base origin/main \
      --run-dir /tmp/rb-<short-tag>-run
@@ -220,7 +233,7 @@ The reviewer contract is strict:
 | Code | Status | Meaning | What to do |
 |---|---|---|---|
 | `0` | `clean` | Reviewers had no P0/P1/P2 findings (P3-only is also clean by default) | Ship; check `latest reviewer message in run-dir` for any leftover P3 nits worth addressing |
-| `2` | `usage_error` | Bad CLI args | Fix the invocation; the JSON line is still emitted with `run_dir: null` |
+| `2` | `usage_error` | Bad CLI args, incl. no implementer selected (`--implementer` and `--implement-cmd` both absent) | Fix the invocation; the JSON line is still emitted with `run_dir: null` |
 | `3` | `env_error` | Not in a git repo, missing tool, run-dir setup failure | Fix the env; rerun |
 | `10` | `implementer_failed` | Implementer subprocess returned non-zero (incl. timeout 124/137) | Look at `implementer-round-N-iter-K.stderr` for the most recent iter |
 | `11` | `review_panel_failed` | Zero reviewers exited 0 | Check `reviewer-round-N-K.stderr` for both reviewers; usually missing CLI or auth |
@@ -287,6 +300,7 @@ When something looks off, read these in order: `log.txt` → the latest
 
 ```bash
 rb-lite run \
+  --implementer codex \
   --task "Address any review-worthy issues on this branch. Smoke tests must still pass." \
   --base origin/main
 ```
@@ -295,6 +309,7 @@ rb-lite run \
 
 ```bash
 rb-lite run \
+  --implementer codex \
   --task "Implement the TODO at src/foo.rs:42 per the comments above it. Do not refactor unrelated code." \
   --base origin/main \
   --branch dogfood/foo-todo
@@ -304,7 +319,16 @@ rb-lite run \
 
 ```bash
 echo 'claude -p "<...>" --permission-mode acceptEdits --allowedTools "Bash,Read,Grep,Glob,Edit"' >.rb-lite-reviewers
-rb-lite run --task "..." --base origin/main
+rb-lite run --implementer codex --task "..." --base origin/main
 ```
 
 (remove the file when done)
+
+**Use claude as the implementer instead of codex:**
+
+```bash
+rb-lite run \
+  --implementer claude \
+  --task "..." \
+  --base origin/main
+```
