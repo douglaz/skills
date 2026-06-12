@@ -15,7 +15,7 @@ description: >-
   orchestration, durable resumable state, or multi-flow stages — prefer
   `ralph-burning` instead. Do NOT use for tiny direct edits, pure
   explanations, or one-shot patches that are faster to apply by hand.
-compatibility: Requires `rb-lite` on `PATH` or `nix run github:douglaz/rb-lite -- ...`. rb-lite has no default implementer — pass `--implementer codex|claude` (or `--implement-cmd`). Both `codex` and `claude` CLIs must be installed and authenticated for the default reviewer panel and the matching implementer preset.
+compatibility: Requires `rb-lite` on `PATH` or `nix run github:douglaz/rb-lite -- ...`. rb-lite has no default implementer — pass `--implementer` with one preset or a comma-separated cycle (default to `--implementer claude,codex`), or `--implement-cmd`. Both `codex` and `claude` CLIs must be installed and authenticated for the default reviewer panel and the implementer presets.
 ---
 
 Use `rb-lite` as the default lightweight implement → review loop for
@@ -27,11 +27,14 @@ a real reviewer pass adds value, but small enough that a full
 ## What rb-lite is, in one paragraph
 
 `rb-lite` is a Bash CLI that loops a chosen implementer preset
-(`--implementer codex` or `--implementer claude`; there is no default) until
-the git diff stabilizes, then runs `codex review` and `claude -p` in
-parallel against the diff, feeds P0/P1/P2 findings back to the implementer
-for another round, and stops when reviewers go clean, the implementer
-refuses to keep changing things, or a budget cap is hit. Every exit emits
+(`--implementer claude,codex`, a comma-separated cycle, or a single
+`codex`/`claude`; there is no default) until the git diff stabilizes, then
+runs `codex review` and `claude -p` in parallel against the diff, feeds
+P0/P1/P2 findings back to the implementer for another round, and stops when
+reviewers go clean, the implementer refuses to keep changing things, or a
+budget cap is hit. With a comma-separated list, round N uses
+`list[(N-1) mod len]`: each review round with findings hands the feedback
+to the next implementer in the cycle. Every exit emits
 a single JSON line on stdout summarizing the run. No daemons, no state DB,
 just a script and the per-run artifact directory.
 
@@ -75,11 +78,15 @@ override the panel with a `.rb-lite-reviewers` file (see "Customizing the
 panel" below) — but the default behavior assumes both.
 
 **Implementer selection.** Recent `rb-lite` has **no default implementer**:
-you must pass `--implementer codex|claude` (or a raw `--implement-cmd`).
-Default to `--implementer codex` unless the user asks for claude. If the
-`rb-lite` on PATH rejects `--implementer` with "unknown run option", it
-predates implementer selection — update it (those older builds default to
-codex, so you can omit the flag there).
+you must pass `--implementer` (or a raw `--implement-cmd`). Default to the
+cycling form `--implementer claude,codex` unless the user pins a single
+implementer — cycling alternates agents after every review round, so each
+round's findings are addressed by a fresh pair of eyes. If the `rb-lite` on
+PATH rejects the comma list with "--implementer must be one of claude,
+codex", it predates cycling — fall back to a single preset (`--implementer
+codex`) or update rb-lite. If it rejects `--implementer` itself with
+"unknown run option", it predates implementer selection entirely — update
+it (those oldest builds default to codex, so you can omit the flag there).
 
 ## Required outputs
 
@@ -123,10 +130,13 @@ When you finish a run on the user's behalf, report:
    and `command -v claude`. If either is missing, stop and tell the user —
    the default panel won't work, and silently substituting a single-reviewer
    panel would change the loop's behavior. rb-lite has **no default
-   implementer**: choose `--implementer codex` or `--implementer claude` (or a
-   raw `--implement-cmd`). Default to `--implementer codex` unless the user
-   asks for claude — the codex preset reuses its session within a round.
-   Omitting all of these is a usage error (exit 2).
+   implementer**: pass `--implementer` with a single preset or a
+   comma-separated cycle (or a raw `--implement-cmd`). Default to
+   `--implementer claude,codex` unless the user pins one — round 1 runs
+   claude, and each review round with findings hands off to the next preset
+   in the cycle (wrapping). Session reuse stays within a round, so cycling
+   never resumes the other agent's session. Omitting all of these is a
+   usage error (exit 2).
 
 4. **Confirm the git state.** rb-lite refuses to run outside a git repo
    and ignores changes under `.rb-lite/`, `.ralph-burning/`, and
@@ -159,7 +169,7 @@ When you finish a run on the user's behalf, report:
 
    ```bash
    rb-lite run \
-     --implementer codex \
+     --implementer claude,codex \
      --task "<self-contained task instruction>" \
      --base origin/main \
      --run-dir /tmp/rb-<short-tag>-run
@@ -300,7 +310,7 @@ When something looks off, read these in order: `log.txt` → the latest
 
 ```bash
 rb-lite run \
-  --implementer codex \
+  --implementer claude,codex \
   --task "Address any review-worthy issues on this branch. Smoke tests must still pass." \
   --base origin/main
 ```
@@ -309,7 +319,7 @@ rb-lite run \
 
 ```bash
 rb-lite run \
-  --implementer codex \
+  --implementer claude,codex \
   --task "Implement the TODO at src/foo.rs:42 per the comments above it. Do not refactor unrelated code." \
   --base origin/main \
   --branch dogfood/foo-todo
@@ -319,16 +329,16 @@ rb-lite run \
 
 ```bash
 echo 'claude -p "<...>" --permission-mode acceptEdits --allowedTools "Bash,Read,Grep,Glob,Edit"' >.rb-lite-reviewers
-rb-lite run --implementer codex --task "..." --base origin/main
+rb-lite run --implementer claude,codex --task "..." --base origin/main
 ```
 
 (remove the file when done)
 
-**Use claude as the implementer instead of codex:**
+**Pin a single implementer (no cycling):**
 
 ```bash
 rb-lite run \
-  --implementer claude \
+  --implementer codex \
   --task "..." \
   --base origin/main
 ```
