@@ -110,6 +110,32 @@ Codex:
 Use the orchestrating-with-ralph-burning skill to implement this with ralph-burning.
 ```
 
+### orchestrating-with-rb-lite
+
+Uses `rb-lite` as the lightweight implement/review loop for self-contained work
+on the current repo. It also drains an existing `br` backlog by running one
+focused rb-lite loop per ready bead, with one branch, one PR, one squash merge,
+and one bead closure per item.
+
+Claude Code:
+
+```text
+/orchestrating-with-rb-lite review and fix this branch before PR
+/orchestrating-with-rb-lite drain the ready br backlog with rb-lite
+```
+
+Codex:
+
+```text
+Use the orchestrating-with-rb-lite skill to run rb-lite until this branch is clean.
+Use the orchestrating-with-rb-lite skill to clear the ready br backlog one bead at a time.
+```
+
+Best fit: you want codex+claude implementation/review convergence without
+creating a full `ralph-burning` project. For backlog draining, the durable state
+comes from `br`, Git branches, PRs, and CI; rb-lite only handles one bead's
+inner loop at a time.
+
 ### codex-review-beads-ralph-loop
 
 Composes `codex review` + `br` beads + `ralph-burning` into a harden-until-clean
@@ -167,9 +193,9 @@ Install specific skills:
 ./install.sh codex-review-loop
 ./install.sh --target claude codex-review-loop
 ./install.sh --target codex plan-to-beads-transfer bead-polish-loop second-model-bead-audit orchestrating-with-ralph-burning
-./install.sh plan-to-beads-transfer bead-polish-loop second-model-bead-audit orchestrating-with-ralph-burning
+./install.sh plan-to-beads-transfer bead-polish-loop second-model-bead-audit orchestrating-with-ralph-burning orchestrating-with-rb-lite
 ./install.sh --target codex --migrate-existing plan-to-beads-transfer bead-polish-loop second-model-bead-audit
-./install.sh --target codex complexity-reducer
+./install.sh --target codex complexity-reducer orchestrating-with-rb-lite
 ```
 
 ## Uninstall
@@ -188,15 +214,21 @@ directories created by `--migrate-existing`.
 - [Claude Code](https://claude.com/claude-code) for Claude installation targets
 - [OpenAI Codex CLI](https://github.com/openai/codex) for Codex installation targets
 - `codex` on `PATH` for `codex-review-loop` and
-  `codex-review-beads-ralph-loop`
+  `codex-review-beads-ralph-loop`, and for the default `orchestrating-with-rb-lite`
+  reviewer panel
+- `claude` on `PATH` for the default `orchestrating-with-rb-lite` implementer
+  cycle and reviewer panel
+- `rb-lite` on `PATH`, or `nix run github:douglaz/rb-lite -- ...`, for
+  `orchestrating-with-rb-lite`
 - `br` and `bv` on `PATH`, plus a repo that uses `.beads/`, for
   `plan-to-beads-transfer`, `bead-polish-loop`,
-  `second-model-bead-audit`, and `codex-review-beads-ralph-loop`
+  `second-model-bead-audit`, `codex-review-beads-ralph-loop`, and
+  `orchestrating-with-rb-lite` backlog-drain mode
 - `ralph-burning` on `PATH`, or `nix run github:douglaz/ralph-burning -- ...`,
   for `orchestrating-with-ralph-burning` and
   `codex-review-beads-ralph-loop`
 - `gh` authenticated for `codex-review-beads-ralph-loop` (PR creation and
-  merge)
+  merge) and `orchestrating-with-rb-lite` backlog-drain mode
 
 ## License
 

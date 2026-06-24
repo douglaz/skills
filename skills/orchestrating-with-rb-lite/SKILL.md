@@ -1,28 +1,24 @@
 ---
 name: orchestrating-with-rb-lite
 description: >-
-  Uses `rb-lite` to drive a small implement → review loop on the current git
-  repo: a chosen codex or claude implementer, with a codex + claude parallel
-  reviewer panel, automatic stop on review-clean, consensus failure, P3-only
-  ratchet, or budget exhaustion. Use when the user says "rb-lite", "use
-  rb-lite", "run the rb-lite loop", "iterate on this with rb-lite",
-  "implement this with codex + claude until clean", "review-and-fix loop on
-  this branch", or asks for an iterative codex+claude review/fix cycle
-  scoped to the current branch. Also use to harden a feature branch before
-  opening a PR without setting up a `ralph-burning` project. Prefer
-  `rb-lite` for single-branch, single-task work where you just want "code →
-  review → fix → repeat → JSON summary." Do NOT use for cross-project
-  orchestration, durable resumable state, or multi-flow stages — prefer
-  `ralph-burning` instead. Do NOT use for tiny direct edits, pure
-  explanations, or one-shot patches that are faster to apply by hand.
-compatibility: Requires `rb-lite` on `PATH` or `nix run github:douglaz/rb-lite -- ...`. rb-lite has no default implementer — pass `--implementer` with one preset or a comma-separated cycle (default to `--implementer claude,codex`), or `--implement-cmd`. Both `codex` and `claude` CLIs must be installed and authenticated for the default reviewer panel and the implementer presets.
+  Uses `rb-lite` to drive lightweight implement → review loops in the current
+  git repo. Covers both one self-contained task on a branch and a serialized
+  `br` backlog drain where each ready bead becomes one branch, one rb-lite
+  run, one PR, one squash merge, and one bead closure. Use when the user says
+  "rb-lite", "use rb-lite", "run the rb-lite loop", "iterate on this with
+  rb-lite", "implement this with codex + claude until clean", "review-and-fix
+  loop on this branch", "drain the bead backlog with rb-lite", "solve beads
+  one by one with rb-lite", or asks for an iterative codex+claude review/fix
+  cycle. Prefer `rb-lite` when you want "code → review → fix → repeat → JSON
+  summary" without a full `ralph-burning` project. Do NOT use for durable
+  cross-project orchestration, planner/flow staging, or tiny one-shot edits.
+compatibility: Requires `rb-lite` on `PATH` or `nix run github:douglaz/rb-lite -- ...`. rb-lite has no default implementer — pass `--implementer` with one preset or a comma-separated cycle (default to `--implementer claude,codex`), or `--implement-cmd`. Both `codex` and `claude` CLIs must be installed and authenticated for the default reviewer panel and the implementer presets. Backlog-drain mode also requires `br`, `gh`, and the repo's normal local verification tools.
 ---
 
 Use `rb-lite` as the default lightweight implement → review loop for
-single-branch, single-task work in the current repo. Prefer it over ad hoc
-"please review and fix this" prompts when the work is meaningful enough that
-a real reviewer pass adds value, but small enough that a full
-`ralph-burning` project would be overkill.
+single-branch, single-task work in the current repo. Also use it as the
+execution engine for draining an existing `br` backlog: `br ready` supplies
+the work list, and each bead gets one focused rb-lite run.
 
 ## What rb-lite is, in one paragraph
 
@@ -43,6 +39,8 @@ just a script and the per-run artifact directory.
 - The user explicitly asks for `rb-lite` or "the rb-lite loop."
 - The user wants codex + claude to iterate on the current branch until a
   panel review is clean, on a self-contained task.
+- The user wants to drain, clear, or work through an existing `br` backlog
+  with rb-lite, solving beads one by one.
 - The change is bigger than a one-shot edit but small enough that managing
   it as a `ralph-burning` project would be overhead the user doesn't want.
 - The user wants a parseable summary of what happened (JSON line on stdout)
@@ -54,12 +52,16 @@ just a script and the per-run artifact directory.
 - The work spans multiple branches/projects, needs durable resumable state,
   or wants the planner/implementer/reviewer/final_review staging that
   `ralph-burning` provides — defer to `orchestrating-with-ralph-burning`.
+  Serialized bead draining is the exception: `br`, branches, PRs, and CI are
+  the durable state, while rb-lite only runs one bead at a time.
 - The user explicitly wants direct manual edits without an orchestration
   loop, or a single quick patch.
 - The codebase has no `codex` or `claude` available and the user can't
   install them — the default panel won't work.
 - The user wants a *one-shot* code review without any fix loop — `codex
   review` directly is simpler.
+- The user explicitly asks for `ralph-burning`; use
+  `orchestrating-with-ralph-burning` instead.
 
 ## Tool dependencies
 
@@ -76,6 +78,11 @@ The default reviewer panel uses `codex review` and `claude -p`. Both must
 be on PATH and authenticated. If only one is available, the user can
 override the panel with a `.rb-lite-reviewers` file (see "Customizing the
 panel" below) — but the default behavior assumes both.
+
+Backlog-drain mode additionally needs `br` for bead selection/state and `gh`
+for PR creation/checks/merge. It should use the repo's documented local gates;
+for Rust/Nix repos, default to `cargo fmt`, `cargo clippy`, `cargo test`, and
+`nix build` through `nix develop` where that is the established pattern.
 
 **Implementer selection.** Recent `rb-lite` has **no default implementer**:
 you must pass `--implementer` (or a raw `--implement-cmd`). Default to the
@@ -100,11 +107,15 @@ When you finish a run on the user's behalf, report:
 5. If the run failed (codes 10/11/12/13/70), a one-sentence diagnosis
    pointing at which artifact to look at.
 
+For backlog-drain mode, also report the bead ids closed, PRs merged, the next
+ready bead if the queue is not empty, and the exact reason the loop stopped.
+
 ## Default stance
 
 - Run from the user's current branch in their current working directory.
   Don't `git switch` unless the user asks for a feature branch
-  (`--branch NAME`).
+  (`--branch NAME`). Backlog-drain mode always uses one fresh feature branch
+  per bead.
 - Use `--base` matching what the user is comparing against. If they don't
   say, default to `origin/main` (modern projects) or `main` if no remote
   is configured. Avoid `origin/master` unless the user's repo actually
@@ -116,11 +127,19 @@ When you finish a run on the user's behalf, report:
   not lower it to `P3` unless the user wants to chase nits.
 - Read the JSON summary line, don't paraphrase. The schema is stable and
   parseable.
+- In backlog-drain mode, one bead equals one branch and one PR. Do not batch
+  unrelated beads into one rb-lite run.
+- Pre-existing backlog beads are immutable input. If a bead is ambiguous or
+  its acceptance criteria are weak, ask the user before launching rb-lite.
+- File rb-lite/tooling dogfood findings as fresh beads immediately. P0/P1
+  dogfood beads interrupt the queue; P2 or lower can wait.
 
 ## Workflow
 
 1. **Confirm the work is rb-lite-shaped.** Reread the user's request. If
-   it's a one-shot edit or a multi-project initiative, redirect.
+   it's a one-shot edit or a multi-project initiative, redirect. If the user
+   wants to clear an existing bead queue, use "Backlog-drain workflow" below
+   after resolving the rb-lite binary and prerequisites.
 
 2. **Resolve the binary.** `command -v rb-lite` first; otherwise plan to
    prefix every invocation with `nix run github:douglaz/rb-lite --`. Note
@@ -191,6 +210,147 @@ When you finish a run on the user's behalf, report:
 11. **Report concisely.** Tell the user what shipped, what didn't, where
     artifacts are, and whether anything needs manual follow-up. Don't
     paste the full review files — they're on disk.
+
+## Backlog-drain workflow
+
+Use this mode when the user wants to clear an existing `br` backlog with
+rb-lite. The beads are the input; do not invent a fresh work list. Codex is
+operating the queue and PR workflow, while rb-lite handles the inner
+implement → review loop for each bead.
+
+1. **Pick.** Run `br ready --limit 10`. Take the top P0 first; if none,
+   the lowest-numbered P1; only descend to P2 if the user says so or the
+   P1 list is empty / oversized.
+
+2. **Read.** Run `br show <id>` (and `br show <id> --json` if structured
+   fields help). If the acceptance criteria are vague, pause and ask the
+   user before writing the task.
+
+3. **Sync base and branch.** Confirm there is no unrelated dirty work, fetch
+   the selected base, and start the bead from that clean base. Use one branch
+   per bead, e.g. `feat/<bead-id>-<short-slug>`. Let rb-lite create/switch the
+   branch with `--branch` unless the branch already exists and the user
+   explicitly wants to resume it. Do not pile multiple beads onto one branch.
+
+4. **Task file.** Write a focused task file, usually under
+   `.rb-lite/tasks/bead-<id>.md`, using the template below. Keep it outside
+   the committed source diff unless the repo intentionally tracks task
+   files.
+
+5. **Run rb-lite.**
+
+   ```bash
+   rb-lite run \
+     --implementer claude,codex \
+     --task-file .rb-lite/tasks/bead-<id>.md \
+     --base origin/main \
+     --branch feat/<bead-id>-<short-slug> \
+     --run-dir /tmp/rb-lite-<bead-id>-run
+   ```
+
+   If using the nix fallback, prefix the same `run ...` arguments with
+   `nix run github:douglaz/rb-lite --`.
+
+6. **Read the JSON summary.** Exit `0` with status `clean` means the panel
+   had no P0/P1/P2 findings. For exit `10`, `11`, `12`, `13`, or `70`, use
+   the rb-lite diagnosis table below and inspect the run artifacts before
+   deciding whether to rerun, fix manually, or file a dogfood bead.
+
+7. **Run local gates.** Use the repo's own verification contract. In the
+   Rust/Nix repos this skill was built for, the default gate set is:
+
+   ```bash
+   nix develop -c cargo fmt --check
+   nix develop -c cargo clippy --locked -- -D warnings
+   nix develop -c cargo test --locked --features test-stub
+   nix build
+   ```
+
+   Treat real failures as part of the bead. Treat pre-existing flakiness as
+   a separate bead; don't hand-tune the branch to hide a flaky CI failure.
+
+8. **Commit, push, PR.** Add only intentional source/docs/config changes and
+   any bead-state sync files the repo expects. Do not commit `.rb-lite/` run
+   artifacts. Commit with a real message, push, and create a PR with a body
+   that includes the bead id, rb-lite status/rounds, and local test plan.
+
+9. **CI.** Use `gh pr checks <pr>` and wait for green. On known-flaky CI,
+   rerun failed jobs via `gh run rerun <id> --failed`; do not keep changing
+   product code just to dodge a flake.
+
+10. **Merge and reset.** Squash-merge the PR, delete the branch, fetch the
+    base branch, reset local state to the remote base, and rerun the
+    authoritative build gate before taking the next bead:
+
+    ```bash
+    gh pr merge <pr> --squash --delete-branch
+    git fetch origin main
+    git reset --hard origin/main
+    nix build
+    ```
+
+    Substitute `master` only when the repo actually uses `master`.
+
+11. **Close the bead.** Run `br update <bead-id> -s closed` after the merged
+    code is present on the base branch. If the repo requires a bead-state
+    sync/flush step, run it and leave `.beads/` clean according to that repo's
+    convention.
+
+12. **Loop.** Return to `br ready --limit 10`. Stop when the queue is empty,
+    the user says stop, a bead needs human product/security judgment, or a
+    P0/P1 dogfood bead interrupts the queue.
+
+## Backlog task template
+
+The task file for a bead should be self-contained and narrow:
+
+```markdown
+# Bead <id>: <one-line goal>
+
+## Problem description
+<2-4 paragraphs explaining what and why; reference the bead's acceptance
+criteria.>
+
+## Required changes
+<Numbered list of concrete edits: paths, functions, behaviors, expected
+shape of the change.>
+
+## Tests
+<3-7 specific test cases the implementer should add or update. Use behavior
+phrases like "X happens when Y", not only test function names.>
+
+## Scope guard
+- Do not refactor unrelated code.
+- Do not broaden this bead into adjacent backlog items.
+- Do not run `rb-lite` itself, send signals to your own process tree, or
+  otherwise interfere with the surrounding orchestration.
+- Treat `.rb-lite/`, `.ralph-burning/`, `.git/ralph-burning-live/`, and
+  `.beads/` as orchestration/state directories, not product code to review.
+
+## Acceptance criteria
+- <Acceptance criteria copied from `br show <id>`.>
+- The repo's local gate set passes on the final tree.
+```
+
+The scope guard is load-bearing. Without it, reviewer rounds can ratchet into
+adjacent beads or rb-lite's own run artifacts.
+
+## Backlog dogfooding
+
+Running rb-lite across a queue exposes workflow bugs. Capture them as beads
+while the evidence is fresh:
+
+- If rb-lite fails for a reason unrelated to the bead (tool crash, reviewer
+  panel failure, auth/config breakage, task parser bug, ignored-files problem,
+  or implementer self-interference), file a fresh bead with
+  `br create -t bug -p <0|1|2> -l dogfood,rb-lite "..." -d "..."`. Include
+  observed behavior, repro trace, expected behavior, likely fix options, and
+  acceptance criteria.
+- If the dogfood bead is P0 or P1, interrupt the queue and fix it next. Since
+  rb-lite is stateless, record the interrupted bead id, branch, run dir, and
+  JSON status; after the dogfood fix lands, restart rb-lite on that bead with
+  the same task file.
+- If the dogfood bead is P2 or lower, file it and keep moving.
 
 ## Constructing a good task
 
@@ -323,6 +483,18 @@ rb-lite run \
   --task "Implement the TODO at src/foo.rs:42 per the comments above it. Do not refactor unrelated code." \
   --base origin/main \
   --branch dogfood/foo-todo
+```
+
+**Run one bead from a backlog:**
+
+```bash
+br show <id>
+rb-lite run \
+  --implementer claude,codex \
+  --task-file .rb-lite/tasks/bead-<id>.md \
+  --base origin/main \
+  --branch feat/<id>-<short-slug> \
+  --run-dir /tmp/rb-lite-<id>-run
 ```
 
 **Run with a custom panel that disables the codex reviewer:**
