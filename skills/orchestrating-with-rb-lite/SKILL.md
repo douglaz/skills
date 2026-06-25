@@ -104,7 +104,9 @@ When you finish a run on the user's behalf, report:
 3. Rounds completed and the final reviewer state (clean, consensus
    failure, max-rounds, etc.).
 4. The run artifact directory path so the user can inspect logs.
-5. If the run failed (codes 10/11/12/13/70), a one-sentence diagnosis
+5. The independent verification you ran on the landed diff, and whether it
+   passed.
+6. If the run failed (codes 10/11/12/13/70), a one-sentence diagnosis
    pointing at which artifact to look at.
 
 For backlog-drain mode, also report the bead ids closed, PRs merged, the next
@@ -130,6 +132,17 @@ ready bead if the queue is not empty, and the exact reason the loop stopped.
   ratchet is a primary failure mode (see "Guard against overengineering").
 - Read the JSON summary line, don't paraphrase. The schema is stable and
   parseable.
+- **Treat `clean` as "no panel objections," not "verified correct."** rb-lite
+  leaves the final accepted diff **uncommitted in the working tree** (it does
+  not commit on your behalf) — always `git status` / `git diff` to see what
+  actually landed, then commit it yourself. And the panel may be **degraded**:
+  it succeeds with as few as one exit-0 reviewer, so a `clean` verdict can rest
+  on a single surviving reviewer (check `log.txt` for the `K of M reviewers
+  succeeded` line and the `review-round-*.md` status headers). Before trusting a
+  run, **independently re-run the repo's own gates** (tests, goldens/digests,
+  fmt/clippy) on the landed diff; for high-stakes work add a **separate
+  adversarial result-review** (e.g. `codex exec` over the committed diff) — the
+  panel's `clean` is one input, not the gate. See "Verify the landed diff."
 - In backlog-drain mode, one bead equals one branch and one PR. Do not batch
   unrelated beads into one rb-lite run.
 - Pre-existing backlog beads are immutable input. If a bead is ambiguous or
@@ -165,7 +178,10 @@ ready bead if the queue is not empty, and the exact reason the loop stopped.
    `.git/ralph-burning-live/` (those are runtime state). If the working
    tree has unrelated dirty changes the user didn't mention, surface that
    before launching — they will be in scope for the implementer and
-   reviewers.
+   reviewers. If the user intentionally wants rb-lite to operate on
+   existing uncommitted work, save an explicit pre-run snapshot first
+   (commit, stash, or patch file) so recovery can return to that exact
+   state without deleting unrelated work.
 
 5. **Pick a base ref.** Try in order: the explicit user choice, then
    `origin/main`, `origin/master`, `main`, `master`. Pick the first that
@@ -210,9 +226,47 @@ ready bead if the queue is not empty, and the exact reason the loop stopped.
     line; match on the JSON `status` and `exit_code`. The mapping is
     fixed (see the table below).
 
+10.5 **Verify the landed diff yourself (do not skip).** rb-lite's `clean` is
+    the reviewer panel's verdict, not ground truth — and the panel is often
+    degraded in practice. Before trusting a run: (a) `git status` / `git diff`
+    — the accepted diff sits **uncommitted in the working tree**, so confirm
+    what actually changed and that no throwaway/debug files snuck in, then
+    commit it yourself; (b) check `log.txt` for `K of M reviewers succeeded` —
+    a `clean` resting on 1-of-3 (e.g. a dead/unauthenticated reviewer) is one
+    opinion, not a panel consensus; (c) re-run the repo's own gates on the
+    landed diff (tests, goldens/digests, fmt/clippy); (d) for high-stakes work,
+    add a separate adversarial result-review (e.g. `codex exec` over the
+    committed diff). See "Verify the landed diff" below.
+
 11. **Report concisely.** Tell the user what shipped, what didn't, where
     artifacts are, and whether anything needs manual follow-up. Don't
     paste the full review files — they're on disk.
+
+## Verify the landed diff
+
+The single most important habit when driving rb-lite for real work: **`clean`
+means "no surviving reviewer raised a P0/P1/P2," not "correct."** Three things
+dogfooding made concrete:
+
+- **The diff is uncommitted.** rb-lite leaves the final accepted changes in the
+  working tree (it does not commit on your behalf). Always inspect with `git
+  status` / `git diff` and commit the intentional changes yourself — and watch
+  for stray scratch files (e.g. a `tmp_*` debug test the implementer created and
+  forgot to remove).
+- **The panel degrades silently.** The panel succeeds with as few as one exit-0
+  reviewer (a missing CLI, an expired/free-tier auth, or an 1800s reviewer
+  timeout drops the others). So a `clean` run can rest on a single reviewer's
+  read. Confirm the real panel strength in `log.txt` (`round N review panel
+  proceeded with partial failures: K of M reviewers succeeded`) and the
+  `review-round-*.md` status headers. The thinner the panel, the more the next
+  two steps matter.
+- **Independent verification is the gate, not the panel.** Re-run the project's
+  own contract (its test suites, byte-identical golden/digest checks,
+  `fmt`/`clippy`) on the landed diff yourself. For high-stakes or finding-shaped
+  work, also run a **separate adversarial result-review** with a second model
+  over the committed diff — phrased to attack: *is the result genuine, was
+  anything tuned to pass the panel, is the claim honestly scoped?* Treat the
+  panel's `clean` as one input into your own PASS decision.
 
 ## Backlog-drain workflow
 
@@ -438,7 +492,7 @@ The reviewer contract is strict:
 
 | Code | Status | Meaning | What to do |
 |---|---|---|---|
-| `0` | `clean` | Reviewers had no P0/P1/P2 findings (P3-only is also clean by default) | Ship; check `latest reviewer message in run-dir` for any leftover P3 nits worth addressing |
+| `0` | `clean` | Reviewers had no P0/P1/P2 findings (P3-only is also clean by default) | Verify the landed diff yourself, rerun the repo's gates, then ship if they pass; check `latest reviewer message in run-dir` for any leftover P3 nits worth addressing |
 | `2` | `usage_error` | Bad CLI args, incl. no implementer selected (`--implementer` and `--implement-cmd` both absent) | Fix the invocation; the JSON line is still emitted with `run_dir: null` |
 | `3` | `env_error` | Not in a git repo, missing tool, run-dir setup failure | Fix the env; rerun |
 | `10` | `implementer_failed` | Implementer subprocess returned non-zero (incl. timeout 124/137) | Look at `implementer-round-N-iter-K.stderr` for the most recent iter |
@@ -479,9 +533,25 @@ The JSON schema (every exit, last stdout line):
   implementer declining to act. The consensus-failure stop will catch
   it after `--max-noop-rounds` (default 2) — exit 13. Don't lower this
   unless you understand the trade-off.
+- **Implementer dies (exit 10) — rogue self-terminate or transient API
+  failure.** Two recurring causes: the implementer signals/kills its own
+  process tree (exit 143 / SIGTERM, with a self-experimentation note in
+  `implementer-round-*-iter-*.stderr` — the "self-destruct" mode the task's
+  scope guard is meant to prevent), or a transient provider error (429
+  rate-limit / 529 overload). Both leave a partial, unreliable working tree.
+  Recovery: restore only to the saved pre-run state (reset/delete the rb-lite
+  impl branch if it created one; otherwise apply the pre-run commit/stash/patch
+  you made before launch). Do not blindly run `git checkout -- .` or remove all
+  new files on a branch that may have had user work before rb-lite started.
+  Then **relaunch leading with the OTHER implementer** — swap the round-1 preset
+  (`--implementer claude,codex` ↔ `codex,claude`). A per-implementer failure
+  (one provider overloaded, or one CLI's self-experiment habit) usually doesn't
+  recur when the other leads round 1.
 - **Run hangs.** rb-lite has a default 14400s (4 hour) per-iteration
   timeout — far longer than any realistic iteration. If it actually
-  needs to be lower, pass `--implement-timeout SECS`.
+  needs to be lower, pass `--implement-timeout SECS`. (Reviewers have their
+  own 1800s timeout; a timed-out reviewer is dropped from the panel — see
+  "Verify the landed diff" on degraded panels.)
 - **`nix run` fails with HTTP 404.** The repo went private, or the user
   doesn't have access. Confirm
   https://github.com/douglaz/rb-lite is public and try again.
