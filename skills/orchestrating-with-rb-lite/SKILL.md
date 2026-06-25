@@ -125,6 +125,9 @@ ready bead if the queue is not empty, and the exact reason the loop stopped.
 - Trust rb-lite's stop conditions. The default `--min-findings-severity P2`
   means P3-only review rounds auto-stop the loop — that's intentional, do
   not lower it to `P3` unless the user wants to chase nits.
+- Default to the **simplest correct implementation for the milestone**, and bound
+  every task with non-goals + a size budget — overengineering via the reviewer
+  ratchet is a primary failure mode (see "Guard against overengineering").
 - Read the JSON summary line, don't paraphrase. The schema is stable and
   parseable.
 - In backlog-drain mode, one bead equals one branch and one PR. Do not batch
@@ -322,6 +325,10 @@ phrases like "X happens when Y", not only test function names.>
 ## Scope guard
 - Do not refactor unrelated code.
 - Do not broaden this bead into adjacent backlog items.
+- Build the SIMPLEST correct thing for this bead. Do NOT build: <non-goals —
+  defensive edge cases beyond the threat model, config knobs, new abstractions,
+  retry/scheduling machinery>. Target ~N lines / one focused module; if you are
+  writing materially more, stop and simplify.
 - Do not run `rb-lite` itself, send signals to your own process tree, or
   otherwise interfere with the surrounding orchestration.
 - Treat `.rb-lite/`, `.ralph-burning/`, `.git/ralph-burning-live/`, and
@@ -372,6 +379,35 @@ each round. A few rules from observed dogfood failures:
   stderr.
 - **Reference, don't paste.** If the task touches a spec or PRD, point
   at the file path; don't inline 200 lines of spec into `--task`.
+
+## Guard against overengineering
+
+The reviewer panel ratchets by design: each round surfaces deeper edge cases, so
+relaying every finding back grows the change without bound — a "simple" bead can
+balloon into thousands of lines of speculative hardening across several rounds.
+Default to the **simplest correct implementation for the milestone**, and bound it
+actively. This is a primary failure mode, not a nicety.
+
+- **Every task carries a non-goals / "do NOT build" list and a rough size budget.**
+  Name what to leave OUT — defensive edge cases beyond the milestone's threat
+  model, config knobs, new abstractions, retry/scheduling machinery — and a target
+  like "one focused module, ~N lines; if you're writing materially more, stop and
+  simplify." Pin "done" to the specific named tests and nothing beyond them.
+- **At the gate, hold scope.** After a clean run, relay back ONLY genuine P0/P1
+  milestone blockers (money / secret / correctness). Do NOT feed P2/P3
+  gold-plating into another round — note it and move on. Stop and merge once the
+  core is sound; a verified minimal bead beats an ever-deeper one. (Raising
+  `--min-findings-severity P1` makes the loop itself ignore P2 nits.)
+- **Detecting it takes sharp eyes — proxies flag, analysis confirms.** Two cheap
+  proxies raise the alarm: a high **review-round count** (the loop keeps finding
+  ever-deeper edges) and a large **line count** versus comparable beads (a "simple"
+  module returning at thousands of lines). But proxies only flag, and can mislead —
+  a genuinely hard bead earns its rounds; a necessarily-verbose module earns its
+  lines. The only way to be SURE is to **read the prompt's GOAL, then compare it to
+  the COMPLEXITY of what was actually built**: do the modules, abstractions,
+  edge-case handling, and config surface match what the goal truly requires, or has
+  the implementation grown past it? When they diverge, cut back to the goal — and
+  treat the proxies as the cue to run that comparison, not as the verdict itself.
 
 ## Customizing the panel
 
