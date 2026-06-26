@@ -10,9 +10,9 @@ description: >-
   loop on this branch", "drain the bead backlog with rb-lite", "solve beads
   one by one with rb-lite", or asks for an iterative codex+claude review/fix
   cycle. Prefer `rb-lite` when you want "code → review → fix → repeat → JSON
-  summary" without a full `ralph-burning` project. Do NOT use for durable
-  cross-project orchestration, planner/flow staging, or tiny one-shot edits.
-compatibility: Requires `rb-lite` on `PATH` or `nix run github:douglaz/rb-lite -- ...`. rb-lite has no default implementer — pass `--implementer` with one preset or a comma-separated cycle (default to `--implementer claude,codex`), or `--implement-cmd`. Both `codex` and `claude` CLIs must be installed and authenticated for the default reviewer panel and the implementer presets. Backlog-drain mode also requires `br`, `gh`, and the repo's normal local verification tools.
+  summary" without a durable project orchestrator. Do NOT use for
+  cross-project orchestration, open-ended planning, or tiny one-shot edits.
+compatibility: Requires `rb-lite` on `PATH` or `nix run github:douglaz/rb-lite -- ...`. rb-lite itself has no default implementer, so pass `--implementer` with one preset or a comma-separated cycle, or use `--implement-cmd`; this skill defaults to `--implementer claude,codex` unless the user pins another choice. `codex` and `claude` must be installed and authenticated; the default Claude reviewer needs `jq`, and normal timeout-enabled runs need a compatible `timeout`, either from the host shell for source installs or from the Nix wrapper for Nix installs. `npx` plus Gemini credentials enable the third default reviewer but are not required for the panel to proceed. Backlog-drain mode also requires `br`, `gh`, and the repo's normal local verification tools.
 ---
 
 Use `rb-lite` as the default lightweight implement → review loop for
@@ -25,10 +25,11 @@ the work list, and each bead gets one focused rb-lite run.
 `rb-lite` is a Bash CLI that loops a chosen implementer preset
 (`--implementer claude,codex`, a comma-separated cycle, or a single
 `codex`/`claude`; there is no default) until the git diff stabilizes, then
-runs `codex review` and `claude -p` in parallel against the diff, feeds
-P0/P1/P2 findings back to the implementer for another round, and stops when
-reviewers go clean, the implementer refuses to keep changing things, or a
-budget cap is hit. With a comma-separated list, round N uses
+runs the reviewer panel in parallel (default: codex, claude+`jq`, and
+opportunistic Gemini), feeds P0/P1/P2 findings back to the implementer for
+another round, and stops when reviewers go clean, the implementer refuses to
+keep changing things, or iteration limits (`--max-rounds` / `--max-iters`) are
+hit. With a comma-separated list, round N uses
 `list[(N-1) mod len]`: each review round with findings hands the feedback
 to the next implementer in the cycle. Every exit emits
 a single JSON line on stdout summarizing the run. No daemons, no state DB,
@@ -42,7 +43,7 @@ just a script and the per-run artifact directory.
 - The user wants to drain, clear, or work through an existing `br` backlog
   with rb-lite, solving beads one by one.
 - The change is bigger than a one-shot edit but small enough that managing
-  it as a `ralph-burning` project would be overhead the user doesn't want.
+  it as a durable multi-stage project would be overhead the user doesn't want.
 - The user wants a parseable summary of what happened (JSON line on stdout)
   rather than free-form prose.
 - The user just wants a "review-and-fix" pass before opening a PR.
@@ -50,18 +51,17 @@ just a script and the per-run artifact directory.
 ## Do NOT use this skill when
 
 - The work spans multiple branches/projects, needs durable resumable state,
-  or wants the planner/implementer/reviewer/final_review staging that
-  `ralph-burning` provides — defer to `orchestrating-with-ralph-burning`.
-  Serialized bead draining is the exception: `br`, branches, PRs, and CI are
-  the durable state, while rb-lite only runs one bead at a time.
+  or is still open-ended planning. Convert the plan into beads or a clearer
+  spec first, then run rb-lite on one bounded unit at a time. Serialized bead
+  draining is the exception: `br`, branches, PRs, and CI are the durable state,
+  while rb-lite only runs one bead at a time.
 - The user explicitly wants direct manual edits without an orchestration
   loop, or a single quick patch.
-- The codebase has no `codex` or `claude` available and the user can't
-  install them — the default panel won't work.
+- The environment has no `codex` or `claude`, or a non-Nix rb-lite install has
+  no `jq` or compatible `timeout`, and the user can't install them — the
+  default panel won't work as intended.
 - The user wants a *one-shot* code review without any fix loop — `codex
   review` directly is simpler.
-- The user explicitly asks for `ralph-burning`; use
-  `orchestrating-with-ralph-burning` instead.
 
 ## Tool dependencies
 
@@ -74,10 +74,23 @@ Resolution order, in this order:
 If neither path works, stop and tell the user to install `rb-lite` (e.g.
 `nix profile install github:douglaz/rb-lite`) or expose it on PATH.
 
-The default reviewer panel uses `codex review` and `claude -p`. Both must
-be on PATH and authenticated. If only one is available, the user can
-override the panel with a `.rb-lite-reviewers` file (see "Customizing the
-panel" below) — but the default behavior assumes both.
+The default reviewer panel runs three reviewers concurrently:
+
+- `codex review --base "$BASE"`
+- `claude -p ... --output-format json | jq ...`
+- `npx -y @google/gemini-cli --policy "$RUN_DIR/gemini-policy.toml" ...`
+
+`codex` and `claude` must be on PATH for the default panel to behave as
+intended and must also be authenticated. The default Claude reviewer needs
+`jq`, and normal rb-lite runs need a `timeout` binary that supports
+`--kill-after` because both implementer and reviewer timeouts are enabled by
+default. If rb-lite is resolved through `nix run github:douglaz/rb-lite --` or
+a Nix-profile wrapper, do not reject the setup just because the host shell
+cannot find `jq` or GNU `timeout`; the upstream wrapper supplies those to the
+rb-lite process. For source/path installs, check the host shell. Gemini is
+opportunistic: if `npx` or Gemini credentials are missing, that reviewer fails
+and the panel can still proceed with the remaining successful reviewers. If you
+intentionally want a different panel, write `.rb-lite-reviewers` before running.
 
 Backlog-drain mode additionally needs `br` for bead selection/state and `gh`
 for PR creation/checks/merge. It should use the repo's documented local gates;
@@ -161,17 +174,24 @@ ready bead if the queue is not empty, and the exact reason the loop stopped.
    prefix every invocation with `nix run github:douglaz/rb-lite --`. Note
    the resolved invocation in your plan so the user knows what's running.
 
-3. **Confirm prerequisites and choose the implementer.** `command -v codex`
-   and `command -v claude`. If either is missing, stop and tell the user —
-   the default panel won't work, and silently substituting a single-reviewer
-   panel would change the loop's behavior. rb-lite has **no default
-   implementer**: pass `--implementer` with a single preset or a
-   comma-separated cycle (or a raw `--implement-cmd`). Default to
-   `--implementer claude,codex` unless the user pins one — round 1 runs
-   claude, and each review round with findings hands off to the next preset
-   in the cycle (wrapping). Session reuse stays within a round, so cycling
-   never resumes the other agent's session. Omitting all of these is a
-   usage error (exit 2).
+3. **Confirm prerequisites and choose the implementer.** Always check
+   `command -v codex` and `command -v claude`; if either is missing, stop and
+   tell the user. For a source/path rb-lite install, also check `command -v jq`
+   and `timeout --kill-after=1s 1s true`. For the
+   `nix run github:douglaz/rb-lite --` invocation or a Nix-profile wrapper, skip
+   host `jq`/`timeout` rejection because the wrapper supplies them inside
+   rb-lite. If compatible `timeout` is genuinely unavailable for the resolved
+   rb-lite invocation, stop unless the user explicitly accepts disabling both
+   subprocess timeouts and you pass
+   `--implement-timeout '' --reviewer-timeout ''` on every invocation. Check
+   `command -v npx` too; missing Gemini support is allowed, but report that the
+   default panel may run as codex+claude only. rb-lite has **no default
+   implementer**: pass `--implementer` with a single preset or a comma-separated
+   cycle (or a raw `--implement-cmd`). Default to `--implementer claude,codex`
+   unless the user pins one — round 1 runs claude, and each review round with
+   findings hands off to the next preset in the cycle (wrapping). Session reuse
+   stays within a round, so cycling never resumes the other agent's session.
+   Omitting all of these is a usage error (exit 2).
 
 4. **Confirm the git state.** rb-lite refuses to run outside a git repo
    and ignores changes under `.rb-lite/`, `.ralph-burning/`, and
@@ -185,7 +205,8 @@ ready bead if the queue is not empty, and the exact reason the loop stopped.
 
 5. **Pick a base ref.** Try in order: the explicit user choice, then
    `origin/main`, `origin/master`, `main`, `master`. Pick the first that
-   resolves. Print the chosen ref in your plan.
+   resolves. Print the chosen ref in your plan and always pass it with
+   `--base`; upstream rb-lite's own CLI default is still `origin/master`.
 
 6. **Decide on a feature branch.** If the user said "iterate on the
    current branch," don't pass `--branch`. If they said "do this on a
@@ -241,6 +262,27 @@ ready bead if the queue is not empty, and the exact reason the loop stopped.
 11. **Report concisely.** Tell the user what shipped, what didn't, where
     artifacts are, and whether anything needs manual follow-up. Don't
     paste the full review files — they're on disk.
+
+## Long-run operator discipline
+
+The old heavyweight project workflow carried useful habits that still matter
+when rb-lite runs for more than a quick pass:
+
+- **Use task files for nontrivial work.** Prefer `--task-file` with the same
+  structure as the backlog template: problem description, implementation hints,
+  required changes, tests, scope guard, and acceptance criteria. Keep large specs
+  referenced by path rather than pasted into the prompt.
+- **Treat git + run artifacts as the source of truth.** rb-lite is stateless; the
+  durable state is the branch, the worktree, the run dir, any bead/PR state, and
+  the final JSON line. Use `git status`, `git diff`, `log.txt`, and the latest
+  `review-round-*.md` files instead of reconstructing state from memory.
+- **Track convergence, not just completion.** Healthy runs trend toward fewer
+  actionable findings and smaller diffs. If findings oscillate, new sibling
+  findings keep appearing, or reviewers start debating scope, stop and re-scope
+  or finish manually.
+- **Do not restart blindly.** Before rerunning after a failure, record the branch,
+  run dir, JSON status, and whether the worktree should be preserved, restored to
+  the pre-run snapshot, or split into a smaller unit.
 
 ## Verify the landed diff
 
@@ -534,15 +576,16 @@ failure.
 
 ## Customizing the panel
 
-The default panel is `codex review` + `claude -p` in parallel. To
-override, drop a `.rb-lite-reviewers` file in the repo root before
-running, with one shell command per line:
+The default panel is `codex review` + `claude -p ... | jq ...` + Gemini via
+`npx` in parallel. To override, drop a `.rb-lite-reviewers` file in the repo
+root before running, with one shell command per line:
 
-```
+```bash
 # .rb-lite-reviewers
 codex review --base "$BASE"
-claude -p "Review the diff vs $BASE. Tag findings P0/P1/P2/P3. Output 'No findings.' if clean." --permission-mode acceptEdits --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
-my-linter --json | wrap-as-p-tags
+set -o pipefail; claude -p "Review the diff vs $BASE. Tag findings P0/P1/P2/P3. Output 'No findings.' if clean." --permission-mode acceptEdits --output-format json --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch,Task,TaskOutput,TaskStop,Monitor" | jq -er 'if .is_error then error(.result // "claude reviewer returned is_error") else (.result // empty) end'
+if [[ -e node_modules/@google/gemini-cli || -L node_modules/@google/gemini-cli || -e node_modules/.bin/gemini || -L node_modules/.bin/gemini ]]; then printf "%s\n" "rb-lite: refusing to run Gemini reviewer because this repository has a local Gemini CLI package/bin that npx could prefer; customize this reviewer only if intentional" >&2; exit 1; fi; npx -y @google/gemini-cli --policy "$RUN_DIR/gemini-policy.toml" --approval-mode yolo -p "Review the diff vs $BASE. Tag findings P0/P1/P2/P3. Output 'No findings.' if clean."
+(my-linter --json || true) | wrap-as-p-tags
 ```
 
 Reviewer commands run **concurrently**, get `BASE`/`RUN_DIR`/`ROUND`/
@@ -553,9 +596,13 @@ the run.
 The reviewer contract is strict:
 - Findings on stdout, prefixed near the start of the line with the
   severity tag (`P2:`, `[P2]`, `**P2**:`, `Issue 1 (P2):`, …).
+- Successful reviewer stderr is treated as tool noise and is not fed back to
+  the implementer; failed reviewer stderr gets a tail in that reviewer's
+  markdown file.
 - Exit 0 = real review; exit non-zero = tool failure (output may be
-  partial). A linter that exits non-zero on findings must be wrapped:
-  `mylinter || true`.
+  partial). Findings detection ignores non-zero reviewers, and failed reviewer
+  files are not included in `REVIEW_FILES` for the next implementer round. A
+  linter that exits non-zero on findings must be wrapped: `mylinter || true`.
 
 ## Exit codes and JSON schema
 
@@ -563,9 +610,9 @@ The reviewer contract is strict:
 |---|---|---|---|
 | `0` | `clean` | Reviewers had no P0/P1/P2 findings (P3-only is also clean by default) | Verify the landed diff yourself, rerun the repo's gates, then ship if they pass; check `latest reviewer message in run-dir` for any leftover P3 nits worth addressing |
 | `2` | `usage_error` | Bad CLI args, incl. no implementer selected (`--implementer` and `--implement-cmd` both absent) | Fix the invocation; the JSON line is still emitted with `run_dir: null` |
-| `3` | `env_error` | Not in a git repo, missing tool, run-dir setup failure | Fix the env; rerun |
-| `10` | `implementer_failed` | Implementer subprocess returned non-zero (incl. timeout 124/137) | Look at `implementer-round-N-iter-K.stderr` for the most recent iter |
-| `11` | `review_panel_failed` | Zero reviewers exited 0 | Check `reviewer-round-N-K.stderr` for both reviewers; usually missing CLI or auth |
+| `3` | `env_error` | Not in a git repo, missing tool, unsupported `timeout`, branch creation failure, run-dir setup failure | Fix the env; rerun |
+| `10` | `implementer_failed` | Implementer subprocess returned non-zero (incl. timeout 124/137) or hit max-iters before stabilizing | Look at `implementer-round-N-iter-K.stderr` for the most recent iter |
+| `11` | `review_panel_failed` | Zero reviewers exited 0 | Check `reviewer-round-N-K.stderr` for all reviewers; usually missing CLI/auth or `jq` failure |
 | `12` | `max_rounds_hit` | Burned all `--max-rounds` without convergence | Inspect the latest review files; either bump `--max-rounds`, lower `--min-findings-severity` to skip nits, or address the remaining findings manually |
 | `13` | `consensus_failure` | Implementer kept declining to act on findings for `--max-noop-rounds` consecutive rounds | Read the latest review; the implementer is signaling it disagrees. Apply the fix manually if you side with reviewers, or override `--max-noop-rounds` if you side with the implementer |
 | `70` | `internal_error` | Internal invariant violation or unhandled shell failure | Read `log.txt` and the most recent stderr files; this is rare |
@@ -586,7 +633,8 @@ The JSON schema (every exit, last stdout line):
     "max_iters": "integer",
     "max_noop_rounds": "integer",
     "min_findings_severity": "string",
-    "implement_timeout_secs": "integer | null"
+    "implement_timeout_secs": "integer | null",
+    "reviewer_timeout_secs": "integer | null"
   }
 }
 ```
@@ -625,9 +673,10 @@ The JSON schema (every exit, last stdout line):
   your entire run getting a signal from outside.) **Corollary for stopping your OWN
   run:** never `pkill -f rb-lite` (or `-f <some-runword>`) — the pattern matches your
   own shell (exit 144 self-kill) AND every other session's run. Stop the tracked
-  background task (TaskStop), or kill the exact PID (`pgrep`/`kill <pid>`). Note that
-  killing rb-lite's wrapper does NOT kill its implementer child — kill that orphan
-  by PID separately.
+  background task (TaskStop), or send SIGTERM to the exact wrapper PID
+  (`pgrep`/`kill <pid>`). Current rb-lite forwards TERM/INT/HUP/QUIT to the active
+  child process. If you used SIGKILL, or if implementer/reviewer children remain
+  after TERM/INT/HUP/QUIT forwarding, kill the exact orphaned child PIDs separately.
 - **A run balloons — many rounds, a huge module, edits sprawling into other files.**
   This bead was high-blast-radius and ran unsupervised. Don't keep relaying findings;
   discard and apply the re-scope + file-lock + watch-each-round recovery playbook in
@@ -652,6 +701,8 @@ Inside `<run-dir>/`:
 - `review-round-N-K.md` — per-reviewer markdown the implementer reads
   on the next round (with status header and stderr-tail for failed
   reviewers).
+- `gemini-policy.toml` — generated allow-all policy used by the default Gemini
+  reviewer.
 
 When something looks off, read these in order: `log.txt` → the latest
 `review-round-*.md` files → the relevant `*.stderr`.
@@ -710,7 +761,9 @@ rb-lite run \
 **Run with a custom panel that disables the codex reviewer:**
 
 ```bash
-echo 'claude -p "<...>" --permission-mode acceptEdits --allowedTools "Bash,Read,Grep,Glob,Edit"' >.rb-lite-reviewers
+cat >.rb-lite-reviewers <<'EOF'
+set -o pipefail; claude -p "<...>" --permission-mode acceptEdits --output-format json --allowedTools "Bash,Read,Grep,Glob,Edit,Task,TaskOutput,TaskStop" | jq -er 'if .is_error then error(.result // "claude reviewer returned is_error") else (.result // empty) end'
+EOF
 rb-lite run --implementer claude,codex --task "..." --base origin/main
 ```
 
