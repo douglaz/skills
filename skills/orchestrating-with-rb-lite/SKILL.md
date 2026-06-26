@@ -433,6 +433,17 @@ each round. A few rules from observed dogfood failures:
   stderr.
 - **Reference, don't paste.** If the task touches a spec or PRD, point
   at the file path; don't inline 200 lines of spec into `--task`.
+- **Keep the formatter scoped.** The implementer runs the project formatter
+  (`cargo fmt`, `prettier`, …) each round. On a tree that isn't already
+  format-clean it'll reformat the WHOLE workspace, burying the bead's real diff
+  in unrelated churn (and dragging those files into the reviewers' scope). Before
+  launch, run the repo's formatter check against the selected base. If it fails,
+  land or isolate that formatting cleanup before starting the bead branch. Then add
+  to the task: "run the formatter only on the files you changed; do not reformat
+  unrelated files."
+- **Lock the files on high-blast-radius beads.** If the bead sits next to modules
+  the implementer might rewrite, name the exact file(s) it may create/modify and
+  forbid all others — see "Bounding a high-blast-radius bead."
 
 ## Guard against overengineering
 
@@ -447,11 +458,15 @@ actively. This is a primary failure mode, not a nicety.
   model, config knobs, new abstractions, retry/scheduling machinery — and a target
   like "one focused module, ~N lines; if you're writing materially more, stop and
   simplify." Pin "done" to the specific named tests and nothing beyond them.
-- **At the gate, hold scope.** After a clean run, relay back ONLY genuine P0/P1
-  milestone blockers (money / secret / correctness). Do NOT feed P2/P3
-  gold-plating into another round — note it and move on. Stop and merge once the
-  core is sound; a verified minimal bead beats an ever-deeper one. (Raising
-  `--min-findings-severity P1` makes the loop itself ignore P2 nits.)
+- **At the gate, judge each finding — don't reflexively relay or reflexively cut.**
+  Genuine P0/P1 milestone blockers (money / secret / correctness) always go back.
+  Real P2 polish is worth keeping too — relay it while it's improving the code. P3
+  is inspection-only under the default P2 floor unless you intentionally lower the
+  floor to chase nits. The judgment call is *when low-severity polish turns into
+  gold-plating* (hardening past the goal, edge cases beyond the threat model): at
+  that point stop feeding it and merge. A verified minimal bead beats an ever-deeper
+  one. (Raising `--min-findings-severity P1` makes the loop itself ignore P2 nits —
+  reach for it once the P2 stream has gone gold-plating, not from the start.)
 - **Detecting it takes sharp eyes — proxies flag, analysis confirms.** Two cheap
   proxies raise the alarm: a high **review-round count** (the loop keeps finding
   ever-deeper edges) and a large **line count** versus comparable beads (a "simple"
@@ -462,6 +477,60 @@ actively. This is a primary failure mode, not a nicety.
   edge-case handling, and config surface match what the goal truly requires, or has
   the implementation grown past it? When they diverge, cut back to the goal — and
   treat the proxies as the cue to run that comparison, not as the verdict itself.
+
+## Bounding a high-blast-radius bead
+
+Some beads invite sprawl: the core is genuinely hard, or it sits next to several
+modules the implementer could "helpfully" rewrite. Left unbounded, the loop treats
+every adjacent file as fair game. One real run ballooned to 25 rounds and a
+3600-line module that also rewrote four already-merged files — it had to be
+discarded wholesale. Bound these from the **first** run, not after they blow up:
+
+- **Lock the files.** Put a hard file constraint at the TOP of the task: "Create
+  EXACTLY these file(s): `<paths>`. Do NOT modify any other file. If you believe you
+  need to touch another file, the design is wrong — STOP and restructure to use the
+  existing public seams as they are." This is the single most effective brake on
+  cross-bead contamination — much stronger than the scope guard's generic "don't
+  refactor unrelated code," because it names the boundary.
+- **Keep the bead self-contained.** If the work needs a small piece of an adjacent
+  module's behavior, have the task do that small piece inline against the existing
+  public API — do NOT let it reach in and "factor out" a shared helper. Reaching
+  across the seam is exactly how one bead's run ends up rewriting three other beads.
+- **Watch the run; don't fire-and-forget.** Active supervision is the real control —
+  the caps below are backstops, not the method. Tail each round's diff and review
+  output as it lands (`git diff` on the branch, the latest `review-round-*.md`), and
+  intervene the moment the code starts degrading: edits creeping outside the locked
+  files, speculative abstractions, a "simple" module ballooning. Catching a bad round
+  as it happens is far cheaper than discarding 25 of them.
+- **Treat `--max-rounds` as a checkpoint, not a finish.** A low cap (e.g. `6`) forces
+  a pause to assess rather than ending the work. At the checkpoint, read what actually
+  changed: if the findings were legitimate and the code is sound and still converging,
+  relaunch for another batch (6 or more) to finish; if it's sprawling or gold-plating,
+  stop and re-scope instead. The cap buys you a decision point, not a verdict.
+- **Don't pre-cap finding severity.** Leave the default (`P2`) so genuine P2 polish
+  lands — those are often real improvements worth keeping. P3-only findings are not
+  relayed by default; inspect them manually, or lower the floor to P3 only when the
+  user explicitly wants to chase nits. Raise `--min-findings-severity P1` only
+  *later*, once you've judged that the remaining P2 stream has crossed from useful
+  polish into harmful gold-plating (hardening the code past the goal). Cutting it
+  off from round 1 throws away good work.
+- **Re-scope before re-running.** If a bead is too big to bound, it's too big — split
+  the secondary concern into its own bead and run only the core. (One reconcile bead
+  shed its "downtime credit" half into a separate bead; the core then fit a single
+  ~800-line module that bounded cleanly.)
+
+**The recovery playbook when one blows up anyway:** do NOT just relaunch the same
+run unchanged — it will blow up the same way. (1) Discard the wreckage back to the
+saved pre-run state (`git reset`/`checkout`/`clean`, or apply your pre-run snapshot).
+(2) Re-scope: split off the secondary concern as its own bead. (3) Re-run with the
+file-lock and a low `--max-rounds` checkpoint, watching each round — keep the default
+severity so real P2 polish still lands, raising the floor only if remaining P2s turn
+into gold-plating. (4) At each checkpoint, decide: if the remaining findings are legitimate
+and the code is sound, relaunch for more rounds to finish; if only a P1 or two are
+left and another full pass isn't worth it, apply those fixes yourself, re-run the
+repo's gates, and commit. A bounded run not closing every finding in one go is
+expected — finishing the last mile by hand or with one more batch is normal, not a
+failure.
 
 ## Customizing the panel
 
@@ -547,6 +616,23 @@ The JSON schema (every exit, last stdout line):
   (`--implementer claude,codex` ↔ `codex,claude`). A per-implementer failure
   (one provider overloaded, or one CLI's self-experiment habit) usually doesn't
   recur when the other leads round 1.
+- **Whole run dies mid-round with a signal and ~no output (exit 143 / 137, status
+  `internal_error`).** If you have more than one rb-lite run going (across sessions
+  or projects), this is almost always *another* session's broad `pkill -f rb-lite`
+  collateral-killing yours — not a fault in rb-lite, the box, or the task. Just
+  relaunch the same run; it'll usually complete. (Distinct from the exit-10
+  implementer self-terminate above: that's the implementer's own subprocess; this is
+  your entire run getting a signal from outside.) **Corollary for stopping your OWN
+  run:** never `pkill -f rb-lite` (or `-f <some-runword>`) — the pattern matches your
+  own shell (exit 144 self-kill) AND every other session's run. Stop the tracked
+  background task (TaskStop), or kill the exact PID (`pgrep`/`kill <pid>`). Note that
+  killing rb-lite's wrapper does NOT kill its implementer child — kill that orphan
+  by PID separately.
+- **A run balloons — many rounds, a huge module, edits sprawling into other files.**
+  This bead was high-blast-radius and ran unsupervised. Don't keep relaying findings;
+  discard and apply the re-scope + file-lock + watch-each-round recovery playbook in
+  "Bounding a high-blast-radius bead." (Better: catch it live next time — watch the
+  rounds and intervene before it balloons.)
 - **Run hangs.** rb-lite has a default 14400s (4 hour) per-iteration
   timeout — far longer than any realistic iteration. If it actually
   needs to be lower, pass `--implement-timeout SECS`. (Reviewers have their
@@ -601,6 +687,24 @@ rb-lite run \
   --base origin/main \
   --branch feat/<id>-<short-slug> \
   --run-dir /tmp/rb-lite-<id>-run
+```
+
+**Bound a high-blast-radius bead (file-locked, checkpoint rounds):**
+
+```bash
+# The task file pins EXACTLY the file(s) the implementer may create/modify and
+# forbids all others (see "Bounding a high-blast-radius bead"). --max-rounds is a
+# CHECKPOINT to assess and (if the code is sound) relaunch — not a finish. Leave the
+# default severity so real P2 polish lands; P3 is manual/inspection-only unless you
+# deliberately lower the floor. Add --min-findings-severity P1 only later, once the
+# remaining P2 stream turns into gold-plating. Watch each round as it lands.
+rb-lite run \
+  --implementer claude,codex \
+  --task-file .rb-lite/tasks/bead-<id>.md \
+  --base origin/main \
+  --branch feat/<id>-<short-slug> \
+  --run-dir /tmp/rb-lite-<id>-run \
+  --max-rounds 6
 ```
 
 **Run with a custom panel that disables the codex reviewer:**
