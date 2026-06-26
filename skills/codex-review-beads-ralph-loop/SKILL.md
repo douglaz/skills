@@ -508,7 +508,8 @@ End the loop and surface status to the user when any of these trigger:
   a one-time manual sweep would be faster than N more iterations; pause and
   do a broad grep with the user.
 - Backends are exhausted in a way that cannot be recovered within the session
-  (see `orchestrating-with-ralph-burning` for recovery patterns).
+  (see [references/orchestration-pitfalls.md](references/orchestration-pitfalls.md)
+  for recovery patterns).
 - The user asks to pause.
 
 ## Guardrails
@@ -547,7 +548,7 @@ the shape of the task does not match this loop:
 | Translate a finished markdown plan into beads once | `plan-to-beads-transfer` |
 | Refine existing beads before implementation | `bead-polish-loop` |
 | Audit a bead graph before launching work | `second-model-bead-audit` |
-| Single implementation run without a Codex upstream | `orchestrating-with-ralph-burning` |
+| Self-contained implementation/review run without bead-tracked hardening | `orchestrating-with-rb-lite` |
 
 ## References
 

@@ -92,24 +92,6 @@ Codex:
 Use the second-model-bead-audit skill and give me a launch verdict.
 ```
 
-### orchestrating-with-ralph-burning
-
-Uses `ralph-burning` as the default structured workflow for substantial
-implementation work: requirements, project creation, flow selection, run
-start/resume, and canonical status inspection.
-
-Claude Code:
-
-```text
-/orchestrating-with-ralph-burning implement retry-safe daemon lease cleanup
-```
-
-Codex:
-
-```text
-Use the orchestrating-with-ralph-burning skill to implement this with ralph-burning.
-```
-
 ### orchestrating-with-rb-lite
 
 Uses `rb-lite` as the lightweight implement/review loop for self-contained work
@@ -131,10 +113,10 @@ Use the orchestrating-with-rb-lite skill to run rb-lite until this branch is cle
 Use the orchestrating-with-rb-lite skill to clear the ready br backlog one bead at a time.
 ```
 
-Best fit: you want codex+claude implementation/review convergence without
-creating a full `ralph-burning` project. For backlog draining, the durable state
-comes from `br`, Git branches, PRs, and CI; rb-lite only handles one bead's
-inner loop at a time.
+Best fit: you want implementation/review convergence without a durable
+multi-stage project. For backlog draining, the durable state comes from `br`,
+Git branches, PRs, and CI; rb-lite only handles one bead's inner loop at a
+time.
 
 ### codex-review-beads-ralph-loop
 
@@ -192,8 +174,8 @@ Install specific skills:
 ```bash
 ./install.sh codex-review-loop
 ./install.sh --target claude codex-review-loop
-./install.sh --target codex plan-to-beads-transfer bead-polish-loop second-model-bead-audit orchestrating-with-ralph-burning
-./install.sh plan-to-beads-transfer bead-polish-loop second-model-bead-audit orchestrating-with-ralph-burning orchestrating-with-rb-lite
+./install.sh --target codex plan-to-beads-transfer bead-polish-loop second-model-bead-audit orchestrating-with-rb-lite
+./install.sh plan-to-beads-transfer bead-polish-loop second-model-bead-audit orchestrating-with-rb-lite
 ./install.sh --target codex --migrate-existing plan-to-beads-transfer bead-polish-loop second-model-bead-audit
 ./install.sh --target codex complexity-reducer orchestrating-with-rb-lite
 ```
@@ -218,6 +200,13 @@ directories created by `--migrate-existing`.
   reviewer panel
 - `claude` on `PATH` for the default `orchestrating-with-rb-lite` implementer
   cycle and reviewer panel
+- `jq` on `PATH` for the default `orchestrating-with-rb-lite` Claude reviewer
+  when using a source/path rb-lite install; Nix-wrapped rb-lite supplies it
+- `timeout` with `--kill-after` support for normal `orchestrating-with-rb-lite`
+  runs when using a source/path rb-lite install; Nix-wrapped rb-lite supplies
+  GNU coreutils
+- `npx` plus Gemini credentials to enable the optional third default
+  `orchestrating-with-rb-lite` reviewer
 - `rb-lite` on `PATH`, or `nix run github:douglaz/rb-lite -- ...`, for
   `orchestrating-with-rb-lite`
 - `br` and `bv` on `PATH`, plus a repo that uses `.beads/`, for
@@ -225,8 +214,7 @@ directories created by `--migrate-existing`.
   `second-model-bead-audit`, `codex-review-beads-ralph-loop`, and
   `orchestrating-with-rb-lite` backlog-drain mode
 - `ralph-burning` on `PATH`, or `nix run github:douglaz/ralph-burning -- ...`,
-  for `orchestrating-with-ralph-burning` and
-  `codex-review-beads-ralph-loop`
+  for `codex-review-beads-ralph-loop`
 - `gh` authenticated for `codex-review-beads-ralph-loop` (PR creation and
   merge) and `orchestrating-with-rb-lite` backlog-drain mode
 
