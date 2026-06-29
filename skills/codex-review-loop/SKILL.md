@@ -45,8 +45,13 @@ This skill may be suggested proactively, but do not start running it unless the
 user explicitly asked for it or clearly agreed.
 
 Default stance: treat Codex findings as review hypotheses that deserve
-verification. The goal is to resolve or properly escalate findings, not to win
-an argument with the reviewer.
+verification, not mandates. The goal is to resolve or properly escalate
+findings, not to win an argument with the reviewer — and not to credulously
+implement every one. A finding can be valid *as stated* yet not worth building
+(over-specification): the loop only ever pushes toward *adding*, so you supply
+the counter-pressure toward simplicity. Accepting every finding for several
+passes, or a loop that keeps spawning new findings as fast as it fixes them, is
+a signal to step back, not to keep going.
 
 ## Inputs
 
@@ -60,8 +65,10 @@ Parse the user's request for arguments. In Claude Code, these arrive via
 
 Clamp `MAX_PASSES` to `1..15`. Six is the default because most real review
 loops converge within 1-3 passes; beyond six, repeated findings usually mean an
-unresolved root cause, missing validation, a false positive, or a larger design
-issue.
+unresolved root cause, missing validation, a false positive, a larger design
+issue, or a loop that is generating new findings as fast as it fixes them (each
+fix adds review surface). The last case is a cue to run a skeptical audit
+(§ 4a), not to keep spending passes.
 
 ## Workflow
 
@@ -184,10 +191,13 @@ Otherwise:
 1. Group related findings before editing. Prefer fixing the root cause once over
    patching each comment independently.
 
-2. Classify each finding as `FIX`, `DEFER`, or `REJECT` using the rules in
-   [references/disposition-rules.md](references/disposition-rules.md). The key
-   principle: `FIX` is the default, `REJECT` requires concrete counter-evidence,
-   and `DEFER` is for plausible findings that need broader work.
+2. Classify each finding as `FIX`, `DEFER`, `REJECT`, or `CUT/SIMPLIFY` using the
+   rules in [references/disposition-rules.md](references/disposition-rules.md).
+   The key principle: `FIX` is the default, `REJECT` requires concrete
+   counter-evidence (the finding is wrong), `DEFER` is for plausible findings
+   that need broader work, and `CUT/SIMPLIFY` is for findings that are valid as
+   stated but add mechanism no real correctness/security/data-loss requirement
+   needs — apply the over-specification test there before building.
 
 3. After edits, run the narrowest useful verification you can find from repo
    guidance:
@@ -215,6 +225,8 @@ Otherwise:
    - [P2] <why it remains open>
    Rejected with evidence:
    - [P3] <why it is disproven>
+   Cut/simplified (over-specification):
+   - [P2] <what was not built or shrunk, and what already covers the case>
    Validation: <command/result or "no targeted verifier found">
    ```
 
@@ -229,6 +241,38 @@ Stop early and surface the issue if any of these happen:
 - validation fails and the cause is unclear
 - max passes reached
 
+Stop normal passes and run a **skeptical audit** (§ 4a) instead when the loop
+stops converging:
+
+- findings stay roughly constant or rise across passes, and each pass's findings
+  are clearly *ripples of the previous pass's fixes* (a new mechanism you added
+  last pass now has its own flagged edge cases) — a fractal tail, not progress
+- you have made many fixes with **zero `REJECT` and zero `CUT`** — a sign you are
+  implementing every hypothesis credulously
+- findings are getting more peripheral / deeper into edge-case handling while the
+  core has been clean for several passes
+
+More normal passes will not converge these; they grow the change. The audit is
+the corrective.
+
+### 4a. Skeptical audit (the inverted pass)
+
+When § 4's convergence signals fire, run one inverted review instead of another
+normal pass. Point Codex at the *opposite* question: not "what's wrong?" but
+"what here is **not required for correctness** and could be cut, simplified, or
+deferred?" A useful prompt names the load-bearing core to leave alone and asks
+the reviewer to hunt over-specification aggressively, with, per item: what it is,
+why it isn't strictly required (what already covers the case), and a
+recommendation of CUT / SIMPLIFY / MARK-OPTIONAL.
+
+Then **reconcile, don't obey** — accepting every cut is the same credulity in
+reverse. Run the audit's recommendations through your own judgment and the
+over-specification test, push back where a flagged mechanism is actually
+load-bearing, and apply the agreed cuts/simplifications. If a real product or
+architecture trade-off rides on how aggressively to cut, ask the user (the
+choice changes what the artifact *is*). Re-verify after the cuts that the core is
+intact and no dangling references to removed mechanisms remain.
+
 ### 5. Finish
 
 Report:
@@ -242,6 +286,7 @@ Review dir: <REVIEW_DIR>
 Fixed: P0=W P1=X P2=Y P3=Z
 Deferred: <count or none>
 Rejected with evidence: <count or none>
+Cut/simplified (over-specification): <count or none>
 Remaining: <count or none>
 Validation run: <short summary>
 ```
@@ -252,6 +297,7 @@ Also provide:
 - a short list of any remaining findings
 - any deferred items
 - any rejected items with the evidence used
+- any cut/simplified items with the over-specification rationale
 
 Keep `review.txt` as a copy of the latest pass for compatibility:
 

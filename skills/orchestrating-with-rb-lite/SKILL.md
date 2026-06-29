@@ -549,6 +549,42 @@ actively. This is a primary failure mode, not a nicety.
   the implementation grown past it? When they diverge, cut back to the goal — and
   treat the proxies as the cue to run that comparison, not as the verdict itself.
 
+## The fractal tail, and challenging the panel
+
+The ratchet has a sharper failure mode than just "deeper edge cases." When the
+implementer *fixes* a finding by **adding** a mechanism, that mechanism becomes
+new review surface, so the next round flags *its* edge cases. The loop then
+generates roughly as many findings as it resolves: a fractal tail, not
+convergence. The tell is findings holding steady or rising while each round's
+findings are visibly ripples of the last round's additions, and the core has
+been clean for several rounds.
+
+- **The implementer may challenge the panel, with evidence.** Reviewer findings
+  are hypotheses, not orders. A finding can be a false positive, *or* valid as
+  stated but not worth building (over-specification: it adds build/test surface
+  without preventing a real correctness, security, or data-loss problem). Decline
+  those instead of reflexively implementing, and record why, using the
+  over-specification test: "if I don't do this, what actually breaks, a real
+  correctness problem or only an operational inconvenience?" A round where the
+  implementer declines findings *with documented reasons* is a legitimate stop
+  (exit 13 `consensus_failure`), not a stall to override. Read the implementer's
+  reasons before siding with the panel.
+- **Zero rejections across many rounds is a red flag.** If the implementer has
+  accepted every finding for several rounds, it's probably being too credulous
+  and the change is over-built. That's the cue to run a skeptical pass.
+- **Add a skeptical reviewer for counter-pressure.** Every default reviewer hunts
+  *what's wrong*, which is to say *what to add*. None hunt *what's over-built*. For
+  anything past a small bead, add a fourth reviewer to `.rb-lite-reviewers` that
+  runs the inverted lens, so the panel pushes back against scope creep instead of
+  only feeding it (see "Customizing the panel").
+- **Periodic skeptical audit.** When the fractal tail shows up, or before merging
+  a large run, stop relaying and run one inverted audit yourself: walk what the run
+  added and label each mechanism *required-for-correctness* versus
+  *defense-in-depth / operational*. Cut, simplify, or mark-optional the latter.
+  Reconcile its output through your own judgment (accepting every cut is the same
+  credulity in reverse), then re-verify the core is intact with no dangling
+  references to anything you removed.
+
 ## Bounding a high-blast-radius bead
 
 Some beads invite sprawl: the core is genuinely hard, or it sits next to several
@@ -614,8 +650,16 @@ root before running, with one shell command per line:
 codex review --base "$BASE"
 set -o pipefail; claude -p "Review the diff vs $BASE. Tag findings P0/P1/P2/P3. Output 'No findings.' if clean." --permission-mode acceptEdits --output-format json --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch,Task,TaskOutput,TaskStop,Monitor" | jq -er 'if .is_error then error(.result // "claude reviewer returned is_error") else (.result // empty) end'
 if [[ -e node_modules/@google/gemini-cli || -L node_modules/@google/gemini-cli || -e node_modules/.bin/gemini || -L node_modules/.bin/gemini ]]; then printf "%s\n" "rb-lite: refusing to run Gemini reviewer because this repository has a local Gemini CLI package/bin that npx could prefer; customize this reviewer only if intentional" >&2; exit 1; fi; npx -y @google/gemini-cli --policy "$RUN_DIR/gemini-policy.toml" --approval-mode yolo -p "Review the diff vs $BASE. Tag findings P0/P1/P2/P3. Output 'No findings.' if clean."
+# Skeptical reviewer: hunts over-specification instead of bugs, so the panel has counter-pressure against scope creep
+set -o pipefail; claude -p "Review the diff vs $BASE for OVER-SPECIFICATION, not bugs. Flag any mechanism, handling, config, or abstraction that is NOT required for correctness, security, or data-safety and could be cut, simplified, or deferred. For each, give: what it is, why it isn't strictly required (what already covers the case), and a recommendation. Tag each finding 'P2: CUT', 'P2: SIMPLIFY', or 'P2: DEFER'. Do not flag missing behavior or bugs; another reviewer owns that. Output 'No findings.' if the diff is already minimal for its goal." --permission-mode acceptEdits --output-format json --allowedTools "Bash,Read,Glob,Grep" | jq -er 'if .is_error then error(.result // "skeptic reviewer returned is_error") else (.result // empty) end'
 (my-linter --json || true) | wrap-as-p-tags
 ```
+
+The skeptical reviewer is the practical form of "add a fourth reviewer for
+counter-pressure" above: its `CUT` / `SIMPLIFY` / `DEFER` findings tell the
+implementer to *remove* surface, balancing the three default reviewers that only
+ever push to add. Worth adding for any non-trivial bead; skip it for a tiny,
+already-bounded one.
 
 Reviewer commands run **concurrently**, get `BASE`/`RUN_DIR`/`ROUND`/
 `REVIEWER_INDEX` in env, and have stdin closed. The panel succeeds with
@@ -643,7 +687,7 @@ The reviewer contract is strict:
 | `10` | `implementer_failed` | Implementer subprocess returned non-zero (incl. timeout 124/137) or hit max-iters before stabilizing | Look at `implementer-round-N-iter-K.stderr` for the most recent iter |
 | `11` | `review_panel_failed` | Zero reviewers exited 0 | Check `reviewer-round-N-K.stderr` for all reviewers; usually missing CLI/auth or `jq` failure |
 | `12` | `max_rounds_hit` | Burned all `--max-rounds` without convergence | Inspect the latest review files; either bump `--max-rounds`, lower `--min-findings-severity` to skip nits, or address the remaining findings manually |
-| `13` | `consensus_failure` | Implementer kept declining to act on findings for `--max-noop-rounds` consecutive rounds | Read the latest review; the implementer is signaling it disagrees. Apply the fix manually if you side with reviewers, or override `--max-noop-rounds` if you side with the implementer |
+| `13` | `consensus_failure` | Implementer kept declining to act on findings for `--max-noop-rounds` consecutive rounds | Read the latest review **and the implementer's recorded reasons** — it's signaling it disagrees. If its rejections are evidence-backed (false positives or over-specification), this is a legitimate stop, not a failure. Apply the fix manually if you side with reviewers, or accept the run if you side with the implementer |
 | `70` | `internal_error` | Internal invariant violation or unhandled shell failure | Read `log.txt` and the most recent stderr files; this is rare |
 
 The JSON schema (every exit, last stdout line):
@@ -675,10 +719,15 @@ The JSON schema (every exit, last stdout line):
   wrong with the severity floor (it should have stopped). Otherwise,
   consider raising `--min-findings-severity P1` to ignore P2s, or stop
   manually and apply the remaining items.
-- **Implementer "stabilized at iteration 1" repeatedly.** That's the
-  implementer declining to act. The consensus-failure stop will catch
-  it after `--max-noop-rounds` (default 2) — exit 13. Don't lower this
-  unless you understand the trade-off.
+- **Implementer "stabilized at iteration 1" repeatedly.** The implementer is
+  declining to act. The consensus-failure stop catches it after
+  `--max-noop-rounds` (default 2) — exit 13. Before overriding, read *why* it
+  declined: a stuck implementer and one legitimately rejecting findings as false
+  positives or over-specification both look like a no-op round, but only the first
+  is a problem. If the latest `review-round-*.md` plus the implementer's own
+  output show documented, evidence-backed rejections, exit 13 is the right
+  outcome, not a failure to force past. Don't lower `--max-noop-rounds` unless you
+  understand the trade-off.
 - **Implementer dies (exit 10) — rogue self-terminate or transient API
   failure.** Two recurring causes: the implementer signals/kills its own
   process tree (exit 143 / SIGTERM, with a self-experimentation note in
