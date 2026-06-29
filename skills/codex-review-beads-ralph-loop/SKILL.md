@@ -60,7 +60,7 @@ to install.
 
 | Tool | Resolution |
 |------|------------|
-| `codex` | Must be on `PATH` and authenticated. Default to `-c model="gpt-5.4" -c model_reasoning_effort="xhigh"` for reviews; fall back to env default if `gpt-5.4` is unavailable and note the fallback. Codex auth can break mid-session (401) — see pitfall #8 in references/orchestration-pitfalls.md. |
+| `codex` | Must be on `PATH` and authenticated. Default to `-c model="gpt-5.5" -c model_reasoning_effort="xhigh"` for reviews; fall back to env default if `gpt-5.5` is unavailable and note the fallback. Codex auth can break mid-session (401) — see pitfall #8 in references/orchestration-pitfalls.md. |
 | `br` | Must be on `PATH`, **version ≥ 0.1.45** (built from the `beads_rust` repo or installed via `install.sh`). Older versions have a DB corruption bug where `br update`/`br close` return `ISSUE_NOT_FOUND` after branch resets; `br show`/`br list` still work, which masks it. `br where` must point at a `.beads/` workspace. |
 | `ralph-burning` | Resolve in order: `command -v ralph-burning`, then `nix run github:douglaz/ralph-burning --`. Needs to support the `iterative_minimal` flow (see flow selection below). |
 | `gh` | Authenticated (`gh auth status`). Used for PRs. |
