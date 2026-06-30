@@ -39,6 +39,25 @@ Codex:
 Use the complexity-reducer skill to reduce ceremony in this code while preserving behavior.
 ```
 
+### lnd-payments
+
+Operates a Kubernetes-hosted lnd node through `kubectl exec` and `lncli` for
+Lightning invoice decode, receive, pay dry-run/send, watch, and payment tracking
+workflows. Node-specific selectors live outside the public skill in XDG config
+or environment variables.
+
+Claude Code:
+
+```text
+/lnd-payments pay this invoice lnbc...
+```
+
+Codex:
+
+```text
+Use the lnd-payments skill to decode this invoice and dry-run payment.
+```
+
 ### plan-to-beads-transfer
 
 Translates a stable spec, PRD, or markdown plan into actual `br` beads with

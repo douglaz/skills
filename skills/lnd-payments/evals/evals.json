@@ -1,0 +1,36 @@
+{
+  "skill_name": "lnd-payments",
+  "note": "This skill can operate nodes with real funds. Automated evals should avoid live sends unless they use a disposable test node and explicit user approval. Safe paths include config inspection, node status, decode, decode-qr, receive on test nodes, pay dry-run, and tracking known historical payments.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "generate a 5000 sat invoice as a qr code",
+      "expected_output": "Confirms configuration, creates an invoice with `scripts/lnpay receive 5000 --qr <path>`, round-trip verifies the QR image, and surfaces the bolt11 plus hex payment_hash.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "pay this invoice [photo of a Lightning QR code]",
+      "expected_output": "Decodes the QR with `scripts/lnpay decode-qr` or `scripts/lnpay pay @image`, shows amount/description/destination/expiry, stops at dry-run, asks for explicit confirmation, then verifies confirmed successful sends with `scripts/lnpay track <invoice>`.",
+      "files": ["a phone photo of a BOLT11 QR"]
+    },
+    {
+      "id": 3,
+      "prompt": "is our lightning node healthy and how much can it send?",
+      "expected_output": "Runs `lnpay config` and `lnpay node`; reports sync state, active channels, spendable local balance, and inbound remote balance.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "watch that invoice and tell me when it gets paid",
+      "expected_output": "Runs `scripts/lnpay watch <payment_hash|bolt11>` in the background; on settlement reports SETTLED and amount received, or reports timeout/canceled state.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "what route did that lightning payment use?",
+      "expected_output": "Runs `scripts/lnpay track <payment_hash|bolt11>`; reports local node alias if configured, every successful HTLC part, route aliases, pubkeys/channel IDs, actual fee, preimage, and payment index when available.",
+      "files": []
+    }
+  ]
+}
