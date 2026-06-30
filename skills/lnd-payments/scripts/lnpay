@@ -1,0 +1,629 @@
+#!/usr/bin/env bash
+# lnpay - send and receive Bitcoin Lightning payments through an lnd node that
+# is reached by running lncli inside a Kubernetes workload.
+set -euo pipefail
+
+err() { echo "lnpay: $*" >&2; }
+die() { err "$*"; exit 1; }
+
+CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}/lnpay"
+LNPAY_LOADED_CONFIGS=()
+LNPAY_CONFIG_ERROR=""
+LNPAY_CONFIG_ERROR_FATAL=0
+
+CONFIG_ENV_NAMES=(
+  LN_CONTEXT
+  LN_NAMESPACE
+  LN_TARGET
+  LN_DEPLOY
+  LN_CONTAINER
+  LN_LOCAL_ALIAS
+  LN_DEFAULT_FEE_PCT
+  LNPAY_FEE_LIMIT_PERCENT
+  LNPAY_PROFILE
+  LNPAY_PAY_TIMEOUT
+  LNPAY_TRACK_TIMEOUT
+  LNPAY_WATCH_TIMEOUT
+  LNPAY_WATCH_INTERVAL
+)
+
+load_one_config() {
+  local path="$1"
+  [ -f "$path" ] || return 0
+
+  local line key value
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [ -z "$line" ] && continue
+    case "$line" in "#"*) continue;; esac
+    case "$line" in export\ *) line="${line#export }";; esac
+    case "$line" in *=*) ;; *) die "invalid config line in $path: $line";; esac
+
+    key="${line%%=*}"
+    value="${line#*=}"
+    key="${key%"${key##*[![:space:]]}"}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    case "$key" in
+      LN_CONTEXT|LN_NAMESPACE|LN_TARGET|LN_DEPLOY|LN_CONTAINER|LN_LOCAL_ALIAS|LN_DEFAULT_FEE_PCT|LNPAY_FEE_LIMIT_PERCENT|LNPAY_PROFILE|LNPAY_PAY_TIMEOUT|LNPAY_TRACK_TIMEOUT|LNPAY_WATCH_TIMEOUT|LNPAY_WATCH_INTERVAL)
+        ;;
+      *)
+        die "unknown config key in $path: $key"
+        ;;
+    esac
+    case "$value" in
+      \"*\") value="${value#\"}"; value="${value%\"}";;
+      \'*\') value="${value#\'}"; value="${value%\'}";;
+    esac
+    printf -v "$key" '%s' "$value"
+    if [ "$key" = "LN_DEPLOY" ] && [ -n "$value" ]; then
+      LN_TARGET="deploy/$value"
+    fi
+  done < "$path"
+
+  LNPAY_LOADED_CONFIGS+=("$path")
+}
+
+validate_profile_name() {
+  [ -z "${LNPAY_PROFILE:-}" ] && return 0
+  case "$LNPAY_PROFILE" in
+    *[!A-Za-z0-9_-]*)
+      die "invalid LNPAY_PROFILE '$LNPAY_PROFILE' - use letters, numbers, underscore, or hyphen"
+      ;;
+  esac
+}
+
+load_config() {
+  declare -A env_overrides=()
+  local name profile_path
+  for name in "${CONFIG_ENV_NAMES[@]}"; do
+    if [ "${!name+x}" = "x" ]; then
+      env_overrides["$name"]="${!name}"
+    fi
+  done
+
+  if [ -n "${LNPAY_CONFIG:-}" ]; then
+    if [ -f "$LNPAY_CONFIG" ]; then
+      load_one_config "$LNPAY_CONFIG"
+    else
+      LNPAY_CONFIG_ERROR="LNPAY_CONFIG points to missing file: $LNPAY_CONFIG"
+    fi
+  else
+    load_one_config "$CONFIG_HOME/config.env"
+    if [ "${env_overrides[LNPAY_PROFILE]+x}" = "x" ]; then
+      printf -v LNPAY_PROFILE '%s' "${env_overrides[LNPAY_PROFILE]}"
+    fi
+	    validate_profile_name
+	    if [ -n "${LNPAY_PROFILE:-}" ]; then
+	      profile_path="$CONFIG_HOME/profiles/$LNPAY_PROFILE.env"
+	      if [ -f "$profile_path" ]; then
+	        load_one_config "$profile_path"
+	      else
+	        LNPAY_CONFIG_ERROR="LNPAY_PROFILE points to missing file: $profile_path"
+	        LNPAY_CONFIG_ERROR_FATAL=1
+	      fi
+	    fi
+	  fi
+
+  for name in "${CONFIG_ENV_NAMES[@]}"; do
+    case "$name" in LN_TARGET|LN_DEPLOY) continue;; esac
+    [ "${env_overrides[$name]+x}" = "x" ] || continue
+    printf -v "$name" '%s' "${env_overrides[$name]}"
+  done
+  if [ "${env_overrides[LN_DEPLOY]+x}" = "x" ]; then
+    printf -v LN_DEPLOY '%s' "${env_overrides[LN_DEPLOY]}"
+    [ -n "$LN_DEPLOY" ] && LN_TARGET="deploy/$LN_DEPLOY"
+  fi
+  if [ "${env_overrides[LN_TARGET]+x}" = "x" ]; then
+    printf -v LN_TARGET '%s' "${env_overrides[LN_TARGET]}"
+  fi
+  validate_profile_name
+
+  LN_CONTAINER="${LN_CONTAINER:-lnd}"
+  LNPAY_FEE_LIMIT_PERCENT="${LNPAY_FEE_LIMIT_PERCENT:-${LN_DEFAULT_FEE_PCT:-2}}"
+  LNPAY_PAY_TIMEOUT="${LNPAY_PAY_TIMEOUT:-60}"
+  LNPAY_TRACK_TIMEOUT="${LNPAY_TRACK_TIMEOUT:-30}"
+  LNPAY_WATCH_TIMEOUT="${LNPAY_WATCH_TIMEOUT:-1800}"
+  LNPAY_WATCH_INTERVAL="${LNPAY_WATCH_INTERVAL:-8}"
+}
+
+require_node_config() {
+  local missing=()
+  [ -n "${LN_CONTEXT:-}" ] || missing+=("LN_CONTEXT")
+  [ -n "${LN_NAMESPACE:-}" ] || missing+=("LN_NAMESPACE")
+  [ -n "${LN_TARGET:-}" ] || missing+=("LN_TARGET")
+
+	  if [ -n "$LNPAY_CONFIG_ERROR" ] && { [ "$LNPAY_CONFIG_ERROR_FATAL" = 1 ] || [ "${#missing[@]}" -gt 0 ]; }; then
+	    die "$LNPAY_CONFIG_ERROR"
+	  fi
+
+  if [ "${#missing[@]}" -gt 0 ]; then
+    die "missing config: ${missing[*]}. Set env vars, LNPAY_CONFIG, or create $CONFIG_HOME/config.env"
+  fi
+}
+
+kubectl_lncli() {
+  require_node_config
+  local args=(--context "$LN_CONTEXT" -n "$LN_NAMESPACE" exec "$LN_TARGET")
+  [ -n "${LN_CONTAINER:-}" ] && args+=(-c "$LN_CONTAINER")
+  args+=(-- lncli "$@")
+  kubectl "${args[@]}"
+}
+
+kubectl_lncli_timeout() {
+  local seconds="$1"; shift
+  require_node_config
+  local args=(--context "$LN_CONTEXT" -n "$LN_NAMESPACE" exec "$LN_TARGET")
+  [ -n "${LN_CONTAINER:-}" ] && args+=(-c "$LN_CONTAINER")
+  args+=(-- lncli "$@")
+  timeout "${seconds}s" kubectl "${args[@]}"
+}
+
+lncli() {
+  kubectl_lncli "$@"
+}
+
+with_tool() {
+  local pkg="$1" bin="$2"; shift 2
+  [ "${1:-}" = "--" ] && shift
+  if command -v "$bin" >/dev/null 2>&1; then
+    "$bin" "$@"
+  elif command -v nix >/dev/null 2>&1; then
+    nix shell "nixpkgs#$pkg" --command "$bin" "$@"
+  else
+    die "need '$bin' - install $pkg, or install nix so it can be fetched on demand"
+  fi
+}
+
+jget() {
+  python3 -c '
+import sys, json
+key = sys.argv[1]
+try:
+    print(json.load(sys.stdin).get(key, ""))
+except Exception:
+    print("")
+' "$1"
+}
+
+add_json_field() {
+  python3 -c '
+import sys, json
+key = sys.argv[1]
+value = sys.argv[2]
+d = json.load(sys.stdin)
+d[key] = value
+print(json.dumps(d))
+' "$1" "$2"
+}
+
+node_alias() {
+  local pubkey="${1:-}" out
+  [ -n "$pubkey" ] || return 0
+  out="$(lncli getnodeinfo "$pubkey" 2>/dev/null || true)"
+  printf '%s' "$out" | python3 -c '
+import sys, json
+try:
+    print(json.load(sys.stdin).get("node", {}).get("alias", ""))
+except Exception:
+    print("")
+'
+}
+
+payment_rows() {
+  python3 -c '
+import sys, json
+s = sys.stdin.read()
+dec = json.JSONDecoder()
+objs = []
+i = 0
+while i < len(s):
+    while i < len(s) and s[i].isspace():
+        i += 1
+    if i >= len(s):
+        break
+    obj, i = dec.raw_decode(s, i)
+    objs.append(obj)
+if not objs:
+    raise SystemExit("no JSON payment update found")
+d = objs[-1]
+for k in ("payment_hash", "status", "value_sat", "fee_sat", "fee_msat",
+          "payment_preimage", "failure_reason", "payment_index"):
+    print("field\t%s\t%s" % (k, d.get(k, "")))
+htlcs = d.get("htlcs") or []
+parts = [h for h in htlcs if h.get("status") == "SUCCEEDED"]
+if not parts and htlcs:
+    parts = [htlcs[-1]]
+for part_idx, part in enumerate(parts, 1):
+    route = part.get("route") or {}
+    print("part\t%d\t%s\t%s\t%s" % (
+        part_idx,
+        part.get("status", ""),
+        route.get("total_amt", ""),
+        route.get("total_fees", ""),
+    ))
+    for hop_idx, hop in enumerate(route.get("hops") or [], 1):
+        print("hop\t%d\t%d\t%s\t%s\t%s\t%s" % (
+            part_idx,
+            hop_idx,
+            hop.get("pub_key", ""),
+            hop.get("chan_id", ""),
+            hop.get("amt_to_forward", ""),
+            hop.get("fee", ""),
+        ))
+'
+}
+
+extract_bolt11() {
+  python3 -c '
+import sys
+from urllib.parse import parse_qsl, urlsplit
+s = sys.argv[1].strip()
+for p in ("lightning:", "LIGHTNING:"):
+    if s.startswith(p):
+        print(s[len(p):].strip().lower()); sys.exit()
+for k, v in parse_qsl(urlsplit(s).query, keep_blank_values=True):
+    if k.lower() == "lightning" and v:
+        print(v.strip().lower()); sys.exit()
+print(s.strip().lower())
+' "$1"
+}
+
+is_invoice_target() {
+  case "$1" in
+    [lL][nN]*|[lL][iI][gG][hH][tT][nN][iI][nN][gG]:*|[bB][iI][tT][cC][oO][iI][nN]:*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+is_bolt11() {
+  case "$1" in
+    [lL][nN][bB][cC]*|[lL][nN][tT][bB]*|[lL][nN][bB][cC][rR][tT]*|[lL][nN][sS][bB]*)
+      return 0
+      ;;
+    *) return 1;;
+  esac
+}
+
+cmd_config() {
+  if [ "${#LNPAY_LOADED_CONFIGS[@]}" -eq 0 ]; then
+    echo "config_files: none"
+  else
+    printf 'config_files: %s\n' "${LNPAY_LOADED_CONFIGS[*]}"
+  fi
+  [ -z "$LNPAY_CONFIG_ERROR" ] || echo "config_error: $LNPAY_CONFIG_ERROR"
+  echo "profile: ${LNPAY_PROFILE:-}"
+  echo "context: ${LN_CONTEXT:-}"
+  echo "namespace: ${LN_NAMESPACE:-}"
+  echo "target: ${LN_TARGET:-}"
+  echo "container: ${LN_CONTAINER:-}"
+  echo "local_alias: ${LN_LOCAL_ALIAS:-}"
+  echo "fee_limit_percent: $LNPAY_FEE_LIMIT_PERCENT"
+  echo "pay_timeout: $LNPAY_PAY_TIMEOUT"
+  echo "track_timeout: $LNPAY_TRACK_TIMEOUT"
+  echo "watch_timeout: $LNPAY_WATCH_TIMEOUT"
+  echo "watch_interval: $LNPAY_WATCH_INTERVAL"
+}
+
+cmd_node() {
+  require_node_config
+  echo "context=$LN_CONTEXT ns=$LN_NAMESPACE target=$LN_TARGET container=${LN_CONTAINER:-}"
+  lncli getinfo | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+print("alias:           ", d.get("alias"))
+print("pubkey:          ", d.get("identity_pubkey"))
+print("synced_to_chain: ", d.get("synced_to_chain"))
+print("synced_to_graph: ", d.get("synced_to_graph"))
+print("active_channels: ", d.get("num_active_channels"))
+print("block_height:    ", d.get("block_height"))'
+  lncli channelbalance | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+print("spendable_local: ", d.get("local_balance", {}).get("sat"), "sat")
+print("inbound_remote:  ", d.get("remote_balance", {}).get("sat"), "sat")'
+}
+
+need_value() {
+  [ "$#" -ge 2 ] || die "$1 requires a value"
+}
+
+cmd_receive() {
+  local sats="" memo="lnpay invoice" qr="" ansi=0 expiry="" json=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --memo) need_value "$@"; memo="$2"; shift 2;;
+      --qr) need_value "$@"; qr="$2"; shift 2;;
+      --ansi) ansi=1; shift;;
+      --expiry) need_value "$@"; expiry="$2"; shift 2;;
+      --json) json=1; shift;;
+      -*) die "unknown flag: $1";;
+      *) [ -z "$sats" ] && { sats="$1"; shift; } || die "unexpected arg: $1";;
+    esac
+  done
+  [ -n "$sats" ] || die "usage: lnpay receive <sats> [--memo M] [--qr PATH] [--ansi] [--expiry SECONDS] [--json]"
+
+  local addargs=(addinvoice --amt "$sats" --memo "$memo")
+  [ -n "$expiry" ] && addargs+=(--expiry "$expiry")
+  local out; out="$(lncli "${addargs[@]}")" || die "addinvoice failed"
+
+  local bolt11 dec payment_hash upper
+  bolt11="$(printf '%s' "$out" | jget payment_request)"
+  [ -n "$bolt11" ] || die "no payment_request returned"
+  dec="$(lncli decodepayreq "$bolt11")" || die "decodepayreq failed after addinvoice"
+  payment_hash="$(printf '%s' "$dec" | jget payment_hash)"
+  [ -n "$payment_hash" ] || die "no payment_hash returned"
+  upper="$(printf '%s' "$bolt11" | tr 'a-z' 'A-Z')"
+
+  if [ -n "$qr" ]; then
+    printf '%s' "$upper" | with_tool qrencode qrencode -- -o "$qr" -s 8 -m 4 -l M
+    local back
+    back="$(with_tool zbar zbarimg -- --quiet --raw "$qr" | tr 'A-Z' 'a-z' | tr -d '[:space:]')"
+    [ "$back" = "$bolt11" ] || die "QR round-trip verify failed for $qr"
+  fi
+  if [ "$ansi" = 1 ]; then
+    if [ "$json" = 1 ]; then
+      printf '%s' "$upper" | with_tool qrencode qrencode -- -t ANSIUTF8 -l M >&2
+    else
+      printf '%s' "$upper" | with_tool qrencode qrencode -- -t ANSIUTF8 -l M
+    fi
+  fi
+
+  if [ "$json" = 1 ]; then
+    printf '%s\n' "$out" | add_json_field payment_hash "$payment_hash"
+  else
+    echo "amount_sats:  $sats"
+    echo "memo:         $memo"
+    echo "payment_hash: $payment_hash"
+    [ -n "$qr" ] && echo "qr_png:       $qr (round-trip verified)"
+    echo "bolt11:       $bolt11"
+  fi
+}
+
+cmd_decode() {
+  local inv="" json=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --json) json=1; shift;;
+      *) inv="$1"; shift;;
+    esac
+  done
+  [ -n "$inv" ] || die "usage: lnpay decode <bolt11|lightning:...> [--json]"
+  inv="$(extract_bolt11 "$inv")"
+  local out; out="$(lncli decodepayreq "$inv")" || die "decodepayreq failed - not a valid invoice?"
+  if [ "$json" = 1 ]; then
+    printf '%s\n' "$out"
+  else
+    echo "amount_sats:  $(printf '%s' "$out" | jget num_satoshis)"
+    echo "description:  $(printf '%s' "$out" | jget description)"
+    echo "destination:  $(printf '%s' "$out" | jget destination)"
+    echo "expiry_secs:  $(printf '%s' "$out" | jget expiry)"
+    echo "payment_hash: $(printf '%s' "$out" | jget payment_hash)"
+  fi
+}
+
+cmd_decode_qr() {
+  local img="${1:-}"
+  [ -n "$img" ] || die "usage: lnpay decode-qr <image>"
+  [ -f "$img" ] || die "no such file: $img"
+  local raw inv
+  raw="$(with_tool zbar zbarimg -- --quiet --raw "$img")" || die "no QR code found in $img"
+  inv="$(extract_bolt11 "$raw")"
+  is_bolt11 "$inv" || die "QR payload is not a BOLT11 Lightning invoice"
+  printf '%s\n' "$inv"
+}
+
+cmd_pay() {
+  local target="" amt="" fee_limit="" yes=0 timeout="$LNPAY_PAY_TIMEOUT"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --amt) need_value "$@"; amt="$2"; shift 2;;
+      --fee-limit) need_value "$@"; fee_limit="$2"; shift 2;;
+      --timeout) need_value "$@"; timeout="$2"; shift 2;;
+      --yes|-y) yes=1; shift;;
+      -*) die "unknown flag: $1";;
+      *) [ -z "$target" ] && { target="$1"; shift; } || die "unexpected arg: $1";;
+    esac
+  done
+  [ -n "$target" ] || die "usage: lnpay pay <bolt11|lightning:...|@image> [--amt S] [--fee-limit N] [--yes]"
+
+  local inv
+  if [ "${target:0:1}" = "@" ]; then
+    inv="$(cmd_decode_qr "${target:1}")" || die "could not read invoice from QR"
+  else
+    inv="$(extract_bolt11 "$target")"
+  fi
+
+  local dec; dec="$(lncli decodepayreq "$inv")" || die "decodepayreq failed - not a valid invoice?"
+  local n_amt n_msat desc dest exp
+  n_amt="$(printf '%s' "$dec" | jget num_satoshis)"
+  n_msat="$(printf '%s' "$dec" | jget num_msat)"
+  desc="$(printf '%s' "$dec" | jget description)"
+  dest="$(printf '%s' "$dec" | jget destination)"
+  exp="$(printf '%s' "$dec" | jget expiry)"
+  n_amt="${n_amt:-0}"
+  if [ -z "$n_msat" ]; then
+    n_msat="$(python3 -c 'import sys; print(int(sys.argv[1]) * 1000)' "$n_amt")"
+  fi
+
+  local amountless=0
+  [ "$n_msat" = "0" ] && amountless=1
+  [ "$amountless" = 0 ] && [ -n "$amt" ] && die "--amt is only valid for amountless invoices"
+
+  local pay_amt="$n_amt"
+  [ "$amountless" = 1 ] && pay_amt="$amt"
+
+  echo "Invoice"
+  echo "amount_sats:  ${n_amt}${amt:+ (will pay $amt)}"
+  [ "$n_msat" != "$(( n_amt * 1000 ))" ] && echo "amount_msat:  $n_msat"
+  echo "description:  $desc"
+  echo "destination:  $dest"
+  echo "expiry_secs:  $exp"
+
+  [ "$amountless" = 1 ] && [ -z "$amt" ] && die "amountless invoice - supply --amt <sats>"
+
+  if [ -z "$fee_limit" ]; then
+    fee_limit="$(python3 -c 'import math,sys; a=int(sys.argv[1]); p=float(sys.argv[2]); print(max(5, math.ceil(a*p/100)))' "$pay_amt" "$LNPAY_FEE_LIMIT_PERCENT")"
+  fi
+
+  if [ "$yes" != 1 ]; then
+    local pay_label="${pay_amt} sats"
+    [ "$amountless" = 0 ] && [ "$n_msat" != "$(( n_amt * 1000 ))" ] && pay_label="${n_msat} msat"
+    echo "DRY RUN - nothing sent. Re-run with --yes to pay ${pay_label} (fee limit ${fee_limit})."
+    return 0
+  fi
+
+  local payargs=(payinvoice --force --timeout "${timeout}s" --fee_limit "$fee_limit")
+  [ "$amountless" = 1 ] && payargs+=(--amt "$amt")
+  payargs+=("$inv")
+  lncli "${payargs[@]}"
+}
+
+cmd_track() {
+  local target="" timeout="$LNPAY_TRACK_TIMEOUT" json=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --timeout) need_value "$@"; timeout="$2"; shift 2;;
+      --json) json=1; shift;;
+      -*) die "unknown flag: $1";;
+      *) target="$1"; shift;;
+    esac
+  done
+  [ -n "$target" ] || die "usage: lnpay track <payment_hash|bolt11|lightning:...> [--timeout S] [--json]"
+
+  local rhash="$target"
+  if is_invoice_target "$target"; then
+    local inv
+    inv="$(extract_bolt11 "$target")"
+    rhash="$(lncli decodepayreq "$inv" | jget payment_hash)"
+  fi
+  [ -n "$rhash" ] || die "could not determine payment hash"
+
+  local out code=0
+  out="$(kubectl_lncli_timeout "$timeout" trackpayment --json "$rhash" 2>&1)" || code=$?
+  if [ "$code" = 124 ]; then
+    die "trackpayment timed out after ${timeout}s; payment may still be in flight"
+  elif [ "$code" != 0 ]; then
+    printf '%s\n' "$out" >&2
+    die "trackpayment failed"
+  fi
+
+  if [ "$json" = 1 ]; then
+    printf '%s\n' "$out"
+    return 0
+  fi
+
+  local rows
+  rows="$(printf '%s' "$out" | payment_rows)" || die "could not parse trackpayment JSON"
+  [ -n "${LN_LOCAL_ALIAS:-}" ] && printf '%-17s %s\n' "local_alias:" "$LN_LOCAL_ALIAS"
+  while IFS=$'\t' read -r kind a b c d e f; do
+    case "$kind" in
+      field)
+        printf '%-17s %s\n' "${a}:" "$b"
+        ;;
+      part)
+        printf 'part_%s:           status=%s total_amt_sat=%s total_fee_sat=%s\n' \
+          "$a" "$b" "$c" "$d"
+        ;;
+      hop)
+        local alias
+        alias="$(node_alias "$c")"
+        [ -n "$alias" ] || alias="(unknown)"
+        printf 'part_%s_hop_%s:     alias=%s pubkey=%s channel=%s forward_sat=%s fee_sat=%s\n' \
+          "$a" "$b" "$alias" "$c" "$d" "$e" "$f"
+        ;;
+    esac
+  done <<< "$rows"
+}
+
+cmd_watch() {
+  local target="" timeout="$LNPAY_WATCH_TIMEOUT" interval="$LNPAY_WATCH_INTERVAL"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --timeout) need_value "$@"; timeout="$2"; shift 2;;
+      --interval) need_value "$@"; interval="$2"; shift 2;;
+      *) target="$1"; shift;;
+    esac
+  done
+  [ -n "$target" ] || die "usage: lnpay watch <payment_hash|bolt11|lightning:...> [--timeout S] [--interval S]"
+
+  local rhash="$target"
+  if is_invoice_target "$target"; then
+    rhash="$(lncli decodepayreq "$(extract_bolt11 "$target")" | jget payment_hash)"
+  fi
+  [ -n "$rhash" ] || die "could not determine payment hash"
+
+  local deadline=$(( $(date +%s) + timeout )) last=""
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    local out state paid
+    out="$(lncli lookupinvoice "$rhash" 2>&1)" || die "lookupinvoice failed: $out"
+    state="$(printf '%s' "$out" | jget state)"
+    paid="$(printf '%s' "$out" | jget amt_paid_sat)"
+    if [ "$state" != "$last" ]; then
+      echo "[$(date +%H:%M:%S)] state=${state:-?} amt_paid_sat=${paid:-0}"
+      last="$state"
+    fi
+    case "$state" in
+      SETTLED) echo "RESULT: SETTLED - received ${paid} sats"; return 0;;
+      CANCELED) echo "RESULT: CANCELED/expired"; return 0;;
+    esac
+    sleep "$interval"
+  done
+  echo "RESULT: still ${last:-OPEN} after ${timeout}s - stopped watching (invoice may still be valid)"
+}
+
+usage() {
+  cat <<EOF
+lnpay - send and receive Lightning payments via kubectl exec + lncli
+
+Commands:
+  lnpay config                            show loaded config, without secrets
+  lnpay node                              node sync status + spendable balance
+  lnpay receive <sats> [--memo M]         create an invoice to receive sats
+        [--qr PATH] [--ansi] [--expiry S] [--json]
+  lnpay decode <bolt11|lightning:...>     show what an invoice will pay
+        [--json]
+  lnpay decode-qr <image>                 read a bolt11 out of a QR image
+  lnpay pay <bolt11|lightning:...|@image> pay invoice, dry-run until --yes
+        [--amt S] [--fee-limit N] [--timeout S] [--yes]
+  lnpay track <payment_hash|bolt11>       status, fee, preimage, route aliases
+        [--timeout S] [--json]
+  lnpay watch <payment_hash|bolt11>       poll until a receive invoice settles
+        [--timeout S] [--interval S]
+
+Config:
+  Required: LN_CONTEXT, LN_NAMESPACE, and LN_TARGET (or LN_DEPLOY).
+  Optional: LN_CONTAINER, LN_LOCAL_ALIAS, LNPAY_FEE_LIMIT_PERCENT,
+            LNPAY_PAY_TIMEOUT, LNPAY_TRACK_TIMEOUT, LNPAY_WATCH_TIMEOUT.
+
+Effective config precedence:
+  1. explicit environment variables
+  2. LNPAY_CONFIG=/path/to/config.env
+  3. ${CONFIG_HOME}/profiles/\$LNPAY_PROFILE.env
+  4. ${CONFIG_HOME}/config.env
+
+Without LNPAY_CONFIG, config.env is loaded first and the selected profile is
+loaded after it so profile values can override shared defaults.
+EOF
+}
+
+load_config
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  config) cmd_config "$@";;
+  node) cmd_node "$@";;
+  receive) cmd_receive "$@";;
+  decode) cmd_decode "$@";;
+  decode-qr) cmd_decode_qr "$@";;
+  pay) cmd_pay "$@";;
+  track) cmd_track "$@";;
+  watch) cmd_watch "$@";;
+  ""|help|-h|--help) usage;;
+  *) err "unknown command: $cmd"; usage; exit 2;;
+esac
