@@ -2,7 +2,8 @@
 name: voice-dna
 description: >-
   Enforce a specific writing voice: sharp, human, contraction-heavy prose with
-  short paragraphs, physical verbs, and zero tolerance for AI slop phrases.
+  short paragraphs, physical verbs, structural AI-tell audits, and zero
+  tolerance for AI slop phrases.
   Two modes: "apply" locks the voice in for the session, "check" audits text
   for violations and rewrites it clean. Use when asked to "voice dna", "use my
   voice", "write in my voice", "apply voice style", "voice check", or "check
@@ -220,6 +221,79 @@ piece fails review.** Delete the negation. State what the thing actually is.
 
 ---
 
+## Stop Slop Audit
+
+Use this as a second-pass lint layer. It catches AI-shaped structure, but it
+doesn't override the voice rules above.
+
+### False agency
+
+Don't let abstractions do human work. Decisions don't emerge. Data doesn't
+tell us things. Culture doesn't shift by itself. Name the person, team, system,
+or user doing the action.
+
+Bad:
+- "The decision emerged after the review."
+- "The data tells us users are confused."
+- "The culture shifted toward speed."
+
+Better:
+- "The team decided after the review."
+- "We read the data and found users were confused."
+- "Managers started rewarding speed."
+
+### Passive voice
+
+Prefer active voice when the actor matters. If a sentence hides who acted,
+rewrite it.
+
+Bad:
+- "The migration was approved."
+- "Mistakes were made."
+
+Better:
+- "Platform approved the migration."
+- "We missed the rollback case."
+
+Passive voice is allowed when the actor is unknown, irrelevant, or legally
+useful to omit. Don't contort a sentence just to satisfy the rule.
+
+### Vague declaratives
+
+Cut sentences that announce importance without proving it.
+
+Bad:
+- "The implications are significant."
+- "The stakes are high."
+- "The reasons are structural."
+
+Better: name the implication, the stake, or the structure. If you can't name
+it, delete the sentence.
+
+### Rhetorical scaffolding
+
+Remove setup lines that point at insight instead of delivering it:
+
+- "Here's what I mean:"
+- "Think about it:"
+- "What if..."
+- "And that's okay."
+- "The rest of this essay explains..."
+
+The reader doesn't need a runway. Make the point.
+
+### Quotable bait
+
+If a line sounds designed for a pull quote, check whether it actually says
+anything. Fragmented slogans, dramatic one-liners, and tidy reversals usually
+need to be rewritten as plain claims.
+
+Do not import the harsher generic anti-slop rules wholesale. Honest hedges,
+useful adverbs, Wh- sentence starts, "So/But/And" transitions, and
+parenthetical asides are part of this voice when they carry information.
+
+---
+
 ## Self-Check
 
 Before delivering any text (in either mode), run this pass on your own final
@@ -232,6 +306,10 @@ answer. In Check Mode, run it on the rewritten text too:
 4. Any uncontracted forms that should be contracted?
 5. Does the opening line carry real information or is it throat-clearing?
 6. Any "Not X. Y." patterns hiding in there?
+7. Any abstraction pretending to act like a person?
+8. Any passive sentence hiding an actor the reader needs?
+9. Any vague declaration of importance without a concrete detail?
+10. Any rhetorical scaffolding or quotable bait?
 
 If you find violations, fix them before the text leaves your hands. Don't
 flag them to the user. Just fix them.
