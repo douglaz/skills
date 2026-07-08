@@ -1,10 +1,12 @@
-# skills
+# douglaz/skills
 
-A collection of skills for [Claude Code](https://claude.com/claude-code) and
-[OpenAI Codex](https://github.com/openai/codex).
+Shared agent skills for [Claude Code](https://claude.com/claude-code) and
+[OpenAI Codex](https://github.com/openai/codex). The repo collects the
+workflows I reach for most: Codex review loops, beads planning, rb-lite
+orchestration, Lightning ops, code simplification, and writing checks.
 
-The Flywheel bead skills in this repo intentionally stick to the shared
-agent-skills format so they can work in both tools.
+Each skill sticks to the shared agent-skills format, so the same source can be
+installed into both tools.
 
 ## Available skills
 
@@ -37,6 +39,23 @@ Codex:
 
 ```text
 Use the complexity-reducer skill to reduce ceremony in this code while preserving behavior.
+```
+
+### voice-dna
+
+Checks and rewrites public-facing prose against a direct, human writing style:
+short paragraphs, concrete verbs, contractions, and no AI-shaped filler.
+
+Claude Code:
+
+```text
+/voice-dna check this README section
+```
+
+Codex:
+
+```text
+Use the voice-dna skill to check this announcement draft.
 ```
 
 ### lnd-payments
@@ -161,6 +180,28 @@ Use the codex-review-beads-ralph-loop skill to drive codex+beads+ralph until thi
 Best fit: you want durable, bead-tracked regression sweeps with one PR per
 finding, not the inline-edit style of `codex-review-loop`.
 
+### pr-with-codex-bot-review
+
+Opens and lands GitHub pull requests through the `chatgpt-codex-connector`
+review bot, with guidance for CodeRabbit when it is configured. Covers PR body
+drafting, local gates, bot re-triggers, review comment handling, force-push
+amends, and squash-merge cleanup.
+
+Claude Code:
+
+```text
+/pr-with-codex-bot-review ship this branch
+```
+
+Codex:
+
+```text
+Use the pr-with-codex-bot-review skill to open this PR and handle the bot review.
+```
+
+Best fit: you want a GitHub PR carried from local changes through review-bot
+feedback and merge.
+
 ## Install
 
 ```bash
@@ -197,6 +238,7 @@ Install specific skills:
 ./install.sh plan-to-beads-transfer bead-polish-loop second-model-bead-audit orchestrating-with-rb-lite
 ./install.sh --target codex --migrate-existing plan-to-beads-transfer bead-polish-loop second-model-bead-audit
 ./install.sh --target codex complexity-reducer orchestrating-with-rb-lite
+./install.sh --target both voice-dna pr-with-codex-bot-review
 ```
 
 ## Uninstall
@@ -235,7 +277,8 @@ directories created by `--migrate-existing`.
 - `ralph-burning` on `PATH`, or `nix run github:douglaz/ralph-burning -- ...`,
   for `codex-review-beads-ralph-loop`
 - `gh` authenticated for `codex-review-beads-ralph-loop` (PR creation and
-  merge) and `orchestrating-with-rb-lite` backlog-drain mode
+  merge), `orchestrating-with-rb-lite` backlog-drain mode, and
+  `pr-with-codex-bot-review`
 
 ## License
 
