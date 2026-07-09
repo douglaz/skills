@@ -202,6 +202,57 @@ Use the pr-with-codex-bot-review skill to open this PR and handle the bot review
 Best fit: you want a GitHub PR carried from local changes through review-bot
 feedback and merge.
 
+### galtland-architecture
+
+Applies or reviews a Rust async architecture: platform-split crates (a
+wasm-buildable core with transports, spawners, and storage injected) plus
+channel-based actor/command concurrency — command enums whose variants carry
+`oneshot` replies, a single event loop owning `!Sync` state, pending-id maps
+bridging callback APIs to async/await, two-tier event fan-out with admission
+control, and per-resource daemon actors with panic-safe lifecycles. Has an
+apply mode and a review mode with a checklist.
+
+Claude Code:
+
+```text
+/galtland-architecture design the concurrency for this daemon
+/galtland-architecture review the architecture of this workspace
+```
+
+Codex:
+
+```text
+Use the galtland-architecture skill to review this project's crate layout and concurrency.
+```
+
+Best fit: designing or reviewing a Rust async/networked service, or wrapping an
+event-driven / `!Sync` API (libp2p, FFI, GUI loop, device handle).
+
+### galtland-code-style
+
+Applies or reviews Rust code-style conventions: anyhow-based errors with
+layered `Result`s and invariant-asserting context, enum-variant-path-prefixed
+logging keyed by actionability, `XxxInfo` parameter objects, Client/daemon
+naming pairs, scoped consts, module-granular import formatting, and
+TODO/FIXME/`todo!()` discipline. Also knows which habits are legacy quirks not
+to replicate.
+
+Claude Code:
+
+```text
+/galtland-code-style review the style and error handling of this crate
+/galtland-code-style write this actor in my usual conventions
+```
+
+Codex:
+
+```text
+Use the galtland-code-style skill to review this crate for convention conformance.
+```
+
+Best fit: writing Rust that should match these conventions, or reviewing a
+crate for style, error handling, and logging quality.
+
 ## Install
 
 ```bash
