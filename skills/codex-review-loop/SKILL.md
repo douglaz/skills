@@ -30,11 +30,11 @@ Drive a tight Codex review loop without bloating the agent's own context.
 
 This skill requires the `codex` CLI on `PATH`. If the binary is missing, stop
 and tell the user to install it. The skill uses `codex review` with flags like
-`--base`, `-c 'model="gpt-5.5"'`, and
-`-c 'model_reasoning_effort="xhigh"'`. Default to `gpt-5.5` at `xhigh`
+`--base`, `-c 'model="gpt-5.6-sol"'`, and
+`-c 'model_reasoning_effort="xhigh"'`. Default to `gpt-5.6-sol` at `xhigh`
 reasoning for review passes. Web search is enabled by default in current Codex
 CLI releases, so do not pass `--enable web_search_cached`. If the user or repo
-explicitly asks for a stronger model, honor that instead. If `gpt-5.5` is
+explicitly asks for a stronger model, honor that instead. If `gpt-5.6-sol` is
 unavailable, retry once with the environment default model and note the
 fallback. If a flag is not recognized, retry without it and note the
 incompatibility; the Codex CLI may have changed between versions.
@@ -140,13 +140,13 @@ For each pass `N` from `1` to `MAX_PASSES`:
    Default command:
 
    ```bash
-   codex review --base "$DIFF_BASE" -c 'model="gpt-5.5"' -c 'model_reasoning_effort="xhigh"' >"$PASS_OUT" 2>"$PASS_ERR"
+   codex review --base "$DIFF_BASE" -c 'model="gpt-5.6-sol"' -c 'model_reasoning_effort="xhigh"' >"$PASS_OUT" 2>"$PASS_ERR"
    ```
 
    If focus text exists:
 
    ```bash
-   codex review "$FOCUS" --base "$DIFF_BASE" -c 'model="gpt-5.5"' -c 'model_reasoning_effort="xhigh"' >"$PASS_OUT" 2>"$PASS_ERR"
+   codex review "$FOCUS" --base "$DIFF_BASE" -c 'model="gpt-5.6-sol"' -c 'model_reasoning_effort="xhigh"' >"$PASS_OUT" 2>"$PASS_ERR"
    ```
 
    Do not add `--enable web_search_cached`; it is deprecated because web search
