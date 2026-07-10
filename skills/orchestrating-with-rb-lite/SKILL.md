@@ -316,7 +316,7 @@ when rb-lite runs for more than a quick pass:
 ## Verify the landed diff
 
 The single most important habit when driving rb-lite for real work: **`clean`
-means "no surviving reviewer raised a P0/P1/P2," not "correct."** Three things
+means "no surviving reviewer raised a P0/P1/P2," not "correct."** Four things
 dogfooding made concrete:
 
 - **The diff is uncommitted.** rb-lite leaves the final accepted changes in the
@@ -338,6 +338,17 @@ dogfooding made concrete:
   over the committed diff — phrased to attack: *is the result genuine, was
   anything tuned to pass the panel, is the claim honestly scoped?* Treat the
   panel's `clean` as one input into your own PASS decision.
+- **Verify the comments, not just the code.** Agent loops can *corrupt a correct
+  comment* to placate a reviewer: read every load-bearing correctness/safety/
+  invariant comment in the landed diff and confirm each is TRUE per the code —
+  following the invariant across files when its guarantee lives outside the diff.
+  Then reconcile the **commit message's claims against the shipped comments** (a
+  commit that says "conservative lower bound" over a comment that says the opposite
+  is a tell). Observed: a reviewer asserted a false out-of-diff fee premise, the
+  implementer rewrote a correct invariant docstring to agree, and two more
+  reviewers then echoed the corrupted comment — a self-reinforcing loop that only
+  broke on reading the unchanged cap code. Tests passing does not catch this;
+  reading the claims against the code does.
 
 ## Backlog-drain workflow
 
@@ -458,6 +469,18 @@ phrases like "X happens when Y", not only test function names.>
   otherwise interfere with the surrounding orchestration.
 - Treat `.rb-lite/`, `.ralph-burning/`, `.git/ralph-burning-live/`, and
   `.beads/` as orchestration/state directories, not product code to review.
+  This does NOT forbid ordinary git usage: **`git add` any new SOURCE file you
+  create** so it appears in the reviewed diff (`git diff <base>` omits untracked
+  files — an unstaged new module reads to reviewers as "missing, won't compile").
+  Staging a source file is not the prohibited editing of `.git/` internals.
+- **Never weaken, invert, or delete a correctness/safety/invariant comment or
+  assertion to satisfy a review finding without first verifying it against the
+  actual code and citing `file:line`.** A correctness-comment edit is NOT a cheap
+  doc fix — it carries the same evidence burden as a behavior change. If a reviewer
+  says an invariant claim is wrong, either prove it (fix code + comment together)
+  or refute the finding with code evidence and keep the comment. Be especially wary
+  of findings about invariants whose guarantee lives in a file the diff does not
+  show.
 
 ## Acceptance criteria
 - <Acceptance criteria copied from `br show <id>`.>
@@ -660,6 +683,21 @@ counter-pressure" above: its `CUT` / `SIMPLIFY` / `DEFER` findings tell the
 implementer to *remove* surface, balancing the three default reviewers that only
 ever push to add. Worth adding for any non-trivial bead; skip it for a tiny,
 already-bounded one.
+
+**Put the verify-before-asserting rule in every custom reviewer prompt**: *"Before
+asserting the diff violates or overstates an invariant — or any claim about
+behavior in code the diff does not show — verify it by reading that code and cite
+`file:line`; if you cannot, mark it a QUESTION, not a finding."* Reviewers see only
+the diff, so a confidently-wrong claim about an invariant guaranteed in an
+unchanged file will otherwise get an implementer to corrupt a correct comment, then
+echo through later rounds. The default **claude + gemini** reviewers carry this
+rule; the default **`codex review`** one cannot — `codex review` rejects a custom
+`[PROMPT]` together with `--base` (they are mutually exclusive), so codex stays
+diff-blind to out-of-diff invariants. Lean on the implementer guard (do not weaken
+invariant comments without code proof) and the landed-diff comment-truth check as
+the backstop for codex's findings; or replace the default codex reviewer with a
+`codex exec`-based one in `.rb-lite-reviewers` if you want the guard on it (at the
+cost of `codex review`'s structured output).
 
 Reviewer commands run **concurrently**, get `BASE`/`RUN_DIR`/`ROUND`/
 `REVIEWER_INDEX` in env, and have stdin closed. The panel succeeds with
