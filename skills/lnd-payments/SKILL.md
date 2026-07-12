@@ -4,10 +4,11 @@ description: >-
   Send and receive Bitcoin Lightning payments with an lnd node reached through
   kubectl exec and lncli. Use when the user wants to pay a Lightning/BOLT11
   invoice, decode an invoice or Lightning QR image, create a receive invoice
-  optionally as a QR code, watch a receive invoice until settlement, inspect
-  outgoing payment status/fees/routes/preimages, or check an lnd node's sync and
-  channel balance. Use for Kubernetes-hosted lnd nodes configured through
-  environment variables or XDG config files.
+  optionally as a QR code, generate an onchain (on-chain) bitcoin receive
+  address, watch a receive invoice until settlement, inspect outgoing payment
+  status/fees/routes/preimages, or check an lnd node's sync and channel balance.
+  Use for Kubernetes-hosted lnd nodes configured through environment variables
+  or XDG config files.
 ---
 
 # lnd-payments
@@ -69,6 +70,7 @@ use `scripts/lnpay` from the skill directory.
 ```bash
 scripts/lnpay config                    show loaded config, without secrets
 scripts/lnpay node                      sync status + spendable/inbound balance
+scripts/lnpay newaddress [TYPE] [--json] generate an onchain receive address
 scripts/lnpay receive <sats> [--memo M] create an invoice to receive sats
       [--qr PATH] [--ansi] [--expiry S] [--json]
 scripts/lnpay decode <bolt11|lightning:...>
@@ -87,12 +89,26 @@ scripts/lnpay watch <payment_hash|bolt11>
 ```
 
 The CLI is non-interactive: commands exit non-zero on failure, `--json` returns
-`lncli` JSON for `decode` and `track`, `receive --json` adds a hex
+`lncli` JSON for `decode`, `track`, and `newaddress`, `receive --json` adds a hex
 `payment_hash`, and other commands print key/value lines.
 
 Start by running `scripts/lnpay config` and `scripts/lnpay node` to verify the
 configured node is reachable, synced, and has enough spendable local balance for
 sends.
+
+## On-chain addresses
+
+Use `scripts/lnpay newaddress` to generate a fresh on-chain bitcoin receive
+address from the lnd wallet. The address type is an optional positional argument:
+
+- `p2wkh` (default) — native SegWit `bc1q…`, widely compatible.
+- `np2wkh` — nested SegWit `3…`, for legacy senders.
+- `p2tr` — Taproot `bc1p…`.
+
+Each call returns a new unused address. Add `--json` to pass through the raw
+`lncli newaddress` JSON (`{"address": "..."}`) for scripting. This funds the lnd
+on-chain wallet (e.g. for opening channels); it does not create a Lightning
+invoice — use `receive` for that.
 
 ## Receiving
 

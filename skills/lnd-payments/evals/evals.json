@@ -31,6 +31,12 @@
       "prompt": "what route did that lightning payment use?",
       "expected_output": "Runs `scripts/lnpay track <payment_hash|bolt11>`; reports local node alias if configured, every successful HTLC part, route aliases, pubkeys/channel IDs, actual fee, preimage, and payment index when available.",
       "files": []
+    },
+    {
+      "id": 6,
+      "prompt": "generate an onchain address on our lnd",
+      "expected_output": "Runs `scripts/lnpay newaddress` (default p2wkh native SegWit) and returns the fresh bc1q address; offers np2wkh or p2tr as alternatives when relevant, without hand-writing a raw kubectl exec.",
+      "files": []
     }
   ]
 }
