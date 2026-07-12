@@ -333,6 +333,33 @@ need_value() {
   [ "$#" -ge 2 ] || die "$1 requires a value"
 }
 
+cmd_newaddress() {
+  local addr_type="" json=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --json) json=1; shift;;
+      -*) die "unknown flag: $1";;
+      *) [ -z "$addr_type" ] && { addr_type="$1"; shift; } || die "unexpected arg: $1";;
+    esac
+  done
+  addr_type="${addr_type:-p2wkh}"
+  case "$addr_type" in
+    p2wkh|np2wkh|p2tr) ;;
+    *) die "unknown address type '$addr_type' - use p2wkh, np2wkh, or p2tr";;
+  esac
+
+  local out; out="$(lncli newaddress "$addr_type")" || die "newaddress failed"
+  local address; address="$(printf '%s' "$out" | jget address)"
+  [ -n "$address" ] || die "no address returned"
+
+  if [ "$json" = 1 ]; then
+    printf '%s\n' "$out"
+  else
+    echo "address_type: $addr_type"
+    echo "address:      $address"
+  fi
+}
+
 cmd_receive() {
   local sats="" memo="lnpay invoice" qr="" ansi=0 expiry="" json=0
   while [ $# -gt 0 ]; do
@@ -584,6 +611,8 @@ lnpay - send and receive Lightning payments via kubectl exec + lncli
 Commands:
   lnpay config                            show loaded config, without secrets
   lnpay node                              node sync status + spendable balance
+  lnpay newaddress [p2wkh|np2wkh|p2tr]    generate an onchain receive address
+        [--json]
   lnpay receive <sats> [--memo M]         create an invoice to receive sats
         [--qr PATH] [--ansi] [--expiry S] [--json]
   lnpay decode <bolt11|lightning:...>     show what an invoice will pay
@@ -618,6 +647,7 @@ cmd="${1:-}"; shift || true
 case "$cmd" in
   config) cmd_config "$@";;
   node) cmd_node "$@";;
+  newaddress) cmd_newaddress "$@";;
   receive) cmd_receive "$@";;
   decode) cmd_decode "$@";;
   decode-qr) cmd_decode_qr "$@";;
