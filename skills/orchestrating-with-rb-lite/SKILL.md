@@ -238,34 +238,32 @@ ready bead if the queue is not empty, and the exact reason the loop stopped.
    `.rb-lite/runs/<timestamp>-<pid>` in the repo). A `/tmp/...` run-dir
    is convenient when you don't want artifacts in the repo tree.
 
-   **Long background runs on a shared box — launch under `setsid`.** A
-   multi-hour run launched as a plain `… &` child of your shell stays in
-   the shell's process group, so it dies if that group is torn down — the
-   harness cleaning up a finished tool-call's process group, a terminal/
-   `SIGHUP` teardown, or a `kill -- -<pgid>` sweep. `setsid` puts rb-lite
-   in its own session/process group, insulating it from that whole class:
+   **Long background runs — let your harness own the background lifecycle.**
+   If your harness has a tracked-background primitive, launch rb-lite directly
+   under it and stop it through that same primitive: the harness keeps the task
+   alive across turns, captures its output, and reaps it cleanly — so you get
+   the survival you want without fighting the tooling. (Claude Code: run it in
+   the Bash tool's background mode and stop with TaskStop. Codex: the launch
+   returns a session id you stop through. Other hosts: use whatever tracked-task
+   stop your host provides.) Run the same command as above; nothing wraps it:
 
    ```bash
-   setsid rb-lite run \
+   rb-lite run \
      --implementer claude,codex \
      --task-file /tmp/rb-<short-tag>-task.md \
      --base origin/main \
-     --run-dir /tmp/rb-<short-tag>-run \
-     > /tmp/rb-<short-tag>.log 2>&1 < /dev/null &
+     --run-dir /tmp/rb-<short-tag>-run
    ```
 
-   This is a cheap hedge, **not** full protection: `setsid` changes only
-   session/group membership, so it does NOT stop a name-pattern kill
-   (`pkill -f rb-lite`, `killall rb-lite`), a direct `kill <pid>`, or the
-   OOM killer — those match by command line / name / PID regardless of
-   session (see "When the loop misbehaves"). The durable protection is
-   recoverability: rb-lite is resumable and leaves its diff in the tree,
-   and you verify the landed diff anyway (step 10.5), so a mid-run kill
-   costs time, not correctness. Observed on a busy shared box: a `nohup …
-   &` run was swept at ~36 min while `setsid …` runs of the same workload
-   completed cleanly (~1–4 h) — consistent with a group/SIGHUP-class
-   teardown, though it does not rule out that a `pkill` sweep simply
-   missed the later runs' window.
+   **Don't detach it from the harness.** Backgrounding rb-lite in its own
+   session — where the harness can no longer see it — buys nothing here: a
+   tracked background task already survives across turns, and the survival
+   guarantee was never the process boundary anyway. rb-lite is resumable and
+   leaves its diff in the tree, and you verify the landed diff regardless (step
+   10.5), so a mid-run kill costs time, not correctness. Detaching only costs
+   you the harness's own tooling: no clean monitoring, no one-call stop through
+   the harness, and PID-hunting — via the collateral-kill-prone `pkill -f
+   rb-lite` (see "When the loop misbehaves") — to stop it.
 
 9. **Read the JSON summary.** rb-lite always prints a single-line JSON
    object as the last line of stdout, on success and failure. Pipe to
@@ -793,16 +791,14 @@ The JSON schema (every exit, last stdout line):
   (`pgrep`/`kill <pid>`). Current rb-lite forwards TERM/INT/HUP/QUIT to the active
   child process. If you used SIGKILL, or if implementer/reviewer children remain
   after TERM/INT/HUP/QUIT forwarding, kill the exact orphaned child PIDs separately.
-  **`setsid` does NOT save you from this case.** Launching under `setsid` (step 8)
-  only insulates the *group/SIGHUP* class (process-group teardown, terminal HUP); a
-  `pkill -f rb-lite` matches rb-lite's own argv regardless of session, so it kills a
-  `setsid`'d run just the same. A resource scope (`systemd-run --scope`, a cgroup)
-  can help with lifecycle and resource containment, but it is not protection from
-  a same-user broad `pkill`, direct PID kill, or OOM kill. For a determined
+  **No launch trick saves you from this case.** A `pkill -f rb-lite` matches
+  rb-lite's own argv regardless of how it was launched. A resource scope
+  (`systemd-run --scope`, a cgroup) can help with lifecycle and resource
+  containment, but it is not protection from a same-user broad `pkill`, direct
+  PID kill, or OOM kill. For a determined
   name/PID/OOM sweep, recoverability (relaunch — the run is resumable, the diff is
   in the tree) is the real defense; stronger isolation means a separate user, PID
-  namespace/container, or tighter operational discipline. Use `setsid` for the
-  group/SIGHUP class, not for this.
+  namespace/container, or tighter operational discipline.
 - **A run balloons — many rounds, a huge module, edits sprawling into other files.**
   This bead was high-blast-radius and ran unsupervised. Don't keep relaying findings;
   discard and apply the re-scope + file-lock + watch-each-round recovery playbook in
