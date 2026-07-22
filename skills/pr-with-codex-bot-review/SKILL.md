@@ -3,7 +3,8 @@ name: pr-with-codex-bot-review
 description: >-
   How to open and land a pull request through GitHub's `chatgpt-codex-connector` review bot
   (the one that auto-comments "Codex Review" on PRs), gating also on `coderabbitai[bot]`
-  when it is configured on the repo. Covers writing the PR body, running local gates, the
+  when it is configured on the repo. Covers writing the PR body, running local gates, a
+  local Claude Fable pre-review before push so bot rounds start from the good diff, the
   codex bot's actual behavior — auto-fires on substantive code PRs, often silent on
   docs-only PRs, line-level findings live in PR review comments not the review body —
   re-triggering with `@codex review`, addressing findings via amend + force-push, knowing
@@ -148,7 +149,79 @@ If clippy fails on `clippy::items-after-test-module` only when `--all-targets` i
 that's a pre-existing artifact and CI doesn't use that flag — confirm against CI before
 reformatting code to fix it.
 
-### 2. Push and open the PR with a structured body
+### 2. Local second reviewer before you push
+
+The GitHub bots are the *last* reviewers to see the diff, and they're the slowest
+(5–30 min) and the most expensive to iterate against — every round costs a
+force-push and a re-trigger. Running one local reviewer first turns findings you
+would have collected over three bot rounds into edits you make before the PR
+exists.
+
+Claude Fable at high effort is the default local reviewer here: it reads the repo
+around the diff, so it catches the out-of-diff callers and siblings the bots
+routinely miss.
+
+```bash
+BASE=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)
+RD=$(mktemp -d "/tmp/pr-review-$(basename "$(git rev-parse --show-toplevel)")-XXXXXX")
+cat >"$RD/prompt.txt" <<EOF
+Review the changes on this branch against origin/${BASE}, as a pre-PR review.
+
+Scope: \`git diff origin/${BASE}\` plus untracked source files from
+\`git status --short\` (they are not in the diff). Read CLAUDE.md / AGENTS.md and
+the surrounding code when a finding depends on them.
+
+Report real defects in the changed code: correctness, security, data loss,
+concurrency, error handling, missing tests for changed behavior, and violations
+of this repo's documented conventions. Before asserting any claim about behavior
+in code the diff does not show, read that code and cite file:line; if you cannot
+verify it, mark it a QUESTION, not a finding. One finding per line starting with
+[P0]/[P1]/[P2]/[P3], then file:line, then the claim, then indented detail. Do not
+propose mechanism no correctness/security/data-loss requirement needs. Do not
+modify any file. Output exactly "No findings." if clean.
+EOF
+
+claude -p "$(cat "$RD/prompt.txt")" \
+  --model fable --effort high --output-format json \
+  --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
+  --disallowedTools "Edit,Write,NotebookEdit" \
+  >"$RD/fable.json" 2>"$RD/fable.stderr"
+CLAUDE_RC=$?
+
+jq -er 'if .is_error then error(.result // "reviewer returned is_error")
+        else (.result // empty) end' \
+  <"$RD/fable.json" >"$RD/fable.txt"
+JQ_RC=$?
+```
+
+**Check both exit codes before believing the output.** `CLAUDE_RC != 0` or
+`JQ_RC != 0` means the review never ran — auth, rate limit (429), or overload
+(529) — and `$RD/fable.txt` will be empty. Do not pipe this straight
+into `tee` and read the file: a failed reviewer and a clean reviewer both leave
+you with no findings on stdout, and the difference is the whole point. The clean
+signal is exit 0 plus exactly `No findings.`; empty output with exit 0 is
+ambiguous, not clean.
+
+If it failed, either re-run it or open the PR without a pre-review — but do not
+tick the pre-review line in the PR body. Claiming a review that never ran is
+worse than not running one.
+
+Triage it exactly like a bot finding: credible hypothesis, verify before agreeing
+or rejecting, fix what's real, and don't build mechanism no requirement needs.
+Fix accepted findings *before* opening the PR so the bots review the good version
+— the first diff the bots see is the one their reaction attaches to.
+
+Two things worth saying out loud in the PR body afterwards: that a local review
+ran, and what you deliberately did **not** change. When the codex bot later
+raises something you already considered and rejected, a line in the body saying
+so (with your evidence) is what keeps the next round from relitigating it.
+
+This step is optional when the diff is trivial or docs-only. It earns its keep on
+anything that touches auth, money, migrations, concurrency, or a public API — the
+same classes where a bot round-trip hurts most. If `claude` isn't available, skip
+it and say so rather than pretending the PR got a pre-review.
+
+### 3. Push and open the PR with a structured body
 
 Use a HEREDOC to keep the body readable. The structure that consistently works through
 the bot:
@@ -170,6 +243,7 @@ honesty in commit messages with kinder reviews.>
 - [x] `nix develop -c cargo clippy --locked -- -D warnings` clean
 - [x] `nix develop -c cargo fmt --check` clean
 - [x] `nix build` succeeds
+- [x] Local review (claude fable, high effort): <N findings addressed / clean>
 - [ ] CI green
 - [ ] Codex bot review
 
@@ -181,19 +255,19 @@ Open with `gh pr create --title "<imperative title under 70 chars>" --body "$(ca
 EOF
 )" --head <branch>`.
 
-### 3. Wait for CI
+### 4. Wait for CI
 
 ```bash
 gh pr checks <N>     # one-shot status
 ```
 
-Typical lag for ralph-burning's conformance gate: ~7-8 min. While CI runs, work on
+Typical lag for a heavy conformance gate: ~7-8 min. While CI runs, work on
 other things — don't sit on the pull. If CI fails on something unrelated to your diff
 (common: signal-timing flakes, log-capture races), `gh run rerun <run-id> --failed`
 and continue. Diagnose the flake into a follow-up bead/issue rather than blocking the
 current PR.
 
-### 4. Wait for the bot's reaction signal
+### 5. Wait for the bot's reaction signal
 
 The bot's reaction on the PR body is the authoritative status indicator. Don't fall
 back to "wait some minutes and assume" when this is one API call away:
@@ -236,7 +310,7 @@ gh api repos/<owner>/<repo>/pulls/<N>/comments \
 When reaction is `+1` AND CI is green, merge. The boilerplate review wrapper plus
 zero outstanding line comments confirms it.
 
-### 5. Address findings, if any
+### 6. Address findings, if any
 
 For each P-badge finding:
 
@@ -253,7 +327,7 @@ For each P-badge finding:
   `git commit --amend --no-edit` then `git push --force-with-lease`. For larger
   follow-ups, separate commits are fine — the squash absorbs them.
 
-### 6. Decide based on reaction, not on time
+### 7. Decide based on reaction, not on time
 
 Merge when the reaction-based check passes:
 
@@ -276,7 +350,7 @@ Don't merge when:
 **The reaction is what matters; clock-time waits are a code smell that suggests
 you're ignoring the actual signal.**
 
-### 7. Squash-merge and clean up
+### 8. Squash-merge and clean up
 
 ```bash
 gh pr merge <N> --squash --delete-branch
@@ -350,6 +424,13 @@ the commit message anyway, so the PR title is mostly cosmetic.
 - **Don't merge while the bot is mid-review** (the boilerplate review is in
   `state: COMMENTED` but no line comments yet, less than 30 min after a fresh
   push). Findings often arrive in a second wave.
+- **Don't use the PR as your first reviewer.** Opening a rough diff to "see what
+  the bot says" spends 5–30 minutes per round on findings a local review would
+  have handed you in one, and every round costs a force-push that resets the
+  bot's SHA anyway.
+- **Don't let the local reviewer become an extra ratchet.** It hunts defects, so
+  it will always find *something* to add. Apply the same over-specification test
+  you'd apply to a bot finding: if skipping it breaks nothing real, skip it.
 
 ## Reference: real PR examples from this session
 

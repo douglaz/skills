@@ -141,7 +141,7 @@ remove_symlinks_from_dir() {
   for link in "$dir"/*; do
     [[ -L "$link" ]] || continue
     target_path=$(readlink "$link")
-    if [[ "$target_path" == "$install_dir"* ]]; then
+    if [[ "$target_path" == "$install_dir"/* ]]; then
       rm "$link"
       echo "Removed symlink: $link"
       ((removed += 1))
@@ -149,6 +149,27 @@ remove_symlinks_from_dir() {
   done
 
   [[ $removed -eq 0 ]] && echo "No symlinks found in $dir pointing to $install_dir"
+}
+
+# Drop installer-managed symlinks whose source is gone (skill renamed or removed
+# upstream). Only touches links that point into $install_dir and no longer
+# resolve, so a live skill or a user's own symlink is never at risk.
+prune_dangling_symlinks() {
+  local dir="$1"
+  local target_path
+
+  [[ -d "$dir" ]] || return 0
+
+  for link in "$dir"/*; do
+    [[ -L "$link" ]] || continue
+    [[ -e "$link" ]] && continue
+    target_path=$(readlink "$link")
+    if [[ "$target_path" == "$install_dir"/* ]]; then
+      rm "$link"
+      echo "  $(basename "$link") [$dir]: pruned stale symlink (source no longer in repo)"
+      ((pruned_count += 1))
+    fi
+  done
 }
 
 if $uninstall; then
@@ -193,6 +214,7 @@ migrated_count=0
 skipped_count=0
 missing_count=0
 migration_hint_count=0
+pruned_count=0
 backup_stamp=$(date -u +%Y%m%dT%H%M%SZ)
 
 # Ensure target directories exist
@@ -246,6 +268,10 @@ for skill in "${skills[@]}"; do
   done
 done
 
+for target_dir in "${target_dirs[@]}"; do
+  prune_dangling_symlinks "$target_dir"
+done
+
 echo
 if [[ $skipped_count -eq 0 && $missing_count -eq 0 ]]; then
   echo "Done."
@@ -253,7 +279,7 @@ else
   echo "Install completed with warnings."
 fi
 echo "Requested ${#skills[@]} skill(s) across ${#target_dirs[@]} target(s)."
-echo "Actions: installed=$installed_count updated=$updated_count migrated=$migrated_count already-linked=$already_linked_count skipped=$skipped_count missing=$missing_count"
+echo "Actions: installed=$installed_count updated=$updated_count migrated=$migrated_count already-linked=$already_linked_count skipped=$skipped_count missing=$missing_count pruned=$pruned_count"
 echo "Targets:"
 for target_dir in "${target_dirs[@]}"; do
   echo "  - $target_dir"

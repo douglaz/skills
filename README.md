@@ -2,7 +2,7 @@
 
 Shared agent skills for [Claude Code](https://claude.com/claude-code) and
 [OpenAI Codex](https://github.com/openai/codex). The repo collects the
-workflows I reach for most: Codex review loops, beads planning, rb-lite
+workflows I reach for most: multi-reviewer review loops, beads planning, rb-lite
 orchestration, Lightning ops, code simplification, and writing checks.
 
 Each skill sticks to the shared agent-skills format, so the same source can be
@@ -10,18 +10,24 @@ installed into both tools.
 
 ## Available skills
 
-### codex-review-loop
+### multi-reviewer-loop
 
-Runs an iterative Codex review/fix/re-review loop on your current branch. Detects a review base, runs `codex review`, treats findings as credible until disproven, fixes accepted items, validates the changed code, and repeats until clean or the pass limit is reached.
+Runs an iterative multi-reviewer review/fix/re-review loop on your current branch. Detects a review base, runs two reviewers in parallel — `codex review` (`gpt-5.6-sol` at `xhigh`) and Claude Fable at high effort — merges and dedupes their findings, treats findings as credible until disproven, fixes accepted items, validates the changed code, and repeats until both reviewers are clean or the pass limit is reached.
 
 ```
-/codex-review-loop              # up to 6 passes (default)
-/codex-review-loop 3            # up to 3 passes
-/codex-review-loop 5 focus on error handling  # 5 passes, focused review
+/multi-reviewer-loop              # up to 6 passes (default), both reviewers
+/multi-reviewer-loop 3            # up to 3 passes
+/multi-reviewer-loop 5 focus on error handling  # 5 passes, focused review
+/multi-reviewer-loop --reviewers codex          # pin a single reviewer
 ```
 
-Best fit: Claude Code explicit invocation. This skill shells out to `codex
-review` and is most natural when run as a slash command from Claude Code.
+Two reviewers with different scopes — codex sees the diff, Fable reads out into the repo — catch more than either alone, and their disagreements are the highest-signal moments in the loop. Findings both raise get fixed first; a finding only one raises still gets the full evidence bar, because the other reviewer's silence is not counter-evidence. If one reviewer is unavailable the loop runs degraded and says so; it never reports a one-reviewer pass as clean.
+
+Best fit: Claude Code explicit invocation. This skill shells out to both `codex`
+and `claude` and is most natural when run as a slash command from Claude Code.
+
+Renamed from `codex-review-loop` when the second reviewer landed. Rerun
+`install.sh` to drop the stale symlink.
 
 ### complexity-reducer
 
@@ -116,7 +122,10 @@ Use the bead-polish-loop skill on the current bead graph.
 ### second-model-bead-audit
 
 Provides an independent audit of an existing bead graph against the plan, with
-blocking findings first and exact bead-level fixes when obvious.
+blocking findings first and exact bead-level fixes when obvious. The second model
+is whichever CLI you are not currently running in — `codex exec` from a Claude
+session, `claude --model fable --effort high` from a Codex one — and the report
+names which model audited and whether it was independent or a self-audit.
 
 Claude Code:
 
@@ -151,41 +160,32 @@ Use the orchestrating-with-rb-lite skill to run rb-lite until this branch is cle
 Use the orchestrating-with-rb-lite skill to clear the ready br backlog one bead at a time.
 ```
 
+It also runs a **harden-until-clean drive**: a codex + Claude Fable panel
+reviews the whole branch, every real finding becomes a bead labeled with the
+reviewer that found it, the beads drain one rb-lite run at a time, and the panel
+runs again over everything that merged — until both reviewers are clean.
+
+```text
+/orchestrating-with-rb-lite harden this branch against main until review is clean
+```
+
 Best fit: you want implementation/review convergence without a durable
 multi-stage project. For backlog draining, the durable state comes from `br`,
 Git branches, PRs, and CI; rb-lite only handles one bead's inner loop at a
-time.
+time. Reach for the harden-until-clean drive when you want durable,
+bead-tracked regression sweeps with one PR per finding instead of the
+inline-edit style of `multi-reviewer-loop`.
 
-### codex-review-beads-ralph-loop
-
-Composes `codex review` + `br` beads + `ralph-burning` into a harden-until-clean
-loop on a work branch. Each `codex review` finding becomes a tracked bead; each
-bead gets solved via its own `ralph-burning` minimal run on a dedicated
-feature branch, through PR and merge; after every batch of merges the
-review is rerun. Stops when the review is clean or the same finding
-survives two full iterations.
-
-Claude Code:
-
-```text
-/codex-review-beads-ralph-loop harden this branch against main
-```
-
-Codex:
-
-```text
-Use the codex-review-beads-ralph-loop skill to drive codex+beads+ralph until this branch is clean.
-```
-
-Best fit: you want durable, bead-tracked regression sweeps with one PR per
-finding, not the inline-edit style of `codex-review-loop`.
+(This mode replaces the retired `codex-review-beads-ralph-loop` skill, which
+drove the same loop through `ralph-burning`.)
 
 ### pr-with-codex-bot-review
 
 Opens and lands GitHub pull requests through the `chatgpt-codex-connector`
 review bot, with guidance for CodeRabbit when it is configured. Covers PR body
-drafting, local gates, bot re-triggers, review comment handling, force-push
-amends, and squash-merge cleanup.
+drafting, local gates, a local Claude Fable pre-review before push so the bots
+review the good version of the diff, bot re-triggers, review comment handling,
+force-push amends, and squash-merge cleanup.
 
 Claude Code:
 
@@ -274,6 +274,11 @@ current setups, with fallback to the legacy `~/.agents/skills` layout when
 that is the only Codex skills directory present. Use `--target claude` or
 `--target codex` to install into only one tool.
 
+Installer-managed symlinks whose source no longer exists in the repo (a skill
+renamed or removed upstream, such as `codex-review-loop` →
+`multi-reviewer-loop`) are pruned on every install. Only dangling links pointing
+into the install directory are touched.
+
 If a target skill path already exists as a plain directory instead of a
 symlink, the installer now treats that as a conflict and exits non-zero after
 reporting the partial install. When the directory looks like a copied skill
@@ -283,8 +288,8 @@ from this repo, rerun with `--migrate-existing` to rename it to
 Install specific skills:
 
 ```bash
-./install.sh codex-review-loop
-./install.sh --target claude codex-review-loop
+./install.sh multi-reviewer-loop
+./install.sh --target claude multi-reviewer-loop
 ./install.sh --target codex plan-to-beads-transfer bead-polish-loop second-model-bead-audit orchestrating-with-rb-lite
 ./install.sh plan-to-beads-transfer bead-polish-loop second-model-bead-audit orchestrating-with-rb-lite
 ./install.sh --target codex --migrate-existing plan-to-beads-transfer bead-polish-loop second-model-bead-audit
@@ -307,13 +312,17 @@ directories created by `--migrate-existing`.
 
 - [Claude Code](https://claude.com/claude-code) for Claude installation targets
 - [OpenAI Codex CLI](https://github.com/openai/codex) for Codex installation targets
-- `codex` on `PATH` for `codex-review-loop` and
-  `codex-review-beads-ralph-loop`, and for the default `orchestrating-with-rb-lite`
-  reviewer panel
-- `claude` on `PATH` for the default `orchestrating-with-rb-lite` implementer
-  cycle and reviewer panel
-- `jq` on `PATH` for the default `orchestrating-with-rb-lite` Claude reviewer
-  when using a source/path rb-lite install; Nix-wrapped rb-lite supplies it
+- `codex` on `PATH` for the `multi-reviewer-loop` panel, the
+  `orchestrating-with-rb-lite` harden-until-clean panel, and the default
+  `orchestrating-with-rb-lite` reviewer panel
+- `claude` on `PATH` for the Claude Fable reviewer in `multi-reviewer-loop`,
+  `orchestrating-with-rb-lite` harden-until-clean mode, and
+  `pr-with-codex-bot-review`, and for the default `orchestrating-with-rb-lite`
+  implementer cycle and reviewer panel.
+  Either review CLI alone runs the loops degraded — with both missing they stop
+- `jq` on `PATH` to unwrap the Claude reviewer's JSON in `multi-reviewer-loop`,
+  `orchestrating-with-rb-lite`, and `pr-with-codex-bot-review`; Nix-wrapped
+  rb-lite supplies its own for the default panel
 - `timeout` with `--kill-after` support for normal `orchestrating-with-rb-lite`
   runs when using a source/path rb-lite install; Nix-wrapped rb-lite supplies
   GNU coreutils
@@ -321,14 +330,12 @@ directories created by `--migrate-existing`.
   `orchestrating-with-rb-lite` reviewer
 - `rb-lite` on `PATH`, or `nix run github:douglaz/rb-lite -- ...`, for
   `orchestrating-with-rb-lite`
-- `br` and `bv` on `PATH`, plus a repo that uses `.beads/`, for
-  `plan-to-beads-transfer`, `bead-polish-loop`,
-  `second-model-bead-audit`, `codex-review-beads-ralph-loop`, and
-  `orchestrating-with-rb-lite` backlog-drain mode
-- `ralph-burning` on `PATH`, or `nix run github:douglaz/ralph-burning -- ...`,
-  for `codex-review-beads-ralph-loop`
-- `gh` authenticated for `codex-review-beads-ralph-loop` (PR creation and
-  merge), `orchestrating-with-rb-lite` backlog-drain mode, and
+- `br` (≥ 0.1.45) and `bv` on `PATH`, plus a repo that uses `.beads/`, for
+  `plan-to-beads-transfer`, `bead-polish-loop`, `second-model-bead-audit`, and
+  `orchestrating-with-rb-lite` backlog-drain and harden-until-clean modes.
+  Older `br` corrupts its DB after the branch resets those modes depend on
+- `gh` authenticated for `orchestrating-with-rb-lite` backlog-drain and
+  harden-until-clean modes (PR creation, checks, merge) and
   `pr-with-codex-bot-review`
 
 ## License

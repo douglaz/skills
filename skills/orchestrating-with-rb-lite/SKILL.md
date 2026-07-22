@@ -2,23 +2,28 @@
 name: orchestrating-with-rb-lite
 description: >-
   Uses `rb-lite` to drive lightweight implement → review loops in the current
-  git repo. Covers both one self-contained task on a branch and a serialized
-  `br` backlog drain where each ready bead becomes one branch, one rb-lite
-  run, one PR, one squash merge, and one bead closure. Use when the user says
-  "rb-lite", "use rb-lite", "run the rb-lite loop", "iterate on this with
+  git repo. Covers one self-contained task on a branch, a serialized `br`
+  backlog drain where each ready bead becomes one branch, one rb-lite run, one
+  PR, one squash merge, and one bead closure, and a harden-until-clean drive
+  that reviews a whole branch with a codex + Claude Fable panel, mints beads
+  from the findings, drains them, and re-reviews until clean. Use when the user
+  says "rb-lite", "use rb-lite", "run the rb-lite loop", "iterate on this with
   rb-lite", "implement this with codex + claude until clean", "review-and-fix
   loop on this branch", "drain the bead backlog with rb-lite", "solve beads
-  one by one with rb-lite", or asks for an iterative codex+claude review/fix
-  cycle. Prefer `rb-lite` when you want "code → review → fix → repeat → JSON
-  summary" without a durable project orchestrator. Do NOT use for
+  one by one with rb-lite", "harden this branch", "review and solve until
+  clean", "review findings into beads", or asks for an iterative codex+claude
+  review/fix cycle. Prefer `rb-lite` when you want "code → review → fix →
+  repeat → JSON summary" without a durable project orchestrator. Do NOT use for
   cross-project orchestration, open-ended planning, or tiny one-shot edits.
-compatibility: Requires `rb-lite` on `PATH` or `nix run github:douglaz/rb-lite -- ...`. rb-lite itself has no default implementer, so pass `--implementer` with one preset or a comma-separated cycle, or use `--implement-cmd`; this skill defaults to `--implementer claude,codex` unless the user pins another choice. `codex` and `claude` must be installed and authenticated; the default Claude reviewer needs `jq`, and normal timeout-enabled runs need a compatible `timeout`, either from the host shell for source installs or from the Nix wrapper for Nix installs. `npx` plus Gemini credentials enable the third default reviewer but are not required for the panel to proceed. Backlog-drain mode also requires `br`, `gh`, and the repo's normal local verification tools.
+compatibility: Requires `rb-lite` on `PATH` or `nix run github:douglaz/rb-lite -- ...`. rb-lite itself has no default implementer, so pass `--implementer` with one preset or a comma-separated cycle, or use `--implement-cmd`; this skill defaults to `--implementer claude,codex` unless the user pins another choice. `codex` and `claude` must be installed and authenticated; the default Claude reviewer needs `jq`, and normal timeout-enabled runs need a compatible `timeout`, either from the host shell for source installs or from the Nix wrapper for Nix installs. `npx` plus Gemini credentials enable the third default reviewer but are not required for the panel to proceed. Backlog-drain mode also requires `br` (>= 0.1.45), `gh`, and the repo's normal local verification tools; harden-until-clean mode additionally needs `codex` and `claude` for the outer review panel.
 ---
 
 Use `rb-lite` as the default lightweight implement → review loop for
 single-branch, single-task work in the current repo. Also use it as the
 execution engine for draining an existing `br` backlog: `br ready` supplies
-the work list, and each bead gets one focused rb-lite run.
+the work list, and each bead gets one focused rb-lite run. When the work list
+does not exist yet and the goal is a clean branch, the harden-until-clean drive
+generates it from a review panel and feeds the same drain.
 
 ## What rb-lite is, in one paragraph
 
@@ -42,6 +47,9 @@ just a script and the per-run artifact directory.
   panel review is clean, on a self-contained task.
 - The user wants to drain, clear, or work through an existing `br` backlog
   with rb-lite, solving beads one by one.
+- The user wants a branch **hardened until review is clean** with a durable
+  audit trail — findings become beads, beads become PRs — rather than fixed
+  inline. See "Harden-until-clean drive" below.
 - The change is bigger than a one-shot edit but small enough that managing
   it as a durable multi-stage project would be overhead the user doesn't want.
 - The user wants a parseable summary of what happened (JSON line on stdout)
@@ -93,7 +101,11 @@ and the panel can still proceed with the remaining successful reviewers. If you
 intentionally want a different panel, write `.rb-lite-reviewers` before running.
 
 Backlog-drain mode additionally needs `br` for bead selection/state and `gh`
-for PR creation/checks/merge. It should use the repo's documented local gates;
+for PR creation/checks/merge. Require **`br` ≥ 0.1.45**: older builds corrupt
+their DB after branch resets, so `br update`/`br close` start returning
+`ISSUE_NOT_FOUND` while `br show`/`br list` keep working — which hides the
+failure until bead state is already lost. Both drain modes reset branches after
+every merge, so they hit that bug hard. It should use the repo's documented local gates;
 for Rust/Nix repos, default to `cargo fmt`, `cargo clippy`, `cargo test`, and
 `nix build` through `nix develop` where that is the established pattern.
 
@@ -437,6 +449,59 @@ implement → review loop for each bead.
     the user says stop, a bead needs human product/security judgment, or a
     P0/P1 dogfood bead interrupts the queue.
 
+## Harden-until-clean drive
+
+Use this mode when the user wants a **branch hardened until review is clean**
+and there is no backlog yet. It is the backlog drain with an outer loop bolted
+on: a review panel generates the work list, the drain executes it, then the
+panel runs again over everything that merged.
+
+```
+loop:
+  findings = review_panel(work_branch, base=review_base)   # codex + claude fable, parallel
+  if none: break                                           # DONE
+  beads   = mint(triage(findings))                         # one bead per real defect
+  drain(beads)                                             # the Backlog-drain workflow above
+```
+
+Triggers: "harden this branch", "review and solve until clean", "keep running
+review+fix passes until it's clean", "turn the review findings into beads".
+
+**Why bother, when rb-lite already reviews inside each run?** Different diff
+bases. rb-lite's panel sees one bead's branch diff; the outer panel sees the
+work branch against its base — every merged bead plus the original work. A bead
+that tightens a server predicate passes its own review and breaks callers the
+run never looked at. Only the outer pass catches that, which is why later
+iterations mostly surface regressions from earlier fixes. That is the loop
+working.
+
+The full procedure — panel invocations and reviewer prompt, triage rules, the
+sibling sweep, bead minting with `review-src:` labels and priority mapping, stop
+conditions, and what to expect — is in
+[references/harden-until-clean.md](references/harden-until-clean.md). Read it
+before iteration 1.
+
+The load-bearing points, if you read nothing else:
+
+- **The work branch must be disposable.** Never `main`/`master` or a shared
+  branch; the loop resets it to origin after every merge.
+- **Run the two reviewers in parallel and never show one the other's findings.**
+  Correlated reviewers are one reviewer at twice the price.
+- **One defect, one bead.** Dedupe across reviewers before `br create`, or you
+  build yourself a merge conflict out of two branches fixing the same line.
+- **Every bead's acceptance criteria name what must KEEP working**, not only
+  what is broken. Skip that and a security narrowing produces an over-correction
+  bead next iteration.
+- **Sweep for siblings yourself.** When a finding names one instance of a class,
+  grep for the rest and mint those beads now — it collapses two or three future
+  iterations into one.
+- **Both reviewers clean ends the loop.** A reviewer that failed transiently gets
+  rerun; one that is permanently unavailable ends the loop at `CLEAN_DEGRADED`,
+  named. There is no pass limit here, so that exit is what keeps a
+  single-reviewer machine from iterating forever.
+- Expect **10–20 iterations and dozens of PRs** on a substantial branch. Say so
+  before starting; do not begin without explicit agreement.
+
 ## Backlog task template
 
 The task file for a bead should be self-contained and narrow:
@@ -455,6 +520,12 @@ shape of the change.>
 ## Tests
 <3-7 specific test cases the implementer should add or update. Use behavior
 phrases like "X happens when Y", not only test function names.>
+- Test through the REAL code path. A test that exercises a test-only shortcut
+  (env-gated early return, fake injected above the seam being fixed) stays green
+  whether or not the fix works. Inject fakes *below* the seam you care about.
+- The new test must actually RUN under the repo's default test command. Verify
+  by running it and grepping the output for the new test name — a test file
+  outside the runner's glob is dead coverage that reads as a gate.
 
 ## Scope guard
 - Do not refactor unrelated code.
@@ -482,6 +553,9 @@ phrases like "X happens when Y", not only test function names.>
 
 ## Acceptance criteria
 - <Acceptance criteria copied from `br show <id>`.>
+- <What must KEEP working — name the legitimate cases the change must preserve.
+  Criteria that only describe what to block get signed off, and the breakage
+  they cause comes back as its own bead later.>
 - The repo's local gate set passes on the final tree.
 ```
 

@@ -5,6 +5,10 @@ Load this file when writing the final review.
 ```markdown
 # Bead Graph Audit
 
+## Auditor
+- Model: <e.g. claude fable (high effort) | codex gpt-5.6-sol (xhigh)>
+- Independence: INDEPENDENT (different model than built the graph) | SELF-AUDIT | UNKNOWN (graph authorship not determined)
+
 ## Launch verdict
 - Fail / Conditional pass / Pass
 - One-sentence reason
@@ -37,11 +41,17 @@ Load this file when writing the final review.
 - Missing or weak unit/integration/e2e obligations
 - Missing diagnostics or logging where they are needed
 
+## Disagreements with the auditor
+- <auditor's claim> — upheld / overruled, per <bead id or plan section>
+
 ## Suggested br actions
 ```bash
 # exact commands when you can state them confidently
 ```
 ```
+
+Drop the disagreements section on a self-audit; there is no second opinion to
+disagree with, and an empty heading implies independence you did not have.
 
 ## Severity rules
 

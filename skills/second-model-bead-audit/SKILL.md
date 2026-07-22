@@ -10,7 +10,10 @@ description: >-
   the beads ready to build?", or "review the bead graph before we start". Also
   works as a self-audit when no second model is available. Prefer read-only
   review unless the user explicitly asks for bead edits.
-compatibility: Requires br and bv on PATH and a repo that uses .beads/.
+compatibility: Requires br and bv on PATH and a repo that uses .beads/. The
+  second model is whichever of `codex` / `claude` you are not currently running
+  in; either CLI on PATH enables a genuine cross-model audit, and the skill also
+  works as a self-audit without them.
 ---
 
 Provide a second-model audit of the bead graph without inheriting the first
@@ -24,13 +27,65 @@ unexpected errors, check whether the CLI version matches the expected subcommand
 signatures in the command palette below — flag version mismatches to the user
 rather than guessing at alternative syntax.
 
+## Who the second model is
+
+"Second model" means *a different model from the one that built the graph*, not
+merely a second pass. A model re-reading its own work inherits the assumptions
+that produced the gaps.
+
+Pick the auditor from **who built the graph**, not from which CLI you happen to
+be sitting in. Auditing a Claude-built graph with Claude is a self-audit even
+when a different session runs it.
+
+| Graph was built by | Auditor to invoke |
+|---|---|
+| Claude | `codex exec` (default `gpt-5.6-sol` at `model_reasoning_effort="xhigh"`) |
+| Codex | `claude -p "<audit prompt>" --model fable --effort high --output-format json` |
+| Unknown | Ask, or check the bead history (`br show <id> --json` actor fields). If it stays unknown, run the audit anyway and mark independence `UNKNOWN` |
+| The other CLI is unavailable | Self-audit — say so explicitly in the verdict |
+
+Concretely, from a Codex session:
+
+```bash
+set -o pipefail   # else jq's failure is masked and an empty audit reads as a thin one
+claude -p "$(cat /tmp/bead-audit-prompt.txt)" \
+  --model fable --effort high --output-format json \
+  --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
+  --disallowedTools "Edit,Write,NotebookEdit" \
+  | jq -er 'if .is_error then error(.result // "auditor returned is_error")
+            else (.result // empty) end'
+```
+
+A non-zero exit means the auditor never ran (auth, rate limit, overload) — fall
+back to a `SELF-AUDIT` and label it, rather than reporting a thin audit as an
+independent one. Keep `--disallowedTools`: this skill is read-only by default,
+and an auditor that edits beads has stopped being a second opinion.
+
+The audit prompt should carry the plan path, the `br`/`bv` commands from the
+command palette below, the audit categories, and the report template — the second
+model has none of this session's context, and that ignorance is exactly what you
+are buying.
+
+Two rules that keep this honest:
+
+- **Do not hand the second model your own conclusions.** Give it the plan and the
+  graph, not your assessment of them. An auditor shown the answer grades the
+  answer.
+- **Reconcile, don't rubber-stamp in reverse.** Its findings are hypotheses too.
+  Where it disagrees with you about the graph, go read the beads and the plan and
+  decide with citations — and record which of you was right in the report.
+
+A self-audit is still worth running when no second CLI is available. Label it
+`SELF-AUDIT` in the verdict so the user knows the independence claim is weaker.
+
 ## Default posture
 
 Stay in read-only audit mode unless the user explicitly asks you to apply fixes.
 
 ## Use this skill when
 
-- Claude or another agent already created/refined beads and the user wants Codex or another model to review them
+- Claude or another agent already created/refined beads and the user wants Codex,
+  Claude Fable, or another model to review them
 - the project is important enough that a second-model check is worth the time
 - the graph feels plausible but you want an independent launch verdict
 
@@ -43,9 +98,12 @@ Stay in read-only audit mode unless the user explicitly asks you to apply fixes.
 ## Required outputs
 
 1. A launch verdict: fail, conditional pass, or pass.
-2. A structured report with blocking findings first.
-3. Exact bead-level fixes or proposed `br` actions where possible.
-4. Clear distinction between hard blockers, important improvements, and optional nits.
+2. Which model performed the audit, and whether it was independent or a
+   `SELF-AUDIT`.
+3. A structured report with blocking findings first.
+4. Exact bead-level fixes or proposed `br` actions where possible.
+5. Clear distinction between hard blockers, important improvements, and optional nits.
+6. Any place the auditor and you disagreed, and the citation that settled it.
 
 ## Workflow
 

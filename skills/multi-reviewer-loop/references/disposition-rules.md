@@ -2,6 +2,10 @@
 
 Load this file when classifying findings during the fix-and-validate phase.
 
+Classify the **merged** findings, one disposition per real defect. If both
+reviewers raised the same defect, that is one finding with one disposition, not
+two.
+
 ## Classification
 
 Before editing, classify each finding as `FIX`, `DEFER`, `REJECT`, or
@@ -21,6 +25,37 @@ Before editing, classify each finding as `FIX`, `DEFER`, `REJECT`, or
   optional/deferred. This is a *scope* decision, not a claim the finding is
   false, so it doesn't need REJECT's counter-evidence — but it must pass the
   over-specification test below. (The finding is *not worth building*.)
+
+## Cross-reviewer signals
+
+Each merged finding carries a source tag: `BOTH`, `CODEX`, `FABLE`, or
+`CONFLICT`. The tag changes *ordering and attention*, never the evidence bar.
+
+- **`BOTH`** — two independent reads found the same defect. Fix these first.
+  Agreement raises confidence that the defect is real; it says nothing about
+  whether the proposed remedy is right, so the over-specification test still
+  applies. Two reviewers can both talk you into building something no
+  requirement needs.
+- **`CODEX` / `FABLE` only** — normal disposition, normal evidence bar. The
+  reviewers have different visibility: `codex review` sees the diff against the
+  base, while the Claude reviewer reads out into the repo. Each one routinely
+  catches things the other structurally cannot see. A single-source P1 is still
+  a P1.
+- **`CONFLICT`** — one reviewer asserts a defect the other explicitly calls
+  correct. Resolve by reading the code yourself and citing `file:line`. Do not
+  split the difference, do not defer to the more alarming read, and do not defer
+  to the reviewer that was right last time. Record which one was right; a
+  reviewer that is confidently wrong about the changed code is worth knowing
+  about for the rest of the loop.
+
+**Silence is not counter-evidence.** "The other reviewer didn't flag it" is not
+on the REJECT evidence list below and never becomes one. One reviewer missing a
+defect is the expected case — it is why there are two.
+
+**Agreement is not validation either.** Both reviewers reading the same diff can
+share the same wrong assumption about code neither opened. When a `BOTH` finding
+rests on a claim about behavior outside the diff, verify that claim before
+fixing, exactly as you would for a single-source finding.
 
 ## REJECT evidence bar
 
@@ -45,6 +80,7 @@ Do not reject a finding for any of these reasons:
 - the change might be intentional, but you have no proof
 - CI, lint, typecheck, or tests might catch it later
 - unrelated validation passed after your edits
+- only one reviewer raised it, or the other reviewer stayed silent about it
 
 These are invalid for `REJECT` *and* for `CUT/SIMPLIFY`. `CUT` is not "this is
 annoying to write" — that's churn, and churn is not a reason. `CUT` is "omitting
@@ -87,6 +123,18 @@ the finding implies.
   Stop adding. Run a skeptical / over-specification audit (an inverted pass that
   hunts what to *cut*, not what to add) and reconcile, rather than spending more
   normal passes.
+- **A reviewer going quiet is a convergence signal, not a broken reviewer.** If
+  one reviewer has reported clean for two or more consecutive passes while the
+  other keeps producing findings, the quiet one is telling you the core is done
+  and the loud one is mining the tail. Check the loud reviewer's recent findings
+  for the fractal-tail pattern before spending another pass on them. (First rule
+  out the boring explanation: confirm the quiet reviewer actually ran and exited
+  0 rather than failing silently.)
+- **Whose findings you accept, tracked across passes, is worth a glance.** If
+  every accepted finding for several passes came from one reviewer while every
+  finding from the other was rejected or cut, either that reviewer is
+  mis-tuned for this repo, or you have stopped reading its findings on their
+  merits. Both are worth a moment before the next pass.
 
 ## Priority guidance
 
@@ -108,7 +156,15 @@ For each finding you `FIX` or `DEFER`:
 2. Inspect any claimed safeguard, test, or doc before deciding
 3. Make the smallest correct fix when fixing
 4. Re-read the edited code
-5. Note the disposition and evidence in `"$PASS_NOTES"`
+5. Note the disposition, the source tag, and the evidence in `"$PASS_NOTES"`
+
+For each `CONFLICT`:
+
+1. Read the disputed code yourself and decide with `file:line` evidence
+2. Record the winner and the evidence in `"$PASS_NOTES"` — this is the one
+   disposition always worth surfacing in chat, because a confident reviewer was
+   wrong about code you are shipping
+3. Dispose of the surviving claim normally (`FIX` / `DEFER` / `REJECT` / `CUT`)
 
 For each finding you `REJECT`:
 
@@ -133,3 +189,10 @@ For each finding you `CUT/SIMPLIFY`:
 If a materially identical finding reappears on the next pass after you
 rejected it, assume your rejection may have been wrong. Re-verify from
 scratch before calling it a persistent false positive.
+
+**A rejected finding that comes back from the *other* reviewer is stronger
+evidence than a repeat from the same one.** A reviewer repeating itself may just
+be reading the same code the same wrong way; a second, independent reviewer
+arriving at the claim you disproved means your counter-evidence probably does not
+say what you thought it said. Re-verify that one before anything else in the
+pass.
