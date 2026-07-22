@@ -328,7 +328,8 @@ directories created by `--migrate-existing`.
   GNU coreutils
 - `npx` plus Gemini credentials to enable the optional third default
   `orchestrating-with-rb-lite` reviewer
-- `rb-lite` on `PATH`, or `nix run github:douglaz/rb-lite -- ...`, for
+- `rb-lite` on `PATH`, or `nix run --refresh github:douglaz/rb-lite -- ...`
+  (the `--refresh` avoids running an hour-stale cached revision), for
   `orchestrating-with-rb-lite`
 - `br` (≥ 0.1.45) and `bv` on `PATH`, plus a repo that uses `.beads/`, for
   `plan-to-beads-transfer`, `bead-polish-loop`, `second-model-bead-audit`, and

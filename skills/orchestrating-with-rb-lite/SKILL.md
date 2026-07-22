@@ -15,7 +15,7 @@ description: >-
   review/fix cycle. Prefer `rb-lite` when you want "code → review → fix →
   repeat → JSON summary" without a durable project orchestrator. Do NOT use for
   cross-project orchestration, open-ended planning, or tiny one-shot edits.
-compatibility: Requires `rb-lite` on `PATH` or `nix run github:douglaz/rb-lite -- ...`. rb-lite itself has no default implementer, so pass `--implementer` with one preset or a comma-separated cycle, or use `--implement-cmd`; this skill defaults to `--implementer claude,codex` unless the user pins another choice. `codex` and `claude` must be installed and authenticated; the default Claude reviewer needs `jq`, and normal timeout-enabled runs need a compatible `timeout`, either from the host shell for source installs or from the Nix wrapper for Nix installs. `npx` plus Gemini credentials enable the third default reviewer but are not required for the panel to proceed. Backlog-drain mode also requires `br` (>= 0.1.45), `gh`, and the repo's normal local verification tools; harden-until-clean mode additionally needs `codex` and `claude` for the outer review panel.
+compatibility: Requires `rb-lite` on `PATH` or `nix run --refresh github:douglaz/rb-lite -- ...` (use `--refresh` at least once per session so Nix does not reuse an hour-stale cached revision). rb-lite itself has no default implementer, so pass `--implementer` with one preset or a comma-separated cycle, or use `--implement-cmd`; this skill defaults to `--implementer claude,codex` unless the user pins another choice. `codex` and `claude` must be installed and authenticated; the default Claude reviewer needs `jq`, and normal timeout-enabled runs need a compatible `timeout`, either from the host shell for source installs or from the Nix wrapper for Nix installs. `npx` plus Gemini credentials enable the third default reviewer but are not required for the panel to proceed. Backlog-drain mode also requires `br` (>= 0.1.45), `gh`, and the repo's normal local verification tools; harden-until-clean mode additionally needs `codex` and `claude` for the outer review panel.
 ---
 
 Use `rb-lite` as the default lightweight implement → review loop for
@@ -76,8 +76,16 @@ just a script and the per-run artifact directory.
 Resolution order, in this order:
 
 1. `command -v rb-lite` — installed binary on PATH.
-2. `nix run github:douglaz/rb-lite -- ...` — public flake; works on first
-   run after a short build, cached afterwards.
+2. `nix run --refresh github:douglaz/rb-lite -- ...` — public flake; works on
+   first run after a short build, cached afterwards.
+
+**Always pass `--refresh` on the first `nix run` of a session.** Without it,
+Nix reuses the GitHub revision it resolved earlier (`tarball-ttl`, one hour by
+default) and silently runs a stale rb-lite — which is how you end up debugging
+"unknown run option" errors against a binary that was fixed upstream days ago.
+`--refresh` costs one extra ref lookup; the build itself is still cached when
+the revision hasn't moved. Once you've refreshed, later invocations in the same
+session can drop the flag.
 
 If neither path works, stop and tell the user to install `rb-lite` (e.g.
 `nix profile install github:douglaz/rb-lite`) or expose it on PATH.
@@ -92,8 +100,9 @@ The default reviewer panel runs three reviewers concurrently:
 intended and must also be authenticated. The default Claude reviewer needs
 `jq`, and normal rb-lite runs need a `timeout` binary that supports
 `--kill-after` because both implementer and reviewer timeouts are enabled by
-default. If rb-lite is resolved through `nix run github:douglaz/rb-lite --` or
-a Nix-profile wrapper, do not reject the setup just because the host shell
+default. If rb-lite is resolved through `nix run --refresh
+github:douglaz/rb-lite --` or a Nix-profile wrapper, do not reject the setup
+just because the host shell
 cannot find `jq` or GNU `timeout`; the upstream wrapper supplies those to the
 rb-lite process. For source/path installs, check the host shell. Gemini is
 opportunistic: if `npx` or Gemini credentials are missing, that reviewer fails
@@ -120,11 +129,18 @@ codex`) or update rb-lite. If it rejects `--implementer` itself with
 "unknown run option", it predates implementer selection entirely — update
 it (those oldest builds default to codex, so you can omit the flag there).
 
+To update: `nix run --refresh github:douglaz/rb-lite -- ...` for the nix
+fallback, `nix profile upgrade` for a Nix-profile install, or `git pull` plus a
+rebuild for a source/path install. Retry the rejected flag after updating
+before you fall back to the older calling convention — a stale flake cache is
+the most common cause of these "predates X" errors.
+
 ## Required outputs
 
 When you finish a run on the user's behalf, report:
 
-1. The binary you used (`rb-lite` from PATH, or `nix run github:...`).
+1. The binary you used (`rb-lite` from PATH, or `nix run --refresh
+   github:...`).
 2. The exit code and the `status` field from the JSON summary.
 3. Rounds completed and the final reviewer state (clean, consensus
    failure, max-rounds, etc.).
@@ -183,14 +199,17 @@ ready bead if the queue is not empty, and the exact reason the loop stopped.
    after resolving the rb-lite binary and prerequisites.
 
 2. **Resolve the binary.** `command -v rb-lite` first; otherwise plan to
-   prefix every invocation with `nix run github:douglaz/rb-lite --`. Note
-   the resolved invocation in your plan so the user knows what's running.
+   prefix every invocation with `nix run --refresh github:douglaz/rb-lite --`.
+   Keep `--refresh` on at least the first invocation so you don't run an
+   hour-stale cached revision. Note the resolved invocation in your plan so the
+   user knows what's running.
 
 3. **Confirm prerequisites and choose the implementer.** Always check
    `command -v codex` and `command -v claude`; if either is missing, stop and
    tell the user. For a source/path rb-lite install, also check `command -v jq`
    and `timeout --kill-after=1s 1s true`. For the
-   `nix run github:douglaz/rb-lite --` invocation or a Nix-profile wrapper, skip
+   `nix run --refresh github:douglaz/rb-lite --` invocation or a Nix-profile
+   wrapper, skip
    host `jq`/`timeout` rejection because the wrapper supplies them inside
    rb-lite. If compatible `timeout` is genuinely unavailable for the resolved
    rb-lite invocation, stop unless the user explicitly accepts disabling both
@@ -398,7 +417,7 @@ implement → review loop for each bead.
    ```
 
    If using the nix fallback, prefix the same `run ...` arguments with
-   `nix run github:douglaz/rb-lite --`.
+   `nix run --refresh github:douglaz/rb-lite --`.
 
 6. **Read the JSON summary.** Exit `0` with status `clean` means the panel
    had no P0/P1/P2 findings. For exit `10`, `11`, `12`, `13`, or `70`, use
@@ -886,6 +905,9 @@ The JSON schema (every exit, last stdout line):
 - **`nix run` fails with HTTP 404.** The repo went private, or the user
   doesn't have access. Confirm
   https://github.com/douglaz/rb-lite is public and try again.
+- **rb-lite rejects a flag the docs say exists.** You're on a cached revision.
+  Rerun with `nix run --refresh github:douglaz/rb-lite -- ...` (or
+  `nix profile upgrade`) before concluding the build predates the feature.
 
 ## Run artifacts to know
 
