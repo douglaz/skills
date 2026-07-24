@@ -202,12 +202,12 @@ For each pass `N` from `1` to `MAX_PASSES`:
    PASS_ID=$(printf '%02d' "$N")
    codex review --base "$DIFF_BASE" \
      -c 'model="gpt-5.6-sol"' -c 'model_reasoning_effort="xhigh"' \
-     >"$REVIEW_DIR/pass-${PASS_ID}.codex.txt" 2>"$REVIEW_DIR/pass-${PASS_ID}.codex.stderr.txt" &
+     </dev/null >"$REVIEW_DIR/pass-${PASS_ID}.codex.txt" 2>"$REVIEW_DIR/pass-${PASS_ID}.codex.stderr.txt" &
    CODEX_PID=$!
    claude -p "$(cat "$FABLE_PROMPT_FILE")" --model fable --effort high --output-format json \
      --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
      --disallowedTools "Edit,Write,NotebookEdit" \
-     >"$REVIEW_DIR/pass-${PASS_ID}.fable.raw.json" 2>"$REVIEW_DIR/pass-${PASS_ID}.fable.stderr.txt" &
+     </dev/null >"$REVIEW_DIR/pass-${PASS_ID}.fable.raw.json" 2>"$REVIEW_DIR/pass-${PASS_ID}.fable.stderr.txt" &
    FABLE_PID=$!
    wait "$CODEX_PID"; CODEX_RC=$?
    wait "$FABLE_PID"; FABLE_RC=$?

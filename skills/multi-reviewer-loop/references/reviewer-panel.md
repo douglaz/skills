@@ -105,7 +105,7 @@ Both reviewers start together and neither sees the other's output.
 ```bash
 codex review --base "$DIFF_BASE" \
   -c 'model="gpt-5.6-sol"' -c 'model_reasoning_effort="xhigh"' \
-  >"$CODEX_OUT" 2>"$CODEX_ERR" &
+  </dev/null >"$CODEX_OUT" 2>"$CODEX_ERR" &
 CODEX_PID=$!
 
 claude -p "$(cat "$FABLE_PROMPT_FILE")" \
@@ -115,7 +115,7 @@ claude -p "$(cat "$FABLE_PROMPT_FILE")" \
   --tools "Bash,Read,Glob,Grep" \
   --allowedTools "Bash,Read,Glob,Grep" \
   --disallowedTools "Edit,Write,NotebookEdit" \
-  >"$FABLE_RAW" 2>"$FABLE_ERR" &
+  </dev/null >"$FABLE_RAW" 2>"$FABLE_ERR" &
 FABLE_PID=$!
 
 wait "$CODEX_PID"; CODEX_RC=$?
@@ -124,6 +124,14 @@ wait "$FABLE_PID"; FABLE_RC=$?
 
 Notes on the flags:
 
+- **Close stdin on both reviewers (`</dev/null`).** These are non-interactive
+  batch commands; neither should ever read the launching shell's stdin. Without
+  the redirect, a reviewer that decides to read stdin (observed with `codex` in
+  some releases: it prints `Reading additional input from stdin...` and blocks)
+  hangs until the outer `timeout` kills it — which then looks like a slow review,
+  not a stuck one. `</dev/null` gives an immediate EOF so the command proceeds on
+  its arguments alone. Harmless when the tool never reads stdin, decisive when it
+  does. (Backgrounding with `&` does not reliably detach stdin from a tty.)
 - **No focus argument on `codex review`.** `codex review [PROMPT]` and `--base`
   are mutually exclusive at the CLI level — passing both exits immediately with
   `error: the argument '[PROMPT]' cannot be used with '--base <BRANCH>'`, before
