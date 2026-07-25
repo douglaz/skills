@@ -13,8 +13,13 @@ description: >-
   one by one with rb-lite", "harden this branch", "review and solve until
   clean", "review findings into beads", or asks for an iterative codex+claude
   review/fix cycle. Prefer `rb-lite` when you want "code → review → fix →
-  repeat → JSON summary" without a durable project orchestrator. Do NOT use for
-  cross-project orchestration, open-ended planning, or tiny one-shot edits.
+  repeat → JSON summary" without a durable project orchestrator. When the
+  deliverable IS a test or verification gate — a smoke, integration/regression/
+  property test, or a live end-to-end gate that must actually run green rather
+  than merely be reviewed — use `testing-with-rb-lite` instead (it authors the
+  test with rb-lite and then independently RUNS it, since the panel only reads
+  the test's source). Do NOT use for cross-project orchestration, open-ended
+  planning, or tiny one-shot edits.
 compatibility: Requires `rb-lite` on `PATH` or `nix run --refresh github:douglaz/rb-lite -- ...` (use `--refresh` at least once per session so Nix does not reuse an hour-stale cached revision). rb-lite itself has no default implementer, so pass `--implementer` with one preset or a comma-separated cycle, or use `--implement-cmd`; this skill defaults to `--implementer claude,codex` unless the user pins another choice. `codex` and `claude` must be installed and authenticated; the default Claude reviewer needs `jq`, and normal timeout-enabled runs need a compatible `timeout`, either from the host shell for source installs or from the Nix wrapper for Nix installs. `npx` plus Gemini credentials enable the third default reviewer but are not required for the panel to proceed. Backlog-drain mode also requires `br` (>= 0.1.45), `gh`, and the repo's normal local verification tools; harden-until-clean mode additionally needs `codex` and `claude` for the outer review panel.
 ---
 
