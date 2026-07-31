@@ -131,4 +131,6 @@ This is the first step in the bead lifecycle:
 2. `bead-polish-loop`
 3. `second-model-bead-audit`
 
-Recommend `bead-polish-loop` after almost every non-trivial transfer. For high-stakes or large graphs, recommend `second-model-bead-audit` before implementation.
+Run `bead-polish-loop` after almost every non-trivial transfer. Normal polish
+completion now includes the `second-model-bead-audit` reviewer-panel gate before
+implementation; do not reserve that audit only for high-stakes graphs.
