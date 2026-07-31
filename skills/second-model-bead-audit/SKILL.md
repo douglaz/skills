@@ -1,180 +1,286 @@
 ---
 name: second-model-bead-audit
 description: >-
-  Audits a bead graph against the plan with an independent second opinion,
-  checking coverage gaps, duplicate ownership, weak descriptions, dependency
-  mistakes, and missing verification obligations before implementation starts.
-  Use when another agent already created or polished the beads and you want a
-  launch verdict with exact fixes, or when the user says "sanity check the
-  beads", "audit the graph", "give me a second opinion on these beads", "are
-  the beads ready to build?", or "review the bead graph before we start". Also
-  works as a self-audit when no second model is available. Prefer read-only
+  Runs the default final launch-readiness audit for a polished bead graph against
+  its plan. A read-only two-reviewer panel (Codex gpt-5.6-sol at xhigh plus Claude
+  Fable at high effort) independently checks coverage, ownership, bead quality,
+  dependencies, priority, verification, and operational obligations; the
+  orchestrator merges and reconciles their findings into one verdict. Use after
+  bead-polish-loop by default, or when the user asks to sanity-check, audit, get a
+  second opinion on, or approve beads before implementation. Prefer read-only
   review unless the user explicitly asks for bead edits.
-compatibility: Requires br and bv on PATH and a repo that uses .beads/. The
-  second model is whichever of `codex` / `claude` you are not currently running
-  in; either CLI on PATH enables a genuine cross-model audit, and the skill also
-  works as a self-audit without them.
+argument-hint: "[plan/spec path] [--reviewers codex|fable|codex,fable]"
+compatibility: >-
+  Requires br, bv, jq, SHA-256 tooling (sha256sum or shasum), and GNU timeout
+  (timeout or gtimeout) on PATH, plus a repo that uses .beads/. The full default
+  panel also requires authenticated codex and claude CLIs. One available reviewer
+  produces a DEGRADED audit; if no requested reviewer can run, the audit is
+  BLOCKED.
 ---
 
-Provide a second-model audit of the bead graph without inheriting the first
-model's blind spots.
+# second-model-bead-audit
 
-## Tool dependencies
+Give the polished bead graph a fresh, adversarial launch-readiness check before
+implementation starts.
 
-This skill requires `br` (beads_rust) and `bv` (bead viewer) on `PATH`.
-If either command is missing, stop and tell the user. If commands fail with
-unexpected errors, check whether the CLI version matches the expected subcommand
-signatures in the command palette below — flag version mismatches to the user
-rather than guessing at alternative syntax.
-
-## Who the second model is
-
-"Second model" means *a different model from the one that built the graph*, not
-merely a second pass. A model re-reading its own work inherits the assumptions
-that produced the gaps.
-
-Pick the auditor from **who built the graph**, not from which CLI you happen to
-be sitting in. Auditing a Claude-built graph with Claude is a self-audit even
-when a different session runs it.
-
-| Graph was built by | Auditor to invoke |
-|---|---|
-| Claude | `codex exec` (default `gpt-5.6-sol` at `model_reasoning_effort="xhigh"`) |
-| Codex | `claude -p "<audit prompt>" --model fable --effort high --output-format json` |
-| Unknown | Ask, or check the bead history (`br show <id> --json` actor fields). If it stays unknown, run the audit anyway and mark independence `UNKNOWN` |
-| The other CLI is unavailable | Self-audit — say so explicitly in the verdict |
-
-Concretely, from a Codex session:
-
-```bash
-set -o pipefail   # else jq's failure is masked and an empty audit reads as a thin one
-claude -p "$(cat /tmp/bead-audit-prompt.txt)" \
-  --model fable --effort high --output-format json \
-  --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
-  --disallowedTools "Edit,Write,NotebookEdit" \
-  | jq -er 'if .is_error then error(.result // "auditor returned is_error")
-            else (.result // empty) end'
-```
-
-A non-zero exit means the auditor never ran (auth, rate limit, overload) — fall
-back to a `SELF-AUDIT` and label it, rather than reporting a thin audit as an
-independent one. Keep `--disallowedTools`: this skill is read-only by default,
-and an auditor that edits beads has stopped being a second opinion.
-
-The audit prompt should carry the plan path, the `br`/`bv` commands from the
-command palette below, the audit categories, and the report template — the second
-model has none of this session's context, and that ignorance is exactly what you
-are buying.
-
-Two rules that keep this honest:
-
-- **Do not hand the second model your own conclusions.** Give it the plan and the
-  graph, not your assessment of them. An auditor shown the answer grades the
-  answer.
-- **Reconcile, don't rubber-stamp in reverse.** Its findings are hypotheses too.
-  Where it disagrees with you about the graph, go read the beads and the plan and
-  decide with citations — and record which of you was right in the report.
-
-A self-audit is still worth running when no second CLI is available. Label it
-`SELF-AUDIT` in the verdict so the user knows the independence claim is weaker.
+This is still called a second-model audit because at least one panel member should
+be independent of the model lineage that built and polished the graph. The default
+is now a panel, not one hand-picked alternate model: two independent reads expose
+both shared findings and useful disagreements, and avoid making graph authorship a
+prerequisite for choosing the reviewer.
 
 ## Default posture
 
-Stay in read-only audit mode unless the user explicitly asks you to apply fixes.
+- Run this audit after every non-trivial `bead-polish-loop`, not only for
+  high-stakes launches.
+- Keep the panel read-only. It reports exact fixes; `bead-polish-loop` owns normal
+  graph mutation.
+- Run both reviewers independently and in parallel. Never seed one with the
+  other's findings or with your own conclusions.
+- Treat panel findings as hypotheses to verify, not commands to obey.
+- Do not proceed to implementation on `FAIL` or `CONDITIONAL PASS`. Resolve and
+  re-audit every accepted condition first; any graph edit invalidates the old
+  verdict.
 
-## Use this skill when
+The user may explicitly opt out for a tiny or low-risk graph. Record the skipped
+gate rather than silently treating the polisher's own convergence judgment as an
+independent audit.
 
-- Claude or another agent already created/refined beads and the user wants Codex,
-  Claude Fable, or another model to review them
-- the project is important enough that a second-model check is worth the time
-- the graph feels plausible but you want an independent launch verdict
+## Inputs
 
-## Do not use this skill when
+Parse `--reviewers <list>` first. Valid values are `codex`, `fable`, and
+`codex,fable`; the default is both. A user-pinned one-reviewer audit is a
+`PINNED PANEL`, not an availability failure, but it still lacks full-panel
+agreement.
 
-- there is no real bead graph yet
-- the user wants implementation instead of review
-- the request is actually a planning task, not a bead audit
+The remaining argument is the plan/spec path. If it is absent, discover the
+relevant plan from the beads' spec refs and repo docs. Ask only when multiple
+plausible source plans would materially change the coverage audit.
+
+## Tool dependencies and panel health
+
+The graph audit itself requires `br`, `bv`, `jq`, SHA-256 tooling (`sha256sum` or
+`shasum`), and GNU `timeout` (`timeout` or `gtimeout`). If any is missing, stop
+and tell the user. If their commands fail unexpectedly, flag a likely CLI-version
+mismatch rather than inventing alternate syntax.
+
+The default panel is:
+
+| Reviewer | Invocation | Role |
+|---|---|---|
+| `codex` | `codex exec`, `gpt-5.6-sol`, `model_reasoning_effort="xhigh"`, read-only sandbox | Independent plan/graph audit with a custom rubric |
+| `fable` | `claude -p`, `--model fable --effort high`, read-only tool set | Independent plan/graph audit with the same rubric |
+
+`jq` is used to build the common graph snapshot and unwrap the Claude JSON result.
+
+- Both healthy: `FULL PANEL`.
+- One missing, unauthenticated, timed out, or unusable: continue with the survivor
+  and label the audit `DEGRADED`.
+- No requested external reviewer runs successfully: `BLOCKED`. Do not silently
+  replace the panel with the coordinating agent's self-review.
+- A user-pinned reviewer that runs successfully: `PINNED PANEL`.
+- Never turn an empty, truncated, ambiguous, or failed reviewer response into a
+  clean vote.
+
+Exact prompts, invocations, log layout, clean detection, and recovery rules live
+in [references/reviewer-panel.md](references/reviewer-panel.md). Read that file
+before launching the panel.
+
+## Independence from the graph
+
+Panel health and graph independence are different claims. Report both.
+
+Determine who built or substantially polished the graph from session context or
+`br show <id> --json` actor/history fields when practical. Do not delay the audit
+just to establish authorship.
+
+For each reviewer, label independence:
+
+- `INDEPENDENT`: a different model family from the graph's builder/polisher.
+- `BUILDER-LINEAGE`: the same model family; useful corroboration, but not the
+  second opinion.
+- `UNKNOWN`: graph authorship could not be established.
+
+With a Codex-built graph, Fable supplies the independent vote; with a Claude-built
+graph, Codex does. When authorship is mixed or unknown, the two-reviewer panel is
+still stronger than guessing which single auditor to invoke.
 
 ## Required outputs
 
-1. A launch verdict: fail, conditional pass, or pass.
-2. Which model performed the audit, and whether it was independent or a
-   `SELF-AUDIT`.
-3. A structured report with blocking findings first.
-4. Exact bead-level fixes or proposed `br` actions where possible.
-5. Clear distinction between hard blockers, important improvements, and optional nits.
-6. Any place the auditor and you disagreed, and the citation that settled it.
+1. Launch verdict: `FAIL`, `CONDITIONAL PASS`, or `PASS`; `NONE` when panel
+   health is `BLOCKED`.
+2. Audit quality: `FULL PANEL`, `DEGRADED`, `PINNED PANEL`, or `BLOCKED`.
+3. Panel roster, model settings, exit health, and independence labels.
+4. One merged report with blockers first and every finding tagged `BOTH`,
+   `CODEX`, `FABLE`, or `CONFLICT`.
+5. Exact bead-level fixes or proposed `br` actions where they are safe to state.
+6. Disagreements and contradictions, plus the plan section or bead evidence that
+   settled them.
+7. Paths to the raw reviewer outputs and merged report.
+
+A semantic `PASS` from a degraded or pinned audit must retain that quality label,
+for example `PASS (DEGRADED)`. Only a healthy full panel can produce an
+unqualified `PASS`. If no reviewer is `INDEPENDENT` from the known graph lineage,
+also append `NO INDEPENDENT VOTE` to any pass label. A blocked audit produces no
+launch verdict.
+
+Only an unqualified `PASS` clears the gate automatically. A qualified pass
+requires either a later healthy full-panel pass or the user's explicit,
+recorded acceptance of the reduced review coverage.
 
 ## Workflow
 
-1. Reread `AGENTS.md`, then read the relevant plan/spec and current bead graph.
-2. Ground in reality:
-   - `br list --limit 0 --json -a`
-   - `bv --robot-triage`
-   - `bv --robot-plan`
-   - `bv --robot-suggest`
-   - optionally `bv --robot-insights`, `bv --robot-priority`, and `br show <id> --json`
-3. Re-derive the judgment independently. Do not assume the existing graph is correct because another strong model made it.
-4. Audit the graph across these categories:
-   - plan coverage
-   - duplicate or overlapping ownership
-   - vague or under-specified beads
-   - dependency correctness and frontier health
-   - priority and sequencing fit
-   - verification obligations, including unit/integration/e2e and useful diagnostics where relevant
-   - user-visible and operator-visible risks that are still unowned
-5. Use the template in [references/review-report-template.md](references/review-report-template.md).
-6. If you are asked to apply fixes, mutate only the clearly justified ones with `br`, then flush with `br sync --flush-only`.
+### 1. Preflight and shared scope
 
-## Review standards
+1. Read `AGENTS.md`, `README.md`, the relevant plan/spec, and any graph-specific
+   guidance.
+2. Confirm the graph is meaningful and has already had a real polish pass. If it
+   is raw, redirect to `bead-polish-loop`; the final gate should not substitute for
+   routine cleanup.
+3. Confirm `br`, `bv`, the requested reviewer CLIs, and `jq` as applicable.
+4. Define the audit scope explicitly:
+   - authoritative plan/spec files, approved deltas, and recorded waivers
+   - plan-backed root beads/epics and their child/dependency closure
+   - the wider graph only for cross-scope dependencies and frontier health
 
-A good audit is not a rubber stamp. It should be willing to say:
+   Do not label unrelated backlog beads as unplanned merely because
+   `br list -a` includes them.
+5. Flush once, capture one shared baseline, and fingerprint it before launching
+   either reviewer:
 
-- the graph is missing work even though it looks large
-- two beads should merge even though their titles differ
-- one bead is overloaded and should split
-- the graph is not launch-ready because testing or failure-handling is still implicit
+   ```bash
+   br sync --flush-only
+   br list --limit 0 --json -a
+   bv --robot-triage
+   bv --robot-plan
+   bv --robot-suggest
+   ```
+
+   Add `bv --robot-insights`, `bv --robot-priority`, and targeted
+   `br show <id> --json` when useful.
+6. Create a unique audit directory and one neutral prompt containing the
+   snapshotted requirement and graph paths, audit scope, categories, severity
+   rules, and output contract. Do not include your conclusions or prior polish
+   findings.
+
+### 2. Run the panel
+
+Start Codex and Fable in parallel with the same prompt. Close stdin on both batch
+commands, persist stdout/stderr separately, and bound hangs when `timeout` is
+available.
+
+The panel audits:
+
+- plan-to-bead and bead-to-plan coverage
+- duplicate or overlapping ownership
+- vague, overloaded, undersized, or under-specified beads
+- dependency direction, cycles, bottlenecks, and ready-frontier health
+- priority and sequencing fit
+- unit, integration/e2e, acceptance, and regression obligations
+- logging, diagnostics, rollout, recovery, and operator-visible obligations
+- scope growth or beads with no plan backing
+
+Each reviewer must cite plan sections and bead IDs, propose bead-level remedies,
+and state `No findings.` explicitly when clean.
+
+Before parsing or merging findings, recompute the graph and requirement-source
+fingerprints. Any drift during the panel invalidates every vote: report
+`BLOCKED`, preserve the evidence, do not reset user state, and rerun only from a
+stable new snapshot. Also reject contradictory or truncated reviewer output as
+ambiguous rather than treating the presence of any finding tag as a usable audit.
+
+### 3. Merge and reconcile
+
+Merge on the underlying claim, not wording:
+
+- `BOTH`: both reviewers found the same issue.
+- `CODEX` / `FABLE`: only that reviewer found it.
+- `CONFLICT`: one asserts a problem and the other explicitly says the same graph
+  shape is correct.
+
+Agreement increases confidence and review order; it does not replace verification.
+Silence from the other reviewer is not counter-evidence. For every contradiction,
+read the cited plan and beads yourself, decide with citations, and record which
+reviewer was right.
+
+Reject a finding only with concrete plan, bead, or graph evidence. If a proposed
+fix adds work not required by the plan or a real delivery/verification risk,
+record it as out of scope rather than expanding the graph reflexively.
+
+Use [references/review-report-template.md](references/review-report-template.md)
+for the synthesis.
+
+### 4. Decide the verdict
+
+- `FAIL`: any blocking coverage, ownership, dependency, execution, or verification
+  defect remains.
+- `CONDITIONAL PASS`: no blocker, but one or more named important conditions must
+  be fixed before the intended launch shape is safe.
+- `PASS`: no blocking or important findings remain; optional nits may remain.
+
+Reviewer verdict votes are evidence, not a majority election. The orchestrator
+owns the final verdict and must explain any departure from either vote.
+
+### 5. Handoff and re-audit
+
+Normal mode is report-only:
+
+- `PASS`: proceed to implementation.
+- `CONDITIONAL PASS` or `FAIL`: send accepted findings into
+  `bead-polish-loop`'s ledger, fix them there, then rerun the full panel.
+
+If the user explicitly asks this skill to apply fixes, mutate only reconciled,
+clearly justified items with `br`, flush with `br sync --flush-only`, and rerun the
+panel before upgrading the verdict. Never let a reviewer edit the graph directly.
+
+Bound an automatic polish/audit cycle to three panel runs. Stop earlier when the
+same material finding survives two genuine fix attempts, the graph drifts during
+review, reviewer health is blocked, or an architecture/product decision is
+required. Surface the remaining issue instead of recursively invoking the two
+skills forever.
+
+Stop and ask for a product/architecture decision when a finding exposes ambiguity
+in the plan rather than a bead-quality defect.
 
 ## Command palette
 
 ```bash
 br list --limit 0 --json -a
 br show <id> --json
+br update <id> --description "..."
+br close <id> --reason "..."
+br dep add <issue> <depends-on>
+br dep remove <issue> <depends-on>
+br lint
 bv --robot-triage
 bv --robot-plan
 bv --robot-suggest
 bv --robot-insights
 bv --robot-priority
+br sync --flush-only
 ```
 
-## Common failure patterns to avoid
+## Failure patterns to avoid
 
-- praising the graph without independently checking plan coverage
-- nitpicking style while missing missing-work risks
-- collapsing all findings into one severity bucket
-- suggesting implementation changes when the graph itself is the problem
-- editing beads by default when the user asked for a review
+- choosing only the presumed alternate model when both reviewers are available
+- running reviewers sequentially or showing one the other's conclusions
+- giving reviewers the polish findings and creating an echo chamber
+- calling a one-reviewer, failed, empty, or ambiguous panel an unqualified pass
+- counting reviewer votes instead of reconciling claims against the plan and graph
+- dismissing a single-source finding because the other reviewer stayed silent
+- letting either reviewer mutate beads
+- nitpicking wording while missing absent work, dependency errors, or test gaps
+- expanding the graph for speculative hardening with no plan or delivery need
 
 ## Pipeline context
 
-This skill is the **final check** in the bead lifecycle:
+This is the default final gate in the bead lifecycle:
 
-1. **plan-to-beads-transfer** — create beads from a stable plan
-2. **bead-polish-loop** — refine the graph through iterative review rounds
-3. **second-model-bead-audit** (you are here) — independent launch-readiness verdict
+1. `plan-to-beads-transfer` — create executable memory from a stable plan.
+2. `bead-polish-loop` — iteratively refine the graph.
+3. `second-model-bead-audit` — run the read-only reviewer panel and issue the
+   launch verdict.
 
-Before using this skill, the graph should already have been through at least one
-round of polishing (via `bead-polish-loop` or manual review). Auditing a raw,
-unpolished transfer will produce a long list of issues that polishing would have
-caught — use `bead-polish-loop` first in that case.
-
-After the audit:
-- **Pass**: proceed to implementation.
-- **Conditional pass**: fix the noted conditions (often via a quick
-  `bead-polish-loop` round), then proceed.
-- **Fail**: return to `bead-polish-loop` to address blocking findings before
-  re-auditing.
-
-## Additional resources
-
-- For the report structure, see [references/review-report-template.md](references/review-report-template.md).
+The gate is part of normal completion, not an optional high-stakes add-on. A
+failed or conditional audit loops back to polishing and then through this gate
+again.

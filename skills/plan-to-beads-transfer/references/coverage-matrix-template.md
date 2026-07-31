@@ -1,6 +1,7 @@
 # Plan-to-Beads Coverage Matrix Template
 
-Load this file during transfer audits and later polishing passes.
+Load this file during transfer audits, later polishing passes, and the final
+`second-model-bead-audit` reviewer-panel gate.
 
 Use a simple table or checklist like this while translating the plan:
 

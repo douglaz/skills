@@ -88,11 +88,14 @@ score = 0.30 * coverage + 0.25 * findings + 0.25 * velocity + 0.20 * stability
 - `< 0.50`: not close; keep iterating
 - `0.50 - 0.74`: improving, but not launch-ready by convergence alone
 - `0.75 - 0.84`: close in some dimensions, but still below the stop threshold
-- `0.85 - 0.94`: usually good enough if the ledger is clear and the stop gates pass
-- `>= 0.95`: likely at diminishing returns
+- `0.85 - 0.94`: usually ready for the independent reviewer-panel handoff if the
+  ledger is clear and the stop gates pass
+- `>= 0.95`: likely at diminishing returns; hand off to the panel
 
 ## Interpretation notes
 
 - A high score does not excuse missing coverage, weak verification, or unresolved graph bottlenecks.
+- A high score is a polishing stop signal, not implementation approval. The
+  default `second-model-bead-audit` panel still owns the launch verdict.
 - If any critical findings ledger item remains open, cap the effective score at `0.74`.
 - Two consecutive rounds with scores above `0.85`, only corrective edits, and a clear findings ledger are a strong stop signal.

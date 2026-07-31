@@ -2,17 +2,19 @@
 name: bead-polish-loop
 description: >-
   Refine an existing bead graph through repeated review-and-revise rounds until
-  it converges into launch-ready executable memory with strong coverage,
+  it converges into audit-ready executable memory with strong coverage,
   deduplication, dependency shape, sizing, priority, and verification detail.
   Use when beads already exist but feel vague, duplicated, over-broad,
   dependency-wrong, or under-tested; when a large transfer from a markdown plan
   just landed; when a plan revision likely introduced graph drift; or when the
   user asks to clean up, tighten, review, or launch-ready the beads. Do not use
   for first-draft planning, direct implementation, or repos that do not yet have
-  meaningful beads to inspect.
+  meaningful beads to inspect. Normal completion hands the converged graph to the
+  second-model-bead-audit reviewer panel before implementation.
 ---
 
-Polish the bead graph until it is launch-ready, not merely plausible.
+Polish the bead graph until it is ready for the independent launch gate, not
+merely plausible.
 
 ## Core invariants
 
@@ -20,10 +22,14 @@ Polish the bead graph until it is launch-ready, not merely plausible.
 - Preserve functionality and intent; do not oversimplify away features, constraints, or verification.
 - Optimize for fungible agents: clear beads, correct dependencies, and a healthy ready frontier for parallel work.
 - Stop on convergence, not on an arbitrary round count.
+- Treat convergence as readiness for the independent audit, not permission to skip it.
 
 ## Preflight
 
 - Confirm `br` and `bv` are on `PATH`. If either is missing, stop and say so.
+- Record whether `codex`, `claude`, and `jq` are available for the final reviewer
+  panel. Missing panel tools do not block polishing, but they determine whether
+  the eventual audit can be full, degraded, or blocked.
 - Re-read `AGENTS.md`, `README.md`, and the relevant plan/spec before editing the graph.
 - If there are no meaningful beads yet, redirect to `plan-to-beads-transfer`.
 - If polishing keeps surfacing architecture questions, step back into plan space instead of repeatedly fixing downstream symptoms.
@@ -50,6 +56,9 @@ Do not declare convergence before all of these are true:
 - every `P0` and `P1` bead was inspected at least once
 - every bead on the critical dependency path was inspected at least once
 - every important unresolved finding is either fixed or explicitly waived with a reason
+
+Convergence ends the polishing phase. It does not complete the bead lifecycle:
+run `second-model-bead-audit` by default after the graph meets these gates.
 
 ## Per-round workflow
 
@@ -154,7 +163,38 @@ Use these escalations:
 
 - step back into plan space when the graph keeps expanding because the plan is still undecided
 - restart in a fresh session when current assumptions feel sticky or compaction degraded context
-- hand the graph to `second-model-bead-audit` when you want an independent launch-readiness verdict
+- stop and ask for a decision when the graph exposes a real product or architecture ambiguity
+
+## Default reviewer-panel gate
+
+After convergence:
+
+1. Flush the final graph with `br sync --flush-only`.
+2. Invoke `second-model-bead-audit` with the source plan/spec path. Its default
+   Codex + Fable panel is read-only and must not receive this skill's findings
+   ledger or conclusions.
+3. Handle the verdict:
+   - unqualified `PASS`: polishing is complete; proceed to implementation.
+   - `PASS (DEGRADED)` or `PASS (PINNED PANEL)`: do not proceed automatically.
+     Rerun a healthy full panel, or obtain and record the user's explicit
+     acceptance of the reduced review coverage.
+   - `CONDITIONAL PASS`: add accepted conditions to the ledger, run a focused
+     polish round, and re-audit before any implementation starts.
+   - `FAIL`: reopen polishing, resolve blocking findings, and rerun the panel.
+4. Preserve the audit quality label. A qualified pass is not equivalent to a
+   healthy full-panel pass, and a blocked audit has no launch verdict.
+
+The panel gate is the default for every non-trivial graph, not merely
+launch-critical work. The user may explicitly opt out for tiny or low-risk work;
+record that the gate was skipped. Do not count panel audits toward the minimum
+polish-round budget, and do not let the read-only reviewers mutate beads.
+
+Bound an automatic polish/audit cycle to three panel runs. Stop sooner if the same
+material finding survives two genuine fix attempts, the graph changes while a
+panel is reading it, reviewer health is blocked, or a product/architecture choice
+is required. Report the remaining issue instead of recursively bouncing between
+skills forever. Any graph mutation after an audit invalidates that verdict and
+requires a new panel snapshot.
 
 ## Hard failure modes
 
@@ -167,6 +207,9 @@ Do not:
 - assume a large graph is complete because it is verbose
 - oversimplify and silently delete functionality or test obligations
 - stop after the first pass that merely feels decent
+- proceed directly to implementation after non-trivial polishing without running
+  or explicitly waiving the reviewer-panel gate
+- bias the audit by handing the panel this session's findings ledger
 
 ## Command palette
 
@@ -195,4 +238,6 @@ This is the second step in the bead lifecycle:
 2. `bead-polish-loop`
 3. `second-model-bead-audit`
 
-Before using this skill, beads should already exist. After convergence, recommend `second-model-bead-audit` for high-stakes launches, or proceed to implementation when the graph is genuinely clean.
+Before using this skill, beads should already exist. After convergence, run
+`second-model-bead-audit` as the normal final gate. Failed and conditional audits
+loop back here with their accepted findings, then return to the panel.

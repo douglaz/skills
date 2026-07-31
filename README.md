@@ -105,7 +105,9 @@ Use the plan-to-beads-transfer skill on docs/PLAN.md.
 
 Runs repeated bead-graph refinement rounds for coverage, deduplication,
 dependency repair, sizing, priority, and verification completeness until the
-graph converges.
+graph converges. For every non-trivial graph, normal completion runs the
+`second-model-bead-audit` reviewer panel before implementation; a failed or
+conditional audit feeds accepted findings back into another focused polish round.
 
 Claude Code:
 
@@ -121,16 +123,20 @@ Use the bead-polish-loop skill on the current bead graph.
 
 ### second-model-bead-audit
 
-Provides an independent audit of an existing bead graph against the plan, with
-blocking findings first and exact bead-level fixes when obvious. The second model
-is whichever CLI you are not currently running in — `codex exec` from a Claude
-session, `claude --model fable --effort high` from a Codex one — and the report
-names which model audited and whether it was independent or a self-audit.
+Provides the default final audit of a polished bead graph against the plan, with
+blocking findings first and exact bead-level fixes when obvious. It runs a
+read-only reviewer panel in parallel — Codex `gpt-5.6-sol` at `xhigh` plus Claude
+Fable at high effort — then merges findings as `BOTH`, `CODEX`, `FABLE`, or
+`CONFLICT` and reconciles them against the plan and graph. One unavailable
+reviewer produces a clearly labeled degraded audit; with neither external
+reviewer available, the audit is blocked rather than silently replaced by a
+self-review.
 
 Claude Code:
 
 ```text
 /second-model-bead-audit docs/PLAN.md
+/second-model-bead-audit docs/PLAN.md --reviewers fable  # explicitly pin one reviewer
 ```
 
 Codex:
@@ -313,19 +319,27 @@ directories created by `--migrate-existing`.
 - [Claude Code](https://claude.com/claude-code) for Claude installation targets
 - [OpenAI Codex CLI](https://github.com/openai/codex) for Codex installation targets
 - `codex` on `PATH` for the `multi-reviewer-loop` panel, the
+  `second-model-bead-audit` panel,
   `orchestrating-with-rb-lite` harden-until-clean panel, and the default
   `orchestrating-with-rb-lite` reviewer panel
 - `claude` on `PATH` for the Claude Fable reviewer in `multi-reviewer-loop`,
+  `second-model-bead-audit`,
   `orchestrating-with-rb-lite` harden-until-clean mode, and
   `pr-with-codex-bot-review`, and for the default `orchestrating-with-rb-lite`
   implementer cycle and reviewer panel.
-  Either review CLI alone runs the loops degraded — with both missing they stop
-- `jq` on `PATH` to unwrap the Claude reviewer's JSON in `multi-reviewer-loop`,
+  When both reviewers are requested, either CLI alone runs the loops degraded;
+  with both missing they stop. An explicitly pinned reviewer produces
+  `PINNED PANEL` when healthy and `BLOCKED` when it fails.
+- `jq` on `PATH` to build `second-model-bead-audit` graph snapshots and unwrap
+  Claude reviewer JSON in `multi-reviewer-loop`, `second-model-bead-audit`,
   `orchestrating-with-rb-lite`, and `pr-with-codex-bot-review`; Nix-wrapped
   rb-lite supplies its own for the default panel
-- `timeout` with `--kill-after` support for normal `orchestrating-with-rb-lite`
-  runs when using a source/path rb-lite install; Nix-wrapped rb-lite supplies
-  GNU coreutils
+- SHA-256 tooling (`sha256sum` or `shasum`) for
+  `second-model-bead-audit` snapshot integrity
+- GNU `timeout` with `--kill-after` support (named `timeout`, or `gtimeout` from
+  Homebrew coreutils) for `second-model-bead-audit` and normal
+  `orchestrating-with-rb-lite` runs when using a source/path rb-lite install;
+  Nix-wrapped rb-lite supplies GNU coreutils
 - `npx` plus Gemini credentials to enable the optional third default
   `orchestrating-with-rb-lite` reviewer
 - `rb-lite` on `PATH`, or `nix run --refresh github:douglaz/rb-lite -- ...`
