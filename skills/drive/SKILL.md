@@ -1,18 +1,39 @@
 ---
 name: drive
 description: >-
-  Drives a software project end to end through its full lifecycle — shape a spec,
-  cut it into beads, build each bead with rb-lite, prove it with real gates,
-  harden it with a reviewer panel, land the PR, then advance to the next bead —
-  choosing and sequencing the right specialist skill at each phase and continuing
-  without waiting to be told. Use when the user says "drive this", "drive the
-  project", "work on X until it's done", "take this from idea to merged", "keep
-  going until the backlog is drained", "run the whole pipeline", or hands over a
-  goal rather than a single step. Also use to answer "where are we / what's next"
-  on a project, and to resume a project in a fresh session. Prefer this over
-  invoking one lifecycle skill directly when the work spans more than one phase.
-  Not for one-off edits, questions, ops/debugging tasks, or non-code work.
+  Use this whenever the user hands over a GOAL instead of a single action and expects
+  you to keep working until it is reached. Make sure to use it even when the user never
+  says the word "drive" — a request that spans more than one phase of the software
+  lifecycle is a drive, and running the phases ad hoc instead is the mistake this skill
+  exists to prevent. Trigger phrases: "drive this", "drive the project", "take X from
+  spec to merged", "from idea to merged", "handle it end to end", "run the whole
+  pipeline", "work on X until it's done", "keep going until the beads/backlog are
+  drained", "don't stop and ask me between steps", "I'll check back later", plus any
+  request that names a feature, epic or milestone rather than a file, or that states a
+  finish condition rather than an action. Also use it to answer "where are we / what's
+  next" on a project, and to resume a half-finished project in a fresh session. It
+  sequences the specialist lifecycle skills — spec, then beads, then build, then tests,
+  then the reviewer panel, then the PR and merge, then the next bead — and enforces the
+  evidence gate between each, so prefer it over invoking any single one of those skills
+  directly whenever the work spans more than one of those phases. Skip it only for a
+  single bounded action, a one-off edit, a question, or debugging and ops work.
 argument-hint: "[goal or bead id] [--phase shape|graph|build|prove|harden|land]"
+compatibility: >-
+  Inherits the prerequisites of whichever phases a project actually reaches:
+  `codex` and `claude` on PATH for HARDEN, `rb-lite` (PATH or the Nix wrapper) for
+  BUILD, `br` and `jq` for the bead phases, `gh` authenticated for LAND. The
+  bundled `scripts/drive-status` detector needs none of them — it degrades to
+  `n/a`/`unknown` and exits 0 — but its bead counts and PR state stay blank
+  without them. SHAPE delegates to planning skills that are not in this repo.
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - Skill
+  - AskUserQuestion
 ---
 
 # drive
@@ -66,15 +87,15 @@ ask one question. Then resume the moment it is answered.
 # Resolve from whichever target this skill was installed into — `install.sh --target codex`
 # never creates ~/.claude/skills. Do NOT add a `$(dirname "$0")` fallback: this snippet is
 # run by the agent's shell, so $0 is the shell, and the resulting relative path would point
-# into the DRIVEN repo's parent — where it could execute an unrelated `bin/drive-status`.
+# into the DRIVEN repo's parent — where it could execute an unrelated `scripts/drive-status`.
 for d in "$HOME/.claude/skills/drive" "${CODEX_HOME:-$HOME/.codex}/skills/drive" \
          "$HOME/.agents/skills/drive"; do
-  [ -x "$d/bin/drive-status" ] && { "$d/bin/drive-status"; break; }
+  [ -x "$d/scripts/drive-status" ] && { "$d/scripts/drive-status"; break; }
 done
 ```
 
 If none resolve, you are running from a checkout rather than an install: use the skill
-directory the harness gave you and run `<skill-dir>/bin/drive-status` explicitly. If you
+directory the harness gave you and run `<skill-dir>/scripts/drive-status` explicitly. If you
 cannot locate it, say so — do not infer the phase by hand.
 
 It prints repo, branch, cleanliness, gate command, bead counts, PR state, spec files, and

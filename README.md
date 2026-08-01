@@ -48,7 +48,7 @@ adding another consumer of the same concept), a blown scope budget, or a goal th
 turned out to be wrong. The rationale for each rule, with the transcript evidence
 behind it, is in `references/autonomy-contract.md`.
 
-Ships with `bin/drive-status`, a read-only detector that prints branch, gate command,
+Ships with `scripts/drive-status`, a read-only detector that prints branch, gate command,
 bead counts, PR state, specs, and an inferred phase (`--json` for scripting).
 
 ### multi-reviewer-loop
@@ -395,7 +395,7 @@ directories created by `--migrate-existing`.
   `pr-with-codex-bot-review`
 - `drive` orchestrates the other skills, so it inherits every prerequisite above
   for whichever phases a given project actually reaches. Its own
-  `bin/drive-status` detector needs nothing — it degrades to `n/a`/`?` and exits
+  `scripts/drive-status` detector needs nothing — it degrades to `n/a`/`?` and exits
   0 without `br`, `jq`, or `gh` — but its bead counts and PR state stay blank
   until those are present.
 - `drive`'s SHAPE phase delegates to planning skills that are **not** in this
