@@ -29,11 +29,11 @@ The phase machine, and the skill each phase delegates to:
 | Phase | Skill | Exit gate |
 |---|---|---|
 | SHAPE | `planning-workflow`, `grill-with-docs`, `spec` | spec committed, codex xhigh clean of P0/P1 |
-| GRAPH | `plan-to-beads-transfer` → `bead-polish-loop` → `second-model-bead-audit` | audit PASS, `br ready` non-empty |
+| GRAPH | `plan-to-beads-transfer` → `bead-polish-loop` → `second-model-bead-audit` | audit PASS, a scoped `br ready` bead exists |
 | BUILD | `orchestrating-with-rb-lite` | rb-lite clean **and** you ran the gate yourself |
 | PROVE | `testing-with-rb-lite` | the gate ran green at a real exit code |
-| HARDEN | `multi-reviewer-loop` + a final `codex review --base` | both reviewers clean |
-| LAND | `pr-with-codex-bot-review` | squash-merged, bead closed, branch reset |
+| HARDEN | `multi-reviewer-loop` + a final pinned `codex review --base` | both reviewers clean **on the current diff** |
+| LAND | `pr-with-codex-bot-review` | squash-merged, bead closed, `DRIVE.md` committed, branch reset |
 
 Four guards automate what previously took a human nudge: **evidence** (run the real
 gate, never piped through `tail`, make new tests fail first), **scope budget** (a

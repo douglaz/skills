@@ -67,9 +67,16 @@ gate has failed the same way twice with no new hypothesis to try.
 
 Everything else is yours to decide.
 
-1. **Irreversible or outward-facing**: force-push over someone else's work, deleting
-   branches/data not named in the goal, production deploys, spending real money,
-   publishing anything public.
+1. **Irreversible or outward-facing.** A drive goal *does* authorize the ordinary
+   mechanics of landing its own work: pushing its own feature branch, opening the PR,
+   `--force-with-lease` on that branch, and squash-merging it once the gates are green.
+   That is the deliverable, not a separate decision.
+   It does **not** authorize anything whose blast radius leaves the repository or cannot
+   be undone: production deploys, publishing packages or releases, posting outside the
+   PR, spending real money, touching secrets or credentials, force-pushing a shared or
+   protected branch, rewriting history someone else has pulled, or deleting branches,
+   data, or issues the goal never named. When the repo's own rules disagree with this
+   (protected default branch, required human approval), the repo wins.
 2. **A design fork inside a money/consensus/data-loss path** where two defensible
    mechanisms lead to materially different systems.
 3. **The cross-cutting tell**: a second review round adds *another* consumer of the same
@@ -94,9 +101,15 @@ for d in "$HOME/.claude/skills/drive" "${CODEX_HOME:-$HOME/.codex}/skills/drive"
 done
 ```
 
-If none resolve, you are running from a checkout rather than an install: use the skill
-directory the harness gave you and run `<skill-dir>/scripts/drive-status` explicitly. If you
-cannot locate it, say so — do not infer the phase by hand.
+This takes the first match. With a normal `install.sh` run every target is a symlink to
+one source, so the order is irrelevant — but if you have both a Claude and a Codex install
+that are *separate copies*, the first one wins and it may be the stale one. When the skill
+directory the harness handed you is one of these paths, prefer that one; it is by
+definition the version being executed.
+
+If none resolve, you are running from a checkout rather than an install: run
+`<skill-dir>/scripts/drive-status` explicitly. If you cannot locate it, say so — do not
+infer the phase by hand.
 
 It prints repo, branch, cleanliness, gate command, bead counts, PR state, spec files, and
 an inferred phase. Read it, then confirm the inference against `DRIVE.md` if present.
@@ -123,11 +136,11 @@ wants to re-run a phase.
 | Phase | Entry condition | Skill it runs | Exit gate (evidence required) |
 |---|---|---|---|
 | **SHAPE** | Goal is prose; no reviewed spec | `planning-workflow`, `grill-with-docs`, `spec` | Spec file committed **and** a codex xhigh review returns no P0/P1 |
-| **GRAPH** | Spec exists; no bead graph covering it | `plan-to-beads-transfer` → `bead-polish-loop` → `second-model-bead-audit` | Audit verdict PASS; `br ready` non-empty |
+| **GRAPH** | Spec exists; no bead graph covering it | `plan-to-beads-transfer` → `bead-polish-loop` → `second-model-bead-audit` | Audit verdict PASS; a **scoped** `br ready` bead exists (see `Scope:` in `DRIVE.md`) |
 | **BUILD** | A ready bead exists | `orchestrating-with-rb-lite` (one bead = one branch) | rb-lite exits clean **and** you independently ran the gate |
 | **PROVE** | Bead's deliverable is a test/gate, or the change touches money/data/infra | `testing-with-rb-lite` | The gate **ran** and printed green, with the real exit code |
-| **HARDEN** | Branch has unreviewed substantive code | `multi-reviewer-loop`, then a final `codex review --base <ref>` | Both reviewers clean; final gate clean |
-| **LAND** | Branch is clean and reviewed | `pr-with-codex-bot-review` | Squash-merged; bead closed; branch reset |
+| **HARDEN** | Branch has unreviewed substantive code | `multi-reviewer-loop`, then a final pinned `codex review --base <ref>` | Both reviewers clean **on the current diff** (re-run the panel after any final-gate fix); gate green at a real exit code |
+| **LAND** | Branch is clean, reviewed, and gate-green | `pr-with-codex-bot-review` | Squash-merged; bead closed; `DRIVE.md` updated and committed; branch reset |
 | → **BUILD** | More ready beads | — | loop until `br ready` is empty |
 
 Full per-phase mechanics, including how to skip phases legitimately, live in
@@ -170,7 +183,10 @@ A phase closes on evidence or it does not close.
 
 Declare before entering BUILD, in the task file:
 
-- exact file list (file-lock — forbid all others from round 1)
+- exact file list (file-lock — forbid all others from round 1), **plus a standing
+  exemption for `DRIVE.md` and the beads JSONL**. Guard 4 rewrites `DRIVE.md` at every
+  transition and LAND runs `br close`, so a lock that forbids them forbids the
+  bookkeeping this skill requires. Exempt them; do not spend budget on them.
 - rough LOC budget
 - an explicit **do NOT build** list: defensive edges, abstractions, and config knobs
   beyond this milestone
@@ -213,6 +229,7 @@ anything, and so "status?" is already answered.
 ```markdown
 # DRIVE — <goal, one line>
 
+**Scope:** epic acme-M2 (beads acme-40..acme-49) — the ONLY beads this drive may take
 **Phase:** BUILD · **Bead:** acme-42 · **Branch:** acme-42-retry-budget
 **Gate:** `nix develop -c ./check.sh` · last green 2026-08-01 (exit 0)
 
@@ -232,6 +249,13 @@ acme-43 (blocked on 42) → acme-44 → re-audit graph
 ```
 
 Commit it with the work. Keep it under a screen — it is a resume point, not a log.
+
+**`Scope:` is the one canonical definition and every phase reads it.** `drive-status`
+counts the whole repository — it cannot know your scope — so its bead numbers and its
+`DONE` are repository-wide. Filter them through `Scope:` before believing either. GRAPH
+needs a *scoped* ready bead, BUILD may only take a bead inside the scope, and DONE means
+the scope is empty, not the backlog. Without this line a fresh session inherits the goal
+but not its boundary, and will happily pick up unrelated work.
 
 ## Reporting
 

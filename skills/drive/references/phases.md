@@ -53,7 +53,8 @@ consumers of the new invariant) before writing more spec.
 3. `second-model-bead-audit` — the default final gate. A conditional/failed verdict feeds
    accepted findings back into one more focused polish round, then re-audits.
 
-**Exit gate:** audit verdict PASS and `br ready` is non-empty.
+**Exit gate:** audit verdict PASS and a **scoped** ready bead exists — `br ready` filtered
+through `DRIVE.md`'s `Scope:` line, not the raw repository count.
 
 **Failure:** the audit says coverage is thin → the *spec* is thin. Go back to SHAPE for
 the uncovered area rather than inventing beads to paper over it.
@@ -64,14 +65,17 @@ the uncovered area rather than inventing beads to paper over it.
 
 **Enter when:** `br ready` has a bead **inside the goal's scope**.
 
-Scope first, then pick. If the goal named a bead, epic, or milestone, only beads in that
-set are eligible, and DONE means *that set* is empty — not the whole repository backlog.
+Scope first, then pick. The scope is the `Scope:` line in `DRIVE.md` — one canonical
+definition every phase reads. If the goal named a bead, epic, or milestone, only beads in
+that set are eligible, and DONE means *that set* is empty — not the whole repository
+backlog.
 A bare `br ready` in a repo with unrelated work will happily hand you a higher-priority
 bead the user never asked for, and the drive would then build, review, and **merge** it
 autonomously. Draining the entire backlog is a legitimate goal, but only when the user
 actually said so ("drain the backlog"), never as a side effect of a scoped request.
 
-Record the scope in `DRIVE.md` so a resumed session inherits it. Within scope, take the
+Write it to `DRIVE.md`'s `Scope:` line before the first bead, so a resumed session
+inherits the boundary along with the goal. Within scope, take the
 highest-priority bead; ties break toward whatever unblocks the most work.
 
 One bead = one branch = one rb-lite run = one PR = one squash merge = one bead closed.

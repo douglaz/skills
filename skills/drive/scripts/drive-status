@@ -69,7 +69,8 @@ ON_DEFAULT=false
 # Classify a newline-separated path list as bead / doc / code. Used for BOTH the working
 # tree and the committed branch diff — the two must agree, or the same change reads as
 # planning while uncommitted and as code once committed.
-#   bead = only beads metadata (GRAPH work)     doc = only prose/specs, incl. a bead mix
+#   bead = beads metadata present (GRAPH work), even when mixed with docs
+#   doc  = prose/specs only, no beads metadata
 #   code = at least one path that is neither    (DRIVE.md never counts, it is our own state)
 _BEAD_RE='^\.beads/|(^|/)[^/]*\.beads\.jsonl$|^\.beads\.jsonl$'
 _DOC_RE='(SPEC|PLAN|PRD|DESIGN|README|CHANGELOG|CONTEXT)[^/]*\.md$|^docs/|^adrs?/'
@@ -82,9 +83,15 @@ _classify_paths() {
 }
 # What is actually IN those commits: spec-only or bead-only work is not "substantive code
 # ready to harden", it is interrupted SHAPE/GRAPH work that happens to be committed.
+# THREE dots. `git diff A..B` compares the two tips, so once the default branch advances
+# past the fork point it drags in upstream-only paths this branch never touched — a
+# spec-only branch then classifies as `code` and infers HARDEN, skipping SHAPE/GRAPH.
+# `A...B` diffs from the merge base, i.e. only what this branch actually changed.
+# (BRANCH_COMMITS above keeps two dots on purpose: for rev-list that already means
+# "commits reachable from HEAD but not from BASE_REF", which is what we want.)
 BRANCH_DIFF_KIND=""
 if [[ "$BRANCH_COMMITS" -gt 0 ]]; then
-  BRANCH_DIFF_KIND=$(_classify_paths "$(git -c core.quotePath=false diff --name-only "$BASE_REF..HEAD" 2>/dev/null)")
+  BRANCH_DIFF_KIND=$(_classify_paths "$(git -c core.quotePath=false diff --name-only "$BASE_REF...HEAD" 2>/dev/null)")
 fi
 
 # --- gate command detection (first match wins) ---
@@ -310,13 +317,13 @@ if $JSON; then
     --arg pr_state "$PR_STATE" --arg pr_num "$PR_NUM" --arg drive_md "$DRIVE_MD" \
     --arg drive_phase "$DRIVE_PHASE" --arg phase "$PHASE" --arg tree_phase "$TREE_PHASE" \
     --arg phase_source "$PHASE_SOURCE" --arg record_valid "$RECORD_VALID" \
-    --arg blocked_only "$BLOCKED_ONLY" \
+    --arg blocked_only "$BLOCKED_ONLY" --arg ahead "$AHEAD" \
     --arg br_ready "$BR_READY" --arg br_unresolved "$BR_UNRESOLVED" --arg br_blocked "$BR_BLOCKED" \
     --arg br_inprogress "$BR_INPROGRESS" \
     --argjson dirty "${DIRTY_COUNT:-0}" --argjson untracked "${UNTRACKED:-0}" \
     --argjson branch_commits "${BRANCH_COMMITS:-0}" \
     '{root:$root,branch:$branch,default_branch:$default_branch,dirty:$dirty,
-      untracked:$untracked,branch_commits:$branch_commits,gate:$gate,
+      untracked:$untracked,ahead:$ahead,branch_commits:$branch_commits,gate:$gate,
       beads:{ready:$br_ready,unresolved:$br_unresolved,blocked:$br_blocked,in_progress:$br_inprogress},
       specs:($specs|split("\n")|map(select(length>0))),adr_dir:$adrs,
       pr:{number:$pr_num,state:$pr_state},drive_md:$drive_md,
