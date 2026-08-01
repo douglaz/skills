@@ -194,21 +194,43 @@ degraded — which, per the skill's finish rules, blocks a legitimate `CLEAN`.
 
 ## Parsing findings
 
-Both reviewers emit findings whose first non-space token is `[P0]`, `[P1]`,
-`[P2]`, or `[P3]`, so one parser handles both files:
+Both reviewers tag findings `[P0]`–`[P3]`, but only the Claude reviewer is
+**prompted**, so only it puts the tag first. `codex review` cannot take a prompt
+alongside `--base`, so its format is whatever the CLI emits — currently markdown
+bullets, `- [P1] src/foo.rs:42 - claim`. Parse both with one tolerant pattern:
 
 ```bash
-grep -cE '^\s*\[P[0-3]\]' "$CODEX_OUT"
-grep -cE '^\s*\[P[0-3]\]' "$FABLE_OUT"
+FINDING_RE='^[[:space:]]*([-*+][[:space:]]+|[0-9]+[.)][[:space:]]+|#{1,6}[[:space:]]+)?([`*_]{0,2})(\[P[0-3]\]|P[0-3]:)'
+grep -cE "$FINDING_RE" "$CODEX_OUT"
+grep -cE "$FINDING_RE" "$FABLE_OUT"
+# per-severity: swap [0-3] for the digit you want
 ```
+
+It accepts bullets, numbered items, headings, and bold/backtick wrappers, and
+requires an unambiguous tag (`[P1]` or `P1:`) so prose like `P10 items remain`,
+`**P2** severity means…`, or `P1 findings are listed below` does not score.
+
+**This is not a cosmetic nicety.** Measured across 7 real passes of this panel,
+the old first-token rule `^\s*\[P[0-3]\]` matched **0 codex findings in every
+pass** while codex had actually filed **43**; the tolerant pattern matched all 43
+and every Fable finding. A first-token rule cannot report codex as *clean* (the
+ambiguity net catches that), but it under-reports codex to the user and trips § 4's
+"ambiguous twice in a row" stop condition on a healthy reviewer. If codex's output
+shape changes again, widen this pattern — do not narrow it.
 
 Clean signals:
 
-- codex: exit 0, zero `[P*]` lines, and the output says so.
+- codex: exit 0, zero findings under the pattern above, **and** the prose says so.
+  Its exact clean wording is not pinned here because it is not prompted and no
+  clean codex pass has been observed to quote — so read the output and judge, and
+  when you do see one, record the phrasing here.
 - Claude reviewer: exit 0, `jq` succeeded, and the result is exactly
-  `No findings.` (allow surrounding whitespace).
+  `No findings.` (allow surrounding whitespace) — it *is* prompted, so this is
+  contractual.
 
 Anything else with zero findings is **ambiguous**, not clean. Surface the log.
+Note the asymmetry: a broken parser plus an unpinned clean signal is what turns a
+healthy codex pass into "ambiguous". Suspect the parser before the reviewer.
 
 ## Merging into `pass-NN.merged.md`
 

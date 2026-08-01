@@ -226,8 +226,16 @@ For each pass `N` from `1` to `MAX_PASSES`:
    reviewer's prompt collapses it into an echo chamber.
 
 2. Unwrap the Claude reviewer's JSON into a plain findings file with `jq`, and
-   parse findings from both reviewers using lines whose first non-space token is
-   `[P0]`, `[P1]`, `[P2]`, or `[P3]`. Keep per-priority counts **per reviewer**.
+   parse findings from both reviewers with the shared pattern in
+   [references/reviewer-panel.md](references/reviewer-panel.md) § Parsing findings.
+   Keep per-priority counts **per reviewer**.
+
+   **Do not tighten that pattern to "the severity tag is the first token."** Only
+   the Claude reviewer is prompted, so only it obeys a format you dictate; `codex
+   review` cannot take a prompt alongside `--base` and emits markdown bullets
+   (`- [P1] …`). A first-token rule silently scores every codex pass as zero
+   findings — which § 4 then treats as *ambiguous twice in a row* and aborts the
+   loop while codex was working perfectly.
 
 3. Detect clean vs ambiguous vs failed, per reviewer:
    - **Clean**: exit 0, zero findings, and output explicitly says there are none
