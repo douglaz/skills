@@ -51,6 +51,26 @@ behind it, is in `references/autonomy-contract.md`.
 Ships with `scripts/drive-status`, a read-only detector that prints branch, gate command,
 bead counts, PR state, specs, and an inferred phase (`--json` for scripting).
 
+### agents-md
+
+Maintains one managed block in a repo's `AGENTS.md` carrying the portable rules
+that keep an agent honest — verified edits, unpiped gates, evidence instead of
+assertion — and delegates the beads workflow to `br agents`. Everything outside
+the markers stays human-owned and untouched.
+
+```text
+/agents-md              # add or refresh the block in this repo
+/agents-md --check      # report what is there without writing
+```
+
+`AGENTS.md` is the only place a working agreement travels: it is committed, so it
+reaches every clone and every machine, and both Claude Code and Codex read it. A
+lesson recorded in a local config is lost the moment someone works on another box.
+
+Rules earn a place in the block only if they apply to essentially any repo, an
+agent gets them wrong by default, and you can name the incident that produced
+them — it is copied everywhere, so bloat gets the whole thing ignored.
+
 ### multi-reviewer-loop
 
 Runs an iterative multi-reviewer review/fix/re-review loop on your current branch. Detects a review base, runs two reviewers in parallel — `codex review` (`gpt-5.6-sol` at `xhigh`) and Claude Fable at high effort — merges and dedupes their findings, treats findings as credible until disproven, fixes accepted items, validates the changed code, and repeats until both reviewers are clean on the current diff. A final consistency pass then reads the changed files — plus the untouched docs that describe them — as one artifact and asks whether they still agree — the class of defect a diff-scoped loop structurally cannot see, such as a summary table that no longer matches the behaviour it describes, or a rule in one file that forbids what another file requires. `CLEAN` requires both.
@@ -395,7 +415,7 @@ directories created by `--migrate-existing`.
   `pr-with-codex-bot-review`
 - `drive` orchestrates the other skills, so it inherits every prerequisite above
   for whichever phases a given project actually reaches. Its own
-  `scripts/drive-status` detector needs nothing — it degrades to `n/a`/`?` and exits
+  `scripts/drive-status` detector needs nothing — it degrades to `n/a`/`unknown` and exits
   0 without `br`, `jq`, or `gh` — but its bead counts and PR state stay blank
   until those are present.
 - `drive`'s SHAPE phase delegates to planning skills that are **not** in this

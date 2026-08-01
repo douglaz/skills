@@ -141,7 +141,7 @@ wants to re-run a phase.
 | **PROVE** | Bead's deliverable is a test/gate, or the change touches money/data/infra | `testing-with-rb-lite` | The gate **ran** and printed green, with the real exit code |
 | **HARDEN** | Branch has unreviewed substantive code | `multi-reviewer-loop`, then a final pinned `codex review --base <ref>` | `multi-reviewer-loop` reports `CLEAN` — both reviewers clean **and** its consistency pass clean, on the same tree; gate green at a real exit code |
 | **LAND** | Branch is clean, reviewed, and gate-green | `pr-with-codex-bot-review` | Squash-merged; bead closed; `DRIVE.md` updated and committed; branch reset |
-| → **BUILD** | More ready beads | — | loop until `br ready` is empty |
+| → **BUILD** | More ready beads **in scope** | — | loop until the scoped set is empty — not the repository backlog |
 
 Full per-phase mechanics, including how to skip phases legitimately, live in
 `references/phases.md`.

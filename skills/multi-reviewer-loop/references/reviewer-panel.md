@@ -136,7 +136,7 @@ Notes on the flags:
   are mutually exclusive at the CLI level — passing both exits immediately with
   `error: the argument '[PROMPT]' cannot be used with '--base <BRANCH>'`, before
   any review runs. Focus text goes into the Claude reviewer's prompt only (the
-  `${FOCUS:+...}` block above). For a *focused* codex pass you need `codex exec`
+  `if [ -n "${FOCUS:-}" ]` block above). For a *focused* codex pass you need `codex exec`
   with your own prompt instead, which gives up `codex review`'s structured
   output — usually not worth it inside the loop.
 - `--model fable` resolves to the current Fable model; `--effort high` is the
@@ -324,11 +324,17 @@ CONSISTENCY_RAW="$REVIEW_DIR/consistency.fable.raw.json"
 
 # -z everywhere: NUL-delimited output is the only form that survives a path
 # containing a newline or tab, which core.quotePath=false alone does not fix.
+# cd to the repo root first: git prints root-relative paths, so `[ -e "$f" ]` run
+# from a subdirectory would call every changed file "deleted" and tell the reviewer
+# not to open it — a clean verdict over an artifact nobody read.
+cd "$(git rev-parse --show-toplevel)" || exit 1
+# --no-renames so a rename appears as delete+add: the OLD path then reaches DELETED,
+# which is what lets the reviewer hunt untouched docs for stale references to it.
 changed_z() {
-  { git diff -z --name-only "$DIFF_BASE...HEAD"
-    git diff -z --name-only                       # unstaged
-    git diff -z --name-only --cached              # staged
-    git ls-files -z --others --exclude-standard   # untracked
+  { git diff -z --no-renames --name-only "$DIFF_BASE...HEAD"
+    git diff -z --no-renames --name-only                     # unstaged
+    git diff -z --no-renames --name-only --cached            # staged
+    git ls-files -z --others --exclude-standard              # untracked
   } | sort -zu
 }
 # Split into files that still exist and files this change deleted. `|| true` on the
