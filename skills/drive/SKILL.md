@@ -1,0 +1,252 @@
+---
+name: drive
+description: >-
+  Drives a software project end to end through its full lifecycle — shape a spec,
+  cut it into beads, build each bead with rb-lite, prove it with real gates,
+  harden it with a reviewer panel, land the PR, then advance to the next bead —
+  choosing and sequencing the right specialist skill at each phase and continuing
+  without waiting to be told. Use when the user says "drive this", "drive the
+  project", "work on X until it's done", "take this from idea to merged", "keep
+  going until the backlog is drained", "run the whole pipeline", or hands over a
+  goal rather than a single step. Also use to answer "where are we / what's next"
+  on a project, and to resume a project in a fresh session. Prefer this over
+  invoking one lifecycle skill directly when the work spans more than one phase.
+  Not for one-off edits, questions, ops/debugging tasks, or non-code work.
+argument-hint: "[goal or bead id] [--phase shape|graph|build|prove|harden|land]"
+---
+
+# drive
+
+The project driver. It does not implement anything itself — it decides **which phase the
+project is in**, runs **the right specialist skill for that phase**, demands **evidence**
+that the phase actually completed, records the transition, and **immediately enters the
+next phase**.
+
+Every rule below exists because its absence showed up as a human intervention in real
+sessions. Keep that framing: this skill's job is to make the user stop having to type
+`continue`, `status?`, `commit/push`, `call codex again`, and `are you sure?`.
+
+## Prime directive: the continuation contract
+
+**Once the user names a goal, every step required to reach that goal is authorized.**
+
+- Never end a turn with "Want me to do X?" when X is the obvious next step inside the
+  drive lane. Say "Doing X now" and do it.
+- Never end a turn with a summary and a stop. A summary is a *transition marker*, not a
+  finish line. Report the phase that closed, then open the next one in the same turn.
+- Never wait for a nudge after a background job completes. The completion notification is
+  the trigger to continue, not to report and idle.
+- A phase that fails does not end the drive. Diagnose, fix, re-run the gate. Only the
+  stop-list below ends a turn.
+
+The only things that end a turn: the goal is reached, a **stop-list** item is hit, or a
+gate has failed the same way twice with no new hypothesis to try.
+
+### Stop-list — genuinely needs the human
+
+Everything else is yours to decide.
+
+1. **Irreversible or outward-facing**: force-push over someone else's work, deleting
+   branches/data not named in the goal, production deploys, spending real money,
+   publishing anything public.
+2. **A design fork inside a money/consensus/data-loss path** where two defensible
+   mechanisms lead to materially different systems.
+3. **The cross-cutting tell**: a second review round adds *another* consumer of the same
+   concept. Stop expanding scope file-by-file — run a design pass and surface it.
+   (See `references/autonomy-contract.md` § 5.)
+4. **Scope budget blown** — see Guard 2.
+5. **The goal itself was wrong** — what you learned building contradicts the premise.
+
+When you hit one, state the fork in a few sentences, give your recommendation first, and
+ask one question. Then resume the moment it is answered.
+
+## Phase 0 — Orient (always run first)
+
+```bash
+# Resolve from whichever target this skill was installed into — `install.sh --target codex`
+# never creates ~/.claude/skills. Do NOT add a `$(dirname "$0")` fallback: this snippet is
+# run by the agent's shell, so $0 is the shell, and the resulting relative path would point
+# into the DRIVEN repo's parent — where it could execute an unrelated `bin/drive-status`.
+for d in "$HOME/.claude/skills/drive" "${CODEX_HOME:-$HOME/.codex}/skills/drive" \
+         "$HOME/.agents/skills/drive"; do
+  [ -x "$d/bin/drive-status" ] && { "$d/bin/drive-status"; break; }
+done
+```
+
+If none resolve, you are running from a checkout rather than an install: use the skill
+directory the harness gave you and run `<skill-dir>/bin/drive-status` explicitly. If you
+cannot locate it, say so — do not infer the phase by hand.
+
+It prints repo, branch, cleanliness, gate command, bead counts, PR state, spec files, and
+an inferred phase. Read it, then confirm the inference against `DRIVE.md` if present.
+**Never guess the phase.**
+
+**The record wins when it exists; the tree wins when it does not.** `DRIVE.md` is written
+at every transition, and several phases leave no trace git can distinguish — a `PROVE`
+branch and a `HARDEN` branch are byte-identical, a spec committed but not yet reviewed
+looks finished, and a dirty tree cannot say whether the edit is implementation, a test
+being authored, or a reviewer fix being applied. So the detector reports three things:
+`phase` (what to act on), `tree_phase` (what the tree alone suggests), and whether they
+disagree.
+
+A disagreement is information, not an error. It usually means a transition was interrupted.
+Read both, decide, and **state your reason** if you override the record — an unexplained
+override silently skips that phase's exit gate. If the record is genuinely stale (the user
+just handed you a new goal), say so and rewrite `DRIVE.md` as your first act.
+
+Route to the first phase whose exit gate is not yet satisfied. `--phase <name>` overrides
+the inference and *starts* there — it pins the entry point, not the exit; the drive still
+runs forward through every later phase. Use it when the detector is wrong or the user
+wants to re-run a phase.
+
+| Phase | Entry condition | Skill it runs | Exit gate (evidence required) |
+|---|---|---|---|
+| **SHAPE** | Goal is prose; no reviewed spec | `planning-workflow`, `grill-with-docs`, `spec` | Spec file committed **and** a codex xhigh review returns no P0/P1 |
+| **GRAPH** | Spec exists; no bead graph covering it | `plan-to-beads-transfer` → `bead-polish-loop` → `second-model-bead-audit` | Audit verdict PASS; `br ready` non-empty |
+| **BUILD** | A ready bead exists | `orchestrating-with-rb-lite` (one bead = one branch) | rb-lite exits clean **and** you independently ran the gate |
+| **PROVE** | Bead's deliverable is a test/gate, or the change touches money/data/infra | `testing-with-rb-lite` | The gate **ran** and printed green, with the real exit code |
+| **HARDEN** | Branch has unreviewed substantive code | `multi-reviewer-loop`, then a final `codex review --base <ref>` | Both reviewers clean; final gate clean |
+| **LAND** | Branch is clean and reviewed | `pr-with-codex-bot-review` | Squash-merged; bead closed; branch reset |
+| → **BUILD** | More ready beads | — | loop until `br ready` is empty |
+
+Full per-phase mechanics, including how to skip phases legitimately, live in
+`references/phases.md`.
+
+### Sizing — do not run the whole machine for a typo
+
+- **≤ a couple of lines, mechanical and self-evident** → edit directly, run the gate,
+  commit, push. No spec, no bead, no rb-lite — the orchestration overhead only pays off
+  when the change is big enough to need review convergence.
+- **Bounded, one or two files, clear** → skip SHAPE/GRAPH. Go straight to BUILD.
+- **Multi-file, needs design judgment, or a new invariant** → full pipeline from SHAPE.
+
+Say which size you picked and why, in one line. Then go.
+
+## The four guards
+
+These are the automated versions of interventions the user currently performs by hand.
+
+### Guard 1 — Evidence, not assertion
+
+A phase closes on evidence or it does not close.
+
+- Run the real gate yourself. rb-lite's panel and every reviewer **read** code; they do
+  not **run** it. A clean panel is not a passing build.
+- **Never pipe a gate through `tail`/`head`/`grep`.** The pipeline exit code is the last
+  stage's, so a red gate reports 0. (See `references/autonomy-contract.md` § 2.)
+
+  ```bash
+  <gate-cmd> > /tmp/gate.log 2>&1; echo "EXIT=$?"
+  ```
+
+  Then read the log. Quote the command and the exit code in your report.
+- For a test you just wrote: make it **fail first** against the unfixed code, then pass. A
+  green test that never could have gone red proves nothing.
+- Words that need a number or an exit code behind them: "passing", "working", "clean",
+  "verified", "done". Without one, say what you actually observed instead.
+
+### Guard 2 — Scope budget (the overengineering brake)
+
+Declare before entering BUILD, in the task file:
+
+- exact file list (file-lock — forbid all others from round 1)
+- rough LOC budget
+- an explicit **do NOT build** list: defensive edges, abstractions, and config knobs
+  beyond this milestone
+- done-definition tied to named tests
+
+Then watch each round. Two proxies raise the alarm — **round count climbing** and **LOC
+far past comparable work**. Proxies only flag; confirm by re-reading the goal and asking
+whether what got built matches what the goal actually requires. When they diverge, cut
+back to the goal.
+
+Hard brake: **at 2× the LOC budget or round 4, stop and report** rather than feeding
+another round. That is a stop-list item.
+
+Keep `--min-findings-severity` open at first — P2/P3 are often genuine polish. Raise the
+floor to P1 only once that stream has turned into gold-plating. `--max-rounds` is a
+checkpoint to assess and relaunch, not a finish line. (See
+`references/autonomy-contract.md` § 4.)
+
+### Guard 3 — Transitions fire their own gates
+
+Committing, pushing, reviewing, and opening the PR are **parts of a phase transition**,
+not separate requests. When a phase's gate goes green:
+
+1. Commit with a real message. 2. Push. 3. Fire the next phase's reviewer.
+
+Do not report a green gate and wait. The user should never need to type "commit/push" or
+"call codex again" — if they do, this guard failed.
+
+Exception: the stop-list. Never auto-push to a protected branch. `--force-with-lease` on
+**your own PR branch** is part of LAND (amending after bot findings) and is allowed; a
+force-push to a shared or protected branch, over someone else's work, or without a lease,
+is not.
+
+### Guard 4 — Durable state (`DRIVE.md`)
+
+Maintain `DRIVE.md` at the repo root. Rewrite it at **every phase transition**, before
+starting the next phase. It exists so a fresh session resumes without re-deriving
+anything, and so "status?" is already answered.
+
+```markdown
+# DRIVE — <goal, one line>
+
+**Phase:** BUILD · **Bead:** acme-42 · **Branch:** acme-42-retry-budget
+**Gate:** `nix develop -c ./check.sh` · last green 2026-08-01 (exit 0)
+
+## Done
+- acme-40 validate destination addresses — merged #118
+- acme-41 encode request-id in the audit log — merged #119
+
+## Now
+acme-42: wire the retry budget into prod. Budget: 3 files, ~250 LOC. Round 2 of max 4.
+Do NOT build: retry policy config, pluggable backends.
+
+## Next
+acme-43 (blocked on 42) → acme-44 → re-audit graph
+
+## Open questions for the human
+- none
+```
+
+Commit it with the work. Keep it under a screen — it is a resume point, not a log.
+
+## Reporting
+
+At each transition, one compact block. No preamble, no re-explaining what the user asked.
+
+```
+✅ BUILD acme-42 — clean in 2 rounds, 3 files, +180 LOC (budget 250)
+   gate: nix develop -c ./check.sh → EXIT=0
+   → HARDEN: launching codex + fable panel now
+```
+
+If a background job is running, say what you're waiting on and that you'll continue
+automatically. Then actually continue — do not stop and wait to be pinged.
+
+## Self-continuation across turns
+
+**Claude Code only, and check before relying on it.** `/goal` is a harness built-in — it
+has no file under `~/.claude/commands` and no Codex equivalent, so a filesystem search will
+not find it. Confirm it exists in your build with `/help` before depending on it; if it is
+absent, the continuation contract above is the only mechanism and you follow it that much
+more strictly. Never report a backlog as "being drained by the hook" without having seen
+the hook confirm it is active.
+
+If the drive spans a long backlog and you have been stopping early, set a session goal so
+the harness enforces continuation:
+
+```
+/goal drain all ready beads for <project>
+```
+
+That installs a session-scoped Stop hook that blocks the session from idling until the
+condition holds. Use it when the user hands over a backlog rather than a single bead. Do
+not tell them to clear it afterwards; it auto-clears when the condition is met.
+
+## Reference
+
+- `references/phases.md` — per-phase mechanics, skip rules, failure recovery
+- `references/autonomy-contract.md` — the intervention patterns this skill automates,
+  with the transcript evidence behind each rule

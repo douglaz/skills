@@ -10,6 +10,47 @@ installed into both tools.
 
 ## Available skills
 
+### drive
+
+The meta-skill: it drives a project through its whole lifecycle and sequences the
+other skills. It implements nothing itself — it works out which phase the project
+is in, runs the right specialist skill for that phase, demands evidence that the
+phase actually closed, records the transition in `DRIVE.md`, and enters the next
+phase without waiting to be told.
+
+```text
+/drive take the M1b milestone from spec to merged
+/drive drain the ready beads
+/drive                          # orient only: where are we, what's next
+```
+
+The phase machine, and the skill each phase delegates to:
+
+| Phase | Skill | Exit gate |
+|---|---|---|
+| SHAPE | `planning-workflow`, `grill-with-docs`, `spec` | spec committed, codex xhigh clean of P0/P1 |
+| GRAPH | `plan-to-beads-transfer` → `bead-polish-loop` → `second-model-bead-audit` | audit PASS, `br ready` non-empty |
+| BUILD | `orchestrating-with-rb-lite` | rb-lite clean **and** you ran the gate yourself |
+| PROVE | `testing-with-rb-lite` | the gate ran green at a real exit code |
+| HARDEN | `multi-reviewer-loop` + a final `codex review --base` | both reviewers clean |
+| LAND | `pr-with-codex-bot-review` | squash-merged, bead closed, branch reset |
+
+Four guards automate what previously took a human nudge: **evidence** (run the real
+gate, never piped through `tail`, make new tests fail first), **scope budget** (a
+file-lock and a do-NOT-build list up front, hard brake at 2× budget or round 4),
+**transitions fire their own gates** (commit/push/review are part of the transition,
+not a separate request), and **durable state** (`DRIVE.md` at the repo root, so
+`status?` is answered before it is asked and a fresh session resumes cleanly).
+
+A short stop-list still ends a turn: anything irreversible or outward-facing, a design
+fork on a money/consensus/data-loss path, the cross-cutting tell (a second review round
+adding another consumer of the same concept), a blown scope budget, or a goal that
+turned out to be wrong. The rationale for each rule, with the transcript evidence
+behind it, is in `references/autonomy-contract.md`.
+
+Ships with `bin/drive-status`, a read-only detector that prints branch, gate command,
+bead counts, PR state, specs, and an inferred phase (`--json` for scripting).
+
 ### multi-reviewer-loop
 
 Runs an iterative multi-reviewer review/fix/re-review loop on your current branch. Detects a review base, runs two reviewers in parallel — `codex review` (`gpt-5.6-sol` at `xhigh`) and Claude Fable at high effort — merges and dedupes their findings, treats findings as credible until disproven, fixes accepted items, validates the changed code, and repeats until both reviewers are clean or the pass limit is reached.
@@ -352,6 +393,20 @@ directories created by `--migrate-existing`.
 - `gh` authenticated for `orchestrating-with-rb-lite` backlog-drain and
   harden-until-clean modes (PR creation, checks, merge) and
   `pr-with-codex-bot-review`
+- `drive` orchestrates the other skills, so it inherits every prerequisite above
+  for whichever phases a given project actually reaches. Its own
+  `bin/drive-status` detector needs nothing — it degrades to `n/a`/`?` and exits
+  0 without `br`, `jq`, or `gh` — but its bead counts and PR state stay blank
+  until those are present.
+- `drive`'s SHAPE phase delegates to planning skills that are **not** in this
+  repo: `planning-workflow`, `spec`, `grill-me`, `grill-with-docs`,
+  `plan-eng-review`, and `plan-ceo-review`. Install them separately (several ship
+  with [gstack](https://github.com/steipete/gstack)) or substitute your own — the
+  phase only requires that a reviewed, buildable spec exists at its exit gate,
+  not that any particular skill produced it.
+- `drive`'s self-continuation section uses `/goal`, a Claude Code built-in with
+  no Codex equivalent. Under Codex the skill relies on its continuation contract
+  alone.
 
 ## License
 

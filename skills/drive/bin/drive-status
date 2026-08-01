@@ -1,0 +1,356 @@
+#!/usr/bin/env bash
+# drive-status — print the signals needed to infer a project's lifecycle phase.
+# Read-only. Never mutates the repo. Exits 0 even when signals are missing.
+#
+# Usage: drive-status [--json]
+
+set -uo pipefail
+
+JSON=false
+[[ "${1:-}" == "--json" ]] && JSON=true
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || {
+  if $JSON; then echo '{"error":"not a git repository"}'; else echo "not a git repository"; fi
+  exit 0
+}
+cd "$ROOT" || exit 0
+
+BRANCH=$(git branch --show-current 2>/dev/null || echo "")
+DEFAULT_BRANCH=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
+# Probe remote candidates too: a fresh clone of a single branch has origin/main but no
+# local main, and without this BASE_REF stays empty, BRANCH_COMMITS reads 0, and HARDEN
+# becomes unreachable for committed work.
+# When origin/HEAD is unset and BOTH master and main exist (a legacy local master beside an
+# active main), fixed order picks the wrong base and counts the other branch's divergence as
+# this branch's work. Prefer a candidate HEAD actually descends from.
+if [[ -z "$DEFAULT_BRANCH" ]]; then
+  for c in main master; do
+    for r in "refs/heads/$c" "refs/remotes/origin/$c"; do
+      git show-ref --verify --quiet "$r" || continue
+      git merge-base --is-ancestor "$r" HEAD 2>/dev/null && { DEFAULT_BRANCH=$c; break 3; }
+    done
+  done
+fi
+[[ -z "$DEFAULT_BRANCH" ]] && for c in main master; do
+  git show-ref --verify --quiet "refs/heads/$c" && DEFAULT_BRANCH=$c && break
+  git show-ref --verify --quiet "refs/remotes/origin/$c" && DEFAULT_BRANCH=$c && break
+done
+# Tracked modifications only — untracked files are reported separately, so counting
+# `git status --porcelain` wholesale would double-count them.
+DIRTY_COUNT=$(git status --porcelain 2>/dev/null | grep -cv '^??' || true)
+DIRTY_COUNT=${DIRTY_COUNT:-0}
+UNTRACKED=$(git ls-files --others --exclude-standard 2>/dev/null | wc -l | tr -d ' ')
+AHEAD=$(git rev-list --count "@{upstream}..HEAD" 2>/dev/null || echo "?")
+
+# Commits on this branch not yet in the default branch — the review surface.
+# Prefer the REMOTE default ref: a stale local master would count intervening upstream
+# commits as this branch's work (reporting HARDEN before anything was written), and in a
+# checkout where only the feature branch exists locally the local ref does not resolve at
+# all — `|| echo 0` would mask that and make HARDEN unreachable.
+BASE_REF=""
+if [[ -n "$DEFAULT_BRANCH" ]]; then
+  if git rev-parse --verify --quiet "refs/remotes/origin/$DEFAULT_BRANCH" >/dev/null 2>&1; then
+    BASE_REF="origin/$DEFAULT_BRANCH"
+  elif git rev-parse --verify --quiet "refs/heads/$DEFAULT_BRANCH" >/dev/null 2>&1; then
+    BASE_REF="$DEFAULT_BRANCH"
+  fi
+fi
+# Counted on ANY ref, including a detached HEAD (an interrupted rebase still carries real
+# unreviewed commits). What differs on the default branch is not whether commits count but
+# WHAT they mean: a metadata/closure commit there is the state LAND prescribes for a delayed
+# push, while substantive code there is genuinely unreviewed. The branch check therefore
+# moved into infer(), which has the classification to tell those apart.
+BRANCH_COMMITS=0
+if [[ -n "$BASE_REF" ]] && ! git merge-base --is-ancestor HEAD "$BASE_REF" 2>/dev/null; then
+  BRANCH_COMMITS=$(git rev-list --count "$BASE_REF..HEAD" 2>/dev/null || echo 0)
+fi
+ON_DEFAULT=false
+[[ -n "$BRANCH" && "$BRANCH" == "$DEFAULT_BRANCH" ]] && ON_DEFAULT=true
+# Classify a newline-separated path list as bead / doc / code. Used for BOTH the working
+# tree and the committed branch diff — the two must agree, or the same change reads as
+# planning while uncommitted and as code once committed.
+#   bead = only beads metadata (GRAPH work)     doc = only prose/specs, incl. a bead mix
+#   code = at least one path that is neither    (DRIVE.md never counts, it is our own state)
+_BEAD_RE='^\.beads/|(^|/)[^/]*\.beads\.jsonl$|^\.beads\.jsonl$'
+_DOC_RE='(SPEC|PLAN|PRD|DESIGN|README|CHANGELOG|CONTEXT)[^/]*\.md$|^docs/|^adrs?/'
+_classify_paths() {
+  local paths="$1"
+  [[ -z "$paths" ]] && { printf 'none'; return; }
+  if printf '%s\n' "$paths" | grep -qvEi "${_BEAD_RE}|${_DOC_RE}|^DRIVE\.md$"; then printf 'code'; return; fi
+  # All planning. Beads present means the graph is being built; otherwise it is prose.
+  if printf '%s\n' "$paths" | grep -qE "$_BEAD_RE"; then printf 'bead'; else printf 'doc'; fi
+}
+# What is actually IN those commits: spec-only or bead-only work is not "substantive code
+# ready to harden", it is interrupted SHAPE/GRAPH work that happens to be committed.
+BRANCH_DIFF_KIND=""
+if [[ "$BRANCH_COMMITS" -gt 0 ]]; then
+  BRANCH_DIFF_KIND=$(_classify_paths "$(git -c core.quotePath=false diff --name-only "$BASE_REF..HEAD" 2>/dev/null)")
+fi
+
+# --- gate command detection (first match wins) ---
+GATE=""
+# Recipe-based gates are only reported when the recipe actually exists — otherwise the
+# driver runs a guaranteed-failing command and Guard 1 reads it as a red gate.
+_has_just_check() { command -v just >/dev/null 2>&1 && just --summary 2>/dev/null | tr ' ' '\n' | grep -qx 'check'; }
+# npm's default scaffold is `"test": "echo \"Error: no test specified\" && exit 1"` — present
+# in a large share of package.json files and guaranteed to exit 1. Accepting it would report
+# a permanently red gate, the exact failure this existence check exists to prevent.
+_has_npm_test() {
+  command -v jq >/dev/null 2>&1 || return 1
+  local t
+  t=$(jq -r '.scripts.test // empty' package.json 2>/dev/null) || return 1
+  [[ -n "$t" ]] || return 1
+  [[ "$t" == *"no test specified"* ]] && return 1
+  return 0
+}
+_has_make_test()  { grep -qE '^test[[:space:]]*:' Makefile 2>/dev/null; }
+# A pyproject.toml only says "Python package" — it implies neither that pytest is a
+# dependency nor that any tests exist. Emitting `pytest` regardless yields exit 127 (not
+# installed) or 5 (no tests collected) as an authoritative "red gate".
+_has_pytest() {
+  grep -qiE '(^|[^a-z])pytest' pyproject.toml 2>/dev/null && return 0
+  [[ -f pytest.ini || -f tox.ini || -f setup.cfg ]] && grep -qi pytest pytest.ini tox.ini setup.cfg 2>/dev/null && return 0
+  [[ -d tests || -d test ]] && command -v pytest >/dev/null 2>&1 && return 0
+  return 1
+}
+
+if   [[ -x ./check.sh ]];                         then GATE="./check.sh"
+elif { [[ -f justfile || -f Justfile ]]; } && _has_just_check; then GATE="just check"
+elif [[ -f Cargo.toml ]];                         then GATE="cargo clippy --all-targets -- -D warnings && cargo test"
+elif [[ -f package.json ]] && _has_npm_test;      then GATE="npm test"
+elif [[ -f Makefile ]] && _has_make_test;         then GATE="make test"
+elif [[ -f go.mod ]];                             then GATE="go test ./..."
+elif [[ -f pyproject.toml ]] && _has_pytest;      then GATE="pytest"
+fi
+# A flake means the gate probably needs the devshell. Wrap in bash -c so that a
+# composed gate ("a && b") runs entirely INSIDE the devshell — `nix develop -c a && b`
+# would run b outside it, against the system toolchain.
+if [[ -f flake.nix && -n "$GATE" && "$GATE" != nix* ]] && command -v nix >/dev/null 2>&1; then
+  if [[ "$GATE" == *"&&"* || "$GATE" == *"|"* ]]; then
+    GATE="nix develop -c bash -c '${GATE}'"
+  else
+    GATE="nix develop -c ${GATE}"
+  fi
+fi
+
+# --- beads ---
+# `br --json` returns either a bare array (`ready`, `blocked`) or an envelope
+# {issues,total,limit,offset,has_more} (`list`). A plain `jq length` on the envelope
+# counts its 5 KEYS, not the issues — a constant that never reaches 0, which would make
+# the DONE phase unreachable.
+_brcount() {
+  local out
+  out=$(jq 'if type=="array" then length else (.total // (.issues | length)) end' 2>/dev/null)
+  [[ "$out" =~ ^[0-9]+$ ]] && printf '%s' "$out" || printf '?'
+}
+BR_READY="n/a"; BR_UNRESOLVED="n/a"; BR_BLOCKED="n/a"; BR_INPROGRESS="n/a"
+if command -v br >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 \
+   && [[ -d .beads || -f .beads.jsonl || -n $(find . -maxdepth 2 -name '*.beads.jsonl' -print -quit 2>/dev/null) ]]; then
+  # --limit 0 explicitly: current br defaults to unlimited, but the README supports br
+  # >= 0.1.45 where `ready` defaulted to 20 — a silent cap on a large backlog.
+  BR_READY=$(br ready --limit 0 --json 2>/dev/null | _brcount)
+  # Bare `br list` is the UNRESOLVED set (open + in_progress, excluding closed).
+  # Filtering `--status open` would drop in_progress and let DONE fire mid-bead.
+  BR_UNRESOLVED=$(br list --json 2>/dev/null | _brcount)
+  # "blocked" is derived from dependencies, not a status value: `br list --status blocked`
+  # silently returns nothing. `br blocked` is the real query — and it defaults to
+  # --limit 50, which would silently cap the count at 50 on a large backlog.
+  BR_BLOCKED=$(br blocked --limit 0 --json 2>/dev/null | _brcount)
+  # An in_progress bead means a BUILD is under way even when ready=0 and the tree is clean.
+  BR_INPROGRESS=$(br list --status in_progress --json 2>/dev/null | _brcount)
+fi
+
+# --- specs / plans ---
+# Match both conventional basenames AND anything under docs/spec[s]/ — the SHAPE phase
+# tells the driver to write specs to `docs/specs/<slug>.md`, where the slug is arbitrary,
+# so a basename-only search cannot see the specs this very skill creates.
+SPECS=$( { find . -maxdepth 3 \
+    \( -path ./node_modules -o -path ./target -o -path ./.git \) -prune -o \
+    -type f \( -iname 'SPEC*.md' -o -iname 'PLAN*.md' -o -iname 'PRD*.md' -o -iname 'DESIGN*.md' \) \
+    -print 2>/dev/null
+  find ./docs/specs ./docs/spec ./spec ./specs -type f -name '*.md' 2>/dev/null
+  } | grep -v '^\./\.' | grep -viE '/(archive|archived|old|deprecated)/' \
+    | sed 's|^\./||' | sort -u | head -8 )
+# -maxdepth must appear once, before the expression; and prune vendor dirs or `head -1`
+# can return a dependency's own adr/ directory instead of the repo's.
+ADRS=$(find . -maxdepth 3 \
+  \( -name node_modules -o -name target -o -name .git -o -name vendor \) -prune -o \
+  -type d \( -name adr -o -name adrs \) -print 2>/dev/null | head -1 | sed 's|^\./||')
+
+# --- PR state ---
+# "unknown" is NOT "none": if gh is missing, unauthenticated, or the query fails, we have
+# not established that a PR is absent. Claiming "none" would route a branch with an open PR
+# to HARDEN and trigger another full review cycle on already-reviewed work.
+PR_STATE="unknown"; PR_NUM=""
+if [[ -z "$(git remote 2>/dev/null)" ]]; then
+  # No remote at all: there is no forge, so there is genuinely no PR.
+  PR_STATE="none"
+elif ! command -v gh >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1 || [[ -z "$BRANCH" ]]; then
+  PR_STATE="unknown"
+elif ! git remote -v 2>/dev/null | grep -qi 'github\.com'; then
+  # A non-GitHub forge (codeberg, gitlab, self-hosted). gh cannot answer; saying "none"
+  # would be a claim we have not checked, so name the reason instead.
+  PR_STATE="n/a-non-github"
+else
+  if PR_JSON=$(gh pr view --json number,state,reviewDecision,mergeable 2>/dev/null) && [[ -n "$PR_JSON" ]]; then
+    PR_NUM=$(echo "$PR_JSON" | jq -r '.number // ""' 2>/dev/null)
+    PR_STATE=$(echo "$PR_JSON" | jq -r '(.state//"?")+"/"+(.reviewDecision//"no-review")' 2>/dev/null)
+  elif gh repo view >/dev/null 2>&1; then
+    PR_STATE="none"     # gh reached the repo and found no PR for this branch
+  else
+    PR_STATE="unknown"  # gh could not reach the repo (auth, network, permissions)
+  fi
+fi
+
+DRIVE_MD="absent"; DRIVE_PHASE=""; DRIVE_PHASE_LINE_PRESENT=false
+if [[ -f DRIVE.md ]]; then
+  DRIVE_MD="present"
+  # Case-insensitive and non-alpha-tolerant on purpose: `**Phase:** build` is a plausible
+  # hand edit, and extracting nothing there would be indistinguishable from a DRIVE.md with
+  # no phase line at all — the record would be discarded with no warning. Capture whatever
+  # token is present, uppercase it, and let the validity check below decide.
+  DRIVE_PHASE=$(grep -m1 -oiE '\*\*Phase:\*\*[[:space:]]*[A-Za-z_-]+' DRIVE.md 2>/dev/null \
+    | sed -E 's/.*\*\*[[:space:]]*//' | tr '[:lower:]' '[:upper:]' || echo "")
+  DRIVE_PHASE_LINE_PRESENT=false
+  grep -qiE '\*\*Phase:\*\*' DRIVE.md 2>/dev/null && DRIVE_PHASE_LINE_PRESENT=true
+fi
+
+# --- phase inference ---
+#
+# PRECEDENCE INVARIANT (do not re-litigate this per-phase):
+#   DRIVE.md records the phase the driver believes it is in, written at every transition.
+#   The tree supplies EVIDENCE. Several phases are simply not distinguishable from the tree
+#   — a PROVE branch and a HARDEN branch are byte-identical to git; a spec committed but not
+#   yet reviewed looks finished; a dirty tree cannot say whether the edit is implementation,
+#   a test being authored, or a reviewer fix being applied. Whitelisting "the phases the
+#   tree cannot express" fails because that set keeps growing.
+#   So: the RECORD is authoritative whenever present, the TREE is authoritative when it is
+#   absent, and a disagreement is REPORTED rather than silently resolved. infer() below is
+#   therefore pure tree inference and never reads DRIVE_PHASE.
+infer() {
+  local changed
+  changed=""
+  if [[ "$DIRTY_COUNT" -gt 0 || "$UNTRACKED" -gt 0 ]]; then
+    # core.quotePath=false: git quotes non-ASCII paths by default, and the surrounding
+    # double quotes defeat every path pattern below. The second sed takes the destination
+    # of a rename (`R old -> new`). DRIVE.md is dropped outright — it is this skill's own
+    # state file, so its rewrite→commit window is not a signal about the phase.
+    changed=$(git -c core.quotePath=false status --porcelain 2>/dev/null \
+      | sed -e 's/^...//' -e 's/^.* -> //' \
+      | grep -v '^[[:space:]]*$' | grep -vx 'DRIVE\.md' || true)
+  fi
+  if [[ -n "$changed" ]]; then
+    case "$(_classify_paths "$changed")" in
+      # Bead-metadata-only edits are GRAPH work (br create/update rewrites the beads JSONL)
+      # — unless a bead is already in_progress, in which case `br update --status
+      # in_progress` wrote that file and the real state is an active BUILD.
+      bead) [[ "$BR_INPROGRESS" =~ ^[0-9]+$ && "$BR_INPROGRESS" -gt 0 ]] \
+              && { echo "BUILD"; return; }
+            echo "GRAPH"; return ;;
+      doc)  echo "SHAPE"; return ;;
+      *)    echo "BUILD"; return ;;
+    esac
+  fi
+  # Clean tree. Require an OPEN pr: `gh pr view` falls back to the most recent CLOSED or
+  # MERGED PR on the branch, so existence alone would call a rejected PR ready to merge.
+  if [[ -n "$PR_NUM" && "$PR_STATE" == OPEN/* ]]; then echo "LAND"; return; fi
+  # With PR state unknown we cannot rule out an open PR, so HARDEN is a guess — say so via
+  # the warning line rather than silently starting another review cycle.
+  # Committed work only means HARDEN when it is actually code. Spec-only commits are
+  # interrupted SHAPE (its exit gate — the xhigh review — has not run); bead-only commits
+  # are GRAPH. On the DEFAULT branch, doc/bead commits are the delayed bead-closure push
+  # LAND prescribes, not a phase signal — fall through to the bead-derived states rather
+  # than sending the driver back through SHAPE/GRAPH. Substantive code on the default
+  # branch is still unreviewed work and still means HARDEN.
+  if [[ "$BRANCH_COMMITS" =~ ^[0-9]+$ && "$BRANCH_COMMITS" -gt 0 ]]; then
+    case "$BRANCH_DIFF_KIND" in
+      doc)  $ON_DEFAULT || { echo "SHAPE"; return; } ;;
+      bead) $ON_DEFAULT || { echo "GRAPH"; return; } ;;
+      *)    echo "HARDEN"; return ;;
+    esac
+  fi
+  # Bead-derived states, most specific first.
+  [[ "$BR_INPROGRESS" =~ ^[0-9]+$ && "$BR_INPROGRESS" -gt 0 ]] && { echo "BUILD"; return; }
+  [[ "$BR_READY" =~ ^[0-9]+$ && "$BR_READY" -gt 0 ]] && { echo "BUILD"; return; }
+  # ready==0 with work left => everything remaining is blocked or deferred: a graph problem.
+  [[ "$BR_UNRESOLVED" =~ ^[0-9]+$ && "$BR_UNRESOLVED" -gt 0 ]] && { echo "GRAPH"; return; }
+  # No unresolved beads. DONE only if a drive was actually under way; otherwise an empty or
+  # freshly-initialised bead workspace just means nothing has been graphed yet — note this
+  # keys on the COUNT, not on the "n/a" sentinel, so `br init` with zero issues (0, not n/a)
+  # routes to planning rather than falling through to BUILD with no bead to build.
+  if [[ "$BR_UNRESOLVED" == "0" && "$DRIVE_MD" == "present" ]]; then echo "DONE"; return; fi
+  [[ -z "$SPECS" ]] && { echo "SHAPE"; return; }
+  echo "GRAPH"
+}
+TREE_PHASE=$(infer)
+# The record wins when present; the tree is the fallback. Both are reported so the driver —
+# which knows the actual goal — can override with reason rather than being silently steered.
+# RECORD_VALID — not merely "DRIVE.md had something". An unrecognized phase (hand-edited,
+# corrupted, renamed) falls back to the tree, and every downstream label must say so:
+# claiming the record won while shipping a tree value is the silently-resolved disagreement
+# this invariant exists to forbid.
+RECORD_VALID=false
+case "$DRIVE_PHASE" in
+  SHAPE|GRAPH|BUILD|PROVE|HARDEN|LAND|DONE) PHASE="$DRIVE_PHASE"; RECORD_VALID=true ;;
+  *)                                        PHASE="$TREE_PHASE" ;;
+esac
+$RECORD_VALID && PHASE_SOURCE="DRIVE.md" || PHASE_SOURCE="tree"
+# Recomputed outside infer(): `$(infer)` is command substitution, so anything infer()
+# assigns dies with its subshell.
+BLOCKED_ONLY=false
+if [[ "$TREE_PHASE" == "GRAPH" && "$BR_READY" =~ ^[0-9]+$ && "$BR_READY" -eq 0 \
+   && "$BR_UNRESOLVED" =~ ^[0-9]+$ && "$BR_UNRESOLVED" -gt 0 ]]; then
+  BLOCKED_ONLY=true
+fi
+
+if $JSON; then
+  jq -n \
+    --arg root "$ROOT" --arg branch "$BRANCH" --arg default_branch "$DEFAULT_BRANCH" \
+    --arg gate "$GATE" --arg specs "$SPECS" --arg adrs "$ADRS" \
+    --arg pr_state "$PR_STATE" --arg pr_num "$PR_NUM" --arg drive_md "$DRIVE_MD" \
+    --arg drive_phase "$DRIVE_PHASE" --arg phase "$PHASE" --arg tree_phase "$TREE_PHASE" \
+    --arg phase_source "$PHASE_SOURCE" --arg record_valid "$RECORD_VALID" \
+    --arg blocked_only "$BLOCKED_ONLY" \
+    --arg br_ready "$BR_READY" --arg br_unresolved "$BR_UNRESOLVED" --arg br_blocked "$BR_BLOCKED" \
+    --arg br_inprogress "$BR_INPROGRESS" \
+    --argjson dirty "${DIRTY_COUNT:-0}" --argjson untracked "${UNTRACKED:-0}" \
+    --argjson branch_commits "${BRANCH_COMMITS:-0}" \
+    '{root:$root,branch:$branch,default_branch:$default_branch,dirty:$dirty,
+      untracked:$untracked,branch_commits:$branch_commits,gate:$gate,
+      beads:{ready:$br_ready,unresolved:$br_unresolved,blocked:$br_blocked,in_progress:$br_inprogress},
+      specs:($specs|split("\n")|map(select(length>0))),adr_dir:$adrs,
+      pr:{number:$pr_num,state:$pr_state},drive_md:$drive_md,
+      recorded_phase:$drive_phase,tree_phase:$tree_phase,phase:$phase,
+      phase_source:$phase_source,record_valid:($record_valid=="true"),
+      phase_disagreement:(($record_valid=="true") and $drive_phase!=$tree_phase),
+      blocked_only:($blocked_only=="true")}' 2>/dev/null \
+  || {
+    # jq-free fallback. Escape backslashes then quotes: git permits `"` in a branch name
+    # and a repo path may contain either, so raw interpolation can emit invalid JSON.
+    _js() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+    printf '{"phase":"%s","tree_phase":"%s","branch":"%s","gate":"%s"}\n' \
+      "$(_js "$PHASE")" "$(_js "$TREE_PHASE")" "$(_js "$BRANCH")" "$(_js "$GATE")"
+  }
+  exit 0
+fi
+
+printf 'repo       %s\n' "$ROOT"
+printf 'branch     %s (base: %s, %s commits ahead of base)\n' "${BRANCH:-detached}" "${DEFAULT_BRANCH:-?}" "$BRANCH_COMMITS"
+printf 'worktree   %s modified, %s untracked, %s unpushed\n' "$DIRTY_COUNT" "$UNTRACKED" "$AHEAD"
+printf 'gate       %s\n' "${GATE:-<none detected — ask, do not guess>}"
+printf 'beads      ready=%s unresolved=%s blocked=%s in_progress=%s\n' "$BR_READY" "$BR_UNRESOLVED" "$BR_BLOCKED" "$BR_INPROGRESS"
+printf 'specs      %s\n' "$(printf '%s' "${SPECS:-<none>}" | paste -sd, -)"
+[[ -n "$ADRS" ]] && printf 'adrs       %s\n' "$ADRS"
+printf 'pr         %s%s\n' "$PR_STATE" "${PR_NUM:+ (#$PR_NUM)}"
+printf 'DRIVE.md   %s%s\n' "$DRIVE_MD" "${DRIVE_PHASE:+ (says $DRIVE_PHASE)}"
+printf '\nphase: %s   (source: %s)\n' "$PHASE" "$PHASE_SOURCE"
+if $DRIVE_PHASE_LINE_PRESENT && ! $RECORD_VALID; then
+  printf '  ⚠ DRIVE.md has a Phase line that does not name a known phase (%s) — IGNORED, this\n    phase came from the tree. Valid: SHAPE GRAPH BUILD PROVE HARDEN LAND DONE.\n' "${DRIVE_PHASE:-unparseable}"
+elif $RECORD_VALID && [[ "$DRIVE_PHASE" != "$TREE_PHASE" ]]; then
+  printf '  ⚠ the record says %s, the tree looks like %s. The record wins — it is written at\n    every transition and several phases are indistinguishable from git. Override only\n    with a stated reason.\n' "$DRIVE_PHASE" "$TREE_PHASE"
+fi
+[[ "$UNTRACKED" -gt 0 ]] && printf '  ⚠ %s untracked file(s) — codex reviewers are BLIND to these; git add before review.\n' "$UNTRACKED"
+[[ "$PR_STATE" == "unknown" ]] && printf '  ⚠ PR state unknown (no gh / not authenticated / query failed) — an open PR cannot be\n    ruled out, so a HARDEN reading here may really be LAND. Check before re-reviewing.\n'
+[[ "$PR_STATE" == "n/a-non-github" ]] && printf '  ⚠ non-GitHub remote — gh cannot see PRs here. Check the forge yourself before treating\n    a HARDEN reading as "no PR open".\n'
+$BLOCKED_ONLY && printf '  ⚠ no bead is ready (ready=0, unresolved=%s, blocked=%s) — the rest are blocked or\n    deferred. This is a graph problem: re-audit dependencies and deferrals rather than\n    looking for a bead to build.\n' "$BR_UNRESOLVED" "$BR_BLOCKED"
+exit 0
