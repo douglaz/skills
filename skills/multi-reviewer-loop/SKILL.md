@@ -5,8 +5,10 @@ description: >-
   branch: detects a review base, runs a two-reviewer panel (`codex review` plus
   Claude Fable at high effort) in parallel each pass, merges and dedupes their
   findings, treats findings as credible until disproven, fixes accepted items,
-  validates the changed code, and repeats until both reviewers are clean or the
-  pass limit is reached. Use when the user asks to "review loop",
+  validates the changed code, and repeats until both reviewers are clean on the
+  current diff. A final consistency pass then checks that the changed files still
+  agree with each other and with the docs describing them; a clean diff alone does
+  not finish the loop. Stops early at the pass limit. Use when the user asks to "review loop",
   "multi-reviewer loop", "codex review loop", "review and fix", "review until
   clean", "get a second reviewer on this", "let's get this PR clean", "fix what
   the reviewers found", or right before opening a PR or shipping. Also suggest
@@ -278,7 +280,9 @@ For each pass `N` from `1` to `MAX_PASSES`:
 
 ### 3. Fix and validate
 
-If every panel reviewer is clean, skip to "Finish".
+If every panel reviewer is clean, go to § 4b (the consistency pass) — not
+straight to "Finish". A clean diff is the entry condition for that phase, not
+the end of the loop.
 
 Otherwise:
 
@@ -354,7 +358,11 @@ Otherwise:
 
 Stop early and surface the issue if any of these happen:
 
-- the same materially identical finding survives two genuine fix attempts
+- the same materially identical finding survives two genuine fix attempts —
+  but **check the current tree before you count a repeat**. A reviewer that
+  re-reads a file often re-raises a finding it already got fixed, and a second
+  sighting is not evidence the fix failed. Quote the line that closes it and
+  reject; do not re-fix something already fixed.
 - a reviewer's output is ambiguous or empty twice in a row
 - both reviewers fail in the same pass (nothing reviewed the code)
 - a finding remains plausible but fixing it would require a larger architectural
@@ -378,6 +386,21 @@ stops converging:
 
 More normal passes will not converge these; they grow the change. The audit is
 the corrective.
+
+**Falling severity is not the same as done.** P1 counts dropping pass over pass
+feels like convergence, and usually is — but both reviewers are re-reading the
+same diff each round, so what falls can just as easily be their depth. A run that
+ends on `br blocked --limit 50` and JSON quote-escaping has converged *on the
+diff*; it has said nothing about whether the artifact still hangs together. That
+is what § 4b is for, and it is why a clean pass alone does not finish the loop.
+
+**Expect your own fixes to generate the next pass's findings.** A fix changes the
+shape of nearby code, and the next pass sees the new shape for the first time —
+so a late pass turning up defects *introduced by the previous pass's fixes* is
+the loop working, not the loop failing. Two consequences: never treat the last
+fix round as unreviewed-but-probably-fine, and when you are at the pass limit
+with fixes applied since the last review, say so rather than reporting the run as
+clean. Those fixes have not been reviewed by anyone.
 
 ### 4a. Skeptical audit (the inverted pass)
 
@@ -404,19 +427,92 @@ architecture trade-off rides on how aggressively to cut, ask the user (the
 choice changes what the artifact *is*). Re-verify after the cuts that the core is
 intact and no dangling references to removed mechanisms remain.
 
+### 4b. The consistency pass (the artifact-level pass)
+
+Every normal pass reviews `git diff <base>`. That frame can only see defects
+*inside changed lines* — and a whole class of real defects lives in the
+**relationships between** the things you changed, which no hunk contains:
+
+- a summary table, README, or overview that still describes the behaviour you
+  tightened three passes ago
+- two call sites of the same helper that drifted apart (one hardened, one not)
+- a rule in one file that forbids what a rule in another file requires
+- an example, template, or schema that no longer matches the code it documents
+- a claim in the docs (a flag, a path, a command) that no longer exists
+
+These survive any number of diff passes precisely because each individual hunk is
+correct. They also get *created* by a long loop: you tighten a behaviour in one
+file per pass and never re-read the file that summarises it.
+
+**Entry:** a normal panel pass came back clean.
+
+**Who runs it:** a reviewer that accepts a custom prompt. Fable by default — it
+opens files the diff does not show, which is what cross-file agreement needs. On
+a `--reviewers codex` pinned run use `codex exec --sandbox read-only` with the
+same prompt (it takes one; `codex review --base` does not — and the sandbox flag
+matters, since `codex exec` is a general coding agent that may try to *fix* a
+contradiction and mutate the tree during the final check). If no available
+reviewer can take a prompt, the pass cannot run: finish `CLEAN_DIFF_ONLY` and say
+consistency was never checked — not `CLEAN_DEGRADED`, which is about a *panel*
+reviewer being unavailable and has to name which one.
+
+**Scope:** the changed files *plus any file that documents them* — a README or
+overview that was never touched is exactly where this drift hides, so an
+unchanged file contradicting a changed one is in scope and is a finding.
+
+**Loop:** fix what it finds, then **re-run both the panel and this pass** on the
+new diff. A consistency fix is a code change like any other and gets reviewed
+like one. Repeat until a panel pass and a consistency pass are both clean on the
+same tree. These re-runs count against `MAX_PASSES`; if the limit is already
+exhausted, finish `ISSUES_FIXED_UNCONFIRMED` and offer more passes rather than
+quietly calling it clean.
+
+Fix findings the same way as any other — verify first, and prefer correcting
+whichever side is actually wrong over "updating both to match".
+
+**There is no "too small to need this."** A single-file change can still be
+contradicted by an untouched README or overview — that is the incident this pass
+exists for. The trigger is whether anything *documents* what you changed, not how
+many files you touched. If you skip it anyway, the run is `CLEAN_DIFF_ONLY`, not
+`CLEAN`.
+
+The prompt, invocation, and output filenames are in
+[references/reviewer-panel.md](references/reviewer-panel.md) § The consistency
+pass prompt.
+
 ### 5. Finish
 
-The loop is `CLEAN` only when **every reviewer in the panel ran successfully and
-reported no findings in the same pass**. If the final pass was degraded — a
+The loop is `CLEAN` only when, **on the same tree**, every reviewer in the panel
+ran successfully and reported no findings, and the § 4b consistency pass came back
+clean. Fixing something after either pass means that tree was never reviewed —
+re-run both, do not round up.
+
+If the final pass was degraded — a
 reviewer failed, timed out, or was never available — report `CLEAN_DEGRADED` and
 name which reviewer never weighed in. Do not round that up to clean; the user is
 deciding whether to ship on it.
+
+Two ways a run gets reported clean when it is not, both worth checking by name:
+
+- **Fixes applied after the last review.** If you hit the pass limit, fixed the
+  findings, and stopped, the diff you are shipping is one nobody reviewed. That
+  is `ISSUES_FIXED_UNCONFIRMED`, not `CLEAN` — say which fixes are unreviewed and
+  offer a confirmation pass.
+- **Consistency pass never run** — you skipped it, or no reviewer could take a
+  prompt. Diff-clean is not artifact-clean. Report `CLEAN_DIFF_ONLY` and name what
+  it means: the changed lines are clean, and nothing checked whether the files
+  still agree with each other.
+
+When more than one status fits, report the **first** that applies:
+`BLOCKED` → `ISSUES_REMAIN` → `ISSUES_FIXED_UNCONFIRMED` → `CLEAN_DEGRADED` →
+`CLEAN_DIFF_ONLY` → `CLEAN`. A degraded panel that also never ran § 4b is
+`CLEAN_DEGRADED`, and the report's consistency line carries the rest.
 
 Report:
 
 ```text
 MULTI-REVIEWER LOOP COMPLETE
-Status: CLEAN | CLEAN_DEGRADED | ISSUES_REMAIN | BLOCKED
+Status: CLEAN | CLEAN_DIFF_ONLY | CLEAN_DEGRADED | ISSUES_FIXED_UNCONFIRMED | ISSUES_REMAIN | BLOCKED
 Panel: codex (<ok|failed|not available>), fable (<ok|failed|not available>)
 Passes run: N/MAX
 Base: <DIFF_BASE>
@@ -429,6 +525,8 @@ Cut/simplified (over-specification): <count or none>
 Contradictions resolved: <count or none>
 Remaining: <count or none>
 Validation run: <short summary>
+Consistency pass (§ 4b): <ran, N findings | not run — why>
+Fixes since last review: <none | N, unreviewed>
 ```
 
 Also provide:
@@ -462,6 +560,17 @@ If clean:
 If issues remain or you are blocked:
 - A) Continue with 3 more passes
 - B) Stop and leave the remaining findings documented
+- C) Stop here
+
+If the status is `CLEAN_DIFF_ONLY` (diff clean, consistency never checked):
+- A) Run the § 4b consistency pass now
+- B) Accept diff-only and ship
+- C) Stop here
+
+If the status is `ISSUES_FIXED_UNCONFIRMED` (fixes applied after the last review):
+- A) Run one confirmation pass over the fixes (recommended — this is where
+     fix-induced regressions show up)
+- B) Ship the unreviewed fixes
 - C) Stop here
 
 If the final pass was degraded:

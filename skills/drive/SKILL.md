@@ -139,7 +139,7 @@ wants to re-run a phase.
 | **GRAPH** | Spec exists; no bead graph covering it | `plan-to-beads-transfer` → `bead-polish-loop` → `second-model-bead-audit` | Audit verdict PASS; a **scoped** `br ready` bead exists (see `Scope:` in `DRIVE.md`) |
 | **BUILD** | A ready bead exists | `orchestrating-with-rb-lite` (one bead = one branch) | rb-lite exits clean **and** you independently ran the gate |
 | **PROVE** | Bead's deliverable is a test/gate, or the change touches money/data/infra | `testing-with-rb-lite` | The gate **ran** and printed green, with the real exit code |
-| **HARDEN** | Branch has unreviewed substantive code | `multi-reviewer-loop`, then a final pinned `codex review --base <ref>` | Both reviewers clean **on the current diff** (re-run the panel after any final-gate fix); gate green at a real exit code |
+| **HARDEN** | Branch has unreviewed substantive code | `multi-reviewer-loop`, then a final pinned `codex review --base <ref>` | `multi-reviewer-loop` reports `CLEAN` — both reviewers clean **and** its consistency pass clean, on the same tree; gate green at a real exit code |
 | **LAND** | Branch is clean, reviewed, and gate-green | `pr-with-codex-bot-review` | Squash-merged; bead closed; `DRIVE.md` updated and committed; branch reset |
 | → **BUILD** | More ready beads | — | loop until `br ready` is empty |
 

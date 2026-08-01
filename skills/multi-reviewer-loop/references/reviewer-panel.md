@@ -302,3 +302,101 @@ EOF
 
 Reconcile its output through your own judgment. Accepting every cut is the same
 credulity as accepting every finding, pointed the other way.
+
+## The consistency pass prompt
+
+Used by § 4b of the skill — after a panel pass comes back clean, and again after
+every fix, until a panel pass and this pass are clean on the same tree. Normal
+passes review `git diff <base>`, so they can only see defects inside changed
+lines; this one reviews the changed files *and the files that document them* as a
+single artifact, and asks whether they still agree. Run it on Fable: it opens files the diff does
+not show, which is exactly what cross-file agreement requires.
+
+Build the file list from git's own path outputs, never from porcelain status
+lines. `git status --porcelain | cut -c4-` looks equivalent and is not: a rename
+comes out as the single non-path string `old.txt -> new.txt`, a path containing
+whitespace or non-ASCII comes out C-quoted with the quotes attached, and a file
+that is both committed-changed and currently dirty appears twice.
+
+```bash
+CONSISTENCY_OUT="$REVIEW_DIR/consistency.fable.txt"
+CONSISTENCY_RAW="$REVIEW_DIR/consistency.fable.raw.json"
+
+# -z everywhere: NUL-delimited output is the only form that survives a path
+# containing a newline or tab, which core.quotePath=false alone does not fix.
+changed_z() {
+  { git diff -z --name-only "$DIFF_BASE...HEAD"
+    git diff -z --name-only                       # unstaged
+    git diff -z --name-only --cached              # staged
+    git ls-files -z --others --exclude-standard   # untracked
+  } | sort -zu
+}
+# Split into files that still exist and files this change deleted. `|| true` on the
+# loop keeps a trailing deleted path from leaving status 1 and aborting under `set -e`.
+EXISTING=$(changed_z | { while IFS= read -r -d "" f; do [ -e "$f" ] && printf '%s\n' "$f"; done; true; })
+DELETED=$( changed_z | { while IFS= read -r -d "" f; do [ -e "$f" ] || printf '%s\n' "$f"; done; true; })
+
+cat >"$REVIEW_DIR/fable-consistency-prompt.txt" <<EOF
+Do not hunt for bugs — another pass owns those. You own INTERNAL AGREEMENT.
+
+Read these files as one artifact:
+${EXISTING}
+
+These paths were DELETED by this change. Do not try to open them; instead check
+whether anything above still refers to them:
+${DELETED:-(none)}
+
+Then go and find the files that DOCUMENT the ones above but were NOT changed — a
+README, overview, or summary table that nobody edited is exactly where this drift
+hides, and it appears in no diff. Search the repo for references to these paths
+and names, and use judgment about which hits are real documentation rather than
+incidental mentions. A contradiction between one of those and a changed file IS a
+finding, and is the most valuable thing this pass returns.
+
+Report only contradictions:
+1. A summary, table, README, or frontmatter that no longer matches the behaviour
+   it describes (common after a rule was tightened over several rounds).
+2. Two places stating the same rule that have drifted apart — one updated, one not.
+3. A constraint in one file that forbids what another file requires.
+4. An example, template, or schema that no longer matches what it documents.
+5. A documented flag, path, command, section number, or field that does not exist.
+
+For each: both locations (file:line), the exact contradiction, and which side you
+believe is correct and why.
+
+Do not propose new features or mechanism. Do not modify any file.
+If they are consistent with each other, output exactly: No findings.
+EOF
+```
+
+Note the **three-dot** `$DIFF_BASE...HEAD` when listing changed files: two dots
+compares the two tips, so once the base advances past the fork point it reports
+upstream files this branch never touched, and the reviewer wastes the pass on
+code that is not yours.
+
+Run it with the same invocation as the panel's Claude reviewer (same model,
+effort, and the three tool flags), pointing at this prompt file and these output
+files:
+
+```bash
+claude -p "$(cat "$REVIEW_DIR/fable-consistency-prompt.txt")" \
+  --model fable --effort high --output-format json \
+  --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
+  --disallowedTools "Edit,Write,NotebookEdit" \
+  </dev/null >"$CONSISTENCY_RAW" 2>"$REVIEW_DIR/consistency.fable.stderr.txt"
+jq -er 'if .is_error then error(.result // "err") else (.result // empty) end' \
+  <"$CONSISTENCY_RAW" >"$CONSISTENCY_OUT"
+```
+
+On a `--reviewers codex` pinned run, use
+`codex exec --sandbox read-only "$(cat ...)"` with the same prompt instead —
+`codex review --base` cannot take one. The `--sandbox read-only` is not optional:
+`codex exec` is a general coding agent, and if the local config is
+workspace-writable it may try to *fix* a contradiction, mutating the tree during
+the final check so that any `CLEAN` no longer describes the reviewed tree. Re-runs after a fix
+overwrite these files; keep the round in the name (`consistency-02.*`) if you
+want the history.
+
+Fix findings the same way as any other: verify first, and prefer correcting
+whichever side is genuinely wrong over editing both until they match — matching
+two wrong things is still wrong.

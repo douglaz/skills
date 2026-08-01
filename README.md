@@ -32,7 +32,7 @@ The phase machine, and the skill each phase delegates to:
 | GRAPH | `plan-to-beads-transfer` → `bead-polish-loop` → `second-model-bead-audit` | audit PASS, a scoped `br ready` bead exists |
 | BUILD | `orchestrating-with-rb-lite` | rb-lite clean **and** you ran the gate yourself |
 | PROVE | `testing-with-rb-lite` | the gate ran green at a real exit code |
-| HARDEN | `multi-reviewer-loop` + a final pinned `codex review --base` | both reviewers clean **on the current diff** |
+| HARDEN | `multi-reviewer-loop` + a final pinned `codex review --base` | `multi-reviewer-loop` reports `CLEAN` (reviewers **and** consistency pass) |
 | LAND | `pr-with-codex-bot-review` | squash-merged, bead closed, `DRIVE.md` committed, branch reset |
 
 Four guards automate what previously took a human nudge: **evidence** (run the real
@@ -53,7 +53,7 @@ bead counts, PR state, specs, and an inferred phase (`--json` for scripting).
 
 ### multi-reviewer-loop
 
-Runs an iterative multi-reviewer review/fix/re-review loop on your current branch. Detects a review base, runs two reviewers in parallel — `codex review` (`gpt-5.6-sol` at `xhigh`) and Claude Fable at high effort — merges and dedupes their findings, treats findings as credible until disproven, fixes accepted items, validates the changed code, and repeats until both reviewers are clean or the pass limit is reached.
+Runs an iterative multi-reviewer review/fix/re-review loop on your current branch. Detects a review base, runs two reviewers in parallel — `codex review` (`gpt-5.6-sol` at `xhigh`) and Claude Fable at high effort — merges and dedupes their findings, treats findings as credible until disproven, fixes accepted items, validates the changed code, and repeats until both reviewers are clean on the current diff. A final consistency pass then reads the changed files — plus the untouched docs that describe them — as one artifact and asks whether they still agree — the class of defect a diff-scoped loop structurally cannot see, such as a summary table that no longer matches the behaviour it describes, or a rule in one file that forbids what another file requires. `CLEAN` requires both.
 
 ```
 /multi-reviewer-loop              # up to 6 passes (default), both reviewers

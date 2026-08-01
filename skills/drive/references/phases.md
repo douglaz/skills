@@ -178,8 +178,10 @@ diff you are about to ship, so "both reviewers clean" would be a claim about an 
 Re-running builds and tests is not a substitute: they never saw the finding in the first
 place.
 
-**Exit gate:** both reviewers clean **on the current diff**, final gate clean, gate green at
-a real exit code.
+**Exit gate:** `multi-reviewer-loop` reports `CLEAN` — which means both reviewers clean
+**and** its § 4b consistency pass clean, on the same tree. `CLEAN_DIFF_ONLY` is not
+enough: it says the changed lines are fine and nothing checked whether the files still
+agree with each other. Plus the final gate clean, and the gate green at a real exit code.
 
 ---
 
