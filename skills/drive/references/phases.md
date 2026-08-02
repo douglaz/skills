@@ -161,8 +161,11 @@ Two non-negotiables:
    disagreements are the highest-signal moments. Findings both raise get fixed first; a
    finding only one raises still gets the full evidence bar, because the other reviewer's
    silence is not counter-evidence.
-2. If one reviewer is unavailable, the loop runs **degraded** and must say so. Never
-   report a one-reviewer pass as clean.
+2. If one reviewer is unavailable the loop runs **degraded** and must say so — and a
+   degraded run cannot reach `CLEAN`, only `CLEAN_DEGRADED`. That is not this phase's
+   exit gate, so do not grind passes toward a verdict the run can no longer produce:
+   fix the reviewer (auth, install) and re-run, or stop and tell the user HARDEN
+   finished degraded and why. Never report a one-reviewer pass as clean.
 3. Then a **final gate on the committed diff**, which reliably catches P2s the P1-floor
    loop skipped:
    ```bash

@@ -421,7 +421,7 @@ directories created by `--migrate-existing`.
 - `drive`'s SHAPE phase delegates to planning skills that are **not** in this
   repo: `planning-workflow`, `spec`, `grill-me`, `grill-with-docs`,
   `plan-eng-review`, and `plan-ceo-review`. Install them separately (several ship
-  with [gstack](https://github.com/steipete/gstack)) or substitute your own — the
+  with gstack) or substitute your own — the
   phase only requires that a reviewed, buildable spec exists at its exit gate,
   not that any particular skill produced it.
 - `drive`'s self-continuation section uses `/goal`, a Claude Code built-in with

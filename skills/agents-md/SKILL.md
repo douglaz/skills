@@ -69,13 +69,19 @@ The block carries one project-specific line — the command that proves the repo
 healthy — because "run the gate" is useless advice without naming it.
 
 ```bash
-if   [ -x ./check.sh ];   then GATE="./check.sh"
-elif [ -f justfile ];     then GATE="just check"        # confirm the recipe exists
-elif [ -f Cargo.toml ];   then GATE="cargo clippy --all-targets -- -D warnings && cargo test"
-elif [ -f package.json ]; then GATE="npm test"          # confirm scripts.test is real
-elif [ -f go.mod ];       then GATE="go test ./..."
+GATE=""
+if   [ -x ./check.sh ];                   then GATE="./check.sh"
+elif [ -f justfile ] || [ -f Justfile ];  then GATE="just check"   # confirm the recipe exists
+elif [ -f Cargo.toml ];                   then GATE="cargo clippy --all-targets -- -D warnings && cargo test"
+elif [ -f package.json ];                 then GATE="npm test"     # confirm scripts.test is real
+elif [ -f go.mod ];                       then GATE="go test ./..."
 fi
-[ -f flake.nix ] && GATE="nix develop -c bash -c '$GATE'"
+# Only wrap a gate that exists. `nix develop -c bash -c ''` runs nothing and exits 0
+# — a permanently green gate recorded in every future agent's instructions, which is
+# the exact failure this block warns about.
+if [ -n "$GATE" ] && [ -f flake.nix ] && command -v nix >/dev/null 2>&1; then
+  GATE="nix develop -c bash -c '$GATE'"
+fi
 ```
 
 Verify the command actually exists before writing it in — a `justfile` without a
@@ -83,6 +89,13 @@ Verify the command actually exists before writing it in — a `justfile` without
 pin a permanently red gate into every future agent's instructions. If you cannot
 find a real gate, drop the line and say so; a missing gate line is honest, a
 wrong one is worse than nothing.
+
+### 3a. `--check` stops here
+
+`--check` is read-only. Report which blocks exist, whether the discipline block
+matches the current canonical text, and what the detected gate is — then stop. Do
+not fall through into the write steps below; an inspection that edits the file is
+worse than one that refuses to run.
 
 ### 3. Write or update the block
 
@@ -94,11 +107,15 @@ copies of the placeholder and the command is corrupted with no error. Use a
 substitution that treats the replacement as a literal:
 
 ```bash
+# Take only the canonical text — everything before <!-- BLOCK-START --> is
+# commentary for the block's maintainer and must not land in a repo's AGENTS.md.
 GATE="$GATE" python3 -c '
 import os,sys
-sys.stdout.write(sys.stdin.read().replace("{{GATE}}", os.environ["GATE"]))
+t=sys.stdin.read().split("<!-- BLOCK-START -->",1)[1]
+sys.stdout.write(t.replace("{{GATE}}", os.environ["GATE"]))
 ' < references/discipline-block.md > /tmp/block.md
 grep -F "$GATE" /tmp/block.md >/dev/null || { echo "substitution failed"; exit 1; }
+grep -q 'canonical text' /tmp/block.md && { echo "commentary leaked into block"; exit 1; }
 ```
 
 That `grep -F` is the point: it is the difference between substituting and

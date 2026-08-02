@@ -335,12 +335,17 @@ changed_z() {
     git diff -z --no-renames --name-only                     # unstaged
     git diff -z --no-renames --name-only --cached            # staged
     git ls-files -z --others --exclude-standard              # untracked
-  } | sort -zu
+  }
 }
+# No `sort -zu` here: -z is a GNU extension and BSD/macOS sort rejects it, which
+# would empty EXISTING and DELETED and let the reviewer return clean having been
+# handed no files at all. Read NUL-delimited (the part that must be exact), then
+# dedupe with plain `sort -u` once the paths are already newline-delimited.
+
 # Split into files that still exist and files this change deleted. `|| true` on the
 # loop keeps a trailing deleted path from leaving status 1 and aborting under `set -e`.
-EXISTING=$(changed_z | { while IFS= read -r -d "" f; do [ -e "$f" ] && printf '%s\n' "$f"; done; true; })
-DELETED=$( changed_z | { while IFS= read -r -d "" f; do [ -e "$f" ] || printf '%s\n' "$f"; done; true; })
+EXISTING=$(changed_z | { while IFS= read -r -d "" f; do [ -e "$f" ] && printf '%s\n' "$f"; done; true; } | sort -u)
+DELETED=$( changed_z | { while IFS= read -r -d "" f; do [ -e "$f" ] || printf '%s\n' "$f"; done; true; } | sort -u)
 
 cat >"$REVIEW_DIR/fable-consistency-prompt.txt" <<EOF
 Do not hunt for bugs — another pass owns those. You own INTERNAL AGREEMENT.

@@ -18,7 +18,10 @@ every repo, so bloat is expensive and gets ignored wholesale.
 `{{GATE}}` is substituted with the repo's real gate command when the skill can
 detect one, and the line is dropped when it cannot.
 
----
+Everything above this marker is commentary for whoever maintains the block. The
+text the skill copies starts at the next line and runs to the end of the file.
+
+<!-- BLOCK-START -->
 
 ## Working agreement
 

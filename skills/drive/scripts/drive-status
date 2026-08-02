@@ -201,7 +201,9 @@ elif ! git remote -v 2>/dev/null | grep -qi 'github\.com'; then
 else
   if PR_JSON=$(gh pr view --json number,state,reviewDecision,mergeable 2>/dev/null) && [[ -n "$PR_JSON" ]]; then
     PR_NUM=$(echo "$PR_JSON" | jq -r '.number // ""' 2>/dev/null)
-    PR_STATE=$(echo "$PR_JSON" | jq -r '(.state//"?")+"/"+(.reviewDecision//"no-review")' 2>/dev/null)
+          # reviewDecision is an empty STRING when undecided, not null, so `//` never
+      # fires — test for emptiness explicitly or the label is dead in the common case.
+      PR_STATE=$(echo "$PR_JSON" | jq -r '(.state//"?")+"/"+(if (.reviewDecision//"")=="" then "no-review" else .reviewDecision end)' 2>/dev/null)
   elif gh repo view >/dev/null 2>&1; then
     PR_STATE="none"     # gh reached the repo and found no PR for this branch
   else
