@@ -115,6 +115,15 @@ It prints repo, branch, cleanliness, gate command, bead counts, PR state, spec f
 an inferred phase. Read it, then confirm the inference against `DRIVE.md` if present.
 **Never guess the phase.**
 
+Its `pr` field is the one output to distrust in both directions. It reads review
+wrappers, so a PR that two bots have approved by *reaction* still prints `no-review` —
+`+1` from `chatgpt-codex-connector[bot]` lives on the issue reactions endpoint, and
+CodeRabbit's verdict is a status check. Confirm with `pr-with-codex-bot-review`'s queries
+before believing either that a reviewed PR is unreviewed (you re-run HARDEN for nothing)
+or that a `SUCCESS` check means a review happened (CodeRabbit reports `SUCCESS` when it
+*skips* — on a rate limit, or when it judges the diff similar to previous changes, which
+it names in a "Files skipped from review" list worth reading).
+
 **The record wins when it exists; the tree wins when it does not.** `DRIVE.md` is written
 at every transition, and several phases leave no trace git can distinguish — a `PROVE`
 branch and a `HARDEN` branch are byte-identical, a spec committed but not yet reviewed
@@ -140,11 +149,39 @@ wants to re-run a phase.
 | **BUILD** | A ready bead exists | `orchestrating-with-rb-lite` (one bead = one branch) | rb-lite exits clean **and** you independently ran the gate |
 | **PROVE** | Bead's deliverable is a test/gate, or the change touches money/data/infra | gate folded into the BUILD task, **or** a separate test bead run through `testing-with-rb-lite` — decide *before* BUILD starts, since a second rb-lite run on the same branch is forbidden | The gate **ran** and printed green, with the real exit code |
 | **HARDEN** | Branch has unreviewed substantive code | `multi-reviewer-loop` (its "ask the user at the end" step is satisfied by the drive goal — keep going; its stop-list still applies), then a final pinned `codex review --base <ref>` | `multi-reviewer-loop` reports `CLEAN` — both reviewers clean **and** its consistency pass clean, on the same tree; gate green at a real exit code |
-| **LAND** | Branch is clean, reviewed, and gate-green | `pr-with-codex-bot-review` | Squash-merged; bead closed; `DRIVE.md` updated and committed; branch reset |
+| **LAND** | Nothing uncommitted or unreviewed is left in the tree, and the branch tip **is** the tree HARDEN went clean on | `pr-with-codex-bot-review` | Merged SHA is that same SHA and both bots cleared **it**; bead closed; `DRIVE.md` updated and committed; branch reset |
 | → **BUILD** | More ready beads **in scope** | — | loop until the scoped set is empty — not the repository backlog |
 
 Full per-phase mechanics, including how to skip phases legitimately, live in
 `references/phases.md`.
+
+### LAND merges the reviewed tree, not the current one
+
+Sweep everything into the branch **before** HARDEN, then review, then land. Bookkeeping
+counts: `DRIVE.md`, the beads JSONL, a stray comment fix you noticed on the way past.
+
+A commit added after the panel went clean puts the branch back in HARDEN — including one
+that only touches bookkeeping. This is not pedantry about a JSONL file; it is that "the
+panel was clean" and "the thing I am merging was reviewed" quietly stop being the same
+sentence the moment a commit lands between them, and every dashboard keeps saying
+`reviewed` regardless. The multi-reviewer-loop already states this for its own passes
+("fixing something after either pass means that tree was never reviewed"); LAND is where
+it gets violated, because bookkeeping does not feel like a change.
+
+So, before merging, name the three SHAs out loud and refuse if they differ:
+
+```
+panel clean on : <sha>
+bots cleared   : <sha>   # codex reaction + CodeRabbit check, both on this one
+merging        : <sha>
+```
+
+The failure this prevents is not hypothetical: it looks like committing the bead update
+straight to the default branch as "just bookkeeping" while the reviewed PR merges
+separately, leaving the default branch carrying a commit no reviewer and no bot ever saw.
+If the repo's own history shows bookkeeping commits landing directly on the default
+branch, that is a convention about *where they go*, not a licence to skip review —
+put them on the branch and let them ride through with the rest.
 
 ### Sizing — do not run the whole machine for a typo
 
@@ -186,7 +223,9 @@ Declare before entering BUILD, in the task file:
 - exact file list (file-lock — forbid all others from round 1), **plus a standing
   exemption for `DRIVE.md` and the beads JSONL**. Guard 4 rewrites `DRIVE.md` at every
   transition and LAND runs `br close`, so a lock that forbids them forbids the
-  bookkeeping this skill requires. Exempt them; do not spend budget on them.
+  bookkeeping this skill requires. Exempt them; do not spend budget on them. The exemption
+  is from the **budget**, not from review — they ride the same branch, the same panel and
+  the same bots as everything else (see "LAND merges the reviewed tree").
 - rough LOC budget
 - an explicit **do NOT build** list: defensive edges, abstractions, and config knobs
   beyond this milestone
