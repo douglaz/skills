@@ -35,6 +35,21 @@ fi
   git show-ref --verify --quiet "refs/heads/$c" && DEFAULT_BRANCH=$c && break
   git show-ref --verify --quiet "refs/remotes/origin/$c" && DEFAULT_BRANCH=$c && break
 done
+# main/master are conventions, not rules. A repo defaulting to develop/trunk with
+# origin/HEAD unset would otherwise leave BASE_REF empty, BRANCH_COMMITS at 0, and
+# HARDEN unreachable for committed work. Ask the forge, then fall back to whichever
+# remote branch HEAD actually descends from.
+if [[ -z "$DEFAULT_BRANCH" ]] && command -v gh >/dev/null 2>&1; then
+  DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || echo "")
+fi
+if [[ -z "$DEFAULT_BRANCH" ]]; then
+  DEFAULT_BRANCH=$(git for-each-ref --format='%(refname:short)' refs/remotes/origin 2>/dev/null \
+    | sed 's|^origin/||' | grep -vx 'HEAD' \
+    | while IFS= read -r c; do
+        git merge-base --is-ancestor "refs/remotes/origin/$c" HEAD 2>/dev/null \
+          && { printf '%s' "$c"; break; }
+      done)
+fi
 # Tracked modifications only — untracked files are reported separately, so counting
 # `git status --porcelain` wholesale would double-count them.
 DIRTY_COUNT=$(git status --porcelain 2>/dev/null | grep -cv '^??' || true)
