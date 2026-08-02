@@ -221,9 +221,16 @@ shape changes again, widen this pattern — do not narrow it.
 Clean signals:
 
 - codex: exit 0, zero findings under the pattern above, **and** the prose says so.
-  Its exact clean wording is not pinned here because it is not prompted and no
-  clean codex pass has been observed to quote — so read the output and judge, and
-  when you do see one, record the phrasing here.
+  It is not prompted, so its wording is not contractual — read the output and
+  judge. Observed clean phrasings, to calibrate against (append as you see more):
+  - `The diagnostic refactor preserves existing runtime behavior, and the runbook
+    corrections align with the CLI and persisted error semantics. No actionable
+    regressions were found.`
+
+  Note the shape rather than the words: a one-line characterisation of what the
+  diff does, then an explicit negative finding statement. A codex pass that
+  summarises the diff and then stops *without* that negative statement is
+  ambiguous, not clean.
 - Claude reviewer: exit 0, `jq` succeeded, and the result is exactly
   `No findings.` (allow surrounding whitespace) — it *is* prompted, so this is
   contractual.
