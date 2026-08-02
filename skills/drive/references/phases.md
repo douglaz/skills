@@ -226,6 +226,8 @@ carry the previous bead's closure into its diff. Instead:
 - **The scope is empty** → there is no next branch, and reporting DONE while a fresh clone
   still shows the bead open is a lie. Open one small metadata PR (bead closure + final
   `DRIVE.md`) and land it through the same gates. DONE is not reached until it merges.
+  Write that `DRIVE.md` as `**Phase:** DONE · **Pending:** metadata PR #N`, so a session
+  resuming after a restart queries `#N` instead of stopping at a DONE that has not landed.
 
 Either way the tree is clean before BUILD re-enters, and nothing reaches the default
 branch unreviewed.

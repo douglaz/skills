@@ -156,7 +156,7 @@ wants to re-run a phase.
 | **BUILD** | A ready bead exists | `orchestrating-with-rb-lite` (one bead = one branch) | rb-lite exits clean **and** you independently ran the gate |
 | **PROVE** | Bead's deliverable is a test/gate, or the change touches money/data/infra | gate folded into the BUILD task, **or** a separate test bead run through `testing-with-rb-lite` — decide *before* BUILD starts, since a second rb-lite run on the same branch is forbidden | The gate **ran** and printed green, with the real exit code |
 | **HARDEN** | Branch has unreviewed substantive code | `multi-reviewer-loop` (its "ask the user at the end" step is satisfied by the drive goal — keep going; its stop-list still applies), then a final pinned `codex review --base <ref>` | `multi-reviewer-loop` reports `CLEAN` — both reviewers clean **and** its consistency pass clean, on the same tree; gate green at a real exit code |
-| **LAND** | Nothing uncommitted or unreviewed is left in the tree, and the branch tip **is** the tree HARDEN went clean on | `pr-with-codex-bot-review` | Merged SHA is that same SHA and both bots cleared **it**; branch reset; bead closed and `DRIVE.md` updated **by a reviewed path** — never as a commit pushed after clearance (see below) |
+| **LAND** | Nothing uncommitted or unreviewed is left in the tree, and `Cleared:` in `DRIVE.md` names a SHA **equal to the branch tip**. A `Phase: LAND` record without that match is an interrupted HARDEN, not an entry ticket | `pr-with-codex-bot-review` | Merged SHA is that same SHA and both bots cleared **it**; branch reset; bead closed and `DRIVE.md` updated **by a reviewed path** — never as a commit pushed after clearance (see below) |
 | → **BUILD** | More ready beads **in scope** | — | loop until the scoped set is empty — not the repository backlog |
 
 Full per-phase mechanics, including how to skip phases legitimately, live in
@@ -217,6 +217,13 @@ than left to be discovered when the gate fails.
 it. The panel clears a tree that already says LAND, the tip stays that SHA, and nothing is
 added between clearance and merge.
 
+Writing the phase ahead of the event costs you the record's self-sufficiency, so record
+the clearance too: when the panel goes clean, set `**Cleared:** <sha>` — in the working
+tree, uncommitted, since committing it would be the very post-clearance commit this
+forbids. It is a resume aid, not part of the merged artifact. **LAND is admissible only
+while `Cleared:` equals the tip**, which is what stops a session interrupted mid-panel
+from resuming straight into a merge (see Guard 4).
+
 Two consequences worth stating, because getting them wrong is the loop:
 
 - **`Phase: LAND` on a branch whose panel has not yet cleared means "LAND is next", not
@@ -236,7 +243,11 @@ incident this section exists for, so it does not get an exception for being ours
 - **A scoped bead remains** → carry the closure and the `DRIVE.md` update into the next
   bead's branch. It rides that PR through the panel and both bots with everything else.
 - **The scope is empty** → open one small metadata PR (bead closure + final `DRIVE.md`)
-  and land it through the same gates. DONE is not reached until it merges.
+  and land it through the same gates. DONE is not reached until it merges. That final
+  `DRIVE.md` reads `**Phase:** DONE · **Pending:** metadata PR #N` — DONE *conditional on
+  a PR you can query*. Plain `DONE` would make a resumed session stop before the PR lands;
+  leaving it at `LAND` would mean the default branch never records DONE at all. See
+  Guard 4 on why `Pending:` is resolved by querying rather than by another commit.
 
 Do not commit them to the default branch and push, even where the branch permits it and
 the repo's history is full of exactly that. That history is a convention about *where*
@@ -337,6 +348,7 @@ section is the authority on ordering; this one only records that the exception e
 
 **Scope:** epic acme-M2 (beads acme-40..acme-49) — the ONLY beads this drive may take
 **Phase:** BUILD · **Bead:** acme-42 · **Branch:** acme-42-retry-budget
+**Cleared:** — · **Pending:** —
 **Gate:** `nix develop -c ./check.sh` · last green 2026-08-01 (exit 0)
 
 ## Done
@@ -355,6 +367,27 @@ acme-43 (blocked on 42) → acme-44 → re-audit graph
 ```
 
 Commit it with the work. Keep it under a screen — it is a resume point, not a log.
+
+**`Cleared:` and `Pending:` are what make the early-written phases resumable.** Writing
+`Phase: LAND` before the panel finishes (above) means the record alone can no longer prove
+the tip was reviewed — a session that dies mid-panel leaves a record saying LAND, and a
+fresh session that trusts the record would merge an unreviewed tip. These two fields close
+that, and both are resolved by *querying*, so neither needs a commit after the fact:
+
+- **`Cleared: <sha>`** — written only when the panel actually goes clean, naming the tree
+  it cleared. **LAND is admissible only when `Cleared:` equals the current tip.** Absent,
+  stale, or unequal → you are still in HARDEN whatever the `Phase:` line says; re-run the
+  panel. This is the same SHA that appears as `panel clean on` in the three-SHA check.
+- **`Pending: metadata PR #N`** — set when the final `DRIVE.md` rides a metadata PR. A
+  record reading `Phase: DONE` with a `Pending:` PR means *"DONE once #N merges"*, and a
+  resumed session checks `#N`: merged → the drive really is done; open → go finish landing
+  it. Without this, the merged file has to state its own post-merge state, which it cannot:
+  writing `DONE` makes a resumed session stop before the PR lands, and writing `LAND`
+  leaves the default branch never recording DONE at all.
+
+This is the one place the record is *not* self-sufficient, and it is deliberate: both
+fields name something checkable rather than asserting a status. Treat a `Phase:` line that
+disagrees with them as the tree disagreeing with the record — report it, do not round up.
 
 **`Scope:` is the one canonical definition and every phase reads it.** `drive-status`
 counts the whole repository — it cannot know your scope — so its bead numbers and its

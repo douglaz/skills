@@ -294,7 +294,7 @@ gh api repos/<owner>/<repo>/issues/<N>/reactions \
 |---|---|---|
 | (empty) | Bot hasn't picked up the PR yet | Wait or `@codex review` |
 | `eyes` | Bot is reviewing | Wait |
-| `+1` | Bot approves with no concerns | Merge (after CI green) |
+| `+1` | Bot approves with no concerns — **of the tree it read**, which is not always the tip | Go to § 7; do not merge from here |
 
 Typical bot timing: 5-30 minutes from open. On docs-only or tiny PRs the bot still
 reacts (saw `+1` on PR #191's pure-docs change about 20 min after open) — there's
@@ -320,8 +320,11 @@ gh api repos/<owner>/<repo>/pulls/<N>/comments \
   | jq -r '.[] | "\(.commit_id[0:8]) \(.body | split("\n")[0])"'
 ```
 
-When reaction is `+1` AND CI is green, merge. The boilerplate review wrapper plus
-zero outstanding line comments confirms it.
+**`+1` plus green CI is not the merge condition — § 7 is.** This section only tells you
+the bot is *finished*; § 7 decides whether it finished on the tree you are about to merge.
+Two things checked nowhere in this section can each make a `+1` misleading: the reaction
+carries no SHA, so after a force-push it may belong to the previous head, and CodeRabbit
+returns `SUCCESS` when it *skips* a review entirely. Read § 7 before merging, always.
 
 ### 6. Address findings, if any
 
