@@ -42,7 +42,9 @@ file-lock and a do-NOT-build list up front, hard brake at 2× budget or round 4)
 not a separate request), and **durable state** (`DRIVE.md` at the repo root, so
 `status?` is answered before it is asked and a fresh session resumes cleanly).
 
-A short stop-list still ends a turn: anything irreversible or outward-facing, a design
+A short stop-list still ends a turn. It does not cover landing the drive's own work —
+its branch, its PR, `--force-with-lease` on that branch, the squash-merge once gates are
+green — which the goal authorizes. It covers anything leaving the repo or unrecoverable: a design
 fork on a money/consensus/data-loss path, the cross-cutting tell (a second review round
 adding another consumer of the same concept), a blown scope budget, or a goal that
 turned out to be wrong. The rationale for each rule, with the transcript evidence

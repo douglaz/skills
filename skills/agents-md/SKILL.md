@@ -12,7 +12,7 @@ description: >-
   point of AGENTS.md is that the fix travels with the repository instead of
   living in one machine's local config. Not for project-specific architecture
   notes, which belong outside the managed block and are written by a human.
-argument-hint: "[--check | --update] [path to repo]"
+argument-hint: "[--check] [path to repo]"
 allowed-tools:
   - Bash
   - Read
@@ -47,6 +47,17 @@ carefully written file in the repo, and clobbering it to insert boilerplate is a
 much worse outcome than not running at all.
 
 ## Workflow
+
+### 0. Resolve the target repo
+
+Default to the current repo. If the user named a path, `cd` there first and confirm it is
+a git repository — every step below reads and writes relative to the working directory, so
+running them against the wrong repo is the one mistake that cannot be undone by re-running.
+
+```bash
+[ -n "$TARGET" ] && cd "$TARGET"
+git rev-parse --show-toplevel || { echo "not a git repository"; exit 1; }
+```
 
 ### 1. Read what is already there
 
@@ -90,7 +101,7 @@ pin a permanently red gate into every future agent's instructions. If you cannot
 find a real gate, drop the line and say so; a missing gate line is honest, a
 wrong one is worse than nothing.
 
-### 3a. `--check` stops here
+### 2a. `--check` stops here
 
 `--check` is read-only. Report which blocks exist, whether the discipline block
 matches the current canonical text, and what the detected gate is — then stop. Do

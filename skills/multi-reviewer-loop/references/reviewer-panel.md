@@ -400,7 +400,10 @@ jq -er 'if .is_error then error(.result // "err") else (.result // empty) end' \
 ```
 
 On a `--reviewers codex` pinned run, use
-`codex exec --sandbox read-only "$(cat ...)"` with the same prompt instead —
+`codex exec --sandbox read-only "$(cat ...)" </dev/null` with the same prompt instead
+(the `</dev/null` for the same reason as the panel invocations above — a reviewer that
+decides to read stdin blocks until the timeout kills it, which looks like a slow review
+rather than a stuck one) —
 `codex review --base` cannot take one. The `--sandbox read-only` is not optional:
 `codex exec` is a general coding agent, and if the local config is
 workspace-writable it may try to *fix* a contradiction, mutating the tree during
