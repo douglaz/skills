@@ -156,7 +156,7 @@ wants to re-run a phase.
 | **BUILD** | A ready bead exists | `orchestrating-with-rb-lite` (one bead = one branch) | rb-lite exits clean **and** you independently ran the gate |
 | **PROVE** | Bead's deliverable is a test/gate, or the change touches money/data/infra | gate folded into the BUILD task, **or** a separate test bead run through `testing-with-rb-lite` — decide *before* BUILD starts, since a second rb-lite run on the same branch is forbidden | The gate **ran** and printed green, with the real exit code |
 | **HARDEN** | Branch has unreviewed substantive code | `multi-reviewer-loop` (its "ask the user at the end" step is satisfied by the drive goal — keep going; its stop-list still applies), then a final pinned `codex review --base <ref>` | `multi-reviewer-loop` reports `CLEAN` — both reviewers clean **and** its consistency pass clean, on the same tree; gate green at a real exit code |
-| **LAND** | Nothing uncommitted or unreviewed is left in the tree, and `Cleared:` in `DRIVE.md` names a SHA **equal to the branch tip**. A `Phase: LAND` record without that match is an interrupted HARDEN, not an entry ticket | `pr-with-codex-bot-review` | Merged SHA is that same SHA and both bots cleared **it**; branch reset; bead closed and `DRIVE.md` updated **by a reviewed path** — never as a commit pushed after clearance (see below) |
+| **LAND** | Nothing uncommitted or unreviewed is left in the tree **except the `Cleared:` marker**, and that marker names a SHA **equal to the branch tip**. A `Phase: LAND` record without that match is an interrupted HARDEN, not an entry ticket | `pr-with-codex-bot-review` | Merged SHA is that same SHA and both bots cleared **it**; marker discarded, branch reset; bead closed and `DRIVE.md` updated **by a reviewed path** — never as a commit pushed after clearance (see below) |
 | → **BUILD** | More ready beads **in scope** | — | loop until the scoped set is empty — not the repository backlog |
 
 Full per-phase mechanics, including how to skip phases legitimately, live in
@@ -223,6 +223,21 @@ tree, uncommitted, since committing it would be the very post-clearance commit t
 forbids. It is a resume aid, not part of the merged artifact. **LAND is admissible only
 while `Cleared:` equals the tip**, which is what stops a session interrupted mid-panel
 from resuming straight into a merge (see Guard 4).
+
+**Discard the marker the moment the merge lands, before switching branches.** It is an
+uncommitted edit to a *tracked* file whose committed content differs between the branch
+and the default branch, so `git checkout <default>` aborts with `Your local changes to the
+following files would be overwritten by checkout` and the cleanup stops dead — merged, but
+unable to reset the branch or close the bead:
+
+```bash
+gh pr merge <N> --squash --delete-branch
+git checkout -- DRIVE.md          # marker has done its job; drop it BEFORE the switch
+git checkout <default> && git fetch origin <default> && git reset --hard origin/<default>
+```
+
+This is the one piece of state that is deliberately never committed, so it is also the one
+piece git will not carry across a branch switch for you.
 
 Two consequences worth stating, because getting them wrong is the loop:
 

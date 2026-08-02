@@ -206,7 +206,10 @@ Follow `pr-with-codex-bot-review`. The parts that bite:
   `Reviewed commit:` SHA against the tip before merging, not the reaction.
 - A CodeRabbit `SUCCESS` that says `Review skipped` is not a review. Read the "Files
   skipped from review" list; re-trigger unless the skip was expected.
-- Squash-merge, then reset the local branch.
+- Squash-merge, then **discard the uncommitted `Cleared:` marker before switching branches**
+  (`git checkout -- DRIVE.md`). It is a tracked file differing between branches, so
+  `git checkout <default>` otherwise aborts and leaves the PR merged but nothing cleaned up.
+- Reset the local branch.
 
 **Exit gate:** merged at the SHA both bots cleared, branch reset, bead closed
 (`br close <id>`), `DRIVE.md` updated — the last two through a reviewed path.
