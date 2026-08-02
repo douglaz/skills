@@ -1,0 +1,34 @@
+{
+  "skill_name": "drive",
+  "purpose": "Triggering accuracy. drive sits among sibling skills it delegates to, so the risk is not under-triggering alone but stealing work that belongs to a sibling. Negatives are deliberately near-misses that should route elsewhere, not obvious non-matches.",
+  "how_to_run": [
+    "The scripted optimizer (skill-creator scripts/run_loop.py) does NOT work for this skill.",
+    "Its detector inspects only the FIRST tool call and scores anything that is not Skill/Read as 'did not trigger'. An orchestration skill's first move is orienting (Bash), so the score is pinned to 0 regardless of the description -- five different descriptions produced byte-identical scores.",
+    "Measure manually instead: run `claude -p <query> --output-format stream-json --verbose` in a realistic fixture and check whether Skill(drive) appears ANYWHERE in the tool sequence.",
+    "Keep a positive control in the set (N1 below). It fires first-tool on multi-reviewer-loop, so if N1 stops working the environment is broken, not the description."
+  ],
+  "fixture": "git repo with docs/specs/<slug>.md, a Cargo.toml, and 2 ready beads -- drive-status reports BUILD.",
+  "last_measured": "2026-08-01, claude-opus-5, 3 runs per positive",
+  "evals": [
+    {"id": 1,  "query": "take the M2 milestone in ~/projects/lnrent from spec all the way to merged. don't stop and ask me between steps, i'll be out this afternoon", "should_trigger": true, "measured": "3/3"},
+    {"id": 2,  "query": "where are we on the rustnroll multiplayer work and what's next?", "should_trigger": true, "measured": "3/3"},
+    {"id": 3,  "query": "i closed my laptop yesterday halfway through the auth refactor. pick it back up wherever it left off", "should_trigger": true},
+    {"id": 4,  "query": "i want multi-tenant support in the billing service. spec it, break it into beads, build it, review it, ship it. just go", "should_trigger": true},
+    {"id": 5,  "query": "keep going until the ready beads are drained for the payments epic", "should_trigger": true},
+    {"id": 6,  "query": "run the whole pipeline on the new webhook retry feature", "should_trigger": true},
+    {"id": 7,  "query": "review and fix this branch until both reviewers are clean, then open the PR and squash merge it", "should_trigger": true, "measured": "0/2", "known_limitation": "Spans HARDEN+LAND but names outcomes rather than tools, and triggers NOTHING -- not drive, not multi-reviewer-loop. The gap is in both descriptions. Left unfixed deliberately: tuning two skills against one query risks the cells that currently measure clean."},
+    {"id": 8,  "query": "implement bead lnr-42 with rb-lite and then land it", "should_trigger": true},
+    {"id": 9,  "query": "what phase is this repo in right now", "should_trigger": true},
+    {"id": 10, "query": "here's the goal: get the CSV importer rewritten and merged. handle it end to end, check back with me only if you hit something you genuinely can't decide", "should_trigger": true},
+    {"id": 11, "query": "run the review loop on this branch — codex plus fable, iterate until they're both clean", "should_trigger": false, "belongs_to": "multi-reviewer-loop", "measured": "correct (positive control)"},
+    {"id": 12, "query": "use rb-lite to fix the null deref in the csv parser, it crashes on files with empty rows", "should_trigger": false, "belongs_to": "orchestrating-with-rb-lite"},
+    {"id": 13, "query": "have rb-lite write an integration test for the refund reconciliation path and actually run it green, not just review it", "should_trigger": false, "belongs_to": "testing-with-rb-lite"},
+    {"id": 14, "query": "break docs/PLAN.md into beads with proper dependencies", "should_trigger": false, "belongs_to": "plan-to-beads-transfer"},
+    {"id": 15, "query": "these beads feel vague and there's a bunch of duplication, tighten the graph up", "should_trigger": false, "belongs_to": "bead-polish-loop"},
+    {"id": 16, "query": "get a second opinion on the bead graph before we start implementing", "should_trigger": false, "belongs_to": "second-model-bead-audit"},
+    {"id": 17, "query": "open a PR for this and let the codex bot review it", "should_trigger": false, "belongs_to": "pr-with-codex-bot-review"},
+    {"id": 18, "query": "fix the typo in the README, it says 'recieve' instead of 'receive'", "should_trigger": false, "measured": "correct"},
+    {"id": 19, "query": "the k3s node is sitting at 95% memory, figure out what's eating it", "should_trigger": false},
+    {"id": 20, "query": "whats the difference between br ready and br list again", "should_trigger": false}
+  ]
+}
