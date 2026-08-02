@@ -148,7 +148,7 @@ fi
 # composed gate ("a && b") runs entirely INSIDE the devshell — `nix develop -c a && b`
 # would run b outside it, against the system toolchain.
 if [[ -f flake.nix && -n "$GATE" && "$GATE" != nix* ]] && command -v nix >/dev/null 2>&1; then
-  if [[ "$GATE" == *"&&"* || "$GATE" == *"|"* ]]; then
+  if [[ "$GATE" == *"&&"* ]]; then
     GATE="nix develop -c bash -c '${GATE}'"
   else
     GATE="nix develop -c ${GATE}"
@@ -214,7 +214,7 @@ elif ! git remote -v 2>/dev/null | grep -qi 'github\.com'; then
   # would be a claim we have not checked, so name the reason instead.
   PR_STATE="n/a-non-github"
 else
-  if PR_JSON=$(gh pr view --json number,state,reviewDecision,mergeable 2>/dev/null) && [[ -n "$PR_JSON" ]]; then
+  if PR_JSON=$(gh pr view --json number,state,reviewDecision 2>/dev/null) && [[ -n "$PR_JSON" ]]; then
     PR_NUM=$(echo "$PR_JSON" | jq -r '.number // ""' 2>/dev/null)
           # reviewDecision is an empty STRING when undecided, not null, so `//` never
       # fires — test for emptiness explicitly or the label is dead in the common case.
@@ -226,7 +226,7 @@ else
   fi
 fi
 
-DRIVE_MD="absent"; DRIVE_PHASE=""; DRIVE_PHASE_LINE_PRESENT=false
+DRIVE_MD="absent"; DRIVE_PHASE=""
 if [[ -f DRIVE.md ]]; then
   DRIVE_MD="present"
   # Case-insensitive and non-alpha-tolerant on purpose: `**Phase:** build` is a plausible
@@ -235,8 +235,6 @@ if [[ -f DRIVE.md ]]; then
   # token is present, uppercase it, and let the validity check below decide.
   DRIVE_PHASE=$(grep -m1 -oiE '\*\*Phase:\*\*[[:space:]]*[A-Za-z_-]+' DRIVE.md 2>/dev/null \
     | sed -E 's/.*\*\*[[:space:]]*//' | tr '[:lower:]' '[:upper:]' || echo "")
-  DRIVE_PHASE_LINE_PRESENT=false
-  grep -qiE '\*\*Phase:\*\*' DRIVE.md 2>/dev/null && DRIVE_PHASE_LINE_PRESENT=true
 fi
 
 # --- phase inference ---
@@ -334,7 +332,7 @@ if $JSON; then
     --arg pr_state "$PR_STATE" --arg pr_num "$PR_NUM" --arg drive_md "$DRIVE_MD" \
     --arg drive_phase "$DRIVE_PHASE" --arg phase "$PHASE" --arg tree_phase "$TREE_PHASE" \
     --arg phase_source "$PHASE_SOURCE" --arg record_valid "$RECORD_VALID" \
-    --arg blocked_only "$BLOCKED_ONLY" --arg ahead "$AHEAD" \
+    --arg ahead "$AHEAD" \
     --arg br_ready "$BR_READY" --arg br_unresolved "$BR_UNRESOLVED" --arg br_blocked "$BR_BLOCKED" \
     --arg br_inprogress "$BR_INPROGRESS" \
     --argjson dirty "${DIRTY_COUNT:-0}" --argjson untracked "${UNTRACKED:-0}" \
@@ -346,8 +344,7 @@ if $JSON; then
       pr:{number:$pr_num,state:$pr_state},drive_md:$drive_md,
       recorded_phase:$drive_phase,tree_phase:$tree_phase,phase:$phase,
       phase_source:$phase_source,record_valid:($record_valid=="true"),
-      phase_disagreement:(($record_valid=="true") and $drive_phase!=$tree_phase),
-      blocked_only:($blocked_only=="true")}' 2>/dev/null \
+      phase_disagreement:(($record_valid=="true") and $drive_phase!=$tree_phase)}' 2>/dev/null \
   || {
     # jq-free fallback. Escape backslashes then quotes: git permits `"` in a branch name
     # and a repo path may contain either, so raw interpolation can emit invalid JSON.
@@ -368,8 +365,10 @@ printf 'specs      %s\n' "$(printf '%s' "${SPECS:-<none>}" | paste -sd, -)"
 printf 'pr         %s%s\n' "$PR_STATE" "${PR_NUM:+ (#$PR_NUM)}"
 printf 'DRIVE.md   %s%s\n' "$DRIVE_MD" "${DRIVE_PHASE:+ (says $DRIVE_PHASE)}"
 printf '\nphase: %s   (source: %s)\n' "$PHASE" "$PHASE_SOURCE"
-if $DRIVE_PHASE_LINE_PRESENT && ! $RECORD_VALID; then
-  printf '  ⚠ DRIVE.md has a Phase line that does not name a known phase (%s) — IGNORED, this\n    phase came from the tree. Valid: SHAPE GRAPH BUILD PROVE HARDEN LAND DONE.\n' "${DRIVE_PHASE:-unparseable}"
+# A present DRIVE.md whose phase cannot be used is the silently-resolved fallback
+# whether the Phase line is malformed or missing entirely — warn on both.
+if [[ "$DRIVE_MD" == "present" ]] && ! $RECORD_VALID; then
+  printf '  ⚠ DRIVE.md is present but no usable Phase line was found (%s) — IGNORED, this\n    phase came from the tree. Valid: SHAPE GRAPH BUILD PROVE HARDEN LAND DONE.\n' "${DRIVE_PHASE:-none}"
 elif $RECORD_VALID && [[ "$DRIVE_PHASE" != "$TREE_PHASE" ]]; then
   printf '  ⚠ the record says %s, the tree looks like %s. The record wins — it is written at\n    every transition and several phases are indistinguishable from git. Override only\n    with a stated reason.\n' "$DRIVE_PHASE" "$TREE_PHASE"
 fi
