@@ -280,10 +280,12 @@ infer() {
   # the warning line rather than silently starting another review cycle.
   # Committed work only means HARDEN when it is actually code. Spec-only commits are
   # interrupted SHAPE (its exit gate — the xhigh review — has not run); bead-only commits
-  # are GRAPH. On the DEFAULT branch, doc/bead commits are the delayed bead-closure push
-  # LAND prescribes, not a phase signal — fall through to the bead-derived states rather
-  # than sending the driver back through SHAPE/GRAPH. Substantive code on the default
-  # branch is still unreviewed work and still means HARDEN.
+  # are GRAPH. On the DEFAULT branch, doc/bead commits are a stranded bead closure — LAND
+  # no longer prescribes committing one there (it carries the closure into the next bead's
+  # branch, or opens a metadata PR), so this is a recovery path, not a state to steer by:
+  # fall through to the bead-derived states rather than sending the driver back through
+  # SHAPE/GRAPH. Substantive code on the default branch is still unreviewed work and still
+  # means HARDEN.
   if [[ "$BRANCH_COMMITS" =~ ^[0-9]+$ && "$BRANCH_COMMITS" -gt 0 ]]; then
     case "$BRANCH_DIFF_KIND" in
       doc)  $ON_DEFAULT || { echo "SHAPE"; return; } ;;

@@ -98,8 +98,21 @@ is also done. CodeRabbit's signals:
      --jq '.statusCheckRollup[] | select(.context == "CodeRabbit") | "\(.state) at \(.startedAt)"'
    ```
 
-   `SUCCESS` with body `Review skipped` is normal on trivial diffs (e.g., the bot
-   decided the PR didn't warrant review). Treat that as a pass.
+   `SUCCESS` is not the same as "reviewed". CodeRabbit also returns `SUCCESS` when it
+   **skips** — on a rate limit, or when it judges the diff similar to previous changes —
+   and names what it skipped in a "Files skipped from review" list in the walkthrough
+   comment. Read that list before treating the check as a pass:
+
+   ```bash
+   gh api repos/<owner>/<repo>/issues/<N>/comments \
+     --jq '.[] | select(.user.login == "coderabbitai[bot]") | .body' \
+     | grep -A20 -i 'skipped from review'
+   ```
+
+   A skip on files this PR does not meaningfully change is fine. A rate-limit skip, an
+   unexplained one, or one covering files central to the change means **nobody reviewed
+   them** — `@coderabbitai review` to re-trigger and wait. Say which reason applied;
+   "the check was green" is not a review.
 
 2. **Issue comment** — `coderabbitai[bot]` posts an auto-summary / walkthrough as a
    regular PR comment (the `issues/<N>/comments` endpoint, NOT the `pulls/<N>/comments`
@@ -331,9 +344,12 @@ For each P-badge finding:
 
 Merge when the reaction-based check passes:
 
-- Codex bot reaction on PR body is `+1`.
+- Codex bot reaction on PR body is `+1`, **and** the tree it reacted to is the tip. The
+  reaction carries no SHA; its review wrapper does (`**Reviewed commit:** <sha>`). Compare
+  that against the head — a `+1` left before your last force-push approves the old tree.
 - CI is green.
-- CodeRabbit status check is `SUCCESS` (or absent — repo doesn't have it).
+- CodeRabbit status check is `SUCCESS` **and it was a review, not a skip** — check the
+  "Files skipped from review" list per the query above.
 - No outstanding line comments against the current head SHA, from EITHER bot.
 
 Don't merge when:
@@ -343,6 +359,7 @@ Don't merge when:
 - Codex bot has no reaction yet — `@codex review` to wake it up; don't preemptively merge.
 - CodeRabbit status is `PENDING` — wait, even if codex already approved.
 - CodeRabbit status is `FAILURE` or it left unaddressed line comments on the current head — address.
+- CodeRabbit returned `SUCCESS` by skipping files this change actually touches — re-trigger.
 - CI failed and you haven't determined whether it's flaky or real.
 - You force-pushed and reaction still references the old SHA — wait at least 10 min
   after the force-push, or `@codex review` (and `@coderabbitai review`) to re-trigger.

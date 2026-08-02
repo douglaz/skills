@@ -202,21 +202,33 @@ Follow `pr-with-codex-bot-review`. The parts that bite:
   docs PR is not a failure; re-trigger with `@codex review` when you need a pass.
 - Address findings by amend + force-push **to your own PR branch** (allowed; force-pushing
   over someone else's work is stop-list).
+- After any amend, the codex `+1` may still be the *previous* head's. Compare the wrapper's
+  `Reviewed commit:` SHA against the tip before merging, not the reaction.
+- A CodeRabbit `SUCCESS` that says `Review skipped` is not a review. Read the "Files
+  skipped from review" list; re-trigger unless the skip was expected.
 - Squash-merge, then reset the local branch.
 
-**Exit gate:** merged, bead closed (`br close <id>`), branch reset, `DRIVE.md` updated.
+**Exit gate:** merged at the SHA both bots cleared, branch reset, bead closed
+(`br close <id>`), `DRIVE.md` updated — the last two through a reviewed path.
 
-Both of those write tracked files (`.beads/*.jsonl`, `DRIVE.md`) *after* the merge, on the
-default branch — which the stop-list forbids you to push to when it is protected. Do not
-leave them uncommitted, or the next BUILD starts from a dirty base and silently carries the
-previous bead's closure into its diff. Commit them on the default branch and push if the
-branch allows it; if it does not, carry the commit into the next bead's branch so it lands
-with that PR. Either way the tree is clean before BUILD re-enters.
+`DRIVE.md`'s move to `**Phase:** LAND` belongs in the final pre-HARDEN sweep, so the panel
+clears a tree that already carries it and nothing is added between clearance and merge.
+See `SKILL.md` § "Bookkeeping goes in before the panel, or through its own PR".
 
-**For the last bead there is no next branch.** On a protected default branch that leaves the
-closure stranded locally: you report DONE while a fresh clone still shows the bead open.
-Open one small metadata PR (bead closure + final `DRIVE.md`) and land it — DONE is not
-reached until that merges.
+`br close` cannot: closing before the merge marks work done that may never land, so the
+closure is inherently post-merge. It writes `.beads/*.jsonl` on the default branch, and
+committing it there is exactly the unreviewed-bookkeeping failure LAND now forbids. Do not
+leave it uncommitted either — the next BUILD would start from a dirty base and silently
+carry the previous bead's closure into its diff. Instead:
+
+- **A scoped bead remains** → carry the closure commit (plus the `DRIVE.md` update) into
+  the next bead's branch, where it rides that PR through the panel and both bots.
+- **The scope is empty** → there is no next branch, and reporting DONE while a fresh clone
+  still shows the bead open is a lie. Open one small metadata PR (bead closure + final
+  `DRIVE.md`) and land it through the same gates. DONE is not reached until it merges.
+
+Either way the tree is clean before BUILD re-enters, and nothing reaches the default
+branch unreviewed.
 
 Then go straight back to BUILD if a **scoped** ready bead remains — `br ready` filtered to
 the goal's bead set, exactly as at BUILD entry. That loop is the whole point; do not stop to

@@ -120,9 +120,16 @@ wrappers, so a PR that two bots have approved by *reaction* still prints `no-rev
 `+1` from `chatgpt-codex-connector[bot]` lives on the issue reactions endpoint, and
 CodeRabbit's verdict is a status check. Confirm with `pr-with-codex-bot-review`'s queries
 before believing either that a reviewed PR is unreviewed (you re-run HARDEN for nothing)
-or that a `SUCCESS` check means a review happened (CodeRabbit reports `SUCCESS` when it
-*skips* — on a rate limit, or when it judges the diff similar to previous changes, which
-it names in a "Files skipped from review" list worth reading).
+or that a `SUCCESS` check means a review happened.
+
+That second direction is a LAND gate, not a caution. **CodeRabbit reports `SUCCESS` when
+it *skips*** — on a rate limit, or when it judges the diff similar to previous changes —
+and LAND requires that both bots cleared the tree, which a skip did not do. So a `SUCCESS`
+check counts as cleared only once you have read the walkthrough comment's "Files skipped
+from review" list and can say the skip was expected. An unexplained skip, a rate-limit
+skip, or a skipped file that is part of this change is **not cleared**: `@coderabbitai
+review` to re-trigger, and wait. `pr-with-codex-bot-review` § 7 carries the same rule and
+the query.
 
 **The record wins when it exists; the tree wins when it does not.** `DRIVE.md` is written
 at every transition, and several phases leave no trace git can distinguish — a `PROVE`
@@ -149,7 +156,7 @@ wants to re-run a phase.
 | **BUILD** | A ready bead exists | `orchestrating-with-rb-lite` (one bead = one branch) | rb-lite exits clean **and** you independently ran the gate |
 | **PROVE** | Bead's deliverable is a test/gate, or the change touches money/data/infra | gate folded into the BUILD task, **or** a separate test bead run through `testing-with-rb-lite` — decide *before* BUILD starts, since a second rb-lite run on the same branch is forbidden | The gate **ran** and printed green, with the real exit code |
 | **HARDEN** | Branch has unreviewed substantive code | `multi-reviewer-loop` (its "ask the user at the end" step is satisfied by the drive goal — keep going; its stop-list still applies), then a final pinned `codex review --base <ref>` | `multi-reviewer-loop` reports `CLEAN` — both reviewers clean **and** its consistency pass clean, on the same tree; gate green at a real exit code |
-| **LAND** | Nothing uncommitted or unreviewed is left in the tree, and the branch tip **is** the tree HARDEN went clean on | `pr-with-codex-bot-review` | Merged SHA is that same SHA and both bots cleared **it**; bead closed; `DRIVE.md` updated and committed; branch reset |
+| **LAND** | Nothing uncommitted or unreviewed is left in the tree, and the branch tip **is** the tree HARDEN went clean on | `pr-with-codex-bot-review` | Merged SHA is that same SHA and both bots cleared **it**; branch reset; bead closed and `DRIVE.md` updated **by a reviewed path** — never as a commit pushed after clearance (see below) |
 | → **BUILD** | More ready beads **in scope** | — | loop until the scoped set is empty — not the repository backlog |
 
 Full per-phase mechanics, including how to skip phases legitimately, live in
@@ -170,18 +177,72 @@ it gets violated, because bookkeeping does not feel like a change.
 
 So, before merging, name the three SHAs out loud and refuse if they differ:
 
-```
+```text
 panel clean on : <sha>
-bots cleared   : <sha>   # codex reaction + CodeRabbit check, both on this one
+bots cleared   : <sha>
 merging        : <sha>
 ```
 
-The failure this prevents is not hypothetical: it looks like committing the bead update
-straight to the default branch as "just bookkeeping" while the reviewed PR merges
-separately, leaving the default branch carrying a commit no reviewer and no bot ever saw.
-If the repo's own history shows bookkeeping commits landing directly on the default
-branch, that is a convention about *where they go*, not a licence to skip review —
-put them on the branch and let them ride through with the rest.
+**Get the middle one from the review wrapper, not from the reaction.** The codex bot's
+`+1` is a reaction on the issue — it carries a timestamp and no SHA, so after an amend and
+force-push a lingering `+1` from the previous head reads exactly like approval of the
+current one. Its review wrapper comment *does* name the tree it read (`**Reviewed
+commit:** <sha>`), and that is the value to compare:
+
+```bash
+gh api repos/<owner>/<repo>/pulls/<N>/reviews \
+  --jq '.[] | select(.user.login|startswith("chatgpt-codex-connector"))
+        | .body | capture("Reviewed commit:[^0-9a-f]*(?<sha>[0-9a-f]{7,40})").sha'
+```
+
+(`[^0-9a-f]*` and not `\D*`: the wrapper writes the SHA inside backticks, and `\D` treats
+`a`–`f` as skippable, so a hash beginning with hex letters gets silently truncated to its
+tail — a comparison that looks like it works and passes whenever the SHA happens to start
+with a digit.)
+
+If the bot reacted `+1` without leaving a wrapper (its silent-approval path), you have no
+SHA anchor: `@codex review` and wait for one rather than reading the reaction as coverage
+of the current tip. CodeRabbit's check is per-commit, so its `SUCCESS` already refers to
+the head it ran on — but it still has to be a review and not a skip (see Phase 0).
+
+### Bookkeeping goes in before the panel, or through its own PR
+
+`DRIVE.md` and the beads JSONL are the two files this skill itself writes, so they are the
+ones most likely to land after clearance. Guard 4 rewrites `DRIVE.md` at every transition
+and LAND runs `br close` — neither is optional, so the ordering has to be stated rather
+than left to be discovered when the gate fails.
+
+**Before the merge — fold it into the final HARDEN sweep.** The commit that sets
+`**Phase:** LAND` is the *last commit before* the final panel run, not the first one after
+it. The panel clears a tree that already says LAND, the tip stays that SHA, and nothing is
+added between clearance and merge.
+
+Two consequences worth stating, because getting them wrong is the loop:
+
+- **`Phase: LAND` on a branch whose panel has not yet cleared means "LAND is next", not
+  "LAND has begun."** LAND's entry condition — tip equals the cleared SHA — is what
+  actually admits it. The record is not lying; it is pointing one step ahead.
+- **A re-review round inside HARDEN does not rewrite the record back to `HARDEN`.** If the
+  panel finds something, fix it, commit, re-run the panel — the line still reads LAND
+  throughout. Rewriting it back is what turns "commit after clearance returns you to
+  HARDEN" into a cycle that never terminates, because every rewrite is itself a commit
+  after clearance.
+
+**After the merge — `br close` cannot ride that branch.** Closing the bead before the
+merge marks work done that may still fail to land, so the closure is genuinely post-merge
+and genuinely unreviewed if committed straight to the default branch. That is the exact
+incident this section exists for, so it does not get an exception for being ours:
+
+- **A scoped bead remains** → carry the closure and the `DRIVE.md` update into the next
+  bead's branch. It rides that PR through the panel and both bots with everything else.
+- **The scope is empty** → open one small metadata PR (bead closure + final `DRIVE.md`)
+  and land it through the same gates. DONE is not reached until it merges.
+
+Do not commit them to the default branch and push, even where the branch permits it and
+the repo's history is full of exactly that. That history is a convention about *where*
+bookkeeping goes, not a licence to skip review — and it is what leaves a default branch
+carrying a commit no reviewer and no bot ever saw while every dashboard still reports the
+work as reviewed.
 
 ### Sizing — do not run the whole machine for a typo
 
@@ -265,6 +326,12 @@ Maintain `DRIVE.md` at the repo root. Rewrite it at **every phase transition**, 
 starting the next phase. It exists so a fresh session resumes without re-deriving
 anything, and so "status?" is already answered.
 
+**One transition is written early: HARDEN→LAND.** Committing it *after* the panel clears
+would invalidate the clearance LAND then requires, so the `**Phase:** LAND` edit goes into
+the last commit *before* the final panel run, and HARDEN's own re-review rounds leave the
+line alone. See § "Bookkeeping goes in before the panel, or through its own PR" — that
+section is the authority on ordering; this one only records that the exception exists.
+
 ```markdown
 # DRIVE — <goal, one line>
 
@@ -300,7 +367,7 @@ but not its boundary, and will happily pick up unrelated work.
 
 At each transition, one compact block. No preamble, no re-explaining what the user asked.
 
-```
+```text
 ✅ BUILD acme-42 — clean in 2 rounds, 3 files, +180 LOC (budget 250)
    gate: nix develop -c ./check.sh → EXIT=0
    → HARDEN: launching codex + fable panel now
@@ -321,7 +388,7 @@ the hook confirm it is active.
 If the drive spans a long backlog and you have been stopping early, set a session goal so
 the harness enforces continuation:
 
-```
+```text
 /goal drain all ready beads for <project>
 ```
 

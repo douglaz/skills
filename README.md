@@ -33,7 +33,7 @@ The phase machine, and the skill each phase delegates to:
 | BUILD | `orchestrating-with-rb-lite` | rb-lite clean **and** you ran the gate yourself |
 | PROVE | `testing-with-rb-lite` | the gate ran green at a real exit code |
 | HARDEN | `multi-reviewer-loop` + a final pinned `codex review --base` | `multi-reviewer-loop` reports `CLEAN` (reviewers **and** consistency pass) |
-| LAND | `pr-with-codex-bot-review` | squash-merged, bead closed, `DRIVE.md` committed, branch reset |
+| LAND | `pr-with-codex-bot-review` | merged at the SHA both bots cleared, branch reset, bead closed and `DRIVE.md` committed via a reviewed path |
 
 Four guards automate what previously took a human nudge: **evidence** (run the real
 gate, never piped through `tail`, make new tests fail first), **scope budget** (a
