@@ -117,40 +117,26 @@ if present. **Never guess the phase.**
 
 ### Install the working agreement, once per repo
 
-Check for the discipline block and install it when it is missing or stale:
+Invoke the **`agents-md` skill** with `--check` — as a skill, not a shell command; it is a
+skill directory, not a PATH executable. `--check` is read-only and reports whether the
+block is present *and* current. If it says absent or stale, invoke `agents-md` without
+`--check`. It is a no-op on every later run.
 
-```bash
-grep -q 'agent-discipline-v1' AGENTS.md 2>/dev/null || echo "no discipline block"
-```
+These rules only bind agents that read them, and `AGENTS.md` is the only place they travel
+— including to the rb-lite implementers and reviewer panels this skill spawns. `agents-md`
+writes but never commits: leave the edit uncommitted and let the first BUILD branch carry
+it through review like any other change.
 
-If absent or stale, run `agents-md` before starting the first phase. It is a no-op on
-every later run, so this costs nothing after the first drive in a repo.
+### Reading the `pr` field
 
-Why here rather than "the user can run it themselves": these rules only bind agents that
-*read* them, and `AGENTS.md` is the only place they travel — committed, so every clone and
-both CLIs pick them up, including the rb-lite implementers and reviewer panels this skill
-spawns. A rule that lives only in this skill reaches nobody but you.
+Distrust it in both directions — it reads review wrappers, so a PR two bots approved by
+*reaction* still prints `no-review`, and a `SUCCESS` check may be a *skip* rather than a
+review. `pr-with-codex-bot-review` § 7 owns the rules for both and carries the queries.
 
-`agents-md` writes but never commits. Leave the edit uncommitted; the first BUILD branch
-carries it, so it rides that PR through the panel and both bots like any other change.
-Do not commit it straight to the default branch — that is the unreviewed-bookkeeping
-failure LAND exists to prevent, and it is not exempt for being ours.
-
-Its `pr` field is the one output to distrust in both directions. It reads review
-wrappers, so a PR that two bots have approved by *reaction* still prints `no-review` —
-`+1` from `chatgpt-codex-connector[bot]` lives on the issue reactions endpoint, and
-CodeRabbit's verdict is a status check. Confirm with `pr-with-codex-bot-review`'s queries
-before believing either that a reviewed PR is unreviewed (you re-run HARDEN for nothing)
-or that a `SUCCESS` check means a review happened.
-
-That second direction is a LAND gate, not a caution. **CodeRabbit reports `SUCCESS` when
-it *skips*** — on a rate limit, or when it judges the diff similar to previous changes —
-and LAND requires that both bots cleared the tree, which a skip did not do. So a `SUCCESS`
-check counts as cleared only once you have read the walkthrough comment's "Files skipped
-from review" list and can say the skip was expected. An unexplained skip, a rate-limit
-skip, or a skipped file that is part of this change is **not cleared**: `@coderabbitai
-review` to re-trigger, and wait. `pr-with-codex-bot-review` § 7 carries the same rule and
-the query.
+**Bot approval is never clearance.** LAND is admitted by the *local* `cleared` marker
+alone. A fresh clone has no marker by design, however thoroughly the bots approved — so
+"the bots already approved, no need to re-run HARDEN" is the bypass the derivation exists
+to prevent. Use PR state to avoid *duplicate bot rounds*, never to skip the panel.
 
 **The record wins when it exists; the tree wins when it does not.** `DRIVE.md` is written
 at every transition, and several phases leave no trace git can distinguish — a `PROVE`
@@ -177,7 +163,7 @@ wants to re-run a phase.
 | **BUILD** | A ready bead exists | `orchestrating-with-rb-lite` (one bead = one branch) | rb-lite exits clean **and** you independently ran the gate |
 | **PROVE** | Bead's deliverable is a test/gate, or the change touches money/data/infra | gate folded into the BUILD task, **or** a separate test bead run through `testing-with-rb-lite` — decide *before* BUILD starts, since a second rb-lite run on the same branch is forbidden | The gate **ran** and printed green, with the real exit code |
 | **HARDEN** | Branch has unreviewed substantive code | `multi-reviewer-loop` (its "ask the user at the end" step is satisfied by the drive goal — keep going; its stop-list still applies), then a final pinned `codex review --base <ref>` | `multi-reviewer-loop` reports `CLEAN` — both reviewers clean **and** its consistency pass clean, on the same tree; gate green at a real exit code |
-| **LAND** | The panel cleared this checkout and `cleared` still equals the tip (derived, never recorded — see Guard 4); base is an ancestor of the tip | `pr-with-codex-bot-review` | Both bots cleared the tip, base still fresh at merge time, squash-merged, branch reset; bead closed and `DRIVE.md` updated **by a reviewed path** |
+| **LAND** | The panel cleared this checkout and `cleared` still equals the tip (derived, never recorded — see Guard 4); base is an ancestor of the tip | `pr-with-codex-bot-review` | Every bot configured on the repo cleared the tip, base still fresh at merge time, squash-merged, branch reset; bead closed and `DRIVE.md` updated **by a reviewed path** |
 | → **BUILD** | More ready beads **in scope** | — | loop until the scoped set is empty — not the repository backlog |
 | **DONE** | The scope is empty — not the repository backlog | — | Any outstanding closure has merged. A `Pending:` PR that has not merged is `WAITING_FOR_MERGE`, not DONE |
 
@@ -228,8 +214,9 @@ A phase closes on evidence or it does not close.
   a closed bead is not a closed bead until you have seen the JSONL change:
 
   ```bash
-  br close <id>; git diff --stat -- '*.beads/*.jsonl'    # must be non-empty
+  br close <id>; git status --porcelain -- '*.beads*.jsonl'   # must be non-empty
   ```
+
 
 The rules above are what closes a *phase*. The fuller set on not lying about *edits* —
 `sed -i` succeeding on zero matches, `&` silently doubling a replacement — lives in the
@@ -312,40 +299,35 @@ acme-43 (blocked on 42) → acme-44 → re-audit graph
 
 Commit it with the work. Keep it under a screen — it is a resume point, not a log.
 
-**`Phase:` never reads `LAND`.** LAND is *derived*, from `cleared == tip`, and nothing
-else. A commit cannot honestly record that its own SHA was reviewed, because writing the
+**`Phase:` never reads `LAND`.** LAND is *derived* — from `cleared == tip`, plus a base
+that is still an ancestor of that tip. A commit cannot honestly record that its own SHA was reviewed, because writing the
 record changes the SHA — so the record does not try. `Phase:` stops at HARDEN and LAND is
 computed. This is why there is no write-ahead, no "leave the line alone during re-review"
 rule, and no downgrade path for an unproven LAND: nothing can claim LAND falsely because
 nothing claims it at all. (ADR 0002.)
 
 **The volatile store, never committed, at `$(git rev-parse --git-path drive/state)`.**
-One fact matters: `cleared=<sha>`, written when the panel goes clean, naming the tree it
-cleared.
+One fact matters — `cleared=<sha>`, naming the tree a panel actually cleared:
 
-```bash
-STATE=$(git rev-parse --git-path drive/state); mkdir -p "$(dirname "$STATE")"
-printf 'cleared=%s\n' "$(git rev-parse HEAD)" > "$STATE"     # only after a clean panel
+```
+cleared=4456b8c0b8f1e2d3...
 ```
 
-Inside the git dir rather than the worktree, for reasons that are all load-bearing: a
-worktree file needs a `.gitignore` entry, which is itself a repo mutation that must ride a
-reviewed PR before the first drive can start; an *un*ignored one is classified as code and
-flips the inferred phase; and a tracked one cannot be modified-but-uncommitted without
-`git checkout` refusing to switch branches. A path under `.git/` has none of those
-problems, survives `checkout`, `reset --hard` and `clean -xdf`, and is per-worktree.
-(ADR 0001.)
+Under the git dir, not the worktree, so it needs no `.gitignore` entry and survives
+`checkout`/`reset --hard` (ADR 0001).
 
-A fresh clone therefore has the narrative but no clearance. **That is correct.** Clearance
-is a claim about a panel run in a particular checkout; a clone that inherited it would be
-asserting something nobody verified there. Re-run the panel.
+**Do not write it from here.** The moment a panel reports clean is precisely when the tree
+is *dirty* — `multi-reviewer-loop` leaves its fixes uncommitted — so writing `HEAD` at that
+instant records a commit the panel never saw. The guarded snippet in
+`references/phases.md` § HARDEN has the three preconditions; use it.
 
-**`Pending: metadata PR #N` stays committed**, because it is the one fact that *must*
-reach a fresh clone: it is how a reader learns that DONE is conditional on a PR. A record
-reading `DONE` with a `Pending:` PR means "DONE once #N merges" — query it. Note the
-ordering wrinkle: `N` does not exist until the PR is opened, but the file naming `N` is
-that PR's own content, so it is amended in after creation and the first pushed head is
-never the one that merges.
+A fresh clone has narrative but no clearance. That is correct: clearance is a claim about
+a panel run in *this* checkout. Re-run the panel.
+
+**`Pending: metadata PR #N` stays committed**, because it is the one fact that must reach
+a fresh clone: it is how a reader learns DONE is conditional on a PR. A record reading
+`DONE` with a `Pending:` PR means "DONE once #N merges" — query it. `references/phases.md`
+§ LAND covers the ordering.
 
 **`Scope:` is the one canonical definition and every phase reads it.** `drive-status`
 counts the whole repository — it cannot know your scope — so its bead numbers and its

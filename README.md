@@ -33,7 +33,7 @@ The phase machine, and the skill each phase delegates to:
 | BUILD | `orchestrating-with-rb-lite` | rb-lite clean **and** you ran the gate yourself |
 | PROVE | `testing-with-rb-lite` | the gate ran green at a real exit code |
 | HARDEN | `multi-reviewer-loop` + a final pinned `codex review --base` | `multi-reviewer-loop` reports `CLEAN` (reviewers **and** consistency pass), then the cleared SHA is recorded |
-| LAND | `pr-with-codex-bot-review` | both bots cleared the tip, base still an ancestor of it, squash-merged; closure lands via a reviewed path |
+| LAND | `pr-with-codex-bot-review` | every configured bot cleared the tip, base still an ancestor of it, squash-merged; closure lands via a reviewed path |
 | DONE | — | the scope is empty and any `Pending:` closure PR has merged |
 
 Four guards automate what previously took a human nudge: **evidence** (run the real
@@ -46,7 +46,8 @@ cleared) live under the git dir and are correctly absent from a fresh clone.
 
 LAND is *derived*, never recorded: a commit cannot honestly say its own SHA was reviewed,
 because writing the record changes the SHA. `Phase:` stops at HARDEN and LAND is computed
-from `cleared == tip`. See `docs/adr/` for that decision and two others.
+from `cleared == tip` plus a base still fresh enough that the squash will land the tree
+that was actually reviewed. See `docs/adr/` for that decision and two others.
 
 A short stop-list still ends a turn. It does not cover landing the drive's own work —
 its branch, its PR, `--force-with-lease` on that branch, the squash-merge once gates are

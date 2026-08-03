@@ -190,12 +190,34 @@ Then **record the clearance**, which is what admits LAND. Assert the base is fre
 same breath: a panel that cleared a branch already behind base cleared a tree that is not
 the one that will land.
 
+Three preconditions, all of which must hold, and every one of which has bitten:
+
+1. **The tree is clean.** `multi-reviewer-loop` deliberately leaves its fixes uncommitted,
+   and reviews tracked working-tree changes — so `git rev-parse HEAD` at that moment names
+   a commit that does *not* contain what was just reviewed. Recording it would make
+   `cleared == tip` true while the reviewed fixes are absent from the commit and the PR.
+   Commit first, then clear.
+2. **The fetch succeeded.** A failed fetch leaves a stale tracking ref, and an ancestry
+   check against a stale ref reports fresh when it is not.
+3. **The base is an ancestor of the tip** — via `drive-status`, not a hand-rolled check.
+   It already resolves `origin/HEAD`-unset clones, non-`main`/`master` defaults, and the
+   `gh` fallback; reimplementing a two-branch version here would refuse to clear in any
+   repo defaulting to `develop` or `trunk`.
+
 ```bash
-git fetch -q origin && git merge-base --is-ancestor "origin/$(git symbolic-ref --short \
-  refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')" HEAD || echo "REBASE FIRST"
-STATE=$(git rev-parse --git-path drive/state); mkdir -p "$(dirname "$STATE")"
-printf 'cleared=%s\n' "$(git rev-parse HEAD)" > "$STATE"
+DS=<the drive-status path resolved in Phase 0>
+[ -z "$(git status --porcelain)" ] || { echo "tree dirty — commit first, do NOT clear"; exit 1; }
+git fetch -q origin || { echo "fetch failed — base unknown, do NOT clear"; exit 1; }
+[ "$("$DS" --json | jq -r '.base_fresh')" = "true" ] || { echo "REBASE FIRST — not cleared"; exit 1; }
+
+STATE=$(git rev-parse --git-path drive/state)
+mkdir -p "$(dirname "$STATE")" && printf 'cleared=%s\n' "$(git rev-parse HEAD)" > "$STATE" \
+  || { echo "could not persist clearance"; exit 1; }
+echo "cleared $(git rev-parse --short HEAD)"
 ```
+
+Each check `exit 1`s rather than warning: a printed warning followed by an unconditional
+write records clearance anyway, which is exactly what admits derived LAND.
 
 Nothing is committed here — that is the point. A commit would change the SHA this file
 just recorded as reviewed.
@@ -223,22 +245,27 @@ Take the bots' SHA from the review wrapper, not the reaction — a `+1` carries 
 survives a force-push, so a stale one reads exactly like approval of the current head:
 
 ```bash
-gh api repos/<owner>/<repo>/pulls/<N>/reviews \
-  --jq '.[] | select(.user.login|startswith("chatgpt-codex-connector"))
-        | .body | capture("Reviewed commit:[^0-9a-f]*(?<sha>[0-9a-f]{7,40})").sha'
+gh api --paginate --slurp repos/<owner>/<repo>/pulls/<N>/reviews \
+  | jq -r '[.[][] | select(.user.login|startswith("chatgpt-codex-connector"))
+            | .body | capture("Reviewed commit:[^0-9a-f]*(?<sha>[0-9a-f]{7,40})").sha] | last'
 ```
 
-(`[^0-9a-f]*`, not `\D*`: a–f are hex, so `\D` skips into the hash and truncates a
-letter-leading SHA to its tail — passing whenever the SHA happens to start with a digit.)
+Collect across pages and take `last`: the endpoint returns reviews oldest-first, and after
+several rounds a bare stream prints one SHA per round with no indication which is current.
+(`--slurp` cannot combine with `--jq`, hence the pipe.)
 
 If the codex bot reacted `+1` with no wrapper, you have no SHA anchor: `@codex review` and
 wait for one. CodeRabbit's check is per-commit, but a `SUCCESS` may be a *skip* — read the
 "Files skipped from review" list and re-trigger unless the skip was expected.
 
-**2. The merged tree is the reviewed tree.** Do not assert "merged SHA == reviewed SHA":
-the prescribed merge is a squash, which necessarily creates a *new* commit, so that
-equality is impossible and any wording demanding it is unsatisfiable. What must hold is
-that the branch content is unchanged and the base has not moved under it.
+**2. Do not demand `merged SHA == reviewed SHA`.** The merge is a squash, so it always
+creates a new commit; that equality is unsatisfiable by construction.
+
+Pin the head in the merge itself — `gh pr merge <N> --squash --match-head-commit <sha>`.
+Between comparing SHAs and merging, another push can land; `--match-head-commit` makes the
+merge refuse rather than take the newer, unreviewed head. Base drift in that same window is
+*not* closed by any local check — only branch protection or a merge queue does that, which
+is per-repo config this skill cannot assume.
 
 **3. The base is still an ancestor of the tip** — checked when the panel clears **and**
 again immediately before merging:
@@ -276,7 +303,7 @@ good diff and the cap is spent on real findings.
 
 ### Squash-merge, then clean up
 
-**Exit gate:** merged at a tip both bots cleared with a fresh base, branch reset, bead
+**Exit gate:** merged at a tip every configured bot cleared, with a fresh base, branch reset, bead
 closed (`br close <id>`), `DRIVE.md` updated — the last two through a reviewed path.
 
 `br close` cannot ride this branch. It is tempting to think it can: `.beads/issues.jsonl`
@@ -303,8 +330,12 @@ And verify the closure actually happened. `br close` exits 0 even when the flush
 writes the JSONL failed, because the error is caught and logged at debug level:
 
 ```bash
-br close <id>; git diff --stat -- '*.beads/*.jsonl'    # must be non-empty
+br close <id>; git status --porcelain -- '*.beads*.jsonl'   # must be non-empty
 ```
+
+The assertion holds only where a mutation definitely occurred, as it did here. A flush
+over a graph that was already committed and unchanged legitimately reports nothing, so a
+blanket "must be non-empty" would fail a healthy preflight.
 
 Either way the tree is clean before BUILD re-enters, and nothing reaches the default
 branch unreviewed.

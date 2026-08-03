@@ -121,8 +121,10 @@ run `second-model-bead-audit` by default after the graph meets these gates.
 
 4. Apply only justified changes with `br`.
 5. Flush mutations with `br sync --flush-only`, then confirm the JSONL actually changed
-   (`git diff --stat -- '*.beads/*.jsonl'`) — the flush exits 0 even when it failed,
-   because the error is logged at debug level and swallowed.
+   (`git status --porcelain -- '*.beads*.jsonl'`) — the flush exits 0 even when it failed,
+   because the error is logged at debug level and swallowed. Expect output only when the
+   round actually changed something: a late round that applies zero justified changes is
+   a healthy convergence signal, not a failed flush.
 6. Write a round summary:
    - beads added, rewritten, merged, closed, or reprioritized
    - findings ledger entries closed this round

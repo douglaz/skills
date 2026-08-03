@@ -347,12 +347,15 @@ For each P-badge finding:
 
 Merge when the reaction-based check passes:
 
-- Codex bot reaction on PR body is `+1`, **and** the tree it reacted to is the tip. The
+- Codex bot reaction on PR body is `+1`, **and** the tree it reacted to is the tip. Pass
+  that SHA as `--match-head-commit` when you merge, so a push landing between the check
+  and the merge makes the merge refuse rather than take an unreviewed head. The
   reaction carries no SHA; its review wrapper does (`**Reviewed commit:** <sha>`). Compare
   that against the head — a `+1` left before your last force-push approves the old tree.
 - CI is green.
 - CodeRabbit status check is `SUCCESS` **and it was a review, not a skip** — check the
-  "Files skipped from review" list per the query above.
+  "Files skipped from review" list per the query above. Absent from the rollup entirely
+  (repo has no CodeRabbit) is still fine; there is nothing to wait for.
 - No outstanding line comments against the current head SHA, from EITHER bot.
 
 Don't merge when:
@@ -373,32 +376,19 @@ you're ignoring the actual signal.**
 ### 8. Squash-merge and clean up
 
 ```bash
+[ -z "$(git status --porcelain)" ] || { echo "tree dirty — do NOT merge"; exit 1; }
 gh pr merge <N> --squash --delete-branch
-git status --porcelain                       # must be empty — see below
 git checkout master
 git fetch origin master && git reset --hard origin/master
 nix build                                    # confirm master is healthy
 ```
 
-**`git checkout master` aborts if any tracked file has uncommitted changes that differ
-between the two branches** — `Your local changes to the following files would be
-overwritten by checkout`, exit 1, and the cleanup stops with the PR merged but the branch
-never reset. That is why `git status --porcelain` comes first: check, then decide. Stash
-if the change matters; discard only after looking at it, because `git checkout -- .` is
-not recoverable.
+Check before merging, and make it `exit 1` rather than print: a bare `git status
+--porcelain` exits 0 either way, and `--delete-branch` makes `gh pr merge` switch branches
+itself — so a dirty tree aborts *after* the squash has already landed. Stash if the change
+matters; discard only after looking, because `git checkout -- .` is not recoverable.
 
-Scratch state a tool deliberately leaves uncommitted is the usual cause, which is why
-anything of that kind belongs under `.git/` rather than in the worktree — a path there is
-invisible to `status` and survives the switch untouched.
-
-`reset --hard` rather than `pull` because squash-merge rewrites history; a normal
-`git pull` would create an unwanted merge commit on local master.
-
-If the project uses `.beads/` issue tracking, close the corresponding bead now:
-
-```bash
-br update <bead-id> -s closed
-```
+`reset --hard` rather than `pull` because squash-merge rewrites history.
 
 ## Iteration patterns observed
 

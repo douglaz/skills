@@ -149,7 +149,10 @@ recorded acceptance of the reduced review coverage.
    either reviewer:
 
    ```bash
-   br sync --flush-only && git diff --stat -- '*.beads/*.jsonl'   # must be non-empty
+   br sync --flush-only
+   # If you mutated beads this round, confirm it landed — the flush exits 0 even when the
+   # write failed. An unchanged, already-committed graph legitimately reports nothing.
+   git status --porcelain -- '*.beads*.jsonl'
    br list --limit 0 --json -a
    bv --robot-triage
    bv --robot-plan

@@ -249,22 +249,18 @@ if [[ -f DRIVE.md ]]; then
     | grep -oE '[0-9]+$' || echo "")
 fi
 
-# --- volatile per-checkout state (ADR 0003 / 0001) ---
-# Clearance is a claim about a panel run in THIS checkout against THIS tree. It is not
-# committed: a commit cannot record that its own SHA was reviewed without changing that
-# SHA. It lives under the git dir rather than the worktree because a worktree file would
-# need a .gitignore entry — itself a repo mutation that, under this skill's own rules,
-# must ride a reviewed PR before the first drive can start — and because an untracked
-# worktree file is classified as `code` by _classify_paths and flips the inferred phase.
-# --git-path handles linked worktrees; the file survives checkout, reset --hard and
-# clean -xdf, and is correctly absent from a fresh clone.
+# --- volatile per-checkout state (ADR 0001 sites it, ADR 0002 derives LAND from it) ---
+# Clearance is a claim about a panel run in THIS checkout against THIS tree, so it is never
+# committed and is correctly absent from a fresh clone.
 STATE_FILE=$(git rev-parse --git-path drive/state 2>/dev/null || echo "")
 DRIVE_CLEARED=""
 if [[ -n "$STATE_FILE" && -f "$STATE_FILE" ]]; then
   # `[^0-9a-f]*` and not `\D*`: a-f are hex, so \D would skip INTO the hash and truncate a
   # letter-leading SHA to its tail — passing whenever the SHA happens to start with a digit.
+  # Both greps -i: with it on the first only, `cleared=ABC123...` prints the tail after
+  # the last uppercase letter — a SHA that exists nowhere.
   DRIVE_CLEARED=$(grep -m1 -oiE '^cleared[=:][^0-9a-f]*[0-9a-f]{7,40}' "$STATE_FILE" 2>/dev/null \
-    | grep -oE '[0-9a-f]{7,40}$' || echo "")
+    | grep -oiE '[0-9a-f]{7,40}$' || echo "")
 fi
 # Compare against the tip by prefix, so an abbreviated `cleared` still matches. Empty
 # never matches: an absent value is unproven, not cleared.
@@ -272,8 +268,11 @@ fi
 # string "HEAD" on stdout and exits 1, so `|| echo ""` never fires and HEAD_SHA becomes
 # "HEAD" — which compares unequal to everything and would be reported as a stale SHA.
 HEAD_SHA=$(git rev-parse --verify --quiet HEAD 2>/dev/null || echo "")
+# Lowercased before comparing: git writes lowercase, so this only matters for a hand-edited
+# marker, but displaying a SHA and then refusing to match it reads as a bug.
 CLEARED_MATCHES_TIP=false
-[[ -n "$DRIVE_CLEARED" && -n "$HEAD_SHA" && "$HEAD_SHA" == "$DRIVE_CLEARED"* ]] && CLEARED_MATCHES_TIP=true
+_c_lc=$(printf '%s' "$DRIVE_CLEARED" | tr '[:upper:]' '[:lower:]')
+[[ -n "$_c_lc" && -n "$HEAD_SHA" && "$HEAD_SHA" == "$_c_lc"* ]] && CLEARED_MATCHES_TIP=true
 
 # Base freshness. Tip equality is NOT sufficient to prove the merged tree was reviewed:
 # under a squash merge the result is the branch replayed onto the CURRENT base, so if the
@@ -324,9 +323,15 @@ infer() {
       *)    echo "BUILD"; return ;;
     esac
   fi
-  # Clean tree. Require an OPEN pr: `gh pr view` falls back to the most recent CLOSED or
-  # MERGED PR on the branch, so existence alone would call a rejected PR ready to merge.
-  if [[ -n "$PR_NUM" && "$PR_STATE" == OPEN/* ]]; then echo "LAND"; return; fi
+  # Clean tree with an OPEN pr. Require OPEN: `gh pr view` falls back to the most recent
+  # CLOSED or MERGED PR on the branch, so existence alone would call a rejected PR ready
+  # to merge.
+  # This yields HARDEN, not LAND. An open PR says the work was pushed for review; it does
+  # NOT say a panel cleared this tip, and LAND is admitted by clearance alone (ADR 0002).
+  # Returning LAND here would let a fresh clone — which correctly has no clearance — print
+  # `phase: LAND` and contradict the invariant the rest of this file implements. The
+  # derivation above promotes to LAND when, and only when, clearance is present and fresh.
+  if [[ -n "$PR_NUM" && "$PR_STATE" == OPEN/* ]]; then echo "HARDEN"; return; fi
   # With PR state unknown we cannot rule out an open PR, so HARDEN is a guess — say so via
   # the warning line rather than silently starting another review cycle.
   # Committed work only means HARDEN when it is actually code. Spec-only commits are
@@ -366,10 +371,8 @@ TREE_PHASE=$(infer)
 # this invariant exists to forbid.
 RECORD_VALID=false
 case "$DRIVE_PHASE" in
-  # LAND is deliberately NOT accepted from the record (ADR 0002). It is a property of the
-  # current checkout — "a panel cleared THIS tip" — and a committed field cannot assert
-  # that without changing the very SHA it claims was reviewed. A record saying LAND is a
-  # hand edit or a pre-redesign file; treat the phase line as unusable and warn.
+    # LAND is deliberately NOT accepted from the record (ADR 0002): it is a property of this
+  # checkout, and a record claiming it is a hand edit or a pre-redesign file.
   SHAPE|GRAPH|BUILD|PROVE|HARDEN|DONE) PHASE="$DRIVE_PHASE"; RECORD_VALID=true ;;
   *)                                   PHASE="$TREE_PHASE" ;;
 esac
@@ -380,9 +383,25 @@ $RECORD_VALID && PHASE_SOURCE="DRIVE.md" || PHASE_SOURCE="tree"
 # the work is otherwise finished — which is what HARDEN resolving means. Deriving it here
 # is what lets the record stay honest: nothing can claim LAND falsely because nothing
 # claims LAND at all.
-if [[ "$PHASE" == "HARDEN" ]] && $CLEARED_MATCHES_TIP; then
-  PHASE="LAND"
-  PHASE_SOURCE="derived (cleared == tip)"
+# Both conditions, not just clearance: a panel that cleared a branch already behind base
+# cleared a tree that is not the one a squash merge will produce. Promoting on
+# CLEARED_MATCHES_TIP alone would hand `phase: LAND` to a JSON consumer on a stale base —
+# the exact hazard this branch exists to close — with the drift visible only as a warning
+# line that a machine reader never sees.
+# `== true`, not `!= false`: BASE_FRESH is "n/a" when the base ref could not be resolved
+# at all, and treating unknown as fresh would derive LAND with `base_fresh: null` — the
+# ancestry was never established, which is not the same as established-and-fine.
+# Clean tree too, and it is not implied: tree inference only yields HARDEN on a clean tree,
+# but the RECORD path does not, so edits made AFTER clearance leave HEAD — and therefore
+# `cleared == tip` — untouched. Reproduced: dirty=1, phase=LAND, no warning.
+LAND_BLOCKED_DIRTY=false
+if [[ "$PHASE" == "HARDEN" ]] && $CLEARED_MATCHES_TIP && [[ "$BASE_FRESH" == "true" ]]; then
+  if [[ "$DIRTY_COUNT" -eq 0 && "$UNTRACKED" -eq 0 ]]; then
+    PHASE="LAND"
+    PHASE_SOURCE="derived (cleared == tip, base fresh, tree clean)"
+  else
+    LAND_BLOCKED_DIRTY=true
+  fi
 fi
 # A DONE record gated on a metadata PR is DONE only once that PR merges. The merged file
 # cannot state its own post-merge status, so the record says "DONE once #N merges" and the
@@ -417,6 +436,7 @@ if $JSON; then
     --arg cleared "$DRIVE_CLEARED" --arg pending_pr "$DRIVE_PENDING" \
     --arg cleared_matches "$CLEARED_MATCHES_TIP" --arg recorded_land "$RECORDED_LAND" \
     --arg done_pending "$DONE_PENDING" --arg head_sha "$HEAD_SHA" \
+    --arg land_blocked_dirty "$LAND_BLOCKED_DIRTY" \
     --arg state_file "$STATE_FILE" --arg base_fresh "$BASE_FRESH" \
     --argjson dirty "${DIRTY_COUNT:-0}" --argjson untracked "${UNTRACKED:-0}" \
     --argjson branch_commits "${BRANCH_COMMITS:-0}" \
@@ -431,6 +451,7 @@ if $JSON; then
       state_file:$state_file,recorded_land:($recorded_land=="true"),
       base_fresh:(if $base_fresh=="n/a" then null else $base_fresh=="true" end),
       pending_pr:$pending_pr,done_pending:($done_pending=="true"),
+      land_blocked_dirty:($land_blocked_dirty=="true"),
       phase_disagreement:(($record_valid=="true") and $drive_phase!=$tree_phase)}' 2>/dev/null \
   || {
     # jq-free fallback. Escape backslashes then quotes: git permits `"` in a branch name
@@ -456,15 +477,19 @@ printf 'cleared    %s\n' "${DRIVE_CLEARED:-<none — no panel has cleared this c
 printf '\nphase: %s   (source: %s)\n' "$PHASE" "$PHASE_SOURCE"
 # LAND is derived, so a RECORDED LAND is a stale or hand-edited file. Say so rather than
 # silently ignoring the line — an unexplained discard is the failure this warns about.
-$RECORDED_LAND && printf '  ⚠ DRIVE.md records `Phase: LAND`, which is no longer a recordable phase — LAND is\n    derived from `cleared == tip` and nothing else. The line was IGNORED. Rewrite it to\n    HARDEN; the record should never claim a phase only this checkout can prove.\n'
+$RECORDED_LAND && printf '  ⚠ DRIVE.md records `Phase: LAND`, which is no longer a recordable phase — LAND is\n    derived from `cleared == tip` with a fresh base. The line was IGNORED. Rewrite it to\n    HARDEN; the record should never claim a phase only this checkout can prove.\n'
 $DONE_PENDING && printf '  ⚠ DONE is pending metadata PR #%s, so this is WAITING_FOR_MERGE, not DONE. Query that\n    PR: merged means the drive really is done; open means go finish landing it.\n' "$DRIVE_PENDING"
+# Silent otherwise: clearance matches but the tree moved, and every SHA check still passes.
+$LAND_BLOCKED_DIRTY && printf '  ⚠ clearance matches the tip and the base is fresh, but the worktree is dirty\n    (%s modified, %s untracked) — so this is NOT LAND. Those edits are not in the commit\n    a merge would take. Commit and re-clear, or discard them.\n' "$DIRTY_COUNT" "$UNTRACKED"
 # Base drift is invisible in every SHA the driver checks, so it has to be surfaced here.
 [[ "$BASE_FRESH" == "false" ]] && printf '  ⚠ %s has advanced since this branch forked. A squash merge replays onto the CURRENT\n    base, so what lands is a tree no panel and no bot reviewed — while every SHA still\n    matches. Rebase or merge base in, then re-clear before merging.\n' "${BASE_REF:-the base}"
 # A present DRIVE.md whose phase cannot be used is the silently-resolved fallback
 # whether the Phase line is malformed or missing entirely — warn on both.
 if [[ "$DRIVE_MD" == "present" ]] && ! $RECORD_VALID && ! $RECORDED_LAND; then
   printf '  ⚠ DRIVE.md is present but no usable Phase line was found (%s) — IGNORED, this\n    phase came from the tree. Valid: SHAPE GRAPH BUILD PROVE HARDEN DONE (not LAND).\n' "${DRIVE_PHASE:-none}"
-elif $RECORD_VALID && [[ "$DRIVE_PHASE" != "$TREE_PHASE" ]]; then
+elif $RECORD_VALID && [[ "$DRIVE_PHASE" != "$TREE_PHASE" && "$PHASE_SOURCE" != derived* ]]; then
+  # Suppressed for a derived phase: neither record nor tree won, so "the record wins"
+  # would contradict the line above it.
   printf '  ⚠ the record says %s, the tree looks like %s. The record wins — it is written at\n    every transition and several phases are indistinguishable from git. Override only\n    with a stated reason.\n' "$DRIVE_PHASE" "$TREE_PHASE"
 fi
 [[ "$UNTRACKED" -gt 0 ]] && printf '  ⚠ %s untracked file(s) — codex reviewers are BLIND to these; git add before review.\n' "$UNTRACKED"
