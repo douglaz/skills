@@ -32,15 +32,21 @@ The phase machine, and the skill each phase delegates to:
 | GRAPH | `plan-to-beads-transfer` → `bead-polish-loop` → `second-model-bead-audit` | audit PASS, a scoped `br ready` bead exists |
 | BUILD | `orchestrating-with-rb-lite` | rb-lite clean **and** you ran the gate yourself |
 | PROVE | `testing-with-rb-lite` | the gate ran green at a real exit code |
-| HARDEN | `multi-reviewer-loop` + a final pinned `codex review --base` | `multi-reviewer-loop` reports `CLEAN` (reviewers **and** consistency pass) |
-| LAND | `pr-with-codex-bot-review` | merged at the SHA both bots cleared, branch reset, bead closed and `DRIVE.md` committed via a reviewed path |
+| HARDEN | `multi-reviewer-loop` + a final pinned `codex review --base` | `multi-reviewer-loop` reports `CLEAN` (reviewers **and** consistency pass), then the cleared SHA is recorded |
+| LAND | `pr-with-codex-bot-review` | both bots cleared the tip, base still an ancestor of it, squash-merged; closure lands via a reviewed path |
+| DONE | — | the scope is empty and any `Pending:` closure PR has merged |
 
 Four guards automate what previously took a human nudge: **evidence** (run the real
 gate, never piped through `tail`, make new tests fail first), **scope budget** (a
 file-lock and a do-NOT-build list up front, hard brake at 2× budget or round 4),
 **transitions fire their own gates** (commit/push/review are part of the transition,
-not a separate request), and **durable state** (`DRIVE.md` at the repo root, so
-`status?` is answered before it is asked and a fresh session resumes cleanly).
+not a separate request), and **durable state** split by lifetime — `DRIVE.md` at the repo
+root carries the committed narrative, while per-checkout facts (which tree the panel
+cleared) live under the git dir and are correctly absent from a fresh clone.
+
+LAND is *derived*, never recorded: a commit cannot honestly say its own SHA was reviewed,
+because writing the record changes the SHA. `Phase:` stops at HARDEN and LAND is computed
+from `cleared == tip`. See `docs/adr/` for that decision and two others.
 
 A short stop-list still ends a turn. It does not cover landing the drive's own work —
 its branch, its PR, `--force-with-lease` on that branch, the squash-merge once gates are
@@ -51,7 +57,10 @@ turned out to be wrong. The rationale for each rule, with the transcript evidenc
 behind it, is in `references/autonomy-contract.md`.
 
 Ships with `scripts/drive-status`, a read-only detector that prints branch, gate command,
-bead counts, PR state, specs, and an inferred phase (`--json` for scripting).
+bead counts, PR state, specs, the cleared SHA, and an inferred phase (`--json` for
+scripting). It also flags the failures that are otherwise invisible: a base that advanced
+after clearance (a squash merge would then land a tree nobody reviewed, while every SHA
+still matches), and a `DONE` record whose closure PR has not merged.
 
 ### agents-md
 
@@ -207,6 +216,31 @@ Codex:
 ```text
 Use the second-model-bead-audit skill and give me a launch verdict.
 ```
+
+### testing-with-rb-lite
+
+Uses `rb-lite` to **author** a test or verification gate, then independently **runs**
+it — because rb-lite's reviewer panel reads the test's source and never executes the
+gate, so a clean run means "no reviewer objected", not "the test passes". Reach for it
+when the deliverable *is* the test: a smoke, an integration or property test, or a live
+end-to-end gate that has to go green against real infrastructure.
+
+Claude Code:
+
+```text
+/testing-with-rb-lite write a smoke test that proves the retry budget holds
+```
+
+Codex:
+
+```text
+Use the testing-with-rb-lite skill to build and verify an end-to-end gate for this flow.
+```
+
+Front-loads the six ways a test reports PASS without proving anything — stale binaries,
+substring assertions, assertion-weakening to force green, fake setup, false PASS on a
+hang, and editing the code under test — as hard constraints in the task file, then checks
+for each in the result. A test that falsely reports PASS is worse than no test.
 
 ### orchestrating-with-rb-lite
 

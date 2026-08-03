@@ -374,7 +374,7 @@ you're ignoring the actual signal.**
 
 ```bash
 gh pr merge <N> --squash --delete-branch
-git checkout -- .                            # see below before running this
+git status --porcelain                       # must be empty — see below
 git checkout master
 git fetch origin master && git reset --hard origin/master
 nix build                                    # confirm master is healthy
@@ -383,9 +383,13 @@ nix build                                    # confirm master is healthy
 **`git checkout master` aborts if any tracked file has uncommitted changes that differ
 between the two branches** — `Your local changes to the following files would be
 overwritten by checkout`, exit 1, and the cleanup stops with the PR merged but the branch
-never reset. Deliberately-uncommitted scratch state is the usual cause (`drive` keeps its
-`Cleared:` marker in `DRIVE.md` this way). Discard or stash it before the switch, and look
-at what you are discarding first — `git checkout -- .` is not recoverable.
+never reset. That is why `git status --porcelain` comes first: check, then decide. Stash
+if the change matters; discard only after looking at it, because `git checkout -- .` is
+not recoverable.
+
+Scratch state a tool deliberately leaves uncommitted is the usual cause, which is why
+anything of that kind belongs under `.git/` rather than in the worktree — a path there is
+invisible to `status` and survives the switch untouched.
 
 `reset --hard` rather than `pull` because squash-merge rewrites history; a normal
 `git pull` would create an unwanted merge commit on local master.

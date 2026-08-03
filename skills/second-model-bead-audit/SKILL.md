@@ -149,7 +149,7 @@ recorded acceptance of the reduced review coverage.
    either reviewer:
 
    ```bash
-   br sync --flush-only
+   br sync --flush-only && git diff --stat -- '*.beads/*.jsonl'   # must be non-empty
    br list --limit 0 --json -a
    bv --robot-triage
    bv --robot-plan

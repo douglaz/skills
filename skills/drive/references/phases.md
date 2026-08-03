@@ -186,51 +186,125 @@ place.
 enough: it says the changed lines are fine and nothing checked whether the files still
 agree with each other. Plus the final gate clean, and the gate green at a real exit code.
 
+Then **record the clearance**, which is what admits LAND. Assert the base is fresh in the
+same breath: a panel that cleared a branch already behind base cleared a tree that is not
+the one that will land.
+
+```bash
+git fetch -q origin && git merge-base --is-ancestor "origin/$(git symbolic-ref --short \
+  refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')" HEAD || echo "REBASE FIRST"
+STATE=$(git rev-parse --git-path drive/state); mkdir -p "$(dirname "$STATE")"
+printf 'cleared=%s\n' "$(git rev-parse HEAD)" > "$STATE"
+```
+
+Nothing is committed here — that is the point. A commit would change the SHA this file
+just recorded as reviewed.
+
 ---
 
 ## LAND — PR through the bots
 
-**Enter when:** the branch is clean, reviewed, and gate-green.
+**Enter when:** the panel cleared this checkout and `cleared` still equals the tip, the
+gate is green, and the base is an ancestor of the tip. LAND is *derived* from those facts,
+never read from `DRIVE.md` (ADR 0002) — a record claiming LAND is a stale or hand-edited
+file and `drive-status` will say so.
 
-Follow `pr-with-codex-bot-review`. The parts that bite:
+### The three checks, before you merge
 
-- Run a local Fable pre-review **before** pushing so the bot rounds start from the good
-  diff.
+**1. The tip is the tree that was reviewed.** Name the SHAs and refuse if they differ:
+
+```text
+panel cleared : <sha>          # $(git rev-parse --git-path drive/state)
+bots cleared  : <sha>          # the codex wrapper's "Reviewed commit:", NOT the +1
+tip           : <sha>
+```
+
+Take the bots' SHA from the review wrapper, not the reaction — a `+1` carries no SHA and
+survives a force-push, so a stale one reads exactly like approval of the current head:
+
+```bash
+gh api repos/<owner>/<repo>/pulls/<N>/reviews \
+  --jq '.[] | select(.user.login|startswith("chatgpt-codex-connector"))
+        | .body | capture("Reviewed commit:[^0-9a-f]*(?<sha>[0-9a-f]{7,40})").sha'
+```
+
+(`[^0-9a-f]*`, not `\D*`: a–f are hex, so `\D` skips into the hash and truncates a
+letter-leading SHA to its tail — passing whenever the SHA happens to start with a digit.)
+
+If the codex bot reacted `+1` with no wrapper, you have no SHA anchor: `@codex review` and
+wait for one. CodeRabbit's check is per-commit, but a `SUCCESS` may be a *skip* — read the
+"Files skipped from review" list and re-trigger unless the skip was expected.
+
+**2. The merged tree is the reviewed tree.** Do not assert "merged SHA == reviewed SHA":
+the prescribed merge is a squash, which necessarily creates a *new* commit, so that
+equality is impossible and any wording demanding it is unsatisfiable. What must hold is
+that the branch content is unchanged and the base has not moved under it.
+
+**3. The base is still an ancestor of the tip** — checked when the panel clears **and**
+again immediately before merging:
+
+```bash
+git fetch -q origin && git merge-base --is-ancestor origin/<default> HEAD && echo BASE_FRESH
+```
+
+This is the check with no other symptom. A squash merge replays the branch onto the
+*current* base, so if the default branch advanced after clearance, what lands is a
+combination no panel and no bot ever saw — while every SHA above still matches. Git merges
+any textually non-conflicting branch behind base, so the failure is silent and semantic.
+If it fails: rebase or merge base in, then re-clear (which means a new panel run).
+
+### Bot rounds re-arm the panel
+
+Address findings by amend + force-push **to your own PR branch** (allowed; force-pushing
+over someone else's work is stop-list). Then:
+
 - The codex bot's line-level findings live in **PR review comments**, not the review body.
-  Read both.
+  Read both. GitHub re-anchors an unresolved comment's `commit_id` to the newest commit
+  while it still applies, so a "new" finding may be an old one carried forward — check
+  `created_at`, not `commit_id`, before concluding a fix was rejected.
 - It auto-fires on substantive code PRs and is often silent on docs-only PRs. Silence on a
   docs PR is not a failure; re-trigger with `@codex review` when you need a pass.
-- Address findings by amend + force-push **to your own PR branch** (allowed; force-pushing
-  over someone else's work is stop-list).
-- After any amend, the codex `+1` may still be the *previous* head's. Compare the wrapper's
-  `Reviewed commit:` SHA against the tip before merging, not the reaction.
-- A CodeRabbit `SUCCESS` that says `Review skipped` is not a review. Read the "Files
-  skipped from review" list; re-trigger unless the skip was expected.
-- Squash-merge, then **discard the uncommitted `Cleared:` marker before switching branches**
-  (`git checkout -- DRIVE.md`). It is a tracked file differing between branches, so
-  `git checkout <default>` otherwise aborts and leaves the PR merged but nothing cleaned up.
-- Reset the local branch.
+- **Every amend invalidates clearance, so re-run the full local panel.** The amended tree
+  is one no panel has read, and the local panel is stronger than the bots. Re-clear, then
+  let the bots re-review.
+- **Cap: 3 bot rounds.** Past that, stop and report rather than looping — a PR still
+  producing findings after three rounds is telling you the change is wrong-shaped, not
+  that it needs a fourth patch. That is a stop-list item.
 
-**Exit gate:** merged at the SHA both bots cleared, branch reset, bead closed
-(`br close <id>`), `DRIVE.md` updated — the last two through a reviewed path.
+Run a local Fable pre-review **before** the first push so the bot rounds start from the
+good diff and the cap is spent on real findings.
 
-`DRIVE.md`'s move to `**Phase:** LAND` belongs in the final pre-HARDEN sweep, so the panel
-clears a tree that already carries it and nothing is added between clearance and merge.
-See `SKILL.md` § "Bookkeeping goes in before the panel, or through its own PR".
+### Squash-merge, then clean up
 
-`br close` cannot: closing before the merge marks work done that may never land, so the
-closure is inherently post-merge. It writes `.beads/*.jsonl` on the default branch, and
-committing it there is exactly the unreviewed-bookkeeping failure LAND now forbids. Do not
-leave it uncommitted either — the next BUILD would start from a dirty base and silently
-carry the previous bead's closure into its diff. Instead:
+**Exit gate:** merged at a tip both bots cleared with a fresh base, branch reset, bead
+closed (`br close <id>`), `DRIVE.md` updated — the last two through a reviewed path.
+
+`br close` cannot ride this branch. It is tempting to think it can: `.beads/issues.jsonl`
+is tracked, so a closure committed on the branch looks transactional. **It is not** — see
+ADR 0003, which records the code evidence, because this is attractive enough to be
+re-proposed. In short: `br close` auto-flushes immediately, the local SQLite DB is shared
+by every branch with no git awareness, and import is last-write-wins on `updated_at`, so
+the default branch's older OPEN record loses to the branch's newer closure. The closure
+leaks across the checkout and nothing errors.
+
+So closure is genuinely post-merge, and must not be committed straight to the default
+branch. Do not leave it uncommitted either — the next BUILD would start from a dirty base
+and silently carry the previous bead's closure into its diff. Instead:
 
 - **A scoped bead remains** → carry the closure commit (plus the `DRIVE.md` update) into
   the next bead's branch, where it rides that PR through the panel and both bots.
-- **The scope is empty** → there is no next branch, and reporting DONE while a fresh clone
-  still shows the bead open is a lie. Open one small metadata PR (bead closure + final
-  `DRIVE.md`) and land it through the same gates. DONE is not reached until it merges.
-  Write that `DRIVE.md` as `**Phase:** DONE · **Pending:** metadata PR #N`, so a session
-  resuming after a restart queries `#N` instead of stopping at a DONE that has not landed.
+- **The scope is empty** → open one small metadata PR (bead closure + final `DRIVE.md`)
+  and land it through the same gates. Write it as `**Phase:** DONE · **Pending:** metadata
+  PR #N` so a resumed session queries `#N` instead of stopping at a DONE that never landed.
+  `N` does not exist until the PR is open, so amend it in afterwards — the first pushed
+  head is never the one that merges.
+
+And verify the closure actually happened. `br close` exits 0 even when the flush that
+writes the JSONL failed, because the error is caught and logged at debug level:
+
+```bash
+br close <id>; git diff --stat -- '*.beads/*.jsonl'    # must be non-empty
+```
 
 Either way the tree is clean before BUILD re-enters, and nothing reaches the default
 branch unreviewed.
@@ -244,7 +318,6 @@ empties, an unrelated repository bead is ready, and the loop builds, reviews, an
 work the user never authorized. When the scope is empty, the drive is done — even if the
 repository still has ready beads. Say so and stop.
 
----
 
 ## DONE
 
@@ -253,6 +326,12 @@ repository still has ready beads. Say so and stop.
 closed). Scope matters here as much as at BUILD entry: a scoped goal is DONE when *its* set
 is empty, not when the repository is. Waiting on the global backlog turns a finished
 milestone into an open-ended drain the user never asked for.
+
+**Unless a `Pending:` PR has not merged.** A record reading `DONE · Pending: metadata PR
+#N` means "DONE once #N merges" — the merged file cannot state its own post-merge status,
+so the driver queries. `drive-status` reports that state as `WAITING_FOR_MERGE`, not
+`DONE`, precisely so a resumed session goes and lands the PR instead of reporting a
+finished drive whose closure is still open.
 
 Report what landed, what is deferred and why, and stop. This is the one place a summary is
 legitimately the end of the turn.
