@@ -192,7 +192,23 @@ Then **record the clearance**, which is what admits LAND. Assert the base is fre
 same breath: a panel that cleared a branch already behind base cleared a tree that is not
 the one that will land.
 
-Three preconditions, all of which must hold, and every one of which has bitten:
+Four preconditions, all of which must hold, and every one of which has bitten.
+
+The fourth needs a step *before* the panel runs, so do this first — the moment the tree is
+committed and you are about to launch the final panel:
+
+```bash
+DS=<the drive-status path resolved in Phase 0>
+STATE_DIR=$(dirname "$(git rev-parse --git-path drive/state)")
+mkdir -p "$STATE_DIR"
+# Pin what the panel is about to read. GitHub allows retargeting a PR at any moment,
+# including while a 15-minute panel runs, and a retarget moves the reviewed surface
+# without moving HEAD — so every SHA the clearance records would still match.
+{ printf 'panel_base=%s\n' "$("$DS" --json | jq -r '.default_branch')"
+  printf 'panel_tip=%s\n' "$(git rev-parse HEAD)"; } > "$STATE_DIR/panel" \
+  || { echo "could not pin the panel's inputs"; exit 1; }
+```
+
 
 1. **The tree is clean, and the final panel ran on the committed tree.** `multi-reviewer-loop` deliberately leaves its fixes uncommitted,
    and reviews tracked working-tree changes — so `git rev-parse HEAD` at that moment names
@@ -210,6 +226,11 @@ Three preconditions, all of which must hold, and every one of which has bitten:
    It already resolves `origin/HEAD`-unset clones, non-`main`/`master` defaults, and the
    `gh` fallback; reimplementing a two-branch version here would refuse to clear in any
    repo defaulting to `develop` or `trunk`.
+4. **The clearance names what the panel actually read.** Both inputs can move while the
+   panel runs, and neither move is visible in the checks above: retargeting the PR changes
+   the base without touching HEAD, and a commit made between the panel finishing and the
+   clearance being recorded changes the tip that gets recorded as reviewed. Pin both
+   before the panel (above) and compare after.
 
 ```bash
 DS=<the drive-status path resolved in Phase 0>
@@ -220,6 +241,19 @@ DS=<the drive-status path resolved in Phase 0>
 # fetching origin/$BASE would validate freshness against a stale fork branch. Ask the PR
 # for its base repo and fetch from there.
 BASE=$("$DS" --json | jq -r '.default_branch')
+# Precondition 4. Everything below validates whatever base is CURRENT — so if the PR was
+# retargeted mid-panel, the fetch, the ancestry test and the recorded `cleared_base` would
+# all agree about a branch no reviewer diffed against. Compare with what was pinned before
+# the panel; the failure mode is silent otherwise, because every SHA still matches.
+STATE_DIR=$(dirname "$(git rev-parse --git-path drive/state)")
+PANEL_BASE=$(sed -n 's/^panel_base=//p' "$STATE_DIR/panel" 2>/dev/null | head -1)
+PANEL_TIP=$(sed -n 's/^panel_tip=//p' "$STATE_DIR/panel" 2>/dev/null | head -1)
+[ -n "$PANEL_BASE" ] && [ -n "$PANEL_TIP" ] \
+  || { echo "the panel's inputs were never pinned — re-run the panel; NOT cleared"; exit 1; }
+[ "$PANEL_BASE" = "$BASE" ] \
+  || { echo "PR retargeted during review ($PANEL_BASE -> $BASE) — re-run the panel; NOT cleared"; exit 1; }
+[ "$PANEL_TIP" = "$(git rev-parse HEAD)" ] \
+  || { echo "HEAD moved since the panel ran — re-run it; NOT cleared"; exit 1; }
 # REST, not `gh pr view --json baseRepository` — that field does not exist, and without
 # `set -e` the failure is silent and falls back to origin, i.e. the fork.
 # The first clearance runs BEFORE any PR exists — that is the prescribed ordering — so a
@@ -291,9 +325,14 @@ file and `drive-status` will say so.
 
 ```text
 panel cleared : <sha>          # $(git rev-parse --git-path drive/state)
-bots cleared  : <sha>          # the codex wrapper's "Reviewed commit:", NOT the +1
+bots read     : <sha>          # the codex review's `.commit_id`, NOT the +1
 tip           : <sha>
 ```
+
+"Read", not "cleared". The wrapper proves which tree the bot looked at; nothing in the
+API proves the bot is finished with it, which is why `bot-gate`'s verdict is
+`NO_PENDING_EVIDENCE` rather than a clearance (ADR 0004). The *panel's* clearance is the
+one that admits LAND.
 
 Take the bots' SHA from the review wrapper, not the reaction — a `+1` carries no SHA and
 survives a force-push, so a stale one reads exactly like approval of the current head:
@@ -394,7 +433,8 @@ good diff and the cap is spent on real findings.
 
 ### Squash-merge, then clean up
 
-**Exit gate:** merged at a tip every configured bot cleared, with a fresh base, branch reset, bead
+**Exit gate:** merged at a tip every configured bot read with no pending round and no
+undispositioned finding, with a fresh base, branch reset, bead
 closed (`br close <id>`), `DRIVE.md` updated — the last two through a reviewed path.
 
 `br close` cannot ride this branch. It is tempting to think it can: `.beads/issues.jsonl`

@@ -1,9 +1,30 @@
 #!/usr/bin/env bash
-# bot-gate — decide whether a PR's review bots have cleared the CURRENT tip.
+# bot-gate — report whether anything indicates a PR's review bots are still working, or
+# have left findings nobody dispositioned.
 #
-# Exits 0 only when every configured bot has finished a round on this exact tip and the
-# finding list has stopped changing. Any doubt exits non-zero: an API failure, an
-# unsettled comment list, or a missing signal is NOT clearance.
+# WHAT EXIT 0 CLAIMS, exactly:
+#
+#   Across a set of API reads finishing at time T, nothing indicated an unfinished review
+#   round on this exact tip, and no bot finding on it was left undispositioned.
+#
+# It does NOT claim the bots are finished, and the name of the verdict says so:
+# NO_PENDING_EVIDENCE, not CLEAR. Neither bot emits a round-terminal signal. Measured
+# across 19 rounds on this repo's PR #16, the codex bot's review state is always
+# COMMENTED — never APPROVED, GitHub's natural completion signal — and its +1 reaction
+# fired zero times. There is no field to read. Every conclusion below is drawn from
+# ABSENCE, and absence observed over a finite window is not proof.
+#
+# Nor is T an instant. These reads are not atomic; they span the run, so the claim is
+# bounded by an interval, and the JSON reports both ends of it.
+#
+# The honest primitive would be a bot-owned CheckRun bound to head_sha carrying
+# status=completed, made a required status check — GitHub defines exactly those fields and
+# neither bot here emits one. Polling cannot synthesize it. So this is a stop sign, not a
+# green light: exit 0 means "nothing here says wait", and a human still owns the merge.
+# Where the forge can enforce a rule server-side — required checks, required conversation
+# resolution — prefer that. Those are decidable. This is not.
+#
+# Any doubt exits non-zero: an API failure or a missing signal is NOT clearance.
 #
 # It gates on UNRESOLVED bot review threads, not on a raw comment count. A raw count is
 # unsatisfiable — an answered false positive stays anchored to the tip forever, and GitHub
@@ -11,7 +32,7 @@
 # let a real one merge. Thread resolution is the disposition signal that distinguishes
 # them, and it is the one the author controls by acting.
 #
-# Usage: bot-gate <pr-number> [--settle-seconds N] [--no-coderabbit] [--json]
+# Usage: bot-gate <pr-number> [--no-coderabbit] [--json]
 #
 # This exists as a script rather than a snippet in SKILL.md because the same logic was
 # written three times as prose and was wrong three different ways: it enforced nothing
@@ -22,28 +43,49 @@
 # this can. The first version of THIS file still carried half of the second bug — it
 # excluded the author's reply from the count but not the bot's original finding — which
 # is why the count is now reported and not gated.
+#
+# TWO CLAUSES WERE REMOVED, deliberately, and should not come back without new evidence:
+#
+# 1. The settle window — sample the unresolved count, sleep 120s, sample again, and
+#    require the wrapper to have aged past the window. It defended against a delivery gap
+#    (the review wrapper landing before its own line comments) that was then measured not
+#    to exist. On PR #16 every round's comments carry the wrapper's own timestamp to
+#    within a second: 19:40:19Z/19:40:19Z, 20:24:30Z/20:24:31Z, 03:55:25Z/03:55:25Z. The
+#    bot submits a round atomically; the apparent gap was an artifact of polling two
+#    endpoints in sequence. A clause that defends against nothing still costs two minutes
+#    a call — and no finite window can exclude a later comment anyway, so it was never a
+#    proof, only a delay that felt like one.
+#
+# 2. The skipped-vs-changed-files intersection. A "Files skipped from review" list
+#    enumerates files of the PR being reviewed, by construction — CodeRabbit cannot skip a
+#    file the PR does not touch. So the intersection was non-empty whenever a skip existed,
+#    making it identical to the blanket "any skip blocks" rule it was written to replace,
+#    and the only way to empty it was a truncated changed-files response, i.e. fail-open.
+#    The skip list is now REPORTED and not gated: a vendor skipping a file it judged
+#    trivial is a thing to read, not a thing to deadlock on.
 
 set -uo pipefail
 
 PR="${1:-}"; shift || true
-SETTLE=120
 JSON=false
 NO_CR=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --settle-seconds) [[ $# -ge 2 ]] || { echo "--settle-seconds needs a value" >&2; exit 2; }
-                      SETTLE="$2"; shift 2 ;;
+    # Removed rather than accepted-and-ignored: a caller passing it believes it is buying
+    # a guarantee, and silently taking the flag would keep that belief alive.
+    --settle-seconds) echo "--settle-seconds was removed: the settle window it configured defended against a delivery gap that does not exist (see the header)" >&2; exit 2 ;;
     --no-coderabbit)  NO_CR=true; shift ;;
     --json)           JSON=true; shift ;;
     *)                echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
-[[ -n "$PR" ]] || { echo "usage: bot-gate <pr-number> [--settle-seconds N] [--json]" >&2; exit 2; }
+[[ -n "$PR" ]] || { echo "usage: bot-gate <pr-number> [--no-coderabbit] [--json]" >&2; exit 2; }
 [[ "$PR" =~ ^[0-9]+$ ]] || { echo "PR must be a number" >&2; exit 2; }
-# Validated here, not trusted at `sleep` time: `sleep abc` errors and returns 1, and with
-# no `set -e` the script would sail on, sampling A and B back-to-back so SETTLED is
-# trivially true — silently disabling the one check a human cannot eyeball.
-[[ "$SETTLE" =~ ^[0-9]+$ ]] || { echo "--settle-seconds must be a number" >&2; exit 2; }
+
+# Both ends of the observation interval are reported: the claim is bounded by a window,
+# not asserted at an instant, and a consumer that wants to know how stale the read is
+# needs the numbers rather than a promise.
+OBSERVED_FROM=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 for c in gh jq git; do
   command -v "$c" >/dev/null 2>&1 || { echo "BLOCKED: $c not on PATH" >&2; exit 3; }
@@ -77,8 +119,6 @@ iso_to_epoch() {
   date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$1" +%s 2>/dev/null && return 0
   return 1
 }
-DATE_UNPARSED=false
-
 # --slurp, then pipe to jq: --paginate applies --jq per page, so a filter passed with
 # --jq emits one result per page and any comparison against a single value breaks once
 # the endpoint spans more than one page.
@@ -89,13 +129,26 @@ api() {
   printf '%s' "$out"
 }
 
-# --- has the codex bot finished a round on THIS tip? ---
-# The wrapper carries the SHA; the +1 reaction carries only a timestamp. Either can be
-# the completion signal — measured, the bot leaves a wrapper on rounds with findings and
-# may leave only a +1 on a clean round — but only the wrapper can prove WHICH tree was
-# read, so a reaction-only round is reported separately rather than silently accepted.
+# A 200 whose body jq cannot parse is not an answer. Every reader below uses `2>/dev/null`
+# with a fallback, and each of those fallbacks points the same way: an unparseable
+# reactions page becomes "no eyes reaction", an unparseable comments page becomes "no skip
+# notice" AND "CodeRabbit never commented here". All three clear. Validate the payload once
+# at the point it arrives instead of trusting each reader to invent a safe default —
+# a guard keyed on the condition, not on the list of readers that happen to exist today.
+require_json() {  # $1 = what it is, for the message; $2 = payload
+  printf '%s' "$2" | jq -e 'type' >/dev/null 2>&1 \
+    || { echo "BLOCKED: $1 response is not valid JSON" >&2; exit 3; }
+}
+
+# --- did the codex bot submit a review naming THIS tip? ---
+# This is the one thing here that is decidable: a submitted review object carries
+# `.commit_id`, so it proves WHICH tree the bot read. It does not prove the round is over,
+# and nothing else in the API does either. The +1 reaction is sometimes described as the
+# clean-round signal, but it fired zero times across 19 rounds on PR #16 and GitHub allows
+# one reaction per user per item — so an old one may never refresh. Do not gate on it.
 REVIEWS=$(api "repos/$REPO/pulls/$PR/reviews") \
   || { echo "BLOCKED: reviews query failed" >&2; exit 3; }
+require_json "reviews" "$REVIEWS"
 # EXACT login and Bot type, not a prefix: on a public repo anyone may submit a review, and
 # `chatgpt-codex-connector-attacker` satisfies a prefix test — which would let an outside
 # account forge the wrapper this gate treats as proof of review.
@@ -126,20 +179,28 @@ WRAPPER_AT=$(printf '%s' "$WRAPPER_JSON" | jq -r '.latest' 2>/dev/null)
 # `chatgpt-codex-connector` with `__typename: "Bot"`. The suffix filter matches nothing
 # here — measured, it counted 0 against 23 genuinely unresolved bot threads, making this
 # gate silently fail-open on the one hazard it exists to block.
+# Scoped to the two bots this skill actually gates on, not to every account GitHub types
+# as a Bot. § 7 says "either bot"; counting all of them let an unrelated app's unresolved
+# thread — a linter, a coverage reporter, anything installed on the repo — block a merge
+# for a reason this gate has no business having an opinion about. Both filters apply:
+# __typename guards against a human account registering one of these logins.
 # Paginated with a cursor: resolved threads count toward the page size, so a long PR
 # overflows 100 and an unresolved finding in the overflow would be invisible.
+GRAPHQL_BOT_LOGINS='["chatgpt-codex-connector","coderabbitai"]'
 count_unresolved_bot_threads() {
   local cursor=null total=0 page
   while :; do
     page=$(gh api graphql -f query='
       query($o:String!,$r:String!,$n:Int!,$c:String){ repository(owner:$o,name:$r){ pullRequest(number:$n){
         reviewThreads(first:100, after:$c){ pageInfo{ hasNextPage endCursor }
-          nodes { isResolved comments(first:1){ nodes { author{ __typename } } } } } } } }' \
+          nodes { isResolved comments(first:1){ nodes { author{ __typename login } } } } } } } }' \
       -F o="${REPO%%/*}" -F r="${REPO##*/}" -F n="$PR" -F c="$cursor" 2>/dev/null) || return 1
     local n
-    n=$(printf '%s' "$page" | jq -r '[.data.repository.pullRequest.reviewThreads.nodes[]
+    n=$(printf '%s' "$page" | jq -r --argjson bots "$GRAPHQL_BOT_LOGINS" '
+          [.data.repository.pullRequest.reviewThreads.nodes[]
           | select(.isResolved==false)
-          | select(.comments.nodes[0].author.__typename=="Bot")] | length' 2>/dev/null) || return 1
+          | select(.comments.nodes[0].author.__typename=="Bot")
+          | select(.comments.nodes[0].author.login as $l | $bots | index($l))] | length' 2>/dev/null) || return 1
     [[ "$n" =~ ^[0-9]+$ ]] || return 1
     total=$(( total + n ))
     [[ "$(printf '%s' "$page" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')" == "true" ]] || break
@@ -148,28 +209,12 @@ count_unresolved_bot_threads() {
   done
   printf '%s' "$total"
 }
-A=$(count_unresolved_bot_threads) || { echo "BLOCKED: thread query failed" >&2; exit 3; }
-sleep "$SETTLE"
-B=$(count_unresolved_bot_threads) || { echo "BLOCKED: thread query failed on re-check" >&2; exit 3; }
-[[ "$A" =~ ^[0-9]+$ && "$B" =~ ^[0-9]+$ ]] || { echo "BLOCKED: cannot parse threads" >&2; exit 3; }
-
-# Stability alone is not completion: the wrapper can land before its findings, so both
-# samples read 0 inside that gap and "unchanged" means nothing. Require the WRAPPER to
-# have aged past the settle window too — if it landed longer ago than the window and no
-# comment has appeared since, the round really is done.
-SETTLED=false
-if [[ "$A" == "$B" ]]; then
-  if [[ -n "$WRAPPER_AT" ]]; then
-    W_EPOCH=$(iso_to_epoch "$WRAPPER_AT")
-    NOW=$(date -u +%s)
-    if [[ -n "$W_EPOCH" ]]; then
-      (( NOW - W_EPOCH >= SETTLE )) && SETTLED=true
-    else
-      # Could not parse the timestamp: that is doubt, not settlement.
-      DATE_UNPARSED=true
-    fi
-  fi
-fi
+# One sample, no settle window: see the header. Sampling twice around a sleep tested
+# whether findings were still arriving, but a round arrives atomically, so the second
+# sample could only ever differ if a WHOLE new round landed inside the window — which the
+# `eyes` check below detects directly and without the two-minute wait.
+UNRESOLVED=$(count_unresolved_bot_threads) || { echo "BLOCKED: thread query failed" >&2; exit 3; }
+[[ "$UNRESOLVED" =~ ^[0-9]+$ ]] || { echo "BLOCKED: cannot parse threads" >&2; exit 3; }
 
 # --- CodeRabbit, when configured ---
 # "query failed" is not "not configured": mapping both to absent would let a transient
@@ -230,6 +275,7 @@ CR_SKIPPED=false
 # commented here before but has no check for this head yet", which must block.
 if [[ "$CR_STATE" == "SUCCESS" || "$CR_STATE" == "absent" ]]; then
   if CRC=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/comments" 2>/dev/null); then
+    require_json "PR comments" "$CRC"
     # CodeRabbit's own markers, verified against its real output: the plan notice reads
     # "PR reviews subject to [rate limits](...)" — a markdown link, so the phrase is not
     # contiguous — and the HTML marker is "review paused"/"rate limited by coderabbit.ai".
@@ -253,9 +299,15 @@ if [[ "$CR_STATE" == "SUCCESS" || "$CR_STATE" == "absent" ]]; then
   fi
 fi
 
-# A new round can start on an UNCHANGED tip (`@codex review`), so an aged wrapper plus
-# resolved threads is not proof nothing is in flight. An `eyes` reaction newer than the
-# latest wrapper means the bot is reviewing right now.
+# A new round can start on an UNCHANGED tip (`@codex review`), so a wrapper plus resolved
+# threads is not proof nothing is in flight. An `eyes` reaction newer than the latest
+# wrapper means the bot is reviewing right now.
+#
+# ONE-WAY ONLY. Its presence blocks; its absence clears nothing, and must never be read as
+# "no round is running". GitHub allows one reaction per user per item, so the bot cannot
+# re-add an `eyes` it already left, and a round started by any means that does not react
+# leaves no trace here at all. This is a detector for a hazard, not a proof of its absence
+# — which is the whole shape of this script.
 ROUND_ACTIVE=false
 if [[ -n "$WRAPPER_AT" ]]; then
   # Pipe to jq rather than `--jq`, like every other query here: it keeps the raw response
@@ -264,11 +316,19 @@ if [[ -n "$WRAPPER_AT" ]]; then
   # unparseable timestamp is doubt, and doubt is not clearance. Previously both were
   # indistinguishable from "no eyes reaction", which cleared.
   if REACTIONS=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/reactions" 2>/dev/null); then
+    require_json "reactions" "$REACTIONS"
     EYES_AT=$(printf '%s' "$REACTIONS" \
-      | jq -r '[.[][] | select(.user.login=="chatgpt-codex-connector[bot]") | select(.content=="eyes") | .created_at] | max // ""' 2>/dev/null || echo "")
-    if [[ -n "$EYES_AT" ]]; then
-      E=$(iso_to_epoch "$EYES_AT"); W=$(iso_to_epoch "$WRAPPER_AT")
-      if [[ -n "$E" && -n "$W" ]]; then (( E > W )) && ROUND_ACTIVE=true
+      | jq -r '[.[][] | select(.user.login=="chatgpt-codex-connector[bot]") | select(.content=="eyes") | .created_at] | max // ""') \
+      || { echo "BLOCKED: cannot read reactions" >&2; exit 3; }
+    # An unparseable WRAPPER_AT blocks whether or not a reaction exists: it is the only
+    # reference point the active-round detector has, so without it the detector cannot run
+    # at all, and a check that cannot run has not passed.
+    W=$(iso_to_epoch "$WRAPPER_AT")
+    if [[ -z "$W" ]]; then
+      ROUND_ACTIVE=true
+    elif [[ -n "$EYES_AT" ]]; then
+      E=$(iso_to_epoch "$EYES_AT")
+      if [[ -n "$E" ]]; then (( E > W )) && ROUND_ACTIVE=true
       else ROUND_ACTIVE=true; fi   # cannot compare -> assume a round is running
     fi
   else
@@ -276,13 +336,18 @@ if [[ -n "$WRAPPER_AT" ]]; then
   fi
 fi
 
-# A "Files skipped from review" list is only benign when it covers files this PR did not
-# meaningfully change. Ignoring the marker entirely (to avoid blocking on permitted skips)
-# meant a central source file could be skipped and still merge; blocking on the marker
-# meant every permitted skip deadlocked. Compare the two lists instead.
-CR_SKIPPED_CHANGED=""
+# REPORTED, NOT GATED. This list used to be intersected against the PR's changed files, on
+# the theory that a skip is benign when it covers files the PR did not touch. It cannot:
+# CodeRabbit's skip list enumerates files of the PR it is reviewing, by construction, so
+# the intersection was non-empty whenever a skip existed — behaviourally identical to the
+# blanket "any skip blocks" rule it replaced, which deadlocked every permitted skip. The
+# one way to empty it was a truncated changed-files response, i.e. the fail-open direction.
+# So the clause could only be the old deadlock or a fail-open, never the thing it claimed.
+# Decide the underlying policy instead, and this skill's answer is that a vendor skipping
+# what it judged trivial is acceptable: print the list so a human can disagree.
+CR_SKIPLIST=""
 if [[ "$CR_STATE" == "SUCCESS" ]] && ! $CR_SKIPPED && [[ -n "${CRC:-}" ]]; then
-  SKIPLIST=$(printf '%s' "$CRC" | jq -r '[.[][] | select(.user.login=="coderabbitai[bot]")
+  CR_SKIPLIST=$(printf '%s' "$CRC" | jq -r '[.[][] | select(.user.login=="coderabbitai[bot]")
       | select(.body|test("auto-generated comment:";"i"))] | sort_by(.created_at) | last // empty | .body' 2>/dev/null \
     | awk '
         tolower($0) ~ /files skipped from review/ {
@@ -297,25 +362,7 @@ if [[ "$CR_STATE" == "SUCCESS" ]] && ! $CR_SKIPPED && [[ -n "${CRC:-}" ]]; then
     | sed -E 's/^[[:space:]]*[-*][[:space:]]+//' \
     | sed -E 's/[[:space:]]*\([0-9]+ hunks?\)[[:space:]]*$//' \
     | sed -E 's/`//g; s/\*\*//g' \
-    | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | grep -v '^$' | sort -u)
-  if [[ -n "$SKIPLIST" ]]; then
-    # Pipe to jq rather than `-q`, like every other query here — it keeps the raw
-    # response inspectable and lets the fixture stub answer without reimplementing gh.
-    # And fail CLOSED: an empty CHANGED from a failed query makes the intersection empty,
-    # which reads as "no changed file was skipped" and clears a PR whose central files
-    # CodeRabbit explicitly did not review.
-    # REST + --paginate, not `gh pr view --json files`: that field is GraphQL
-    # `files(first: 100)` and truncates on a large PR, so a skipped file late in the list
-    # would never intersect and the guard would clear.
-    if ! FILES_JSON=$(gh api --paginate --slurp "repos/$REPO/pulls/$PR/files" 2>/dev/null); then
-      echo "BLOCKED: changed-files query failed" >&2; exit 3
-    fi
-    if ! CHANGED=$(printf '%s' "$FILES_JSON" | jq -er '[.[][].filename] | join("\n")' 2>/dev/null); then
-      echo "BLOCKED: cannot parse changed files" >&2; exit 3
-    fi
-    CHANGED=$(printf '%s' "$CHANGED" | sort -u)
-    CR_SKIPPED_CHANGED=$(comm -12 <(printf '%s\n' "$SKIPLIST") <(printf '%s\n' "$CHANGED") | head -20)
-  fi
+    | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | grep -v '^$' | sort -u | head -20)
 fi
 
 # "No CodeRabbit signal" is genuinely undecidable from any query: it can be installed
@@ -331,43 +378,51 @@ if [[ -n "${CRC:-}" ]]; then
 fi
 
 VERDICT="BLOCKED"
-if [[ "$WRAPPER_TIP" -gt 0 ]] && $SETTLED && ! $ROUND_ACTIVE && [[ "$B" -eq 0 ]] \
-   && [[ -z "$CR_SKIPPED_CHANGED" ]] \
+if [[ "$WRAPPER_TIP" -gt 0 ]] && ! $ROUND_ACTIVE && [[ "$UNRESOLVED" -eq 0 ]] \
    && { { [[ "$CR_STATE" == "absent" ]] && ! $CR_CONFIGURED && $NO_CR; } \
         || { [[ "$CR_STATE" == "SUCCESS" ]] && ! $CR_SKIPPED; }; }; then
-  VERDICT="CLEAR"
+  VERDICT="NO_PENDING_EVIDENCE"
+fi
+OBSERVED_TO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+# Carried in the output, not just in this file's header, because the exit code is chained
+# into `gh pr merge` by a caller who will never read the header.
+# Only asserted when it holds. Emitting it unconditionally put "nothing indicated an
+# unfinished round" beside `"verdict": "BLOCKED"` in the same object — a machine reader
+# taking the sentence at face value would have it exactly backwards.
+if [[ "$VERDICT" == "NO_PENDING_EVIDENCE" ]]; then
+  CLAIM="across API reads from $OBSERVED_FROM to $OBSERVED_TO, nothing indicated an unfinished round on ${TIP:0:10} or an undispositioned bot finding on it; this is not proof the bots are finished"
+else
+  CLAIM=""
 fi
 
 if $JSON; then
   jq -n --arg tip "$TIP" --arg v "$VERDICT" --arg cr "$CR_STATE" \
-        --argjson w "$WRAPPER_TIP" --argjson a "$A" --argjson b "$B" \
-        --arg settled "$SETTLED" --arg cr_skipped "$CR_SKIPPED" --arg round_active "$ROUND_ACTIVE" --arg skipped_changed "$CR_SKIPPED_CHANGED" \
-    '{tip:$tip,verdict:$v,wrapper_on_tip:$w,unresolved_first:$a,unresolved_after:$b,
-      settled:($settled=="true"),coderabbit:$cr,coderabbit_skipped:($cr_skipped=="true"),round_active:($round_active=="true"),
-      skipped_changed_files:($skipped_changed|split("\n")|map(select(length>0)))}'
+        --argjson w "$WRAPPER_TIP" --argjson u "$UNRESOLVED" \
+        --arg from "$OBSERVED_FROM" --arg to "$OBSERVED_TO" --arg claim "$CLAIM" \
+        --arg cr_skipped "$CR_SKIPPED" --arg round_active "$ROUND_ACTIVE" --arg skiplist "$CR_SKIPLIST" \
+    '{tip:$tip,verdict:$v,claim:(if $claim=="" then null else $claim end),observed_from:$from,observed_to:$to,
+      wrapper_on_tip:$w,unresolved_bot_threads:$u,
+      coderabbit:$cr,coderabbit_skipped:($cr_skipped=="true"),round_active:($round_active=="true"),
+      coderabbit_skipped_files:($skiplist|split("\n")|map(select(length>0)))}'
 else
   printf 'tip              %s\n' "${TIP:0:10}"
-  printf 'codex wrapper    %s on this tip\n' "$WRAPPER_TIP"
-  printf 'unresolved bot   %s -> %s thread(s) (settled: %s)\n' "$A" "$B" "$SETTLED"
+  printf 'codex wrapper    %s naming this tip\n' "$WRAPPER_TIP"
+  printf 'unresolved bot   %s thread(s)\n' "$UNRESOLVED"
   printf 'coderabbit       %s\n' "$CR_STATE"
+  printf 'observed         %s .. %s\n' "$OBSERVED_FROM" "$OBSERVED_TO"
   printf '\nverdict: %s\n' "$VERDICT"
-  [[ "$WRAPPER_TIP" -eq 0 ]] && printf '  ⚠ no wrapper names this tip. The bot may have finished with only a +1 (it does\n    that on a clean round) — in which case nothing proves WHICH tree it read. Push or\n    `@codex review` to get a wrapper, or accept the round explicitly and say so.\n'
-  if ! $SETTLED; then
-    if $DATE_UNPARSED; then
-      printf '  ⚠ could not parse the wrapper timestamp (%s), so its age is unknown — not settled.\n' "$WRAPPER_AT"
-    elif [[ -z "$WRAPPER_AT" ]]; then
-      : # no wrapper at all — the wrapper warning above already says so; the count is fine
-    else
-      printf '  ⚠ unresolved-thread count changed during the settle window — findings are still arriving.\n'
-    fi
-  fi
-  [[ "$B" -gt 0 ]] && printf '  ⚠ %s UNRESOLVED bot thread(s). Fix each, or answer it with evidence and resolve the\n    thread — resolving is how you record that it was dispositioned.\n' "$B"
+  [[ "$VERDICT" == "NO_PENDING_EVIDENCE" ]] && printf '  = %s\n' "$CLAIM"
+  [[ "$WRAPPER_TIP" -eq 0 ]] && printf '  ⚠ no review from the codex bot names this tip, so nothing proves WHICH tree it read.\n    Push or `@codex review` to get one, or accept the round explicitly and say so.\n'
+  [[ "$UNRESOLVED" -gt 0 ]] && printf '  ⚠ %s UNRESOLVED bot thread(s). Fix each, or answer it with evidence and resolve the\n    thread — resolving is how you record that it was dispositioned.\n' "$UNRESOLVED"
   [[ "$CR_STATE" == "absent" ]] && ! $CR_CONFIGURED && ! $NO_CR && printf '  ⚠ no CodeRabbit signal at all — on a new PR that is indistinguishable from "installed\n    but not started yet". Wait, or pass --no-coderabbit if this repo genuinely has none.\n'
   [[ "$CR_STATE" == "absent" ]] && $CR_CONFIGURED && printf '  ⚠ CodeRabbit has commented on this PR but has no check for THIS head yet — it has\n    not started reviewing it. Wait, or `@coderabbitai review`.\n'
   [[ "$CR_STATE" == "query-failed" ]] && printf '  ⚠ CodeRabbit status could not be queried — not the same as "not configured".\n'
   $ROUND_ACTIVE && printf '  ⚠ an `eyes` reaction is newer than the wrapper — a fresh round is running on this\n    same tip. Wait for it to finish.\n'
-  [[ -n "$CR_SKIPPED_CHANGED" ]] && printf '  ⚠ CodeRabbit skipped file(s) this PR changes — nobody reviewed them:\n%s\n' "$(printf '%s' "$CR_SKIPPED_CHANGED" | sed 's/^/      /')"
-  $CR_SKIPPED && printf '  ⚠ CodeRabbit reported SUCCESS but its walkthrough mentions a rate limit or skipped\n    files — nobody reviewed those. `@coderabbitai review` and wait.\n'
+  # Reported, never gated — see the CR_SKIPLIST block. Every file here is one this PR
+  # changes, since that is the only kind CodeRabbit can skip; read the list and decide.
+  [[ -n "$CR_SKIPLIST" ]] && printf '  · CodeRabbit skipped these file(s) as trivial — it did not review them:\n%s\n' "$(printf '%s' "$CR_SKIPLIST" | sed 's/^/      /')"
+  $CR_SKIPPED && printf '  ⚠ CodeRabbit reported SUCCESS but its walkthrough mentions a rate limit or a paused\n    review — nobody reviewed this. `@coderabbitai review` and wait.\n'
 fi
 
-[[ "$VERDICT" == "CLEAR" ]] && exit 0 || exit 1
+[[ "$VERDICT" == "NO_PENDING_EVIDENCE" ]] && exit 0 || exit 1

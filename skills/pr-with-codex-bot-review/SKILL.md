@@ -51,13 +51,17 @@ the same PR:
      | jq '.[] | select(.user.login == "chatgpt-codex-connector[bot]") | {content, created_at}'
    ```
 
-   When the bot has finished and is happy, you'll see `{"content": "+1", ...}`. (This is
-   what the bot's own boilerplate means by "otherwise it will react with 👍.")
+   The bot's own boilerplate says it reacts 👍 when it has nothing to report. **Do not
+   build anything on that.** Measured across 19 rounds on this repo's PR #16, `+1` fired
+   **zero** times — it appears only on a round that finds nothing, and this PR never had
+   one. A gate that waits for it waits forever.
 
-   **It approves the tree the bot read, which is not always the tip.** The reaction has a
-   timestamp and no SHA, so after a force-push a surviving `+1` from the previous head
-   looks identical to a fresh one. This channel tells you the bot *finished a round*, not
-   that it finished *this* round — § 7 has the check that establishes which.
+   **And when it does appear it approves the tree the bot read, which is not always the
+   tip.** The reaction has a timestamp and no SHA, so after a force-push a surviving `+1`
+   from the previous head looks identical to a fresh one — and GitHub allows one reaction
+   per user per item, so the bot cannot refresh it even if it wanted to. Treat `eyes` as
+   evidence a round is *running* and `+1` as evidence of nothing; § 7 has the check that
+   establishes which tree was read.
 
 2. **Pull-request review** with `state: COMMENTED` — usually just boilerplate:
 
@@ -76,9 +80,9 @@ the same PR:
    gh api repos/<owner>/<repo>/pulls/<N>/comments      # actual findings
    ```
 
-When checking whether the bot has weighed in, reactions are the cheapest signal (
-the cheapest completion signal — but see § 7 before treating it as approval of the
-current head), then line comments (for findings if any). Findings are
+When checking whether the bot has weighed in, reactions are the cheapest signal to read —
+but they are not a completion signal, and § 7 explains why you must not treat one as
+approval of the current head. Line comments carry the findings, if any. Findings are
 encoded with markdown priority badges:
 
 ```markdown
@@ -102,10 +106,17 @@ is also done. CodeRabbit's signals:
      --jq '.statusCheckRollup[] | select(.context == "CodeRabbit") | "\(.state) at \(.startedAt)"'
    ```
 
-   `SUCCESS` is not the same as "reviewed". CodeRabbit also returns `SUCCESS` when it
-   **skips** — on a rate limit, or when it judges the diff similar to previous changes —
-   and names what it skipped in a "Files skipped from review" list in the walkthrough
-   comment. Read that list before treating the check as a pass:
+   `SUCCESS` is not the same as "reviewed", and there are two different ways it can lie.
+
+   **A rate limit or a paused review means nobody reviewed anything.** The check is green
+   because CodeRabbit never ran. `@coderabbitai review` to re-trigger and wait; `bot-gate`
+   blocks on this.
+
+   **A "Files skipped from review" list is a narrower claim**: CodeRabbit ran, judged some
+   files trivial or similar to previous changes, and did not read them. Every file on that
+   list is one this PR touches — it cannot skip a file the PR does not change — so do not
+   go looking for whether the skip "covers files central to the change" as a gating test;
+   that question can only be answered by reading it.
 
    ```bash
    gh api repos/<owner>/<repo>/issues/<N>/comments \
@@ -113,10 +124,10 @@ is also done. CodeRabbit's signals:
      | grep -A20 -i 'skipped from review'
    ```
 
-   A skip on files this PR does not meaningfully change is fine. A rate-limit skip, an
-   unexplained one, or one covering files central to the change means **nobody reviewed
-   them** — `@coderabbitai review` to re-trigger and wait. Say which reason applied;
-   "the check was green" is not a review.
+   `bot-gate` prints this list and does not block on it: gating on it is equivalent to
+   blocking on every skip, which deadlocks. It is a vendor's judgement call, so read it and
+   re-trigger if you disagree. Say which reason applied; "the check was green" is not a
+   review.
 
 2. **Issue comment** — `coderabbitai[bot]` posts an auto-summary / walkthrough as a
    regular PR comment (the `issues/<N>/comments` endpoint, NOT the `pulls/<N>/comments`
@@ -362,11 +373,14 @@ Merge when the reaction-based check passes:
   reaction and the comparison proves nothing.)
 
   ```bash
-  # the wrapper for THIS head, and when it landed
+  # the wrapper for THIS head, and when it landed. Match `.commit_id` — the API's own
+  # 40-char SHA — not seven hex characters scraped out of the body: 28 bits collides in a
+  # large history and can be ground out deliberately, letting a stale wrapper stand in as
+  # approval of the current tree.
   gh api --paginate --slurp repos/<owner>/<repo>/pulls/<N>/reviews \
     | jq -r --arg tip "$(git rev-parse HEAD)" '
         [.[][] | select(.user.login=="chatgpt-codex-connector[bot]" and .user.type=="Bot")
-         | select(.body|test("Reviewed commit:[^0-9a-f]*"+$tip[0:7]))] | last | .submitted_at'
+         | select(.commit_id==$tip)] | last | .submitted_at'
   # the +1 specifically — not `eyes`, which means the round is still running
   gh api repos/<owner>/<repo>/issues/<N>/reactions \
     --jq '.[] | select(.user.login=="chatgpt-codex-connector[bot]" and .user.type=="Bot")
@@ -384,10 +398,26 @@ Merge when the reaction-based check passes:
 
   1. A wrapper exists whose `Reviewed commit:` equals the tip. That is the bot stating,
      with a SHA, which tree it read.
-  2. Run **`scripts/bot-gate <PR>`** and require exit 0. It checks that a wrapper names
-     this tip, that the count of unresolved bot review threads is stable across a settle
-     window and zero, and that CodeRabbit (if configured) is green — failing closed on any
-     API error, missing tool, or unparseable response.
+  2. Run **`scripts/bot-gate <PR>`** and require exit 0. It checks that a review from the
+     codex bot names this tip, that no `eyes` reaction post-dates it, that zero review
+     threads from either gated bot are unresolved, and that CodeRabbit (if configured) is
+     green — failing closed on any API error, missing tool, or unparseable response.
+
+     **Know what exit 0 claims, because it is weaker than "the bots cleared this."** The
+     verdict is `NO_PENDING_EVIDENCE`, and it means: across API reads finishing at a
+     reported time, nothing indicated an unfinished round on this tip or an undispositioned
+     bot finding on it. That is an inference from absence. Neither bot emits a
+     round-terminal signal — measured across 19 rounds on this repo's PR #16, the codex
+     bot's review state is always `COMMENTED`, never `APPROVED`, and its `+1` fired zero
+     times — so there is no field that says "done" and no query that can synthesize one.
+     The honest primitive would be a bot-owned CheckRun bound to `head_sha` with
+     `status=completed`, made a required check; neither bot emits one.
+
+     So treat this as a stop sign, not a green light: it tells you when to wait, and a
+     human still owns the merge. **Where the forge can enforce a rule server-side — required
+     status checks, required conversation resolution — put it there instead.** Those are
+     decidable; this is not, and a rule in branch protection cannot be skipped by forgetting
+     to run a script.
 
      Resolve it from the installed skill directory, the same way `drive` resolves
      `drive-status` — skill commands run from the *driven* repo, which has no
@@ -400,20 +430,40 @@ Merge when the reaction-based check passes:
               "$HOME/.agents/skills/pr-with-codex-bot-review"; do
        [ -x "$d/scripts/bot-gate" ] && { BOT_GATE="$d/scripts/bot-gate"; break; }
      done
-     # -R the upstream: on a fork clone a bare `gh pr merge 42` resolves 42 against YOUR
-     # fork. `.parent` is upstream when this repo is a fork, the repo itself otherwise.
-     R=$(gh repo view --json nameWithOwner,parent -q '.parent.nameWithOwner // .nameWithOwner')
-     "$BOT_GATE" 42 && gh pr merge 42 -R "$R" --squash --delete-branch \
-       --match-head-commit "$(git rev-parse HEAD)"
+     "$BOT_GATE" 42 || exit 1
      ```
 
      If none resolve you are running from a checkout: invoke it by its path there.
 
+     **Do not chain this straight into `gh pr merge`.** It is tempting — `bot-gate 42 &&
+     gh pr merge 42 …` — and it merges on a condition the gate never checked: the gate
+     reasons about the *head*, and says nothing about whether the base branch advanced
+     while the bot rounds were running. A behind branch squash-merges into a composition
+     no reviewer saw. § 8 is the merge sequence and it checks that; run it, don't inline a
+     shorter version of it here.
+
      `scripts/bot-gate.test` runs it against a stubbed `gh` with canned API responses —
-     thirty-one cases, each one a defect a reviewer actually found: a forged wrapper login, a
-     `[bot]`-suffix filter that matched nothing, a settle window satisfied by two zeros in
-     the delivery gap, a CodeRabbit rate-limit skip, an API failure. Run it after touching
-     the gate; every case has been shown to go red against the real bug.
+     thirty-seven cases, each one a defect a reviewer actually found: a forged wrapper
+     login, a `[bot]`-suffix filter that matched nothing, an unrelated app's unresolved
+     thread holding the merge, a CodeRabbit rate-limit skip, an API failure. Run it after
+     touching the gate; every case has been shown to go red against the real bug.
+
+     **Two clauses were deliberately removed. Do not restore them without new evidence.**
+
+     - A *settle window* — sample the unresolved count, sleep 120s, sample again, require
+       the wrapper to have aged past the window. It defended against the wrapper landing
+       before its own line comments, which was then measured not to happen: on PR #16 every
+       round's comments carry the wrapper's timestamp to within a second. The bot submits a
+       round atomically, and the apparent gap was an artifact of polling two endpoints in
+       sequence. No finite window can exclude a later comment anyway, so it was never a
+       proof — only a two-minute delay that felt like one.
+     - An *intersection of CodeRabbit's skip list against the changed files*. A "Files
+       skipped from review" list enumerates files of the PR being reviewed, by construction;
+       CodeRabbit cannot skip a file the PR does not touch. So the intersection was
+       non-empty whenever a skip existed — identical to the blanket "any skip blocks" rule
+       that had deadlocked every permitted skip — and the only way to empty it was a
+       truncated changed-files response, i.e. the fail-open direction. The skip list is now
+       printed and not gated.
 
      It is a script, not a snippet here, because this logic was written three times as
      prose and was wrong three different ways: it enforced nothing (a trailing `echo`
@@ -441,10 +491,17 @@ Merge when the reaction-based check passes:
   Then pass `git rev-parse HEAD` to `--match-head-commit` at merge time so a push landing
   after this check makes the merge refuse rather than take it.
 - CI is green.
-- CodeRabbit status check is `SUCCESS` **and it was a review, not a skip** — check the
-  "Files skipped from review" list per the query above. Absent from the rollup entirely
-  (repo has no CodeRabbit) is still fine; there is nothing to wait for.
-- No outstanding line comments against the current head SHA, from EITHER bot.
+- CodeRabbit status check is `SUCCESS` **and it was a review, not a rate-limit skip or a
+  paused review** — those mean nobody reviewed anything, and the gate blocks on them.
+  A "Files skipped from review" list is different: it names files CodeRabbit judged
+  trivial and chose not to read. The gate prints that list and does not block on it —
+  read it and disagree if you want to, but it is a vendor's judgement call, not a failure.
+  Absent from the rollup entirely (repo has no CodeRabbit) is still fine; there is nothing
+  to wait for.
+- No unresolved review threads from **either gated bot** — `chatgpt-codex-connector` or
+  `coderabbitai`. Not "any account GitHub types as a Bot": counting those let an unrelated
+  app hold the merge over something this skill has no opinion about, with no way for the
+  author to clear it.
 
 Don't merge when:
 
@@ -454,7 +511,8 @@ Don't merge when:
   is not itself a blocker; see the merge conditions above.)
 - CodeRabbit status is `PENDING` — wait, even if codex already approved.
 - CodeRabbit status is `FAILURE` or it left unaddressed line comments on the current head — address.
-- CodeRabbit returned `SUCCESS` by skipping files this change actually touches — re-trigger.
+- CodeRabbit returned `SUCCESS` because it was rate-limited or its review is paused — that
+  is a `SUCCESS` nobody earned. `@coderabbitai review` and wait.
 - CI failed and you haven't determined whether it's flaky or real.
 - You force-pushed and no wrapper names the new tip yet — wait, or `@codex review` (and
   `@coderabbitai review`) to re-trigger. Reactions carry no SHA, so the wrapper is the
@@ -469,15 +527,33 @@ ignoring the actual signal.**
 [ -z "$(git status --porcelain)" ] || { echo "tree dirty — do NOT merge"; exit 1; }
 R=$(gh repo view --json nameWithOwner,parent -q '.parent.nameWithOwner // .nameWithOwner')
 BASE=$(gh pr view <N> -R "$R" --json baseRefName -q .baseRefName)
-gh pr merge <N> -R "$R" --squash --delete-branch --match-head-commit "$(git rev-parse HEAD)"
-# Fetch BEFORE checkout. In a single-branch fork clone neither a local `$BASE` nor
-# `origin/$BASE` exists, so `git checkout "$BASE"` fails — and with no error handling the
-# reset then runs against whatever branch is still checked out. Reset from where the merge
-# actually landed: `origin` is your fork and may not contain it at all.
+[ -n "$BASE" ] || { echo "cannot resolve the base branch"; exit 1; }
+
+# Fetch the base BEFORE merging, not after, because the answer decides whether to merge at
+# all. Bot rounds take time and the base moves during them; `bot-gate` reasons about the
+# HEAD and never looks at the base, so a branch that fell behind during review would
+# otherwise squash into a composition no reviewer ever saw.
+git fetch "https://github.com/$R.git" "+refs/heads/$BASE:refs/remotes/upstream/$BASE" \
+  || { echo "cannot fetch the merge target — base unknown, do NOT merge"; exit 1; }
+git merge-base --is-ancestor "refs/remotes/upstream/$BASE" HEAD \
+  || { echo "REBASE FIRST — $BASE advanced since the review"; exit 1; }
+
+# Check the exit status. `--delete-branch` makes gh switch branches as a side effect, so a
+# FAILED merge still leaves you somewhere plausible-looking; without this the steps below
+# "confirm $BASE is healthy" on a tree where nothing landed, and any caller that closes a
+# tracker item after this block closes it for a merge that never happened.
+gh pr merge <N> -R "$R" --squash --delete-branch --match-head-commit "$(git rev-parse HEAD)" \
+  || { echo "merge did not land — do NOT proceed"; exit 1; }
+
+# Re-fetch after the merge: the ref above predates the squash commit. Reset from where the
+# merge actually landed — `origin` is your fork and may not contain it at all. Fetch before
+# checkout, because in a single-branch fork clone neither a local `$BASE` nor `origin/$BASE`
+# exists, so `git checkout "$BASE"` fails and an unguarded reset then runs against whatever
+# branch is still checked out.
 git fetch "https://github.com/$R.git" "+refs/heads/$BASE:refs/remotes/upstream/$BASE" \
   || { echo "cannot fetch the merge target"; exit 1; }
 git checkout -B "$BASE" "refs/remotes/upstream/$BASE"
-nix build                                    # confirm master is healthy
+nix build                                    # confirm the base is healthy
 ```
 
 `--match-head-commit` takes the **full 40-char OID** — pass `git rev-parse HEAD`, not the
@@ -518,10 +594,11 @@ body.
 PR #191 (a README docs PR) had `+1` from the bot 13 minutes BEFORE I merged.
 I'd been waiting another full cycle for nothing.
 
-**Reactions are the cheapest completion signal**, but approval of *this* head is the
-§ 7 check: a wrapper whose `Reviewed commit:` equals the tip, with the comment list
-settled. Do not require the reaction to post-date anything — § 7 explains why that
-deadlocks.
+**Reactions look like the cheapest completion signal, and are not one.** The `+1` fired
+zero times across 19 rounds on PR #16, and GitHub permits one reaction per user per item,
+so an old one may never refresh. Evidence about *this* head is the § 7 check: a review
+whose `.commit_id` equals the tip, with no unresolved threads from either gated bot. Do not
+require the reaction to post-date anything — § 7 explains why that deadlocks.
 
 ### "Force-pushing breaks the bot's auto-trigger"
 

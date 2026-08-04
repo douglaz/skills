@@ -459,7 +459,13 @@ implement → review loop for each bead.
     ```bash
     R=$(gh repo view --json nameWithOwner,parent -q '.parent.nameWithOwner // .nameWithOwner')
     BASE=$(gh pr view <pr> -R "$R" --json baseRefName -q .baseRefName)
-    gh pr merge <pr> -R "$R" --squash --delete-branch
+    [ -n "$BASE" ] || { echo "cannot resolve the base branch"; exit 1; }
+    # Check the merge's exit status. `--delete-branch` makes gh switch branches as a side
+    # effect, so a FAILED merge still leaves you somewhere plausible-looking — and step 11
+    # then closes the bead for a merge that never happened, which is the exact state this
+    # skill's reviewed-closure path exists to prevent.
+    gh pr merge <pr> -R "$R" --squash --delete-branch \
+      || { echo "merge did not land — do NOT close the bead"; exit 1; }
     # Reset from where the merge LANDED. On a fork clone `origin` is your fork and does
     # not contain the upstream squash commit, so resetting to origin/$BASE silently starts
     # the next bead from a tree missing the one just merged — its PR then replays or

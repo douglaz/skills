@@ -5,6 +5,14 @@
 # fail-open bugs and two deadlocks across its first day, each caught only by a reviewer
 # reading it; these assert the behaviour instead.
 #
+# A note on what changed when the settle window and the skipped-vs-changed intersection
+# were removed. Their fixtures did not all die with them: the ones that pinned the SKIP
+# PARSER (backticks, bold, embedded spaces, extensionless paths, the awk range end) were
+# each written against a real bug and are kept, converted from "blocks" to "is reported".
+# The parser still runs — it just no longer decides anything — so a regression in it now
+# costs a human the information rather than costing them a merge, and that is still worth
+# catching. Only the assertions that were about GATING on the skip list are gone.
+#
 # Usage: ./bot-gate.test          (exits 0 if all pass)
 
 set -uo pipefail
@@ -23,7 +31,6 @@ case "$*" in
   *"repo view"*nameWithOwner*)  f repo.txt "owner/repo" ;;
   *"pr view"*headRefOid*)       cat "$FIX/prhead.txt" 2>/dev/null || echo "" ;;
   *"pr view"*number*)           f prnum.txt "16" ;;
-  *"pulls/"*"/files"*)          [ -f "$FIX/prfilesfail" ] && exit 1; f prfiles.json '[[]]' ;;
   *"pr checks"*)                [ -f "$FIX/checksfail" ] && exit 1; f checks.json '[]' ;;
   *"pr view"*statusCheckRollup*) f rollup.json '{"statusCheckRollup":[]}' ;;
   *reactions*)                  [ -f "$FIX/reactionsfail" ] && exit 1; f reactions.json '[[]]' ;;
@@ -41,10 +48,9 @@ chmod +x "$WORK/bin/gh"
 # where bash does not live in /bin (exit 127 for everything).
 
 # Fixed literals, not `date -d`: that is GNU-only, and on BSD it would leave these empty
-# and fail the CLEAR fixtures — the suite reproducing the very portability bug it exists
+# and fail the clearing fixtures — the suite reproducing the very portability bug it exists
 # to catch. Only NOW needs the clock, and `date -u +FORMAT` is portable.
 OLD_UTC="2000-01-01T00:00:00Z"
-FUTURE_UTC="2999-01-01T00:00:00Z"
 NOW_UTC=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 wrapper() {  # $1 = login, $2 = submitted_at  (shape matches `gh api --paginate --slurp`)
@@ -52,19 +58,31 @@ wrapper() {  # $1 = login, $2 = submitted_at  (shape matches `gh api --paginate 
   printf '[[{"user":{"login":"%s","type":"Bot"},"submitted_at":"%s","commit_id":"%s","body":"Reviewed commit: `%s`"}]]' \
     "$1" "$2" "$TIP" "$TIP"
 }
-threads() {  # $1 = count of unresolved bot threads
-  local n=$1 nodes=""
-  for ((i=0;i<n;i++)); do nodes="$nodes${nodes:+,}{\"isResolved\":false,\"comments\":{\"nodes\":[{\"author\":{\"__typename\":\"Bot\",\"login\":\"chatgpt-codex-connector\"}}]}}"; done
+threads() {  # $1 = count of unresolved threads, $2 = GraphQL author login (default codex)
+  local n=$1 login=${2:-chatgpt-codex-connector} nodes=""
+  for ((i=0;i<n;i++)); do nodes="$nodes${nodes:+,}{\"isResolved\":false,\"comments\":{\"nodes\":[{\"author\":{\"__typename\":\"Bot\",\"login\":\"$login\"}}]}}"; done
   printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[%s]}}}}}' "$nodes"
 }
 
+run() {  # runs the gate, stdout on fd 1; adds --no-coderabbit when no check fixture exists
+  local extra=(); [[ -f "$FIX/checks.json" ]] || extra=(--no-coderabbit)
+  PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 "${extra[@]}" 2>/dev/null
+}
 check() {  # $1 = name, $2 = expected exit
   local name=$1 want=$2
-  local extra=(); [[ -f "$FIX/checks.json" ]] || extra=(--no-coderabbit)
-  PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 --settle-seconds 0 "${extra[@]}" >/dev/null 2>&1
+  run >/dev/null
   local got=$?
   if [[ "$got" == "$want" ]]; then PASS=$((PASS+1)); printf '  ok   %-46s (exit %s)\n' "$name" "$got"
   else FAIL=$((FAIL+1)); printf '  FAIL %-46s want %s got %s\n' "$name" "$want" "$got"; fi
+}
+check_reports() {  # $1 = name, $2 = literal string that must appear in the report
+  local name=$1 want=$2 out
+  out=$(run); local got=$?
+  if [[ "$got" == 0 ]] && printf '%s' "$out" | grep -qF -- "$want"; then
+    PASS=$((PASS+1)); printf '  ok   %-46s (reported, exit 0)\n' "$name"
+  else
+    FAIL=$((FAIL+1)); printf '  FAIL %-46s exit %s, %s not reported\n' "$name" "$got" "$want"
+  fi
 }
 
 # A real repo so `git rev-parse HEAD` works.
@@ -76,154 +94,123 @@ new_fix() { FIX="$WORK/fix"; rm -rf "$FIX"; mkdir -p "$FIX"
             echo "owner/repo" > "$FIX/repo.txt"; echo 16 > "$FIX/prnum.txt"
             # The PR head must equal local HEAD or the gate refuses to reason at all.
             printf '%s' "$TIP" > "$FIX/prhead.txt"; }
+# A CodeRabbit walkthrough body with $1 spliced in after the skip header.
+cr_skip() { printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes:\\n%s\\n"}]]' "$1"; }
+cr_success() { echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"; }
 
 echo "bot-gate fixtures"
 
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-check "clean: aged wrapper, 0 unresolved, no CodeRabbit" 0
+check "wrapper on tip, 0 unresolved, no CodeRabbit" 0
 
 new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 check "no wrapper for tip blocks" 1
 
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 3 > "$FIX/threads.json"
-check "unresolved bot threads block" 1
+check "unresolved codex threads block" 1
 
-# A wrapper dated in the FUTURE is younger than any window, so the age check can be
-# exercised with settle 0 — passing a large --settle-seconds would make the gate really
-# sleep that long. Also covers clock skew between the runner and GitHub.
-new_fix; wrapper "chatgpt-codex-connector[bot]" "$FUTURE_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-check "wrapper younger than settle window blocks" 1
+# Both gated bots count, not just codex: § 7 says "either bot".
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 2 coderabbitai > "$FIX/threads.json"
+check "unresolved CodeRabbit threads block" 1
+
+# ...but an unrelated app's thread must NOT. Counting every account GitHub types as a Bot
+# let a linter or coverage reporter hold the merge for a reason this gate has no opinion
+# about — and left no way to clear it, since the author cannot resolve another app's thread
+# by fixing anything this skill talks about.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 4 some-other-linter > "$FIX/threads.json"
+check "unrelated bot's unresolved thread does not block" 0
+
+# A human account cannot borrow a gated login: __typename must ALSO be Bot.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"
+printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"isResolved":false,"comments":{"nodes":[{"author":{"__typename":"User","login":"coderabbitai"}}]}}]}}}}}' > "$FIX/threads.json"
+check "a User posing as a gated bot login does not block" 0
 
 new_fix; wrapper "chatgpt-codex-connector-attacker" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 check "spoofed login (prefix match) blocks" 1
 
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
+cr_success
 # CodeRabbit's real wording: the phrase is broken by a markdown link, so a naive
 # "reviews are subject to rate limits" pattern misses it entirely (it did).
 printf '[[{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\\nYour plan includes PR reviews subject to [rate limits](https://docs.coderabbit.ai/x)."}]]' > "$FIX/issues.json"
 check "CodeRabbit rate-limit notice (real wording) blocks" 1
 
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
+cr_success
 printf '[[{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: review paused by coderabbit.ai -->"}]]' > "$FIX/issues.json"
 check "CodeRabbit paused-review marker blocks" 1
 
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
-printf '[[{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes: docs/x.md"}]]' > "$FIX/issues.json"
-printf '[[{"filename":"src/core.py"}]]' > "$FIX/prfiles.json"
-check "permitted file skips do not block" 0
-
-# The inline form must still be PARSED — the earlier fixture asserted it "does not block"
-# only because the path was unreachable, which encoded a fail-open as expected behaviour.
-new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
-printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes: src/core.py"}]]' > "$FIX/issues.json"
-printf '[[{"filename":"src/core.py"}]]' > "$FIX/prfiles.json"
-check "inline skip naming a changed file blocks" 1
-
-# Content AFTER the skip section must not be swallowed: a "Files selected for processing"
-# list names files CodeRabbit REVIEWED, and treating them as skipped deadlocked every real
-# walkthrough.
-new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
-printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes:\\n- docs/unrelated.md\\n</details>\\nFiles selected for processing:\\n- src/core.py\\n"}]]' > "$FIX/issues.json"
-printf '[[{"filename":"src/core.py"}]]' > "$FIX/prfiles.json"
-check "reviewed-files list after the skip section clears" 0
-
-new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
+cr_success
 printf '[[{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nwalkthrough, all files reviewed"}]]' > "$FIX/issues.json"
 check "CodeRabbit genuine SUCCESS clears" 0
 
 # A walkthrough that merely DISCUSSES rate limiting must not be read as a skip — the old
 # bare `rate limit` substring blocked such a PR forever.
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
+cr_success
 printf '[[{"user":{"login":"coderabbitai[bot]"},"body":"Adds a rate limit to the API client"}]]' > "$FIX/issues.json"
 check "walkthrough mentioning rate limiting still clears" 0
+
+# --- the skip list: PARSED and REPORTED, never gated ---
+# CodeRabbit's skip list enumerates files of the PR it is reviewing, by construction, so
+# intersecting it against the changed files was non-empty whenever a skip existed — the
+# blanket "any skip blocks" deadlock wearing a different hat. Skips no longer block. But
+# each parser bug below was real, and a regression that silently drops an entry now costs
+# a human the information, so the formats stay pinned.
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success; cr_skip '- src/core.py' > "$FIX/issues.json"
+check_reports "a skipped changed file is reported, not blocked" "src/core.py"
+
+# Inline form: the path sits on the header line after the colon, so a line-oriented parser
+# that skips the header never sees it.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success
+printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes: src/inline.py"}]]' > "$FIX/issues.json"
+check_reports "inline skip form is parsed" "src/inline.py"
+
+# Content AFTER the skip section must not be swallowed: a "Files selected for processing"
+# list names files CodeRabbit REVIEWED. The end address used to be a BRE alternation
+# (`/^#|^<\/details>/`), where `|` is literal — so it matched nothing and the range ran to
+# the end of the body, reporting reviewed files as skipped.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success
+printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes:\\n- docs/unrelated.md\\n</details>\\nFiles selected for processing:\\n- src/reviewed.py\\n"}]]' > "$FIX/issues.json"
+out=$(run)
+if printf '%s' "$out" | grep -qF 'docs/unrelated.md' && ! printf '%s' "$out" | grep -qF 'src/reviewed.py'; then
+  PASS=$((PASS+1)); echo "  ok   reviewed-files list is not read as skipped   (bounded)"
+else
+  FAIL=$((FAIL+1)); echo "  FAIL reviewed-files list is not read as skipped"
+fi
+
+# Markdown formats CodeRabbit really uses. The shape filter used to run BEFORE the markdown
+# strip, so anything ending in a non-alphanumeric was dropped; requiring a dot-extension
+# then dropped extensionless paths, which this repo's own deliverables are; requiring a
+# slash then dropped root-level ones. There is no shape test now.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success; cr_skip '- `Makefile` (1 hunks)' > "$FIX/issues.json"
+check_reports "root-level extensionless path is parsed" "Makefile"
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success; cr_skip '- `skills/x/scripts/bot-gate` (2 hunks)' > "$FIX/issues.json"
+check_reports "backticked extensionless path is parsed" "skills/x/scripts/bot-gate"
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success; cr_skip '* **src/bold.py** (3 hunks)' > "$FIX/issues.json"
+check_reports "bold path is parsed" "src/bold.py"
+
+# An ASCII token regex reduced `src/my file.py` to `file.py`.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success; cr_skip '- src/my file.py' > "$FIX/issues.json"
+check_reports "path containing a space is parsed whole" "src/my file.py"
+
+# --- rounds in flight ---
 
 # A fresh `eyes` newer than the wrapper means a round is running on the same tip.
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":"%s"}]]' "$NOW_UTC" > "$FIX/reactions.json"
 check "active round (eyes newer than wrapper) blocks" 1
-
-# A newer REPLY must not mask an older status comment's skip notice: CodeRabbit's replies
-# interleave with its status body, so "latest comment" picks a reply that says nothing.
-new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
-printf '[[{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-01-01","body":"<!-- auto-generated comment: review paused by coderabbit.ai -->"},{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-02-01","body":"<!-- This is an auto-generated reply by CodeRabbit --> thanks"}]]' > "$FIX/issues.json"
-check "newer reply does not mask a skip notice" 1
-
-# But a genuinely newer STATUS comment must clear a stale skip — the retrigger must work.
-new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
-printf '[[{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-01-01","body":"<!-- auto-generated comment: rate limited by coderabbit.ai -->"},{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-02-01","body":"<!-- auto-generated comment: summarize by coderabbit.ai --> walkthrough"}]]' > "$FIX/issues.json"
-check "newer status comment clears a stale skip" 0
-
-# A skip list covering a file the PR CHANGES must block; one covering unrelated files
-# must not. Ignoring the marker entirely let central files merge unreviewed; blocking on
-# it deadlocked every permitted skip.
-new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
-printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes:\\n- src/core.py\\n"}]]' > "$FIX/issues.json"
-printf '[[{"filename":"%s"}]]' 'src/core.py' > "$FIX/prfiles.json"
-check "skip covering a CHANGED file blocks" 1
-
-new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
-printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes:\\n- docs/other.md\\n"}]]' > "$FIX/issues.json"
-printf '[[{"filename":"%s"}]]' 'src/core.py' > "$FIX/prfiles.json"
-check "skip of an unrelated file still clears" 0
-
-# A root-level extensionless file. The "must contain a slash" heuristic that replaced the
-# "must have an extension" heuristic dropped this one — which is why the parser now uses
-# no shape test at all and intersects against the changed files directly.
-new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
-printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes:\\n- `Makefile` (1 hunks)\\n"}]]' > "$FIX/issues.json"
-printf '[[{"filename":"Makefile"}]]' > "$FIX/prfiles.json"
-check "root-level extensionless skipped path blocks" 1
-
-# Markdown formats CodeRabbit really uses: backticked, **bold**, and extensionless. The
-# filter used to run before the markdown strip, so anything ending in a non-alphanumeric
-# was rejected — and requiring a dot-extension dropped extensionless paths, which this
-# repo's own deliverables are.
-new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
-printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes:\\n- `skills/x/scripts/bot-gate` (2 hunks)\\n"}]]' > "$FIX/issues.json"
-printf '[[{"filename":"skills/x/scripts/bot-gate"}]]' > "$FIX/prfiles.json"
-check "backticked extensionless skipped path blocks" 1
-
-new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
-printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes:\\n* **src/bold.py** (3 hunks)\\n"}]]' > "$FIX/issues.json"
-printf '[[{"filename":"src/bold.py"}]]' > "$FIX/prfiles.json"
-check "bold skipped path blocks" 1
-
-# A skipped path containing a space must still intersect: an ASCII token regex reduced
-# `src/my file.py` to `file.py`, which matched nothing and cleared.
-new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
-printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes:\\n- src/my file.py\\n"}]]' > "$FIX/issues.json"
-printf '[[{"filename":"%s"}]]' 'src/my file.py' > "$FIX/prfiles.json"
-check "skipped path with a space still blocks" 1
-
-# CodeRabbit configured (it has commented) but no check for THIS head yet must block —
-# `absent` is not the same as "not installed".
-new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nwalkthrough"}]]' > "$FIX/issues.json"
-check "configured CodeRabbit with no check for this head blocks" 1
-
-# ...and the changed-files query must fail closed too. The suite had knobs for the
-# reactions and checks endpoints but not this one, so the fail-open lived in a branch no
-# fixture reached.
-new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
-printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes:\\n- src/core.py\\n"}]]' > "$FIX/issues.json"
-echo 'x' > "$FIX/prfilesfail"
-check "changed-files query failure is exit 3" 3
 
 # The active-round guard must fail CLOSED. Neither of these was covered by the happy-path
 # case above: reverting the fail-closed logic left it green, which is how an untested
@@ -236,6 +223,52 @@ new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"
 echo 'x' > "$FIX/reactionsfail"
 check "reactions query failure is exit 3" 3
 
+# A 200 whose BODY will not parse is a different failure from a non-zero exit, and it used
+# to clear: every reader takes `2>/dev/null` with a fallback, and each fallback points the
+# clearing way — unparseable reactions read as "no eyes", unparseable comments read as "no
+# skip notice" AND "CodeRabbit never commented here".
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf 'not json at all' > "$FIX/reactions.json"
+check "unparseable reactions body is exit 3" 3
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success; printf '<html>502 Bad Gateway</html>' > "$FIX/issues.json"
+check "unparseable PR-comments body is exit 3" 3
+
+new_fix; printf 'not json' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+check "unparseable reviews body is exit 3" 3
+
+# The wrapper timestamp is now used ONLY as the reference point for the eyes comparison.
+# It must still block when unparseable, and with NO reaction present: it is the detector's
+# only reference, so without it the detector cannot run, and a check that cannot run has
+# not passed. (This is the fail-closed half of the macOS `date -d` problem. The BSD
+# fallback itself cannot be exercised on Linux — shadowing GNU `-d` leaves no working
+# `date -j` either — so that half is verified by inspection against the BSD syntax.)
+new_fix; wrapper "chatgpt-codex-connector[bot]" "not-a-timestamp" > "$FIX/reviews.json"
+threads 0 > "$FIX/threads.json"
+check "unparseable wrapper timestamp blocks" 1
+
+# --- CodeRabbit presence ---
+
+# Configured (it has commented) but no check for THIS head yet must block — `absent` is
+# not the same as "not installed".
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nwalkthrough"}]]' > "$FIX/issues.json"
+check "configured CodeRabbit with no check for this head blocks" 1
+
+# A newer REPLY must not mask an older status comment's skip notice: CodeRabbit's replies
+# interleave with its status body, so "latest comment" picks a reply that says nothing.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success
+printf '[[{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-01-01","body":"<!-- auto-generated comment: review paused by coderabbit.ai -->"},{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-02-01","body":"<!-- This is an auto-generated reply by CodeRabbit --> thanks"}]]' > "$FIX/issues.json"
+check "newer reply does not mask a skip notice" 1
+
+# But a genuinely newer STATUS comment must clear a stale skip — the retrigger must work.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success
+printf '[[{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-01-01","body":"<!-- auto-generated comment: rate limited by coderabbit.ai -->"},{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-02-01","body":"<!-- auto-generated comment: summarize by coderabbit.ai --> walkthrough"}]]' > "$FIX/issues.json"
+check "newer status comment clears a stale skip" 0
+
 # A PENDING CheckRun has no `.state` and a null `.conclusion`. Reading that as "absent"
 # cleared past a review that was still running — the fail-open half that survived the
 # name/state fix.
@@ -243,6 +276,15 @@ new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"
 echo 'CHECKSFAIL' > "$FIX/checksfail"
 echo '{"statusCheckRollup":[{"__typename":"CheckRun","name":"CodeRabbit","conclusion":null}]}' > "$FIX/rollup.json"
 check "pending CheckRun CodeRabbit blocks" 1
+
+# No CodeRabbit signal at all is undecidable on a fresh PR, so it must not clear without
+# the operator saying the repo has none.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 >/dev/null 2>&1
+[[ $? == 1 ]] && { PASS=$((PASS+1)); echo "  ok   no CodeRabbit signal blocks without opt-out (exit 1)"; } \
+              || { FAIL=$((FAIL+1)); echo "  FAIL no CodeRabbit signal blocks without opt-out"; }
+
+# --- integrity of the wrapper itself ---
 
 # A wrapper whose BODY shares the tip's first 7 hex chars but whose commit_id names a
 # different commit. Matching 7 body characters accepted it as approval of the current
@@ -259,23 +301,50 @@ new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"
 printf 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' > "$FIX/prhead.txt"
 check "local HEAD behind the PR head is exit 3" 3
 
-# No CodeRabbit signal at all is undecidable on a fresh PR, so it must not clear without
-# the operator saying the repo has none.
-new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 --settle-seconds 0 >/dev/null 2>&1
-[[ $? == 1 ]] && { PASS=$((PASS+1)); echo "  ok   no CodeRabbit signal blocks without opt-out (exit 1)"; } \
-              || { FAIL=$((FAIL+1)); echo "  FAIL no CodeRabbit signal blocks without opt-out"; }
-
 new_fix; touch "$FIX/FAIL"
 check "API failure is exit 3, never clearance" 3
 
-# An unparseable wrapper timestamp must BLOCK, not clear. This is the fail-closed half of
-# the macOS `date -d` problem and it is testable anywhere; the BSD fallback path itself
-# cannot be exercised on Linux, since shadowing GNU `-d` leaves no working `date -j`
-# either — that half is verified by inspection against the documented BSD syntax.
-new_fix; wrapper "chatgpt-codex-connector[bot]" "not-a-timestamp" > "$FIX/reviews.json"
-threads 0 > "$FIX/threads.json"
-check "unparseable wrapper timestamp blocks" 1
+# --- what exit 0 says it means ---
+
+# The verdict is NO_PENDING_EVIDENCE, not CLEAR, and the claim travels with it. A caller
+# chaining `&&` into `gh pr merge` reads only the exit code, so the wording is for the
+# human reading the report — but if it silently reverts to "CLEAR" the whole point of this
+# rework is gone, and nothing else would notice.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+out=$(run)
+if printf '%s' "$out" | grep -q 'verdict: NO_PENDING_EVIDENCE' && ! printf '%s' "$out" | grep -q 'verdict: CLEAR'; then
+  PASS=$((PASS+1)); echo "  ok   verdict is NO_PENDING_EVIDENCE, not CLEAR   (bounded claim)"
+else
+  FAIL=$((FAIL+1)); echo "  FAIL verdict is NO_PENDING_EVIDENCE, not CLEAR"
+fi
+
+# The observation window must be reported at BOTH ends. "As of instant T" is false — these
+# reads are not atomic — so a consumer needs the interval to judge staleness itself.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+J=$(PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 --no-coderabbit --json 2>/dev/null)
+if printf '%s' "$J" | jq -e '.observed_from and .observed_to and .claim and (.verdict=="NO_PENDING_EVIDENCE")' >/dev/null 2>&1; then
+  PASS=$((PASS+1)); echo "  ok   JSON carries the claim and both window ends (bounded claim)"
+else
+  FAIL=$((FAIL+1)); echo "  FAIL JSON carries the claim and both window ends"
+fi
+
+# ...and does NOT carry it when blocked. Emitting the sentence unconditionally put
+# "nothing indicated an unfinished round" in the same object as `"verdict": "BLOCKED"`,
+# which a machine reader taking it at face value would have exactly backwards.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 3 > "$FIX/threads.json"
+J=$(PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 --no-coderabbit --json 2>/dev/null)
+if printf '%s' "$J" | jq -e '(.verdict=="BLOCKED") and (.claim==null)' >/dev/null 2>&1; then
+  PASS=$((PASS+1)); echo "  ok   a BLOCKED verdict asserts no claim         (bounded claim)"
+else
+  FAIL=$((FAIL+1)); echo "  FAIL a BLOCKED verdict asserts no claim"
+fi
+
+# --settle-seconds is REJECTED, not ignored: a caller passing it believes it is buying a
+# guarantee, and quietly accepting the flag would keep that belief alive.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 --settle-seconds 0 --no-coderabbit >/dev/null 2>&1
+[[ $? == 2 ]] && { PASS=$((PASS+1)); echo "  ok   --settle-seconds is rejected, not ignored  (exit 2)"; } \
+              || { FAIL=$((FAIL+1)); echo "  FAIL --settle-seconds is rejected, not ignored"; }
 
 echo
 echo "passed $PASS, failed $FAIL"

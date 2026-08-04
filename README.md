@@ -33,7 +33,7 @@ The phase machine, and the skill each phase delegates to:
 | BUILD | `orchestrating-with-rb-lite` | rb-lite clean **and** you ran the gate yourself |
 | PROVE | `testing-with-rb-lite` | the gate ran green at a real exit code |
 | HARDEN | `multi-reviewer-loop` + a final pinned `codex review --base` | `multi-reviewer-loop` reports `CLEAN` (reviewers **and** consistency pass), then the cleared SHA is recorded |
-| LAND | `pr-with-codex-bot-review` | every configured bot cleared the tip, base still an ancestor of it, squash-merged; closure lands via a reviewed path |
+| LAND | `pr-with-codex-bot-review` | no evidence of a pending bot round on the tip, base still an ancestor of it, squash-merged; closure lands via a reviewed path |
 | DONE | — | the scope is empty and any `Pending:` closure PR has merged |
 
 Four guards automate what previously took a human nudge: **evidence** (run the real
@@ -307,13 +307,19 @@ Use the pr-with-codex-bot-review skill to open this PR and handle the bot review
 Best fit: you want a GitHub PR carried from local changes through review-bot
 feedback and merge.
 
-Ships with `scripts/bot-gate`, which decides whether the review bots have cleared the
-*current* tip: a wrapper naming this tip, an unresolved-review-thread count stable across a
-settle window and at zero, and CodeRabbit green when configured. It fails closed on any
-API error or missing tool — exit 0 clear, 1 blocked, 2 usage, 3 cannot determine, and
-"cannot determine" is never clearance. `scripts/bot-gate.test` exercises it against a
-stubbed `gh` — thirty-one cases, each one a defect found in review, each shown to go red
-against the real bug.
+Ships with `scripts/bot-gate`, which reports whether anything says the review bots are
+still working on the *current* tip, or have left findings nobody dispositioned: a review
+naming this tip, no `eyes` reaction newer than it, zero unresolved threads from either
+gated bot, and CodeRabbit green when configured. It fails closed on any API error or
+missing tool — exit 0, 1 blocked, 2 usage, 3 cannot determine, and "cannot determine" is
+never clearance.
+
+Exit 0 says `NO_PENDING_EVIDENCE`, not "cleared", and the distinction is the point:
+neither bot emits a round-terminal signal, so every conclusion is drawn from absence over a
+bounded observation window, which the JSON reports both ends of. It is a stop sign, not a
+green light — where the forge can enforce a rule server-side, put it there instead.
+`scripts/bot-gate.test` exercises it against a stubbed `gh` — thirty-seven cases, each one
+a defect found in review, each shown to go red against the real bug.
 
 ### galtland-architecture
 
