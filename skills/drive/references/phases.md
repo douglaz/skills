@@ -287,8 +287,12 @@ DSJ=$("$DS" --json)
 [ "$(printf %s "$DSJ" | jq -r '.default_branch')" = "$BASE" ] \
   || { echo "base changed under the check (want $BASE) — NOT cleared"; exit 1; }
 BF=$(printf %s "$DSJ" | jq -r '.base_fresh')
+# null != false. false = genuinely behind base, and a rebase fixes it. null = freshness was
+# never computed, for one of two reasons the detector names in its own output: the base was
+# GUESSED (no authoritative source, so the test is vacuous), or the PR's base commit is not
+# in this clone (fetch it). Neither is fixable by rebasing, so do not suggest that.
 [ "$BF" = "true" ] || { [ "$BF" = "null" ] \
-  && { echo "base could not be established (base_origin=guessed) — set origin/HEAD or open the PR first; NOT cleared"; exit 1; } \
+  && { echo "base freshness unknown — run drive-status and read the reason (guessed base, or the PR's base commit not fetched); NOT cleared"; exit 1; } \
   || { echo "REBASE FIRST — behind base; NOT cleared"; exit 1; }; }
 
 STATE=$(git rev-parse --git-path drive/state)
@@ -392,7 +396,7 @@ BF=$(printf %s "$DSJ2" | jq -r '.base_fresh')
 # GUESSED (no authoritative source), so freshness was never computed and no rebase can
 # help — the fix is establishing a real base, e.g. `git remote set-head origin -a`.
 [ "$BF" = "true" ] || { [ "$BF" = "null" ] \
-  && { echo "base could not be established (base_origin=guessed) — set origin/HEAD or open the PR first"; exit 1; } \
+  && { echo "base freshness unknown — run drive-status and read the reason; do NOT merge"; exit 1; } \
   || { echo "REBASE FIRST — behind base"; exit 1; }; }
 ```
 

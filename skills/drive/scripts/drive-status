@@ -26,6 +26,7 @@ DEFAULT_BRANCH=""
 # construction — a vacuous check that would report base_fresh=true forever while the real
 # target advances.
 BASE_ORIGIN="none"
+BASE_OID=""
 _RFLAG=()
 if command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   # OPEN only. `gh pr view` falls back to the most recent CLOSED or MERGED PR on the
@@ -48,8 +49,15 @@ if command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   # /bin/bash 3.2 — which would abort the detector in exactly the degraded-gh case its
   # header promises to tolerate ("Exits 0 even when signals are missing").
   _RFLAG=(); [[ -n "$_UP" && -n "$BRANCH" ]] && _RFLAG=("$BRANCH" -R "$_UP")
-  DEFAULT_BRANCH=$(gh pr view ${_RFLAG[@]+"${_RFLAG[@]}"} --json baseRefName,state \
-    -q 'select(.state=="OPEN") | .baseRefName' 2>/dev/null || echo "")
+  # baseRefOid comes free in the same call, and it is the only AUTHORITATIVE base commit
+  # available: `origin/<base>` is a local tracking ref that is exactly as fresh as the last
+  # fetch. A stale one makes the ancestry test below compare against an OLDER base, which
+  # is the fail-open direction — it reports fresh while the real base has advanced and a
+  # squash would land a tree nobody reviewed.
+  _PRBASE=$(gh pr view ${_RFLAG[@]+"${_RFLAG[@]}"} --json baseRefName,baseRefOid,state \
+    -q 'select(.state=="OPEN") | "\(.baseRefName) \(.baseRefOid)"' 2>/dev/null || echo "")
+  DEFAULT_BRANCH="${_PRBASE%% *}"
+  [[ "$_PRBASE" == *" "* ]] && BASE_OID="${_PRBASE##* }"
   [[ -n "$DEFAULT_BRANCH" ]] && BASE_ORIGIN="pr"
 fi
 if [[ -z "$DEFAULT_BRANCH" ]]; then
@@ -348,9 +356,22 @@ fi
 # it, so the ancestry test below is true by construction and proves nothing. Unknown is
 # reported as unknown — and since LAND requires base_fresh == true, this refuses to derive
 # LAND rather than admitting an unreviewed squash.
+# Prefer the forge's own base OID over the local tracking ref when the PR gave us one.
+# And when that OID is not in this clone, say UNKNOWN rather than falling back: the
+# fallback would test against whatever stale commit `origin/<base>` happens to name, which
+# answers a different question and answers it in the clearing direction. A missing object
+# means the base moved and nobody has fetched it — precisely the case worth catching.
+BASE_STALE_REASON=""
 BASE_FRESH="n/a"
-if [[ -n "$BASE_REF" && -n "$HEAD_SHA" && "$BASE_ORIGIN" != "guessed" ]] && ! $ON_DEFAULT; then
-  if git merge-base --is-ancestor "$BASE_REF" HEAD 2>/dev/null; then BASE_FRESH=true; else BASE_FRESH=false; fi
+if [[ -n "$HEAD_SHA" && "$BASE_ORIGIN" != "guessed" ]] && ! $ON_DEFAULT; then
+  if [[ -n "$BASE_OID" ]]; then
+    if ! git cat-file -e "${BASE_OID}^{commit}" 2>/dev/null; then
+      BASE_FRESH="n/a"; BASE_STALE_REASON="the PR's base commit ${BASE_OID:0:10} is not in this clone — fetch it"
+    elif git merge-base --is-ancestor "$BASE_OID" HEAD 2>/dev/null; then BASE_FRESH=true
+    else BASE_FRESH=false; fi
+  elif [[ -n "$BASE_REF" ]]; then
+    if git merge-base --is-ancestor "$BASE_REF" HEAD 2>/dev/null; then BASE_FRESH=true; else BASE_FRESH=false; fi
+  fi
 fi
 
 # --- phase inference ---
@@ -626,6 +647,7 @@ $DONE_PENDING && printf '  ⚠ DONE is pending metadata PR #%s, so this is WAITI
 [[ "$CLEARED_BASE_MATCHES" == "false" ]] && printf '  ⚠ the PR base moved since clearance (marker %s, now %s) — the panel diffed a\n    different surface. Re-run it.\n' "${DRIVE_CLEARED_BASE:0:10}" "$(git rev-parse --short=10 "${BASE_REF:-HEAD}" 2>/dev/null)"
 $LAND_BLOCKED_DIRTY && printf '  ⚠ clearance matches the tip and the base is fresh, but the worktree is dirty\n    (%s modified, %s untracked) — so this is NOT LAND. Those edits are not in the commit\n    a merge would take. Commit and re-clear, or discard them.\n' "$DIRTY_COUNT" "$UNTRACKED"
 # Base drift is invisible in every SHA the driver checks, so it has to be surfaced here.
+[[ -n "$BASE_STALE_REASON" ]] && printf '  ⚠ base freshness is UNKNOWN: %s. Until it is known, LAND is refused — an unknown\n    base is not a fresh one.\n' "$BASE_STALE_REASON"
 [[ "$BASE_FRESH" == "false" ]] && printf '  ⚠ %s has advanced since this branch forked. A squash merge replays onto the CURRENT\n    base, so what lands is a tree no panel and no bot reviewed — while every SHA still\n    matches. Rebase or merge base in, then re-clear before merging.\n' "${BASE_REF:-the base}"
 # A present DRIVE.md whose phase cannot be used is the silently-resolved fallback
 # whether the Phase line is malformed or missing entirely — warn on both.
