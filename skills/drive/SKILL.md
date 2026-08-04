@@ -221,9 +221,19 @@ A phase closes on evidence or it does not close.
   closed bead is not a closed bead until you have seen the JSONL change:
 
   ```bash
+  # Compare before and after, not "is the JSONL dirty". A drain closes one bead per
+  # iteration and carries the closure forward uncommitted, so by the second bead the file
+  # is ALREADY dirty from the first — and a bare dirtiness test then passes without this
+  # close having written anything. The question is whether THIS command wrote, so ask it.
+  beads_fingerprint() { cat .beads/*.jsonl 2>/dev/null | cksum; }
+  BEFORE=$(beads_fingerprint)
   br close <id> || { echo "br close failed"; exit 1; }
-  [ -n "$(git status --porcelain -- '*.beads*.jsonl')" ] || { echo "not persisted"; exit 1; }
+  [ "$(beads_fingerprint)" != "$BEFORE" ] \
+    || { echo "br close changed nothing on disk — not persisted"; exit 1; }
   ```
+
+  A bead that was *already* closed also trips this, correctly: nothing was written, so
+  nothing is proven. Check the bead's state before deciding you have a bug.
 
 
 The rules above are what closes a *phase*. The fuller set on not lying about *edits* —
@@ -325,7 +335,7 @@ nothing claims it at all. (ADR 0002.)
 **The volatile store, never committed, at `$(git rev-parse --git-path drive/state)`.**
 One fact matters — `cleared=<sha>`, naming the tree a panel actually cleared:
 
-```
+```text
 cleared=4456b8c0b8f1e2d3...
 ```
 
