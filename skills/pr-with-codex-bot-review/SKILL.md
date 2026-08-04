@@ -410,7 +410,7 @@ Merge when the reaction-based check passes:
      If none resolve you are running from a checkout: invoke it by its path there.
 
      `scripts/bot-gate.test` runs it against a stubbed `gh` with canned API responses —
-     twenty cases, each one a defect a reviewer actually found: a forged wrapper login, a
+     twenty-one cases, each one a defect a reviewer actually found: a forged wrapper login, a
      `[bot]`-suffix filter that matched nothing, a settle window satisfied by two zeros in
      the delivery gap, a CodeRabbit rate-limit skip, an API failure. Run it after touching
      the gate; every case has been shown to go red against the real bug.
