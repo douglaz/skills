@@ -103,12 +103,6 @@ and `claude` and is most natural when run as a slash command from Claude Code.
 Renamed from `codex-review-loop` when the second reviewer landed. Rerun
 `install.sh` to drop the stale symlink.
 
-Ships with `scripts/bot-gate`, which decides whether the review bots have cleared the
-*current* tip: a wrapper naming this tip, an unresolved-review-thread count stable across a
-settle window and at zero, and CodeRabbit green when configured. It fails closed on any
-API error or missing tool — exit 0 clear, 1 blocked, 2 usage, 3 cannot determine, and
-"cannot determine" is never clearance.
-
 ### complexity-reducer
 
 Reduces code complexity by deleting, collapsing, inlining, and simplifying code
@@ -312,6 +306,12 @@ Use the pr-with-codex-bot-review skill to open this PR and handle the bot review
 
 Best fit: you want a GitHub PR carried from local changes through review-bot
 feedback and merge.
+
+Ships with `scripts/bot-gate`, which decides whether the review bots have cleared the
+*current* tip: a wrapper naming this tip, an unresolved-review-thread count stable across a
+settle window and at zero, and CodeRabbit green when configured. It fails closed on any
+API error or missing tool — exit 0 clear, 1 blocked, 2 usage, 3 cannot determine, and
+"cannot determine" is never clearance.
 
 ### galtland-architecture
 

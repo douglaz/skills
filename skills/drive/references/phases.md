@@ -241,7 +241,10 @@ fi
 # with "REBASE FIRST" that no rebase can fix. Verified.
 git fetch -q "$BASE_REMOTE" "+refs/heads/$BASE:refs/remotes/origin/$BASE" \
   || { echo "fetch failed — base unknown, do NOT clear"; exit 1; }
-[ "$("$DS" --json | jq -r '.base_fresh')" = "true" ] || { echo "REBASE FIRST — not cleared"; exit 1; }
+BF=$("$DS" --json | jq -r '.base_fresh')
+[ "$BF" = "true" ] || { [ "$BF" = "null" ] \
+  && { echo "base could not be established (base_origin=guessed) — set origin/HEAD or open the PR first; NOT cleared"; exit 1; } \
+  || { echo "REBASE FIRST — behind base; NOT cleared"; exit 1; }; }
 
 STATE=$(git rev-parse --git-path drive/state)
 mkdir -p "$(dirname "$STATE")" && printf 'cleared=%s\n' "$(git rev-parse HEAD)" > "$STATE" \
@@ -316,11 +319,18 @@ BASE=$("$DS" --json | jq -r '.default_branch')
 # REST, not `gh pr view --json baseRepository` — that field does not exist, and without
 # `set -e` the failure is silent and falls back to origin, i.e. the fork.
 PRNUM=$(gh pr view --json number -q .number 2>/dev/null) || { echo "no PR — cannot resolve base repo"; exit 1; }
-BASE_REMOTE=$(gh api "repos/{owner}/{repo}/pulls/$PRNUM" --jq .base.repo.clone_url 2>/dev/null) \
+UP=$(gh repo view --json nameWithOwner,parent -q '.parent.nameWithOwner // .nameWithOwner')
+BASE_REMOTE=$(gh api "repos/$UP/pulls/$PRNUM" --jq .base.repo.clone_url 2>/dev/null) \
   || { echo "cannot resolve base repository"; exit 1; }
 git fetch -q "$BASE_REMOTE" "+refs/heads/$BASE:refs/remotes/origin/$BASE" \
   || { echo "fetch failed — base unknown, do NOT merge"; exit 1; }
-[ "$("$DS" --json | jq -r '.base_fresh')" = "true" ] || { echo "REBASE FIRST"; exit 1; }
+BF=$("$DS" --json | jq -r '.base_fresh')
+# null != false. false = genuinely behind base, and a rebase fixes it. null = the base was
+# GUESSED (no authoritative source), so freshness was never computed and no rebase can
+# help — the fix is establishing a real base, e.g. `git remote set-head origin -a`.
+[ "$BF" = "true" ] || { [ "$BF" = "null" ] \
+  && { echo "base could not be established (base_origin=guessed) — set origin/HEAD or open the PR first"; exit 1; } \
+  || { echo "REBASE FIRST — behind base"; exit 1; }; }
 ```
 
 Both `exit 1`. This is the last check before the merge, so a warning that returns 0 lets
