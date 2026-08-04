@@ -258,7 +258,12 @@ BF=$(printf %s "$DSJ" | jq -r '.base_fresh')
   || { echo "REBASE FIRST — behind base; NOT cleared"; exit 1; }; }
 
 STATE=$(git rev-parse --git-path drive/state)
-mkdir -p "$(dirname "$STATE")" && printf 'cleared=%s\n' "$(git rev-parse HEAD)" > "$STATE" \
+# Record the BASE too. `codex review --base` is diff-scoped, so retargeting the PR to an
+# older ancestor afterwards expands the reviewed surface without moving HEAD — the tip SHA
+# alone would still match and LAND would be derived over a diff no panel read.
+mkdir -p "$(dirname "$STATE")" \
+  && { printf 'cleared=%s\n' "$(git rev-parse HEAD)"
+       printf 'cleared_base=%s\n' "$(git rev-parse "origin/$BASE")"; } > "$STATE" \
   || { echo "could not persist clearance"; exit 1; }
 echo "cleared $(git rev-parse --short HEAD)"
 ```

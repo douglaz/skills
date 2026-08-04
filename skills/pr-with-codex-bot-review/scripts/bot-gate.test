@@ -153,6 +153,15 @@ printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-
 printf '[[{"filename":"%s"}]]' 'src/core.py' > "$FIX/prfiles.json"
 check "skip of an unrelated file still clears" 0
 
+# A root-level extensionless file. The "must contain a slash" heuristic that replaced the
+# "must have an extension" heuristic dropped this one — which is why the parser now uses
+# no shape test at all and intersects against the changed files directly.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
+printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes:\\n- `Makefile` (1 hunks)\\n"}]]' > "$FIX/issues.json"
+printf '[[{"filename":"Makefile"}]]' > "$FIX/prfiles.json"
+check "root-level extensionless skipped path blocks" 1
+
 # Markdown formats CodeRabbit really uses: backticked, **bold**, and extensionless. The
 # filter used to run before the markdown strip, so anything ending in a non-alphanumeric
 # was rejected — and requiring a dot-extension dropped extensionless paths, which this

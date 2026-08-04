@@ -275,7 +275,7 @@ if [[ "$CR_STATE" == "SUCCESS" ]] && ! $CR_SKIPPED && [[ -n "${CRC:-}" ]]; then
     | sed -E 's/^[[:space:]]*[-*][[:space:]]+//' \
     | sed -E 's/[[:space:]]*\([0-9]+ hunks?\)[[:space:]]*$//' \
     | sed -E 's/`//g; s/\*\*//g' \
-    | grep -E '^[^[:space:]<].*/' | sort -u)
+    | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | grep -v '^$' | sort -u)
   if [[ -n "$SKIPLIST" ]]; then
     # Pipe to jq rather than `-q`, like every other query here — it keeps the raw
     # response inspectable and lets the fixture stub answer without reimplementing gh.

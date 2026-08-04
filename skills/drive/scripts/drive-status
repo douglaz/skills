@@ -277,7 +277,7 @@ fi
 # All four initialised unconditionally: the parses below happen inside the `-f DRIVE.md`
 # branch, but the comparisons that read them do not, and `set -u` turns the no-DRIVE.md
 # case — the common one, and every first run — into a hard crash instead of an empty value.
-DRIVE_MD="absent"; DRIVE_PHASE=""; DRIVE_CLEARED=""; DRIVE_PENDING=""
+DRIVE_MD="absent"; DRIVE_PHASE=""; DRIVE_CLEARED=""; DRIVE_PENDING=""; DRIVE_CLEARED_BASE=""
 if [[ -f DRIVE.md ]]; then
   DRIVE_MD="present"
   # Case-insensitive and non-alpha-tolerant on purpose: `**Phase:** build` is a plausible
@@ -305,6 +305,12 @@ if [[ -n "$STATE_FILE" && -f "$STATE_FILE" ]]; then
   # the last uppercase letter — a SHA that exists nowhere.
   DRIVE_CLEARED=$(grep -m1 -oiE '^cleared[=:][^0-9a-f]*[0-9a-f]{7,40}' "$STATE_FILE" 2>/dev/null \
     | grep -oiE '[0-9a-f]{7,40}$' || echo "")
+  # The base the panel reviewed against. `codex review --base` is diff-scoped, so
+  # retargeting a PR to an older ancestor after HARDEN EXPANDS the reviewed surface
+  # without changing HEAD — cleared == tip and base_fresh both still hold, and LAND would
+  # be derived over a diff no panel read.
+  DRIVE_CLEARED_BASE=$(grep -m1 -oiE '^cleared_base[=:][^0-9a-f]*[0-9a-f]{7,40}' "$STATE_FILE" 2>/dev/null \
+    | grep -oiE '[0-9a-f]{7,40}$' || echo "")
 fi
 # Compare against the tip by prefix, so an abbreviated `cleared` still matches. Empty
 # never matches: an absent value is unproven, not cleared.
@@ -317,6 +323,15 @@ HEAD_SHA=$(git rev-parse --verify --quiet HEAD 2>/dev/null || echo "")
 CLEARED_MATCHES_TIP=false
 _c_lc=$(printf '%s' "$DRIVE_CLEARED" | tr '[:upper:]' '[:lower:]')
 [[ -n "$_c_lc" && -n "$HEAD_SHA" && "$HEAD_SHA" == "$_c_lc"* ]] && CLEARED_MATCHES_TIP=true
+# ...and the base must still be the one the panel diffed against. Absent in the marker
+# (a pre-upgrade state file) counts as unverified, not as matching.
+CLEARED_BASE_MATCHES="n/a"
+if [[ -n "$DRIVE_CLEARED_BASE" ]]; then
+  _b_lc=$(printf '%s' "$DRIVE_CLEARED_BASE" | tr '[:upper:]' '[:lower:]')
+  _cur_base=$(git rev-parse --verify --quiet "${BASE_REF:-HEAD}" 2>/dev/null || echo "")
+  if [[ -n "$_cur_base" && "$_cur_base" == "$_b_lc"* ]]; then CLEARED_BASE_MATCHES=true
+  else CLEARED_BASE_MATCHES=false; fi
+fi
 
 # Base freshness. Tip equality is NOT sufficient to prove the merged tree was reviewed:
 # under a squash merge the result is the branch replayed onto the CURRENT base, so if the
@@ -462,7 +477,12 @@ fi
 # stranded state, and "go through the panel like any others" is unfollowable — they are not
 # on a branch, and the remedy phases.md prescribes is a metadata PR cut FROM one. infer()
 # already treats that state as a recovery path rather than something to steer by.
-if [[ "$PHASE" == "DONE" ]] && ! $_MERGED_AT_HEAD && ! $ON_DEFAULT \
+# No default-branch exemption. BRANCH_COMMITS counts commits not in origin/<base>, which
+# on the default branch means UNPUSHED — a legacy closure committed locally there reported
+# DONE while a fresh clone still saw the bead open. (`AHEAD` is not usable for this: it
+# needs @{upstream} configured and reads "?" otherwise.) What the default branch changes
+# is the remedy, not whether to downgrade, so only the warning text differs below.
+if [[ "$PHASE" == "DONE" ]] && ! $_MERGED_AT_HEAD \
    && { [[ "$BRANCH_COMMITS" -gt 0 ]] || ! $_BASE_KNOWN; }; then
   DONE_ON_BRANCH=true
   PHASE="HARDEN"
@@ -484,7 +504,8 @@ fi
 # but the RECORD path does not, so edits made AFTER clearance leave HEAD — and therefore
 # `cleared == tip` — untouched. Reproduced: dirty=1, phase=LAND, no warning.
 LAND_BLOCKED_DIRTY=false
-if [[ "$PHASE" == "HARDEN" ]] && $CLEARED_MATCHES_TIP && [[ "$BASE_FRESH" == "true" ]]; then
+if [[ "$PHASE" == "HARDEN" ]] && $CLEARED_MATCHES_TIP && [[ "$BASE_FRESH" == "true" ]] \
+   && [[ "$CLEARED_BASE_MATCHES" != "false" ]]; then
   if [[ "$DIRTY_COUNT" -eq 0 && "$UNTRACKED" -eq 0 ]]; then
     PHASE="LAND"
     PHASE_SOURCE="derived (cleared == tip, base fresh, tree clean)"
@@ -532,7 +553,7 @@ if $JSON; then
     --arg done_pending "$DONE_PENDING" --arg head_sha "$HEAD_SHA" \
     --arg land_blocked_dirty "$LAND_BLOCKED_DIRTY" --arg done_on_branch "$DONE_ON_BRANCH" \
     --arg state_file "$STATE_FILE" --arg base_fresh "$BASE_FRESH" \
-    --arg base_origin "$BASE_ORIGIN" \
+    --arg base_origin "$BASE_ORIGIN" --arg cleared_base "$DRIVE_CLEARED_BASE" --arg cleared_base_matches "$CLEARED_BASE_MATCHES" \
     --argjson dirty "${DIRTY_COUNT:-0}" --argjson untracked "${UNTRACKED:-0}" \
     --argjson branch_commits "${BRANCH_COMMITS:-0}" \
     '{root:$root,branch:$branch,default_branch:$default_branch,dirty:$dirty,
@@ -545,7 +566,8 @@ if $JSON; then
       head:$head_sha,cleared:$cleared,cleared_matches_tip:($cleared_matches=="true"),
       state_file:$state_file,recorded_land:($recorded_land=="true"),
       base_fresh:(if $base_fresh=="n/a" then null else $base_fresh=="true" end),
-      base_origin:$base_origin,
+      base_origin:$base_origin,cleared_base:$cleared_base,
+      cleared_base_matches:(if $cleared_base_matches=="n/a" then null else $cleared_base_matches=="true" end),
       pending_pr:$pending_pr,done_pending:($done_pending=="true"),
       land_blocked_dirty:($land_blocked_dirty=="true"),
       done_on_branch:($done_on_branch=="true"),
@@ -577,9 +599,11 @@ printf '\nphase: %s   (source: %s)\n' "$PHASE" "$PHASE_SOURCE"
 # silently ignoring the line — an unexplained discard is the failure this warns about.
 $RECORDED_LAND && printf '  ⚠ DRIVE.md records `Phase: LAND`, which is no longer a recordable phase — LAND is\n    derived from `cleared == tip`, a fresh base and a clean tree. The line was IGNORED. Rewrite it to\n    HARDEN; the record should never claim a phase only this checkout can prove.\n'
 $DONE_ON_BRANCH && [[ "$PHASE" != "LAND" && "$BRANCH_COMMITS" -eq 0 ]] && printf '  ⚠ %s says DONE but the base ref could not be resolved, so whether this branch has\n    unreviewed commits is unknown — unknown is not safe. Treating it as HARDEN.\n' "$PHASE_WAS"
-$DONE_ON_BRANCH && [[ "$PHASE" != "LAND" && "$BRANCH_COMMITS" -gt 0 ]] && printf '  ⚠ %s says DONE but this branch has %s unmerged commit(s) — that record\n    describes the state AFTER this PR lands. Treating it as HARDEN: these commits are\n    unreviewed and go through the panel like any others.\n' "$PHASE_WAS" "$BRANCH_COMMITS"
+$DONE_ON_BRANCH && $ON_DEFAULT && [[ "$PHASE" != "LAND" ]] && printf '  ⚠ %s says DONE but %s has %s unpushed commit(s) — a fresh clone would still see the\n    bead open. Push them, or carry them into the next branch; do NOT report DONE.\n' "$PHASE_WAS" "${BRANCH:-HEAD}" "$BRANCH_COMMITS"
+$DONE_ON_BRANCH && ! $ON_DEFAULT && [[ "$PHASE" != "LAND" && "$BRANCH_COMMITS" -gt 0 ]] && printf '  ⚠ %s says DONE but this branch has %s unmerged commit(s) — that record\n    describes the state AFTER this PR lands. Treating it as HARDEN: these commits are\n    unreviewed and go through the panel like any others.\n' "$PHASE_WAS" "$BRANCH_COMMITS"
 $DONE_PENDING && printf '  ⚠ DONE is pending metadata PR #%s, so this is WAITING_FOR_MERGE, not DONE. Query that\n    PR: merged means the drive really is done; open means go finish landing it.\n' "$DRIVE_PENDING"
 # Silent otherwise: clearance matches but the tree moved, and every SHA check still passes.
+[[ "$CLEARED_BASE_MATCHES" == "false" ]] && printf '  ⚠ the PR base moved since clearance (marker %s, now %s) — the panel diffed a\n    different surface. Re-run it.\n' "${DRIVE_CLEARED_BASE:0:10}" "$(git rev-parse --short=10 "${BASE_REF:-HEAD}" 2>/dev/null)"
 $LAND_BLOCKED_DIRTY && printf '  ⚠ clearance matches the tip and the base is fresh, but the worktree is dirty\n    (%s modified, %s untracked) — so this is NOT LAND. Those edits are not in the commit\n    a merge would take. Commit and re-clear, or discard them.\n' "$DIRTY_COUNT" "$UNTRACKED"
 # Base drift is invisible in every SHA the driver checks, so it has to be surfaced here.
 [[ "$BASE_FRESH" == "false" ]] && printf '  ⚠ %s has advanced since this branch forked. A squash merge replays onto the CURRENT\n    base, so what lands is a tree no panel and no bot reviewed — while every SHA still\n    matches. Rebase or merge base in, then re-clear before merging.\n' "${BASE_REF:-the base}"

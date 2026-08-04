@@ -51,9 +51,12 @@ new_repo() {  # a feature branch one commit ahead of master, with an origin
   rm -rf "$REPO" "$FIX"; mkdir -p "$REPO" "$FIX"
   git init -q "$REPO"; G branch -M master
   printf 'x\n' > "$REPO/README.md"; G add -A; G commit -q -m init
-  git init -q --bare "$WORK/origin.git" 2>/dev/null || true
-  G remote add origin "$WORK/origin.git" 2>/dev/null || true
-  G push -q origin master 2>/dev/null || true
+  # A FRESH bare origin per case. Reusing one leaves origin/master pointing at a previous
+  # case's unrelated history, so the push silently fails and BRANCH_COMMITS is measured
+  # against the wrong ref — a case then passes or fails for reasons unrelated to the code.
+  rm -rf "$WORK/origin.git"; git init -q --bare "$WORK/origin.git"
+  G remote add origin "$WORK/origin.git"
+  G push -q origin master
   G checkout -q -b feat
   echo master > "$FIX/prbase.txt"
 }
@@ -95,9 +98,29 @@ check "DONE on a branch with unmerged commits" HARDEN
 new_repo; add_code; record '**Phase:** DONE'; clear_at
 check "DONE-on-branch then cleared derives LAND" LAND
 
+# "Landed" means PUSHED: with the record still unpushed the branch has commits the remote
+# does not, which is the unpushed-closure state below, not a finished drive.
 new_repo; record '**Phase:** DONE · **Pending:** metadata PR #7'
-G checkout -q master; G merge -q feat 2>/dev/null || true
+G checkout -q master; G merge -q feat 2>/dev/null || true; G push -q origin master
 check "landed DONE with a pending closure PR" WAITING_FOR_MERGE
+
+# A PR retargeted after clearance expands the diff the panel reviewed without moving HEAD.
+new_repo; add_code; record '**Phase:** HARDEN'
+clear_at
+printf 'cleared_base=%s\n' "$(G rev-parse master)" >> "$REPO/.git/drive/state"
+check "clearance with a matching base derives LAND" LAND
+
+new_repo; add_code; record '**Phase:** HARDEN'
+clear_at
+printf 'cleared_base=deadbeef1234\n' >> "$REPO/.git/drive/state"
+check "clearance whose base moved refuses LAND" HARDEN
+
+# A closure committed locally on the default branch, never pushed: reporting DONE there
+# meant a fresh clone still saw the bead open.
+new_repo
+G checkout -q master
+record '**Phase:** DONE'
+check "unpushed closure on the default branch is not DONE" HARDEN
 
 # Base resolution: a base picked BECAUSE HEAD descends from it makes the ancestry test
 # vacuous, so freshness must be reported unknown rather than true.
