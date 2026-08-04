@@ -46,8 +46,8 @@ cleared) live under the git dir and are correctly absent from a fresh clone.
 
 LAND is *derived*, never recorded: a commit cannot honestly say its own SHA was reviewed,
 because writing the record changes the SHA. `Phase:` stops at HARDEN and LAND is computed
-from `cleared == tip` plus a base still fresh enough that the squash will land the tree
-that was actually reviewed. See `docs/adr/` for that decision and two others.
+from `cleared == tip`, a base still fresh enough that the squash lands the reviewed tree,
+and a clean worktree — post-clearance edits are not in the commit a merge would take. See `docs/adr/` for that decision and two others.
 
 A short stop-list still ends a turn. It does not cover landing the drive's own work —
 its branch, its PR, `--force-with-lease` on that branch, the squash-merge once gates are
@@ -435,9 +435,10 @@ directories created by `--migrate-existing`.
 - SHA-256 tooling (`sha256sum` or `shasum`) for
   `second-model-bead-audit` snapshot integrity
 - GNU `timeout` with `--kill-after` support (named `timeout`, or `gtimeout` from
-  Homebrew coreutils) for `second-model-bead-audit` and normal
-  `orchestrating-with-rb-lite` runs when using a source/path rb-lite install;
-  Nix-wrapped rb-lite supplies GNU coreutils
+  Homebrew coreutils) to bound each reviewer in `multi-reviewer-loop` — both CLIs can
+  hang with no output and no exit, and a backgrounded one has nothing to reap it —
+  and for `second-model-bead-audit` and normal `orchestrating-with-rb-lite` runs when
+  using a source/path rb-lite install; Nix-wrapped rb-lite supplies GNU coreutils
 - `npx` plus Gemini credentials to enable the optional third default
   `orchestrating-with-rb-lite` reviewer
 - `rb-lite` on `PATH`, or `nix run --refresh github:douglaz/rb-lite -- ...`

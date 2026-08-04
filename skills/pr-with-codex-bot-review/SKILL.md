@@ -377,11 +377,16 @@ you're ignoring the actual signal.**
 
 ```bash
 [ -z "$(git status --porcelain)" ] || { echo "tree dirty — do NOT merge"; exit 1; }
-gh pr merge <N> --squash --delete-branch
+gh pr merge <N> --squash --delete-branch --match-head-commit "$(git rev-parse HEAD)"
 git checkout master
 git fetch origin master && git reset --hard origin/master
 nix build                                    # confirm master is healthy
 ```
+
+`--match-head-commit` takes the **full 40-char OID** — pass `git rev-parse HEAD`, not the
+wrapper's SHA, which may be abbreviated and would then make every merge refuse with no
+hint why. The wrapper SHA is for the § 7 *comparison*; this pin is what makes the merge
+itself refuse a head that changed underneath you.
 
 Check before merging, and make it `exit 1` rather than print: a bare `git status
 --porcelain` exits 0 either way, and `--delete-branch` makes `gh pr merge` switch branches

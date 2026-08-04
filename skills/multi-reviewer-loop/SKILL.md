@@ -46,7 +46,8 @@ The default panel is two reviewers, run in parallel every pass:
 | `fable` | `claude -p "<review prompt>" --model fable --effort high --output-format json` | Repo-aware, reads beyond the diff |
 
 Both CLIs must be on `PATH` and authenticated. `jq` is needed to unwrap the
-Claude reviewer's JSON.
+Claude reviewer's JSON, and GNU `timeout` (with `--kill-after`) to bound each
+reviewer — both CLIs can hang indefinitely, writing nothing and never exiting.
 
 - If **both** are missing, stop and tell the user to install them.
 - If **one** is missing or unauthenticated, run the loop with the survivor and
@@ -196,17 +197,21 @@ For each pass `N` from `1` to `MAX_PASSES`:
 1. Run every panel reviewer **in parallel** and write full output to that pass's
    files. A pass can take 10-15 minutes. In Claude Code the Bash tool's timeout
    caps at 600000 ms, so either run the block in background mode or split it into
-   two backgrounded calls; in Codex, the shell will wait naturally. The full
+   two backgrounded calls; in Codex, the shell will wait naturally. **Backgrounding
+   removes the harness's own timeout, so wrap each reviewer in `timeout` yourself** —
+   an unbounded reviewer can hang with no output and no exit, and a backgrounded one
+   has nothing left to reap it. The full
    command block, including the Claude reviewer prompt, is in
    [references/reviewer-panel.md](references/reviewer-panel.md). The shape is:
 
    ```bash
    PASS_ID=$(printf '%02d' "$N")
-   codex review --base "$DIFF_BASE" \
+   timeout --kill-after=60 1500 codex review --base "$DIFF_BASE" \
      -c 'model="gpt-5.6-sol"' -c 'model_reasoning_effort="xhigh"' \
      </dev/null >"$REVIEW_DIR/pass-${PASS_ID}.codex.txt" 2>"$REVIEW_DIR/pass-${PASS_ID}.codex.stderr.txt" &
    CODEX_PID=$!
-   claude -p "$(cat "$FABLE_PROMPT_FILE")" --model fable --effort high --output-format json \
+   timeout --kill-after=60 1500 \
+     claude -p "$(cat "$FABLE_PROMPT_FILE")" --model fable --effort high --output-format json \
      --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
      --disallowedTools "Edit,Write,NotebookEdit" \
      </dev/null >"$REVIEW_DIR/pass-${PASS_ID}.fable.raw.json" 2>"$REVIEW_DIR/pass-${PASS_ID}.fable.stderr.txt" &
@@ -246,8 +251,9 @@ For each pass `N` from `1` to `MAX_PASSES`:
    - **Ambiguous**: exit 0, no `[P*]` items, no explicit clean signal. Do not
      treat as clean — surface the log.
    - **Failed**: non-zero exit, `is_error: true` in the Claude JSON, or empty
-     output. Record it, drop that reviewer from this pass, and mark the pass
-     `DEGRADED`. See the recovery rules in the reviewer-panel reference.
+     output. **Exit 124 is the timeout** and counts here — a reviewer that ran out
+     of time reviewed nothing. Record it, drop that reviewer from this pass, and mark
+     the pass `DEGRADED`. See the recovery rules in the reviewer-panel reference.
 
 4. Merge the two finding lists into `pass-NN.merged.md`. Dedupe on *claim*, not
    wording: same file, same code path, same defect = one merged finding. Tag each
@@ -364,6 +370,8 @@ Stop early and surface the issue if any of these happen:
   sighting is not evidence the fix failed. Quote the line that closes it and
   reject; do not re-fix something already fixed.
 - a reviewer's output is ambiguous or empty twice in a row
+- a reviewer times out (exit 124) twice in a row — the hang is the finding; stop and
+  say so rather than starting a third pass that may sit for an hour
 - both reviewers fail in the same pass (nothing reviewed the code)
 - a finding remains plausible but fixing it would require a larger architectural
   rewrite or product decision

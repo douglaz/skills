@@ -77,10 +77,11 @@ Stop and report plan gaps when any of these are still fuzzy:
    - beads -> plan: every bead has clear backing in the plan or an explicitly approved delta
    - if the audit feels suspiciously short or self-satisfied, assume coverage is incomplete and rerun more exhaustively
 9. Split, merge, rewrite, or close beads until the graph can stand on its own as executable memory.
-10. Flush the state with `br sync --flush-only`, then confirm the JSONL actually
+10. Flush with `br sync --flush-only` and require it to succeed — an explicit sync
+    propagates a real exit code. Then confirm the JSONL actually
     changed (`git status --porcelain -- '*.beads*.jsonl'`) — a transfer always creates
-    beads, so it must report something. The flush exits 0 even when it
-    failed, because the error is logged at debug level and swallowed.
+    beads, so it must report something. The sync's exit code covers its own write; the
+    JSONL check catches an auto-flush swallowed by an earlier `br` mutation.
 11. If the repo workflow supports it, run `br lint` after major rewrites to catch missing sections.
 
 ## Quality bar

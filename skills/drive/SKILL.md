@@ -82,7 +82,8 @@ Everything else is yours to decide.
 3. **The cross-cutting tell**: a second review round adds *another* consumer of the same
    concept. Stop expanding scope file-by-file — run a design pass and surface it.
    (See `references/autonomy-contract.md` § 5.)
-4. **Scope budget blown** — see Guard 2.
+4. **Scope budget blown** — see Guard 2. A PR still producing bot findings after three
+   rounds is the same signal: the change is wrong-shaped, not one patch short.
 5. **The goal itself was wrong** — what you learned building contradicts the premise.
 
 When you hit one, state the fork in a few sentences, give your recommendation first, and
@@ -138,7 +139,9 @@ alone. A fresh clone has no marker by design, however thoroughly the bots approv
 "the bots already approved, no need to re-run HARDEN" is the bypass the derivation exists
 to prevent. Use PR state to avoid *duplicate bot rounds*, never to skip the panel.
 
-**The record wins when it exists; the tree wins when it does not.** `DRIVE.md` is written
+**The record is the default when it exists; the tree is the fallback when it does not** —
+with three exceptions the detector announces, where the record cannot honestly describe
+this checkout (see Guard 4). `DRIVE.md` is written
 at every transition, and several phases leave no trace git can distinguish — a `PROVE`
 branch and a `HARDEN` branch are byte-identical, a spec committed but not yet reviewed
 looks finished, and a dirty tree cannot say whether the edit is implementation, a test
@@ -163,7 +166,7 @@ wants to re-run a phase.
 | **BUILD** | A ready bead exists | `orchestrating-with-rb-lite` (one bead = one branch) | rb-lite exits clean **and** you independently ran the gate |
 | **PROVE** | Bead's deliverable is a test/gate, or the change touches money/data/infra | gate folded into the BUILD task, **or** a separate test bead run through `testing-with-rb-lite` — decide *before* BUILD starts, since a second rb-lite run on the same branch is forbidden | The gate **ran** and printed green, with the real exit code |
 | **HARDEN** | Branch has unreviewed substantive code | `multi-reviewer-loop` (its "ask the user at the end" step is satisfied by the drive goal — keep going; its stop-list still applies), then a final pinned `codex review --base <ref>` | `multi-reviewer-loop` reports `CLEAN` — both reviewers clean **and** its consistency pass clean, on the same tree; gate green at a real exit code |
-| **LAND** | The panel cleared this checkout and `cleared` still equals the tip (derived, never recorded — see Guard 4); base is an ancestor of the tip | `pr-with-codex-bot-review` | Every bot configured on the repo cleared the tip, base still fresh at merge time, squash-merged, branch reset; bead closed and `DRIVE.md` updated **by a reviewed path** |
+| **LAND** | The panel cleared this checkout, `cleared` still equals the tip, the base is an ancestor of it, and the worktree is clean (derived, never recorded — see Guard 4) | `pr-with-codex-bot-review` | Every bot configured on the repo cleared the tip, base still fresh at merge time, squash-merged, branch reset; bead closed and `DRIVE.md` updated **by a reviewed path** |
 | → **BUILD** | More ready beads **in scope** | — | loop until the scoped set is empty — not the repository backlog |
 | **DONE** | The scope is empty — not the repository backlog | — | Any outstanding closure has merged. A `Pending:` PR that has not merged is `WAITING_FOR_MERGE`, not DONE |
 
@@ -209,9 +212,11 @@ A phase closes on evidence or it does not close.
   green test that never could have gone red proves nothing.
 - Words that need a number or an exit code behind them: "passing", "working", "clean",
   "verified", "done". Without one, say what you actually observed instead.
-- **`br` is not exempt.** `br close` and `br sync --flush-only` exit 0 even when the flush
-  that writes `.beads/*.jsonl` failed — the error is caught and logged at debug level. So
-  a closed bead is not a closed bead until you have seen the JSONL change:
+- **`br` is not exempt — but know which failure you are guarding.** An *explicit*
+  `br sync --flush-only` propagates a real exit code, so just require it to succeed. The
+  *automatic* flush that follows a mutating command like `br close` does not: its error is
+  caught and logged at debug level, so `br close` exits 0 with the JSONL unwritten. A
+  closed bead is not a closed bead until you have seen the JSONL change:
 
   ```bash
   br close <id>; git status --porcelain -- '*.beads*.jsonl'   # must be non-empty
@@ -299,8 +304,10 @@ acme-43 (blocked on 42) → acme-44 → re-audit graph
 
 Commit it with the work. Keep it under a screen — it is a resume point, not a log.
 
-**`Phase:` never reads `LAND`.** LAND is *derived* — from `cleared == tip`, plus a base
-that is still an ancestor of that tip. A commit cannot honestly record that its own SHA was reviewed, because writing the
+**`Phase:` never reads `LAND`.** LAND is *derived* — from `cleared == tip`, a base still
+an ancestor of that tip, and a clean worktree. All three: edits made after clearance leave
+`HEAD` untouched, so the marker still matches while the commit a merge takes does not
+contain them. A commit cannot honestly record that its own SHA was reviewed, because writing the
 record changes the SHA — so the record does not try. `Phase:` stops at HARDEN and LAND is
 computed. This is why there is no write-ahead, no "leave the line alone during re-review"
 rule, and no downgrade path for an unproven LAND: nothing can claim LAND falsely because

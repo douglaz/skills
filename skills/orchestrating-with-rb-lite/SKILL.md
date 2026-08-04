@@ -464,10 +464,22 @@ implement → review loop for each bead.
 
     Substitute `master` only when the repo actually uses `master`.
 
-11. **Close the bead.** Run `br update <bead-id> -s closed` after the merged
-    code is present on the base branch. If the repo requires a bead-state
-    sync/flush step, run it and leave `.beads/` clean according to that repo's
-    convention.
+11. **Close the bead, through a reviewed path.** Run `br update <bead-id> -s closed`
+    after the merged code is present on the base branch. That write lands in the
+    tracked `.beads/*.jsonl`, so do **not** commit it straight to the default branch —
+    it would reach the branch unreviewed. Carry the closure commit into the next bead's
+    branch, where it rides that PR; when the queue is empty and there is no next branch,
+    open one small metadata PR for it. Do not leave it uncommitted either, or the next
+    run starts from a dirty base and silently carries the previous closure into its diff.
+
+    Verify it landed: an *explicit* `br sync --flush-only` propagates a real exit code,
+    but the automatic flush after `br update` swallows its error, so check the JSONL
+    actually changed (`git status --porcelain -- '*.beads*.jsonl'`).
+
+    Closing on the feature branch before the merge is **not** a safe shortcut, however
+    transactional it looks — the beads DB is shared across branches with no git
+    awareness, and import is last-write-wins, so the closure leaks. See
+    `docs/adr/0003-bead-closure-stays-post-merge.md` for the code evidence.
 
 12. **Loop.** Return to `br ready --limit 10`. Stop when the queue is empty,
     the user says stop, a bead needs human product/security judgment, or a

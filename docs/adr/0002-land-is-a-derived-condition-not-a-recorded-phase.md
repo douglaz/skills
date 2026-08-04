@@ -3,7 +3,8 @@
 LAND must merge exactly the tree the review panel cleared, so any commit after clearance
 invalidates it — including the commit that records the transition into LAND. We resolved
 this by not recording LAND at all. `Phase` stays committed and honest, stopping at HARDEN;
-LAND is admitted by computing `Cleared == tip` against the volatile store.
+LAND is admitted by computing `Cleared == tip` against the volatile store, together with
+a base still an ancestor of that tip and a clean worktree.
 
 ## Considered Options
 

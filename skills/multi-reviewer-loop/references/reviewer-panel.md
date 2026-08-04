@@ -103,12 +103,16 @@ returns non-zero when `FOCUS` is unset, which aborts the whole group under
 Both reviewers start together and neither sees the other's output.
 
 ```bash
-codex review --base "$DIFF_BASE" \
+RC_TIMEOUT=1500   # 25 min; a normal pass is 5-15
+
+timeout --kill-after=60 "$RC_TIMEOUT" \
+  codex review --base "$DIFF_BASE" \
   -c 'model="gpt-5.6-sol"' -c 'model_reasoning_effort="xhigh"' \
   </dev/null >"$CODEX_OUT" 2>"$CODEX_ERR" &
 CODEX_PID=$!
 
-claude -p "$(cat "$FABLE_PROMPT_FILE")" \
+timeout --kill-after=60 "$RC_TIMEOUT" \
+  claude -p "$(cat "$FABLE_PROMPT_FILE")" \
   --model fable \
   --effort high \
   --output-format json \
@@ -121,6 +125,29 @@ FABLE_PID=$!
 wait "$CODEX_PID"; CODEX_RC=$?
 wait "$FABLE_PID"; FABLE_RC=$?
 ```
+
+**Do not drop the `timeout`.** Either reviewer can hang indefinitely — no output, no
+exit, no error. Measured: an unbounded consistency pass ran **6h20m and wrote zero
+bytes** while comparable calls finished in 5-15 minutes; nothing reaped it, and the
+loop reported "still running" the whole time because an empty output file is
+indistinguishable from a slow one. `--kill-after` matters too: a process ignoring
+`TERM` needs the follow-up `KILL`.
+
+Exit **124 is a reviewer failure**, never clean and never ambiguous. Record it, drop
+that reviewer from the pass, and mark the pass `DEGRADED` — the same as any other
+non-zero exit.
+
+### When a pass looks stuck
+
+Check elapsed time against the 5-15 minute norm before assuming progress:
+
+```bash
+ps -eo pid,etimes,args | grep -E '[c]odex review|[c]laude -p'
+```
+
+An empty output file is not evidence of work. If a reviewer is far past the norm,
+kill it **by exact PID** — never `pkill -f`, which matches your own shell and other
+sessions' reviewers running the same command — then relaunch that reviewer alone.
 
 Notes on the flags:
 
@@ -159,8 +186,9 @@ Notes on the flags:
   tool restriction closes the Edit/Write path; the prompt's "do not modify any
   file" is what covers the rest. If that matters for your repo, drop `Bash` and
   hand the reviewer a pre-computed diff on stdin instead.
-- If `timeout` is available, wrapping each reviewer (`timeout 900 ...`) bounds a
-  hung pass. Treat exit 124 as a reviewer failure, not as clean.
+- The `timeout` wrapper in the invocation above is **not optional** — see the note
+  there. Without GNU `timeout` on the host, bound the pass some other way and say so
+  in the summary; an unbounded reviewer can hang the whole loop silently.
 
 ## Unwrapping the Claude reviewer's output
 
@@ -397,7 +425,8 @@ effort, and the three tool flags), pointing at this prompt file and these output
 files:
 
 ```bash
-claude -p "$(cat "$REVIEW_DIR/fable-consistency-prompt.txt")" \
+timeout --kill-after=60 1500 \
+  claude -p "$(cat "$REVIEW_DIR/fable-consistency-prompt.txt")" \
   --model fable --effort high --output-format json \
   --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
   --disallowedTools "Edit,Write,NotebookEdit" \

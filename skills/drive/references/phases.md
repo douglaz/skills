@@ -226,8 +226,8 @@ just recorded as reviewed.
 
 ## LAND — PR through the bots
 
-**Enter when:** the panel cleared this checkout and `cleared` still equals the tip, the
-gate is green, and the base is an ancestor of the tip. LAND is *derived* from those facts,
+**Enter when:** the panel cleared this checkout, `cleared` still equals the tip, the gate
+is green, the base is an ancestor of the tip, and the worktree is clean. LAND is *derived* from those facts,
 never read from `DRIVE.md` (ADR 0002) — a record claiming LAND is a stale or hand-edited
 file and `drive-status` will say so.
 
@@ -261,7 +261,8 @@ wait for one. CodeRabbit's check is per-commit, but a `SUCCESS` may be a *skip* 
 **2. Do not demand `merged SHA == reviewed SHA`.** The merge is a squash, so it always
 creates a new commit; that equality is unsatisfiable by construction.
 
-Pin the head in the merge itself — `gh pr merge <N> --squash --match-head-commit <sha>`.
+Pin the head in the merge itself — `gh pr merge <N> --squash --match-head-commit "$(git rev-parse HEAD)"`
+(the **full** OID; the wrapper's SHA may be abbreviated, which would refuse every merge).
 Between comparing SHAs and merging, another push can land; `--match-head-commit` makes the
 merge refuse rather than take the newer, unreviewed head. Base drift in that same window is
 *not* closed by any local check — only branch protection or a merge queue does that, which
@@ -271,8 +272,14 @@ is per-repo config this skill cannot assume.
 again immediately before merging:
 
 ```bash
-git fetch -q origin && git merge-base --is-ancestor origin/<default> HEAD && echo BASE_FRESH
+DS=<the drive-status path resolved in Phase 0>
+git fetch -q origin
+[ "$("$DS" --json | jq -r '.base_fresh')" = "true" ] || echo "REBASE FIRST"
 ```
+
+Through `drive-status`, not a hand-rolled `merge-base` — same reason as HARDEN's
+precondition 3: only the detector resolves `origin/HEAD`-unset clones and non-`main`
+defaults, and a two-branch version here would refuse in any repo defaulting to `develop`.
 
 This is the check with no other symptom. A squash merge replays the branch onto the
 *current* base, so if the default branch advanced after clearance, what lands is a

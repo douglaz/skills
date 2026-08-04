@@ -23,6 +23,13 @@ DEFAULT_BRANCH=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/de
 # When origin/HEAD is unset and BOTH master and main exist (a legacy local master beside an
 # active main), fixed order picks the wrong base and counts the other branch's divergence as
 # this branch's work. Prefer a candidate HEAD actually descends from.
+# Ask the forge FIRST, before the main/master conventions below. A repo that defaults to
+# develop/trunk but still carries a legacy `main` in the ancestry would otherwise resolve to
+# `main`, and BASE_FRESH would then validate the WRONG base — deriving LAND even after the
+# real default branch advanced, which is the unreviewed-squash case this all exists to stop.
+if [[ -z "$DEFAULT_BRANCH" ]] && command -v gh >/dev/null 2>&1; then
+  DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || echo "")
+fi
 if [[ -z "$DEFAULT_BRANCH" ]]; then
   for c in main master; do
     for r in "refs/heads/$c" "refs/remotes/origin/$c"; do
@@ -35,13 +42,6 @@ fi
   git show-ref --verify --quiet "refs/heads/$c" && DEFAULT_BRANCH=$c && break
   git show-ref --verify --quiet "refs/remotes/origin/$c" && DEFAULT_BRANCH=$c && break
 done
-# main/master are conventions, not rules. A repo defaulting to develop/trunk with
-# origin/HEAD unset would otherwise leave BASE_REF empty, BRANCH_COMMITS at 0, and
-# HARDEN unreachable for committed work. Ask the forge, then fall back to whichever
-# remote branch HEAD actually descends from.
-if [[ -z "$DEFAULT_BRANCH" ]] && command -v gh >/dev/null 2>&1; then
-  DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || echo "")
-fi
 if [[ -z "$DEFAULT_BRANCH" ]]; then
   DEFAULT_BRANCH=$(git for-each-ref --format='%(refname:short)' refs/remotes/origin 2>/dev/null \
     | sed 's|^origin/||' | grep -vx 'HEAD' \
@@ -296,9 +296,14 @@ fi
 #   yet reviewed looks finished; a dirty tree cannot say whether the edit is implementation,
 #   a test being authored, or a reviewer fix being applied. Whitelisting "the phases the
 #   tree cannot express" fails because that set keeps growing.
-#   So: the RECORD is authoritative whenever present, the TREE is authoritative when it is
-#   absent, and a disagreement is REPORTED rather than silently resolved. infer() below is
-#   therefore pure tree inference and never reads DRIVE_PHASE.
+#   So: the RECORD is the default when present, the TREE is the fallback when it is absent,
+#   and a disagreement is REPORTED rather than silently resolved. infer() below is therefore
+#   pure tree inference and never reads DRIVE_PHASE.
+#   THREE states override even a valid record, because each is a claim the record cannot
+#   make honestly about THIS checkout: a DONE record on a branch with unmerged commits
+#   (it describes the post-merge world), a HARDEN record with fresh clearance (LAND is
+#   derived, never recorded), and a DONE record with an unmerged `Pending:` PR. Each is
+#   announced in the output; none is silent.
 infer() {
   local changed
   changed=""
@@ -379,6 +384,18 @@ esac
 RECORDED_LAND=false
 [[ "$DRIVE_PHASE" == "LAND" ]] && RECORDED_LAND=true
 $RECORD_VALID && PHASE_SOURCE="DRIVE.md" || PHASE_SOURCE="tree"
+# A `DONE` record on a branch that still has unmerged commits is describing the world AFTER
+# its PR lands, not this checkout — the metadata PR carries the very record that says DONE.
+# Left alone it reports DONE and the driver calls a drive finished while its own commits sit
+# unreviewed. Treat it as HARDEN so those commits go through the panel and derive LAND
+# normally; the WAITING_FOR_MERGE state below is for the landed record, where nothing is
+# left to review here.
+DONE_ON_BRANCH=false
+if [[ "$PHASE" == "DONE" && "$BRANCH_COMMITS" -gt 0 ]]; then
+  DONE_ON_BRANCH=true
+  PHASE="HARDEN"
+  PHASE_SOURCE="DRIVE.md (DONE, but this branch has unreviewed commits)"
+fi
 # LAND is DERIVED, never read. It is admissible exactly when a panel cleared this tip and
 # the work is otherwise finished — which is what HARDEN resolving means. Deriving it here
 # is what lets the record stay honest: nothing can claim LAND falsely because nothing
@@ -409,6 +426,11 @@ fi
 # drive finished while its closure sits unmerged. Resolving #N needs a forge call this
 # detector deliberately keeps out of the phase logic, so it reports the waiting state and
 # names the PR for the driver to query.
+# Only when there is nothing left to review here. Sitting ON the metadata branch, its own
+# commits are unreviewed like any others and must go through HARDEN -> derived LAND; the
+# derivation only fires from HARDEN, so overriding to WAITING_FOR_MERGE there would route
+# the driver straight to the bot/merge path with no local panel — the "same gates" promise
+# broken by the state meant to enforce it.
 DONE_PENDING=false
 if [[ "$PHASE" == "DONE" && -n "$DRIVE_PENDING" ]]; then
   DONE_PENDING=true
@@ -436,7 +458,7 @@ if $JSON; then
     --arg cleared "$DRIVE_CLEARED" --arg pending_pr "$DRIVE_PENDING" \
     --arg cleared_matches "$CLEARED_MATCHES_TIP" --arg recorded_land "$RECORDED_LAND" \
     --arg done_pending "$DONE_PENDING" --arg head_sha "$HEAD_SHA" \
-    --arg land_blocked_dirty "$LAND_BLOCKED_DIRTY" \
+    --arg land_blocked_dirty "$LAND_BLOCKED_DIRTY" --arg done_on_branch "$DONE_ON_BRANCH" \
     --arg state_file "$STATE_FILE" --arg base_fresh "$BASE_FRESH" \
     --argjson dirty "${DIRTY_COUNT:-0}" --argjson untracked "${UNTRACKED:-0}" \
     --argjson branch_commits "${BRANCH_COMMITS:-0}" \
@@ -452,7 +474,9 @@ if $JSON; then
       base_fresh:(if $base_fresh=="n/a" then null else $base_fresh=="true" end),
       pending_pr:$pending_pr,done_pending:($done_pending=="true"),
       land_blocked_dirty:($land_blocked_dirty=="true"),
-      phase_disagreement:(($record_valid=="true") and $drive_phase!=$tree_phase)}' 2>/dev/null \
+      done_on_branch:($done_on_branch=="true"),
+      phase_disagreement:(($record_valid=="true") and $drive_phase!=$tree_phase
+                          and ($phase_source|startswith("derived")|not))}' 2>/dev/null \
   || {
     # jq-free fallback. Escape backslashes then quotes: git permits `"` in a branch name
     # and a repo path may contain either, so raw interpolation can emit invalid JSON.
@@ -478,6 +502,7 @@ printf '\nphase: %s   (source: %s)\n' "$PHASE" "$PHASE_SOURCE"
 # LAND is derived, so a RECORDED LAND is a stale or hand-edited file. Say so rather than
 # silently ignoring the line — an unexplained discard is the failure this warns about.
 $RECORDED_LAND && printf '  ⚠ DRIVE.md records `Phase: LAND`, which is no longer a recordable phase — LAND is\n    derived from `cleared == tip` with a fresh base. The line was IGNORED. Rewrite it to\n    HARDEN; the record should never claim a phase only this checkout can prove.\n'
+$DONE_ON_BRANCH && printf '  ⚠ DRIVE.md says DONE but this branch has %s unmerged commit(s) — that record\n    describes the state AFTER this PR lands. Treating it as HARDEN: these commits are\n    unreviewed and go through the panel like any others.\n' "$BRANCH_COMMITS"
 $DONE_PENDING && printf '  ⚠ DONE is pending metadata PR #%s, so this is WAITING_FOR_MERGE, not DONE. Query that\n    PR: merged means the drive really is done; open means go finish landing it.\n' "$DRIVE_PENDING"
 # Silent otherwise: clearance matches but the tree moved, and every SHA check still passes.
 $LAND_BLOCKED_DIRTY && printf '  ⚠ clearance matches the tip and the base is fresh, but the worktree is dirty\n    (%s modified, %s untracked) — so this is NOT LAND. Those edits are not in the commit\n    a merge would take. Commit and re-clear, or discard them.\n' "$DIRTY_COUNT" "$UNTRACKED"
@@ -493,7 +518,7 @@ elif $RECORD_VALID && [[ "$DRIVE_PHASE" != "$TREE_PHASE" && "$PHASE_SOURCE" != d
   printf '  ⚠ the record says %s, the tree looks like %s. The record wins — it is written at\n    every transition and several phases are indistinguishable from git. Override only\n    with a stated reason.\n' "$DRIVE_PHASE" "$TREE_PHASE"
 fi
 [[ "$UNTRACKED" -gt 0 ]] && printf '  ⚠ %s untracked file(s) — codex reviewers are BLIND to these; git add before review.\n' "$UNTRACKED"
-[[ "$PR_STATE" == "unknown" ]] && printf '  ⚠ PR state unknown (no gh / not authenticated / query failed) — an open PR cannot be\n    ruled out, so a HARDEN reading here may really be LAND. Check before re-reviewing.\n'
+[[ "$PR_STATE" == "unknown" ]] && printf '  ⚠ PR state unknown (no gh / not authenticated / query failed) — bot rounds may already\n    exist on an open PR, so check before re-triggering them. HARDEN still stands either\n    way: only a local clearance marker admits LAND, never PR state.\n'
 [[ "$PR_STATE" == "n/a-non-github" ]] && printf '  ⚠ non-GitHub remote — gh cannot see PRs here. Check the forge yourself before treating\n    a HARDEN reading as "no PR open".\n'
 $BLOCKED_ONLY && printf '  ⚠ no bead is ready (ready=0, unresolved=%s, blocked=%s) — the rest are blocked or\n    deferred. This is a graph problem: re-audit dependencies and deferrals rather than\n    looking for a bead to build.\n' "$BR_UNRESOLVED" "$BR_BLOCKED"
 exit 0

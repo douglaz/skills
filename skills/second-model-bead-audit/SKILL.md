@@ -149,10 +149,10 @@ recorded acceptance of the reduced review coverage.
    either reviewer:
 
    ```bash
-   br sync --flush-only
-   # If you mutated beads this round, confirm it landed — the flush exits 0 even when the
-   # write failed. An unchanged, already-committed graph legitimately reports nothing.
-   git status --porcelain -- '*.beads*.jsonl'
+   # An explicit sync propagates a real exit code, so require success. (Only the automatic
+   # post-mutation flush swallows its error.) An unchanged graph legitimately reports no
+   # diff, so do not also demand that the JSONL changed here.
+   br sync --flush-only || { echo "flush failed"; exit 1; }
    br list --limit 0 --json -a
    bv --robot-triage
    bv --robot-plan
