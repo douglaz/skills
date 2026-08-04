@@ -457,9 +457,14 @@ ignoring the actual signal.**
 ```bash
 [ -z "$(git status --porcelain)" ] || { echo "tree dirty — do NOT merge"; exit 1; }
 R=$(gh repo view --json nameWithOwner,parent -q '.parent.nameWithOwner // .nameWithOwner')
+BASE=$(gh pr view <N> -R "$R" --json baseRefName -q .baseRefName)
 gh pr merge <N> -R "$R" --squash --delete-branch --match-head-commit "$(git rev-parse HEAD)"
-git checkout master
-git fetch origin master && git reset --hard origin/master
+git checkout "$BASE"
+# Reset from where the merge actually landed. On a fork, `origin` is your fork and may not
+# contain it at all, so `git reset --hard origin/$BASE` would silently start the next bead
+# from a tree without the code you just merged.
+git fetch "https://github.com/$R.git" "+refs/heads/$BASE:refs/remotes/upstream/$BASE"
+git reset --hard "refs/remotes/upstream/$BASE"
 nix build                                    # confirm master is healthy
 ```
 

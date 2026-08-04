@@ -76,9 +76,16 @@ api() {
 # read, so a reaction-only round is reported separately rather than silently accepted.
 REVIEWS=$(api "repos/$REPO/pulls/$PR/reviews") \
   || { echo "BLOCKED: reviews query failed" >&2; exit 3; }
-WRAPPER_TIP=$(printf '%s' "$REVIEWS" | jq -r --arg tip "$TIP" '
-  [.[][] | select(.user.login|startswith("chatgpt-codex-connector"))
-   | select(.body|test("Reviewed commit:[^0-9a-f]*"+$tip[0:7]))] | length' 2>/dev/null)
+# EXACT login and Bot type, not a prefix: on a public repo anyone may submit a review, and
+# `chatgpt-codex-connector-attacker` satisfies a prefix test — which would let an outside
+# account forge the wrapper this gate treats as proof of review.
+BOT_LOGIN="chatgpt-codex-connector[bot]"
+WRAPPER_JSON=$(printf '%s' "$REVIEWS" | jq -c --arg tip "$TIP" --arg bot "$BOT_LOGIN" '
+  [.[][] | select(.user.login==$bot) | select(.user.type=="Bot")
+   | select(.body|test("Reviewed commit:[^0-9a-f]*"+$tip[0:7]))]
+  | {n: length, latest: (max_by(.submitted_at).submitted_at // "")}' 2>/dev/null)
+WRAPPER_TIP=$(printf '%s' "$WRAPPER_JSON" | jq -r '.n' 2>/dev/null)
+WRAPPER_AT=$(printf '%s' "$WRAPPER_JSON" | jq -r '.latest' 2>/dev/null)
 [[ "$WRAPPER_TIP" =~ ^[0-9]+$ ]] || { echo "BLOCKED: cannot parse reviews" >&2; exit 3; }
 
 # --- unaddressed bot findings on this tip ---
@@ -123,7 +130,18 @@ sleep "$SETTLE"
 B=$(count_unresolved_bot_threads) || { echo "BLOCKED: thread query failed on re-check" >&2; exit 3; }
 [[ "$A" =~ ^[0-9]+$ && "$B" =~ ^[0-9]+$ ]] || { echo "BLOCKED: cannot parse threads" >&2; exit 3; }
 
-SETTLED=false; [[ "$A" == "$B" ]] && SETTLED=true
+# Stability alone is not completion: the wrapper can land before its findings, so both
+# samples read 0 inside that gap and "unchanged" means nothing. Require the WRAPPER to
+# have aged past the settle window too — if it landed longer ago than the window and no
+# comment has appeared since, the round really is done.
+SETTLED=false
+if [[ "$A" == "$B" ]]; then
+  if [[ -n "$WRAPPER_AT" ]]; then
+    W_EPOCH=$(date -u -d "$WRAPPER_AT" +%s 2>/dev/null || echo "")
+    NOW=$(date -u +%s)
+    [[ -n "$W_EPOCH" ]] && (( NOW - W_EPOCH >= SETTLE )) && SETTLED=true
+  fi
+fi
 
 # --- CodeRabbit, when configured ---
 # "query failed" is not "not configured": mapping both to absent would let a transient
@@ -141,18 +159,32 @@ fi
 # an unaddressed finding merge. Unresolved THREADS is the measure that satisfies both —
 # resolving a thread is how the author records a disposition, so it clears when the work
 # is done and blocks when it is not.
+# A CodeRabbit SUCCESS may be a rate-limit skip or a files-skipped result, in which case
+# nobody reviewed them — and since the documented usage chains this exit code straight
+# into `gh pr merge`, a warning is not enough. Inspect the walkthrough before believing it.
+CR_SKIPPED=false
+if [[ "$CR_STATE" == "SUCCESS" ]]; then
+  if CRC=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/comments" 2>/dev/null); then
+    printf '%s' "$CRC" | jq -e '[.[][] | select(.user.login=="coderabbitai[bot]")
+      | select(.body|test("rate limit|Review skipped|Files skipped from review";"i"))] | length > 0' \
+      >/dev/null 2>&1 && CR_SKIPPED=true
+  else
+    CR_STATE="query-failed"
+  fi
+fi
+
 VERDICT="BLOCKED"
 if [[ "$WRAPPER_TIP" -gt 0 ]] && $SETTLED && [[ "$B" -eq 0 ]] \
-   && { [[ "$CR_STATE" == "absent" ]] || [[ "$CR_STATE" == "SUCCESS" ]]; }; then
+   && { [[ "$CR_STATE" == "absent" ]] || { [[ "$CR_STATE" == "SUCCESS" ]] && ! $CR_SKIPPED; }; }; then
   VERDICT="CLEAR"
 fi
 
 if $JSON; then
   jq -n --arg tip "$TIP" --arg v "$VERDICT" --arg cr "$CR_STATE" \
         --argjson w "$WRAPPER_TIP" --argjson a "$A" --argjson b "$B" \
-        --arg settled "$SETTLED" \
+        --arg settled "$SETTLED" --arg cr_skipped "$CR_SKIPPED" \
     '{tip:$tip,verdict:$v,wrapper_on_tip:$w,unresolved_first:$a,unresolved_after:$b,
-      settled:($settled=="true"),coderabbit:$cr}'
+      settled:($settled=="true"),coderabbit:$cr,coderabbit_skipped:($cr_skipped=="true")}'
 else
   printf 'tip              %s\n' "${TIP:0:10}"
   printf 'codex wrapper    %s on this tip\n' "$WRAPPER_TIP"
@@ -163,7 +195,7 @@ else
   $SETTLED || printf '  ⚠ comment count changed during the settle window — findings are still arriving.\n'
   [[ "$B" -gt 0 ]] && printf '  ⚠ %s UNRESOLVED bot thread(s). Fix each, or answer it with evidence and resolve the\n    thread — resolving is how you record that it was dispositioned.\n' "$B"
   [[ "$CR_STATE" == "query-failed" ]] && printf '  ⚠ CodeRabbit status could not be queried — not the same as "not configured".\n'
-  [[ "$CR_STATE" == "SUCCESS" ]] && printf '  note: CodeRabbit SUCCESS can be a rate-limit SKIP. Read its "Files skipped from\n    review" list before treating it as a review.\n'
+  $CR_SKIPPED && printf '  ⚠ CodeRabbit reported SUCCESS but its walkthrough mentions a rate limit or skipped\n    files — nobody reviewed those. `@coderabbitai review` and wait.\n'
 fi
 
 [[ "$VERDICT" == "CLEAR" ]] && exit 0 || exit 1

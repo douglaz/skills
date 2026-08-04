@@ -400,7 +400,8 @@ and silently carry the previous bead's closure into its diff. Instead:
   none. So the discovery path is the forge, and it belongs in the resume checklist:
 
   ```bash
-  gh pr list --state open --json number,headRefName,title   # is a closure PR in flight?
+  UP=$(gh repo view --json nameWithOwner,parent -q '.parent.nameWithOwner // .nameWithOwner')
+  gh pr list -R "$UP" --state open --json number,headRefName,title   # closure PR in flight?
   ```
 
   **Before re-entering BUILD or HARDEN from a fresh clone with unresolved beads, run that
@@ -446,8 +447,9 @@ is empty, not when the repository is. Waiting on the global backlog turns a fini
 milestone into an open-ended drain the user never asked for.
 
 **Unless a closure PR is still open.** From a fresh clone this is not visible in the
-record at all (see LAND above) — check `gh pr list --state open` before concluding the
-drive is unfinished. A record reading `DONE · Pending: metadata PR
+record at all (see LAND above) — check `gh pr list -R <upstream> --state open` before
+concluding the drive is unfinished — a bare `gh pr list` in a fork clone queries the fork,
+where the closure PR is not. A record reading `DONE · Pending: metadata PR
 #N` means "DONE once #N merges" — the merged file cannot state its own post-merge status,
 so the driver queries. `drive-status` reports that state as `WAITING_FOR_MERGE`, not
 `DONE`, precisely so a resumed session goes and lands the PR instead of reporting a
