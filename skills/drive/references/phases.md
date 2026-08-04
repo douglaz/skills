@@ -296,6 +296,11 @@ again immediately before merging:
 ```bash
 DS=<the drive-status path resolved in Phase 0>
 BASE=$("$DS" --json | jq -r '.default_branch')
+# Re-derived here: this snippet runs in a different session from HARDEN's, after the whole
+# bot-round cycle, so it cannot inherit variables from it. A fork PR merges into the
+# upstream base repo while `origin` is your fork.
+BASE_REPO=$(gh pr view --json baseRepository -q '.baseRepository.owner.login + "/" + .baseRepository.name' 2>/dev/null)
+BASE_REMOTE=$([ -n "$BASE_REPO" ] && echo "https://github.com/$BASE_REPO.git" || echo origin)
 git fetch -q "$BASE_REMOTE" "+refs/heads/$BASE:refs/remotes/origin/$BASE" \
   || { echo "fetch failed — base unknown, do NOT merge"; exit 1; }
 [ "$("$DS" --json | jq -r '.base_fresh')" = "true" ] || { echo "REBASE FIRST"; exit 1; }
