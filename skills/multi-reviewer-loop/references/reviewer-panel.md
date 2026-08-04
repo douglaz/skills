@@ -449,7 +449,7 @@ TO=$(command -v timeout || command -v gtimeout) \
   </dev/null >"$CONSISTENCY_RAW" 2>"$REVIEW_DIR/consistency.fable.stderr.txt"
 CONSISTENCY_RC=$?      # capture BEFORE any pipeline replaces it
 [[ "$CONSISTENCY_RC" -eq 0 ]] \
-  || { echo "consistency reviewer exited $CONSISTENCY_RC (124/137 = timeout) — NOT clean"; }
+  || { echo "consistency reviewer exited $CONSISTENCY_RC (124/137 = timeout) — NOT clean"; exit 1; }
 jq -er 'if .is_error then error(.result // "err") else (.result // empty) end' \
   <"$CONSISTENCY_RAW" >"$CONSISTENCY_OUT"
 ```

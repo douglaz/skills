@@ -273,7 +273,16 @@ if [[ "$CR_STATE" == "SUCCESS" ]] && ! $CR_SKIPPED && [[ -n "${CRC:-}" ]]; then
   if [[ -n "$SKIPLIST" ]]; then
     # Pipe to jq rather than `-q`, like every other query here — it keeps the raw
     # response inspectable and lets the fixture stub answer without reimplementing gh.
-    CHANGED=$(gh pr view "$PR" -R "$REPO" --json files 2>/dev/null | jq -r '.files[]?.path' 2>/dev/null | sort -u)
+    # And fail CLOSED: an empty CHANGED from a failed query makes the intersection empty,
+    # which reads as "no changed file was skipped" and clears a PR whose central files
+    # CodeRabbit explicitly did not review.
+    if ! FILES_JSON=$(gh pr view "$PR" -R "$REPO" --json files 2>/dev/null); then
+      echo "BLOCKED: changed-files query failed" >&2; exit 3
+    fi
+    if ! CHANGED=$(printf '%s' "$FILES_JSON" | jq -er '[.files[]?.path] | join("\n")' 2>/dev/null); then
+      echo "BLOCKED: cannot parse changed files" >&2; exit 3
+    fi
+    CHANGED=$(printf '%s' "$CHANGED" | sort -u)
     CR_SKIPPED_CHANGED=$(comm -12 <(printf '%s\n' "$SKIPLIST") <(printf '%s\n' "$CHANGED") | head -20)
   fi
 fi

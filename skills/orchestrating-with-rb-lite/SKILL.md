@@ -457,7 +457,15 @@ implement → review loop for each bead.
     authoritative build gate before taking the next bead:
 
     ```bash
-    gh pr merge <pr> --squash --delete-branch   # add -R <upstream> on a fork clone
+    R=$(gh repo view --json nameWithOwner,parent -q '.parent.nameWithOwner // .nameWithOwner')
+    BASE=$(gh pr view <pr> -R "$R" --json baseRefName -q .baseRefName)
+    gh pr merge <pr> -R "$R" --squash --delete-branch
+    # Reset from where the merge LANDED. On a fork clone `origin` is your fork and does
+    # not contain the upstream squash commit, so resetting to origin/$BASE silently starts
+    # the next bead from a tree missing the one just merged — its PR then replays or
+    # conflicts with it.
+    git fetch "https://github.com/$R.git" "+refs/heads/$BASE:refs/remotes/upstream/$BASE"
+    git checkout -B "$BASE" "refs/remotes/upstream/$BASE"
     git fetch origin main
     git reset --hard origin/main
     nix build

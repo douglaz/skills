@@ -22,7 +22,7 @@ f() { cat "$FIX/$1" 2>/dev/null || echo "$2"; }
 case "$*" in
   *"repo view"*nameWithOwner*)  f repo.txt "owner/repo" ;;
   *"pr view"*number*)           f prnum.txt "16" ;;
-  *"pr view"*files*)            f prfiles.json '{"files":[]}' ;;
+  *"pr view"*files*)            [ -f "$FIX/prfilesfail" ] && exit 1; f prfiles.json '{"files":[]}' ;;
   *"pr checks"*)                [ -f "$FIX/checksfail" ] && exit 1; f checks.json '[]' ;;
   *"pr view"*statusCheckRollup*) f rollup.json '{"statusCheckRollup":[]}' ;;
   *reactions*)                  [ -f "$FIX/reactionsfail" ] && exit 1; f reactions.json '[[]]' ;;
@@ -152,6 +152,15 @@ echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
 printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes:\\n- docs/other.md\\n"}]]' > "$FIX/issues.json"
 echo '{"files":[{"path":"src/core.py"}]}' > "$FIX/prfiles.json"
 check "skip of an unrelated file still clears" 0
+
+# ...and the changed-files query must fail closed too. The suite had knobs for the
+# reactions and checks endpoints but not this one, so the fail-open lived in a branch no
+# fixture reached.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
+printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes:\\n- src/core.py\\n"}]]' > "$FIX/issues.json"
+echo 'x' > "$FIX/prfilesfail"
+check "changed-files query failure is exit 3" 3
 
 # The active-round guard must fail CLOSED. Neither of these was covered by the happy-path
 # case above: reverting the fail-closed logic left it green, which is how an untested
