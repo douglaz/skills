@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# bot-gate — decide whether a PR's review bots have cleared the CURRENT tip.
+#
+# Exits 0 only when every configured bot has finished a round on this exact tip and no
+# unaddressed bot finding remains. Any doubt exits non-zero: an API failure, an
+# unsettled comment list, or a missing signal is NOT clearance.
+#
+# Usage: bot-gate <pr-number> [--settle-seconds N] [--json]
+#
+# This exists as a script rather than a snippet in SKILL.md because the same logic was
+# written three times as prose and was wrong three different ways: it enforced nothing
+# (a trailing `echo` returns 0), then it was unsatisfiable (counting every comment on the
+# tip never reaches zero, because answered findings stay anchored and GitHub re-anchors
+# unresolved ones to each new head), then it broke past 100 comments (`--paginate` with
+# `--jq` emits one result per page). Shell embedded in documentation cannot be tested;
+# this can.
+
+set -uo pipefail
+
+PR="${1:-}"; shift || true
+SETTLE=120
+JSON=false
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --settle-seconds) SETTLE="$2"; shift 2 ;;
+    --json)           JSON=true; shift ;;
+    *)                echo "unknown arg: $1" >&2; exit 2 ;;
+  esac
+done
+[[ -n "$PR" ]] || { echo "usage: bot-gate <pr-number> [--settle-seconds N] [--json]" >&2; exit 2; }
+
+for c in gh jq git; do
+  command -v "$c" >/dev/null 2>&1 || { echo "BLOCKED: $c not on PATH" >&2; exit 3; }
+done
+
+REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null) \
+  || { echo "BLOCKED: cannot resolve repo" >&2; exit 3; }
+TIP=$(git rev-parse --verify --quiet HEAD) \
+  || { echo "BLOCKED: no HEAD" >&2; exit 3; }
+
+# --slurp, then pipe to jq: --paginate applies --jq per page, so a filter passed with
+# --jq emits one result per page and any comparison against a single value breaks once
+# the endpoint spans more than one page.
+api() {
+  local out
+  out=$(gh api --paginate --slurp "$1" 2>/dev/null) || return 1
+  [[ -n "$out" ]] || return 1
+  printf '%s' "$out"
+}
+
+# --- has the codex bot finished a round on THIS tip? ---
+# The wrapper carries the SHA; the +1 reaction carries only a timestamp. Either can be
+# the completion signal — measured, the bot leaves a wrapper on rounds with findings and
+# may leave only a +1 on a clean round — but only the wrapper can prove WHICH tree was
+# read, so a reaction-only round is reported separately rather than silently accepted.
+REVIEWS=$(api "repos/$REPO/pulls/$PR/reviews") \
+  || { echo "BLOCKED: reviews query failed" >&2; exit 3; }
+WRAPPER_TIP=$(printf '%s' "$REVIEWS" | jq -r --arg tip "$TIP" '
+  [.[][] | select(.user.login|startswith("chatgpt-codex-connector"))
+   | select(.body|test("Reviewed commit:[^0-9a-f]*"+$tip[0:7]))] | length' 2>/dev/null)
+[[ "$WRAPPER_TIP" =~ ^[0-9]+$ ]] || { echo "BLOCKED: cannot parse reviews" >&2; exit 3; }
+
+# --- unaddressed bot findings on this tip ---
+# Only bot-authored comments count: § 6 tells you to answer a misread finding with your
+# own comment, and counting that reply would make the gate unsatisfiable. Resolution
+# state lives in GraphQL review threads; this reports the list for judgement and gates
+# only on whether it is STABLE, which is the part a human cannot eyeball reliably.
+count_bot_comments() {
+  local out
+  out=$(api "repos/$REPO/pulls/$PR/comments") || return 1
+  printf '%s' "$out" | jq -r --arg tip "$TIP" '
+    [.[][] | select(.commit_id==$tip) | select(.user.login|endswith("[bot]"))] | length'
+}
+A=$(count_bot_comments) || { echo "BLOCKED: comments query failed" >&2; exit 3; }
+sleep "$SETTLE"
+B=$(count_bot_comments) || { echo "BLOCKED: comments query failed on re-check" >&2; exit 3; }
+[[ "$A" =~ ^[0-9]+$ && "$B" =~ ^[0-9]+$ ]] || { echo "BLOCKED: cannot parse comments" >&2; exit 3; }
+
+SETTLED=false; [[ "$A" == "$B" ]] && SETTLED=true
+
+# --- CodeRabbit, when configured ---
+CR=$(gh pr view "$PR" --json statusCheckRollup \
+       -q '.statusCheckRollup[] | select(.context=="CodeRabbit") | .state' 2>/dev/null || echo "")
+CR_STATE="${CR:-absent}"
+
+VERDICT="BLOCKED"
+if [[ "$WRAPPER_TIP" -gt 0 ]] && $SETTLED && [[ "$B" -eq 0 ]] \
+   && { [[ "$CR_STATE" == "absent" ]] || [[ "$CR_STATE" == "SUCCESS" ]]; }; then
+  VERDICT="CLEAR"
+fi
+
+if $JSON; then
+  jq -n --arg tip "$TIP" --arg v "$VERDICT" --arg cr "$CR_STATE" \
+        --argjson w "$WRAPPER_TIP" --argjson a "$A" --argjson b "$B" \
+        --arg settled "$SETTLED" \
+    '{tip:$tip,verdict:$v,wrapper_on_tip:$w,bot_comments_first:$a,bot_comments_after:$b,
+      settled:($settled=="true"),coderabbit:$cr}'
+else
+  printf 'tip              %s\n' "${TIP:0:10}"
+  printf 'codex wrapper    %s on this tip\n' "$WRAPPER_TIP"
+  printf 'bot comments     %s -> %s (settled: %s)\n' "$A" "$B" "$SETTLED"
+  printf 'coderabbit       %s\n' "$CR_STATE"
+  printf '\nverdict: %s\n' "$VERDICT"
+  [[ "$WRAPPER_TIP" -eq 0 ]] && printf '  ⚠ no wrapper names this tip. The bot may have finished with only a +1 (it does\n    that on a clean round) — in which case nothing proves WHICH tree it read. Push or\n    `@codex review` to get a wrapper, or accept the round explicitly and say so.\n'
+  $SETTLED || printf '  ⚠ comment count changed during the settle window — findings are still arriving.\n'
+  [[ "$B" -gt 0 ]] && printf '  ⚠ %s bot comment(s) on this tip. Fix or answer each with evidence, then re-run.\n' "$B"
+  [[ "$CR_STATE" == "SUCCESS" ]] && printf '  note: CodeRabbit SUCCESS can be a rate-limit SKIP. Read its "Files skipped from\n    review" list before treating it as a review.\n'
+fi
+
+[[ "$VERDICT" == "CLEAR" ]] && exit 0 || exit 1

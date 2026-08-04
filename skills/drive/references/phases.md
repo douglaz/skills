@@ -216,12 +216,17 @@ DS=<the drive-status path resolved in Phase 0>
 [ -z "$(git status --porcelain)" ] || { echo "tree dirty — commit first, do NOT clear"; exit 1; }
 # Name the ref: a --single-branch clone's refspec covers only the feature branch, so a
 # bare `git fetch origin` never creates origin/<base> and freshness stays unknowable.
+# On a fork PR `origin` is YOUR fork, while GitHub merges into the upstream base repo —
+# fetching origin/$BASE would validate freshness against a stale fork branch. Ask the PR
+# for its base repo and fetch from there.
 BASE=$("$DS" --json | jq -r '.default_branch')
+BASE_REPO=$(gh pr view --json baseRepository -q '.baseRepository.owner.login + "/" + .baseRepository.name' 2>/dev/null)
+BASE_REMOTE=$([ -n "$BASE_REPO" ] && echo "https://github.com/$BASE_REPO.git" || echo origin)
 # Explicit DESTINATION refspec. `git fetch origin "$BASE"` updates only FETCH_HEAD — in a
 # --single-branch clone the configured refspec covers just the feature branch, so
 # refs/remotes/origin/$BASE is never created and base_fresh stays null forever, failing
 # with "REBASE FIRST" that no rebase can fix. Verified.
-git fetch -q origin "+refs/heads/$BASE:refs/remotes/origin/$BASE" \
+git fetch -q "$BASE_REMOTE" "+refs/heads/$BASE:refs/remotes/origin/$BASE" \
   || { echo "fetch failed — base unknown, do NOT clear"; exit 1; }
 [ "$("$DS" --json | jq -r '.base_fresh')" = "true" ] || { echo "REBASE FIRST — not cleared"; exit 1; }
 
@@ -291,7 +296,7 @@ again immediately before merging:
 ```bash
 DS=<the drive-status path resolved in Phase 0>
 BASE=$("$DS" --json | jq -r '.default_branch')
-git fetch -q origin "+refs/heads/$BASE:refs/remotes/origin/$BASE" \
+git fetch -q "$BASE_REMOTE" "+refs/heads/$BASE:refs/remotes/origin/$BASE" \
   || { echo "fetch failed — base unknown, do NOT merge"; exit 1; }
 [ "$("$DS" --json | jq -r '.base_fresh')" = "true" ] || { echo "REBASE FIRST"; exit 1; }
 ```

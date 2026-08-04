@@ -20,6 +20,12 @@ BRANCH=$(git branch --show-current 2>/dev/null || echo "")
 # branch rather than the repo default, and validating freshness against the wrong base
 # would report base_fresh=true while the tree GitHub actually squashes onto has moved.
 DEFAULT_BRANCH=""
+# How the base was resolved decides whether a freshness test against it means anything.
+# "authoritative" = the forge or origin/HEAD told us. "guessed" = we picked a ref BECAUSE
+# it is an ancestor of HEAD, which makes `merge-base --is-ancestor BASE HEAD` true by
+# construction — a vacuous check that would report base_fresh=true forever while the real
+# target advances.
+BASE_ORIGIN="none"
 if command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   # OPEN only. `gh pr view` falls back to the most recent CLOSED or MERGED PR on the
   # branch (this script guards PR_STATE on OPEN/* for the same reason), and HARDEN
@@ -28,8 +34,12 @@ if command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   # will not use.
   DEFAULT_BRANCH=$(gh pr view --json baseRefName,state \
     -q 'select(.state=="OPEN") | .baseRefName' 2>/dev/null || echo "")
+  [[ -n "$DEFAULT_BRANCH" ]] && BASE_ORIGIN="pr"
 fi
-[[ -z "$DEFAULT_BRANCH" ]] && DEFAULT_BRANCH=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
+if [[ -z "$DEFAULT_BRANCH" ]]; then
+  DEFAULT_BRANCH=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
+  [[ -n "$DEFAULT_BRANCH" ]] && BASE_ORIGIN="origin/HEAD"
+fi
 # Probe remote candidates too: a fresh clone of a single branch has origin/main but no
 # local main, and without this BASE_REF stays empty, BRANCH_COMMITS reads 0, and HARDEN
 # becomes unreachable for committed work.
@@ -42,6 +52,7 @@ fi
 # real default branch advanced, which is the unreviewed-squash case this all exists to stop.
 if [[ -z "$DEFAULT_BRANCH" ]] && command -v gh >/dev/null 2>&1; then
   DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || echo "")
+  [[ -n "$DEFAULT_BRANCH" ]] && BASE_ORIGIN="forge"
 fi
 if [[ -z "$DEFAULT_BRANCH" ]]; then
   for c in main master; do
@@ -75,6 +86,7 @@ AHEAD=$(git rev-list --count "@{upstream}..HEAD" 2>/dev/null || echo "?")
 # commits as this branch's work (reporting HARDEN before anything was written), and in a
 # checkout where only the feature branch exists locally the local ref does not resolve at
 # all — `|| echo 0` would mask that and make HARDEN unreachable.
+[[ -n "$DEFAULT_BRANCH" && "$BASE_ORIGIN" == "none" ]] && BASE_ORIGIN="guessed"
 BASE_REF=""
 if [[ -n "$DEFAULT_BRANCH" ]]; then
   if git rev-parse --verify --quiet "refs/remotes/origin/$DEFAULT_BRANCH" >/dev/null 2>&1; then
@@ -295,8 +307,12 @@ _c_lc=$(printf '%s' "$DRIVE_CLEARED" | tr '[:upper:]' '[:lower:]')
 # The invariant: the base must be an ancestor of the tip, i.e. the branch already contains
 # everything on the default branch. Checked here so it can be asserted at clearance time
 # AND again immediately before merging.
+# "n/a" when the base was GUESSED: the heuristics pick a ref because HEAD descends from
+# it, so the ancestry test below is true by construction and proves nothing. Unknown is
+# reported as unknown — and since LAND requires base_fresh == true, this refuses to derive
+# LAND rather than admitting an unreviewed squash.
 BASE_FRESH="n/a"
-if [[ -n "$BASE_REF" && -n "$HEAD_SHA" ]] && ! $ON_DEFAULT; then
+if [[ -n "$BASE_REF" && -n "$HEAD_SHA" && "$BASE_ORIGIN" != "guessed" ]] && ! $ON_DEFAULT; then
   if git merge-base --is-ancestor "$BASE_REF" HEAD 2>/dev/null; then BASE_FRESH=true; else BASE_FRESH=false; fi
 fi
 
@@ -420,7 +436,11 @@ _MERGED_AT_HEAD=false
 if [[ "$PR_STATE" == MERGED/* ]] && command -v gh >/dev/null 2>&1; then
   [[ "$(gh pr view --json headRefOid -q .headRefOid 2>/dev/null)" == "$HEAD_SHA" ]] && _MERGED_AT_HEAD=true
 fi
-if [[ "$PHASE" == "DONE" ]] && ! $_MERGED_AT_HEAD \
+# Not on the default branch: committed-but-unpushed closure commits there are the legacy
+# stranded state, and "go through the panel like any others" is unfollowable — they are not
+# on a branch, and the remedy phases.md prescribes is a metadata PR cut FROM one. infer()
+# already treats that state as a recovery path rather than something to steer by.
+if [[ "$PHASE" == "DONE" ]] && ! $_MERGED_AT_HEAD && ! $ON_DEFAULT \
    && { [[ "$BRANCH_COMMITS" -gt 0 ]] || ! $_BASE_KNOWN; }; then
   DONE_ON_BRANCH=true
   PHASE="HARDEN"
@@ -490,6 +510,7 @@ if $JSON; then
     --arg done_pending "$DONE_PENDING" --arg head_sha "$HEAD_SHA" \
     --arg land_blocked_dirty "$LAND_BLOCKED_DIRTY" --arg done_on_branch "$DONE_ON_BRANCH" \
     --arg state_file "$STATE_FILE" --arg base_fresh "$BASE_FRESH" \
+    --arg base_origin "$BASE_ORIGIN" \
     --argjson dirty "${DIRTY_COUNT:-0}" --argjson untracked "${UNTRACKED:-0}" \
     --argjson branch_commits "${BRANCH_COMMITS:-0}" \
     '{root:$root,branch:$branch,default_branch:$default_branch,dirty:$dirty,
@@ -502,6 +523,7 @@ if $JSON; then
       head:$head_sha,cleared:$cleared,cleared_matches_tip:($cleared_matches=="true"),
       state_file:$state_file,recorded_land:($recorded_land=="true"),
       base_fresh:(if $base_fresh=="n/a" then null else $base_fresh=="true" end),
+      base_origin:$base_origin,
       pending_pr:$pending_pr,done_pending:($done_pending=="true"),
       land_blocked_dirty:($land_blocked_dirty=="true"),
       done_on_branch:($done_on_branch=="true"),

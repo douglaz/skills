@@ -384,27 +384,28 @@ Merge when the reaction-based check passes:
 
   1. A wrapper exists whose `Reviewed commit:` equals the tip. That is the bot stating,
      with a SHA, which tree it read.
-  2. No unresolved line comments against the tip — and the comment list has **settled**.
-     The wrapper can land before its own line comments, so a single query can fall inside
-     that delivery gap and read zero findings that are seconds away. Query twice, a couple
-     of minutes apart, and require the same result both times:
+  2. Run **`scripts/bot-gate <PR>`** and require exit 0. It checks that a wrapper names
+     this tip, that the bot-comment count is stable across a settle window, that nothing
+     is outstanding, and that CodeRabbit (if configured) is green — failing closed on any
+     API error, missing tool, or unparseable response.
 
      ```bash
-     c() { gh api --paginate repos/<owner>/<repo>/pulls/<N>/comments \
-             --jq "[.[] | select(.commit_id==\"$(git rev-parse HEAD)\")] | length"; }
-     a=$(c) || { echo "comment query failed — do NOT merge"; exit 1; }
-     sleep 120
-     b=$(c) || { echo "comment query failed — do NOT merge"; exit 1; }
-     [ "$a" = "$b" ] || { echo "findings still arriving"; exit 1; }
-     [ "$a" = "0" ] || { echo "$a unresolved finding(s) on this tip"; exit 1; }
+     scripts/bot-gate 42 && gh pr merge 42 --squash --delete-branch \
+       --match-head-commit "$(git rev-parse HEAD)"
      ```
 
-     All four `exit 1`. A failed query must not read as "no comments" — two empty strings
-     compare equal — and stability alone is not enough: a settled count of *three* is
-     still three findings. The last line is the one that enforces the invariant.
+     It is a script, not a snippet here, because this logic was written three times as
+     prose and was wrong three different ways: it enforced nothing (a trailing `echo`
+     returns 0), then it was unsatisfiable (counting every comment on the tip never
+     reaches zero — § 6 tells you to *answer* a misread finding, and both it and your
+     reply stay anchored), then it broke past 100 comments (`--paginate` with `--jq`
+     emits one result per page). Shell embedded in documentation cannot be run, so none
+     of those were caught by reading. Exit codes: 0 clear, 1 blocked, 2 usage, 3 cannot
+     determine — and "cannot determine" is never clearance.
 
-     `--match-head-commit` does not help here: the tip is unchanged, so the merge succeeds
-     and simply lands before the findings arrive.
+     A `BLOCKED` with `wrapper 0` may just be a clean round the bot signalled with only a
+     `+1`: it leaves no wrapper then, so nothing proves which tree it read. Get a wrapper
+     with `@codex review`, or accept that round explicitly and record why.
   3. If a `+1` exists, it is consistent with (1) and (2); if it does not, that is normal
      on a PR the bot has ever had findings on, and is not a reason to wait.
 
