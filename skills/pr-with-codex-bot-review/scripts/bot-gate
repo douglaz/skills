@@ -295,8 +295,10 @@ fi
 # nobody reviewed them — and since the documented usage chains this exit code straight
 # into `gh pr merge`, a warning is not enough. Inspect the walkthrough before believing it.
 CR_SKIPPED=false
-# Fetched for `absent` too: that is how we tell "CodeRabbit is not installed" from "it has
-# commented here before but has no check for this head yet", which must block.
+# Fetched for `absent` too — for the REPORT, not to block: nothing here gates any more.
+# It is how the output can tell "CodeRabbit is not installed" from "it has commented here
+# before but has no check for this head yet", which are worth distinguishing to a reader
+# even though neither changes the verdict.
 if [[ "$CR_STATE" == "SUCCESS" || "$CR_STATE" == "absent" ]]; then
   if CRC=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/comments" 2>/dev/null); then
     # NOT require_json: this payload feeds only the printed CodeRabbit notes now. An
@@ -323,7 +325,11 @@ if [[ "$CR_STATE" == "SUCCESS" || "$CR_STATE" == "absent" ]]; then
     # picks a staler sibling instead. Both directions are wrong: a current `review paused`
     # loses to a later-created success and clears, and a stale rate-limit marker outranks a
     # successful retrigger and blocks forever.
-    [[ "$CR_STATE" == "SUCCESS" ]] && printf '%s' "$CRC" | jq -e '[[.[][] | select(.user.login=="coderabbitai[bot]")
+    # Checked for `absent` too, not just SUCCESS. The comments are already fetched in both
+    # branches, and a paused or rate-limited notice is exactly the evidence a human needs
+    # when there is no check for this head — suppressing it reported a bare "absent" and
+    # withheld the reason.
+    printf '%s' "$CRC" | jq -e '[[.[][] | select(.user.login=="coderabbitai[bot]")
         | select(.body|test("auto-generated comment:";"i"))]
       | sort_by(.updated_at // .created_at) | last // empty
       | select(.body|test("review (paused|skipped)|rate limited by coderabbit|reviews subject to \\[?rate limits";"i"))] | length > 0' \

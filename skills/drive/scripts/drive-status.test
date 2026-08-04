@@ -21,7 +21,16 @@ cat > "$WORK/bin/gh" <<'STUB'
 [ -f "$FIX/ghfail" ] && exit 1
 case "$*" in
   *"repo view"*parent*)   cat "$FIX/upstream.txt" 2>/dev/null || echo "owner/repo" ;;
-  *"pr view"*baseRefName*) printf '%s\n' "$*" >> "$FIX/gh.calls"; cat "$FIX/prbase.txt"  2>/dev/null || echo "" ;;
+  *"pr view"*baseRefName*)
+      printf '%s\n' "$*" >> "$FIX/gh.calls"
+      # Honour the requested fields. Asking for baseRefOid hands back the CREATION-TIME
+      # snapshot, which is what GitHub really returns — so a fixture can prove what
+      # happens when someone tests freshness against it.
+      if [[ "$*" == *baseRefOid* ]]; then
+        printf '%s %s\n' "$(cat "$FIX/prbase.txt" 2>/dev/null)" "$(cat "$FIX/prbaseoid.txt" 2>/dev/null)"
+      else
+        cat "$FIX/prbase.txt" 2>/dev/null || echo ""
+      fi ;;
   *"pr view"*headRefOid*) printf '%s\n' "$*" >> "$FIX/gh.calls"; cat "$FIX/prhead.txt"   2>/dev/null || echo "" ;;
   *"pr view"*number*)     printf '%s\n' "$*" >> "$FIX/gh.calls"; cat "$FIX/prview.json"  2>/dev/null || echo "" ;;
   *"repo view"*)          echo "owner/repo" ;;
@@ -153,22 +162,23 @@ rc=$?
 if [[ "$rc" -eq 0 ]]; then PASS=$((PASS+1)); echo "  ok   no DRIVE.md still exits 0                      (0)"
 else FAIL=$((FAIL+1)); echo "  FAIL no DRIVE.md still exits 0                      got $rc"; fi
 
-# --- the PR's authoritative base commit ---
-# `origin/<base>` is only as fresh as the last fetch, and a STALE one makes the ancestry
-# test compare against an OLDER base — the fail-open direction, reporting fresh while the
-# real base has advanced and a squash would land a tree nobody reviewed. baseRefOid is
-# authoritative and costs no extra call.
-new_repo; add_code; record '**Phase:** HARDEN'; clear_at
-printf 'master %s\n' "$(G rev-parse master)" > "$FIX/prbase.txt"
-check "PR base OID that is an ancestor derives LAND" LAND
-
-# The OID is not in this clone: the base moved and nobody fetched it. Falling back to the
-# tracking ref would answer a different question in the clearing direction, so this is
-# UNKNOWN — and unknown must refuse LAND, not pass it.
-new_repo; add_code; record '**Phase:** HARDEN'; clear_at
-printf 'master deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n' > "$FIX/prbase.txt"
-check_field "an unfetched PR base reports unknown freshness" base_fresh null
-check "an unfetched PR base refuses LAND" HARDEN
+# --- freshness must come from the tracking ref, never from baseRefOid ---
+# `baseRefOid` is a CREATION-TIME SNAPSHOT of the base tip, not the base's current commit,
+# and no fetch refreshes it: git/git PR #206 has reported the same 2016 OID for a decade
+# while master moved thousands of commits. Testing freshness against it reads true forever,
+# because the snapshot is an ancestor of HEAD from the moment the branch is even with it.
+# This fixture is the discriminator: the base has ADVANCED past the branch point, so the
+# tracking ref is correctly NOT an ancestor, while the snapshot still is. The stub hands
+# out the snapshot to anyone who asks for it, so reintroducing that preference turns
+# base_fresh true here and derives LAND over a base nobody reviewed.
+new_repo
+SNAPSHOT=$(G rev-parse master)          # what the PR was opened against
+add_code; record '**Phase:** HARDEN'; clear_at
+G checkout -q master; printf 'upstream\n' > "$REPO/other.py"; G add -A; G commit -q -m upstream
+G push -q origin master; G checkout -q feat
+printf '%s\n' "$SNAPSHOT" > "$FIX/prbaseoid.txt"
+check_field "an advanced base is NOT fresh (snapshot ignored)" base_fresh false
+check "an advanced base refuses LAND" HARDEN
 
 # The stub used to answer any command containing the JSON field, so dropping the branch
 # selector or `-R <upstream>` — the fork-clone handling — left the suite green.

@@ -465,9 +465,22 @@ implement → review loop for each bead.
    artifacts. Commit with a real message, push, and create a PR with a body
    that includes the bead id, rb-lite status/rounds, and local test plan.
 
-9. **CI.** Use `gh pr checks <pr>` and wait for green. On known-flaky CI,
-   rerun failed jobs via `gh run rerun <id> --failed`; do not keep changing
-   product code just to dodge a flake.
+9. **CI.** Capture the head *before* waiting, then wait for green:
+
+    ```bash
+    MERGING_SHA=$(gh pr view <pr> -R "$R" --json headRefOid -q .headRefOid)
+    [ -n "$MERGING_SHA" ] || { echo "cannot resolve the PR head"; exit 1; }
+    gh pr checks <pr> -R "$R" --watch
+    ```
+
+   Capture first, because the SHA is what makes the pin mean anything. Reading it
+   *after* the checks pass adopts whatever is there then — so a force-push landing
+   between green CI and the merge gets pinned to itself and sails through the very
+   guard meant to catch it. Pinning the pre-CI SHA makes GitHub reject the merge
+   instead; rerun the checks against the new head and try again.
+
+   On known-flaky CI, rerun failed jobs via `gh run rerun <id> --failed`; do not
+   keep changing product code just to dodge a flake.
 
 10. **Merge and reset.** Squash-merge the PR, delete the branch, then reset local state
     to *where the merge landed* — not to `origin`, which on a fork is your own copy — and rerun the
@@ -481,10 +494,9 @@ implement → review loop for each bead.
     # effect, so a FAILED merge still leaves you somewhere plausible-looking — and step 11
     # then closes the bead for a merge that never happened, which is the exact state this
     # skill's reviewed-closure path exists to prevent.
-    # Pin the head. `gh pr checks` passed against whatever the head was THEN; nothing binds
-    # the merge to it, so a force-push in between squashes a tree no check ran on.
-    MERGING_SHA=$(gh pr view <pr> -R "$R" --json headRefOid -q .headRefOid)
-    [ -n "$MERGING_SHA" ] || { echo "cannot resolve the PR head"; exit 1; }
+    # $MERGING_SHA comes from step 9, captured BEFORE CI ran. Re-reading it here would
+    # pin whatever is current — including a force-push that no check ever saw.
+    [ -n "${MERGING_SHA:-}" ] || { echo "MERGING_SHA unset — capture it in step 9"; exit 1; }
     gh pr merge <pr> -R "$R" --squash --delete-branch --match-head-commit "$MERGING_SHA" \
       || { echo "merge did not land — do NOT close the bead"; exit 1; }
     # Reset from where the merge LANDED. On a fork clone `origin` is your fork and does

@@ -114,7 +114,7 @@ infer the phase by hand.
 
 It prints repo, branch, cleanliness, gate command, bead counts, PR state, spec files, the
 cleared SHA, and an inferred phase. `scripts/drive-status.test` covers the derivation —
-twenty-five cases against scratch repos and a stubbed `gh`, each shown to go red against a
+twenty-four cases against scratch repos and a stubbed `gh`, each shown to go red against a
 real defect. Run it after touching the phase logic. Read it, then confirm the inference against `DRIVE.md`
 if present. **Never guess the phase.**
 
@@ -168,7 +168,7 @@ wants to re-run a phase.
 | **BUILD** | A ready bead exists | `orchestrating-with-rb-lite` (one bead = one branch) | rb-lite exits clean **and** you independently ran the gate |
 | **PROVE** | Bead's deliverable is a test/gate, or the change touches money/data/infra | gate folded into the BUILD task, **or** a separate test bead run through `testing-with-rb-lite` — decide *before* BUILD starts, since a second rb-lite run on the same branch is forbidden | The gate **ran** and printed green, with the real exit code |
 | **HARDEN** | Branch has unreviewed substantive code | `multi-reviewer-loop` (its "ask the user at the end" step is satisfied by the drive goal — keep going; its stop-list still applies), then a final pinned `codex review --base <ref>` | `multi-reviewer-loop` reports `CLEAN` — both reviewers clean **and** its consistency pass clean, on the same tree; gate green at a real exit code |
-| **LAND** | The panel cleared this checkout, `cleared` still equals the tip, the base is an ancestor of it, and the worktree is clean (derived, never recorded — see Guard 4) | `pr-with-codex-bot-review` | Every bot configured on the repo cleared the tip, base still fresh at merge time, squash-merged, branch reset; bead closed and `DRIVE.md` updated **by a reviewed path** |
+| **LAND** | The panel cleared this checkout, `cleared` still equals the tip, the base is an ancestor of it, and the worktree is clean (derived, never recorded — see Guard 4). Exit needs `bot-gate` at `NO_PENDING_EVIDENCE` — no bot exposes a terminal "cleared" signal, so waiting for one never ends (ADR 0004) | `pr-with-codex-bot-review` | Every bot configured on the repo cleared the tip, base still fresh at merge time, squash-merged, branch reset; bead closed and `DRIVE.md` updated **by a reviewed path** |
 | → **BUILD** | More ready beads **in scope** | — | loop until the scoped set is empty — not the repository backlog |
 | **DONE** | The scope is empty — not the repository backlog | — | Any outstanding closure has merged. A `Pending:` PR that has not merged is `WAITING_FOR_MERGE`, not DONE |
 
@@ -225,7 +225,10 @@ A phase closes on evidence or it does not close.
   # iteration and carries the closure forward uncommitted, so by the second bead the file
   # is ALREADY dirty from the first — and a bare dirtiness test then passes without this
   # close having written anything. The question is whether THIS command wrote, so ask it.
-  beads_fingerprint() { cat .beads/*.jsonl 2>/dev/null | cksum; }
+  # All three layouts drive-status recognises. `.beads/*.jsonl` alone reads nothing in a
+  # repo using root `.beads.jsonl` or `<name>.beads.jsonl`, so both fingerprints would be
+  # the checksum of empty input and every closure would be rejected as unpersisted.
+  beads_fingerprint() { cat .beads/*.jsonl ./*.beads.jsonl ./.beads.jsonl 2>/dev/null | cksum; }
   BEFORE=$(beads_fingerprint)
   br close <id> || { echo "br close failed"; exit 1; }
   [ "$(beads_fingerprint)" != "$BEFORE" ] \
