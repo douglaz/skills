@@ -222,9 +222,16 @@ DS=<the drive-status path resolved in Phase 0>
 BASE=$("$DS" --json | jq -r '.default_branch')
 # REST, not `gh pr view --json baseRepository` — that field does not exist, and without
 # `set -e` the failure is silent and falls back to origin, i.e. the fork.
-PRNUM=$(gh pr view --json number -q .number 2>/dev/null) || { echo "no PR — cannot resolve base repo"; exit 1; }
-BASE_REMOTE=$(gh api "repos/{owner}/{repo}/pulls/$PRNUM" --jq .base.repo.clone_url 2>/dev/null) \
-  || { echo "cannot resolve base repository"; exit 1; }
+# The first clearance runs BEFORE any PR exists — that is the prescribed ordering — so a
+# hard PR requirement here would deadlock every drive at its first HARDEN. Ask the PR when
+# there is one; otherwise ask whether this repo is a fork; otherwise origin is the target.
+if PRNUM=$(gh pr view --json number -q .number 2>/dev/null) && [ -n "$PRNUM" ]; then
+  BASE_REMOTE=$(gh api "repos/{owner}/{repo}/pulls/$PRNUM" --jq .base.repo.clone_url 2>/dev/null) \
+    || { echo "cannot resolve base repository"; exit 1; }
+else
+  BASE_REMOTE=$(gh repo view --json parent -q '.parent.url // ""' 2>/dev/null)
+  [ -n "$BASE_REMOTE" ] || BASE_REMOTE=origin
+fi
 # Explicit DESTINATION refspec. `git fetch origin "$BASE"` updates only FETCH_HEAD — in a
 # --single-branch clone the configured refspec covers just the feature branch, so
 # refs/remotes/origin/$BASE is never created and base_fresh stays null forever, failing

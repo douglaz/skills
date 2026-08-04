@@ -46,8 +46,13 @@ for c in gh jq git; do
   command -v "$c" >/dev/null 2>&1 || { echo "BLOCKED: $c not on PATH" >&2; exit 3; }
 done
 
-REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null) \
-  || { echo "BLOCKED: cannot resolve repo" >&2; exit 3; }
+# From the PR, not from `gh repo view`: on a fork clone the latter names YOUR fork, while
+# PR numbers, reviews and threads all belong to the base repo — every query would 404 and
+# the gate would sit at exit 3 forever.
+PR_URL=$(gh pr view "$PR" --json url -q .url 2>/dev/null) \
+  || { echo "BLOCKED: cannot resolve PR $PR" >&2; exit 3; }
+REPO=$(printf '%s' "$PR_URL" | sed -E 's#^https?://[^/]+/([^/]+/[^/]+)/pull/.*#\1#')
+[[ "$REPO" == */* ]] || { echo "BLOCKED: cannot parse repo from $PR_URL" >&2; exit 3; }
 TIP=$(git rev-parse --verify --quiet HEAD) \
   || { echo "BLOCKED: no HEAD" >&2; exit 3; }
 
@@ -83,14 +88,32 @@ WRAPPER_TIP=$(printf '%s' "$REVIEWS" | jq -r --arg tip "$TIP" '
 # anchored forever), while not gating at all lets a genuinely unaddressed finding merge.
 # Thread resolution is the disposition signal — you resolve a thread once you have fixed
 # or answered it — so it blocks what should block and clears what should clear.
+# `__typename == "Bot"`, NOT `login|endswith("[bot]")`. REST reports bot logins as
+# `chatgpt-codex-connector[bot]`; GraphQL reports the same account as
+# `chatgpt-codex-connector` with `__typename: "Bot"`. The suffix filter matches nothing
+# here — measured, it counted 0 against 23 genuinely unresolved bot threads, making this
+# gate silently fail-open on the one hazard it exists to block.
+# Paginated with a cursor: resolved threads count toward the page size, so a long PR
+# overflows 100 and an unresolved finding in the overflow would be invisible.
 count_unresolved_bot_threads() {
-  gh api graphql -f query='
-    query($o:String!,$r:String!,$n:Int!){ repository(owner:$o,name:$r){ pullRequest(number:$n){
-      reviewThreads(first:100){ nodes { isResolved comments(first:1){ nodes { author{login} } } } } } } }' \
-    -F o="${REPO%%/*}" -F r="${REPO##*/}" -F n="$PR" \
-    --jq '[.data.repository.pullRequest.reviewThreads.nodes[]
-           | select(.isResolved==false)
-           | select(.comments.nodes[0].author.login|endswith("[bot]"))] | length' 2>/dev/null
+  local cursor=null total=0 page
+  while :; do
+    page=$(gh api graphql -f query='
+      query($o:String!,$r:String!,$n:Int!,$c:String){ repository(owner:$o,name:$r){ pullRequest(number:$n){
+        reviewThreads(first:100, after:$c){ pageInfo{ hasNextPage endCursor }
+          nodes { isResolved comments(first:1){ nodes { author{ __typename } } } } } } } }' \
+      -F o="${REPO%%/*}" -F r="${REPO##*/}" -F n="$PR" -F c="$cursor" 2>/dev/null) || return 1
+    local n
+    n=$(printf '%s' "$page" | jq -r '[.data.repository.pullRequest.reviewThreads.nodes[]
+          | select(.isResolved==false)
+          | select(.comments.nodes[0].author.__typename=="Bot")] | length' 2>/dev/null) || return 1
+    [[ "$n" =~ ^[0-9]+$ ]] || return 1
+    total=$(( total + n ))
+    [[ "$(printf '%s' "$page" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')" == "true" ]] || break
+    cursor=$(printf '%s' "$page" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor')
+    [[ -n "$cursor" && "$cursor" != "null" ]] || return 1
+  done
+  printf '%s' "$total"
 }
 A=$(count_unresolved_bot_threads) || { echo "BLOCKED: thread query failed" >&2; exit 3; }
 sleep "$SETTLE"

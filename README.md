@@ -104,8 +104,8 @@ Renamed from `codex-review-loop` when the second reviewer landed. Rerun
 `install.sh` to drop the stale symlink.
 
 Ships with `scripts/bot-gate`, which decides whether the review bots have cleared the
-*current* tip: a wrapper naming this tip, a bot-comment count stable across a settle
-window, nothing outstanding, and CodeRabbit green when configured. It fails closed on any
+*current* tip: a wrapper naming this tip, an unresolved-review-thread count stable across a
+settle window and at zero, and CodeRabbit green when configured. It fails closed on any
 API error or missing tool — exit 0 clear, 1 blocked, 2 usage, 3 cannot determine, and
 "cannot determine" is never clearance.
 

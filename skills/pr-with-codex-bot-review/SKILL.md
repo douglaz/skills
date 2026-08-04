@@ -385,8 +385,8 @@ Merge when the reaction-based check passes:
   1. A wrapper exists whose `Reviewed commit:` equals the tip. That is the bot stating,
      with a SHA, which tree it read.
   2. Run **`scripts/bot-gate <PR>`** and require exit 0. It checks that a wrapper names
-     this tip, that the bot-comment count is stable across a settle window, that nothing
-     is outstanding, and that CodeRabbit (if configured) is green — failing closed on any
+     this tip, that the count of unresolved bot review threads is stable across a settle
+     window and zero, and that CodeRabbit (if configured) is green — failing closed on any
      API error, missing tool, or unparseable response.
 
      Resolve it from the installed skill directory, the same way `drive` resolves
