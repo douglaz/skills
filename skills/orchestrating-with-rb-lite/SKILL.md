@@ -486,7 +486,7 @@ implement → review loop for each bead.
 
 12. **Loop.** Return to `br ready --limit 10`. Stop when the queue is empty **and** any
     final metadata PR from step 11 has merged — an open closure PR means the drain is
-    still in flight, however empty the queue looks. Stop when the queue is empty,
+    still in flight, however empty the queue looks. Also stop when
     the user says stop, a bead needs human product/security judgment, or a
     P0/P1 dogfood bead interrupts the queue.
 

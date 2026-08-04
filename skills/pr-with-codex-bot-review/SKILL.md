@@ -44,17 +44,20 @@ The bot communicates approval and findings through **three distinct channels**, 
 the same PR:
 
 1. **Reaction on the PR body** — `eyes` (👀) when the bot picks up the PR for review,
-   `+1` (👍) when it approves with no concerns. **This is the authoritative approval
-   signal.** Check it before assuming silence:
+   `+1` (👍) when it approves with no concerns. Check it before assuming silence:
 
    ```bash
    gh api repos/<owner>/<repo>/issues/<N>/reactions \
      | jq '.[] | select(.user.login == "chatgpt-codex-connector[bot]") | {content, created_at}'
    ```
 
-   When the bot has finished and is happy, you'll see `{"content": "+1", ...}`. That's
-   the explicit "approved" signal — don't wait further. (This is what the bot's own
-   boilerplate means by "otherwise it will react with 👍.")
+   When the bot has finished and is happy, you'll see `{"content": "+1", ...}`. (This is
+   what the bot's own boilerplate means by "otherwise it will react with 👍.")
+
+   **It approves the tree the bot read, which is not always the tip.** The reaction has a
+   timestamp and no SHA, so after a force-push a surviving `+1` from the previous head
+   looks identical to a fresh one. This channel tells you the bot *finished a round*, not
+   that it finished *this* round — § 7 has the check that establishes which.
 
 2. **Pull-request review** with `state: COMMENTED` — usually just boilerplate:
 
@@ -74,7 +77,8 @@ the same PR:
    ```
 
 When checking whether the bot has weighed in, query reactions FIRST (cheapest signal,
-authoritative for approval), then line comments (for findings if any). Findings are
+the cheapest completion signal — but see § 7 before treating it as approval of the
+current head), then line comments (for findings if any). Findings are
 encoded with markdown priority badges:
 
 ```markdown
@@ -282,8 +286,9 @@ current PR.
 
 ### 5. Wait for the bot's reaction signal
 
-The bot's reaction on the PR body is the authoritative status indicator. Don't fall
-back to "wait some minutes and assume" when this is one API call away:
+The bot's reaction on the PR body tells you whether it has *finished a round*. Don't fall
+back to "wait some minutes and assume" when this is one API call away — but read § 7
+before treating it as approval of the current head:
 
 ```bash
 gh api repos/<owner>/<repo>/issues/<N>/reactions \
@@ -434,8 +439,9 @@ body.
 PR #191 (a README docs PR) had `+1` from the bot 13 minutes BEFORE I merged.
 I'd been waiting another full cycle for nothing.
 
-**Always query `issues/<N>/reactions` first** — it's the cheapest signal and
-the authoritative one for approval.
+**Always query `issues/<N>/reactions` first** — it's the cheapest completion signal.
+Approval of *this* head takes the § 7 check as well: the reaction must post-date your
+last push, and the wrapper's SHA must equal the tip.
 
 ### "Force-pushing breaks the bot's auto-trigger"
 

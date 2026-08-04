@@ -304,6 +304,12 @@ acme-43 (blocked on 42) → acme-44 → re-audit graph
 
 Commit it with the work. Keep it under a screen — it is a resume point, not a log.
 
+**Three states override even a valid record**, each announced in the output: a `HARDEN`
+record with fresh clearance becomes derived LAND; a `DONE` record on a branch that still
+has unmerged commits becomes HARDEN, because that record describes the world after its PR
+lands rather than this checkout; and a `DONE` record with an unmerged `Pending:` PR becomes
+`WAITING_FOR_MERGE`.
+
 **`Phase:` never reads `LAND`.** LAND is *derived* — from `cleared == tip`, a base still
 an ancestor of that tip, and a clean worktree. All three: edits made after clearance leave
 `HEAD` untouched, so the marker still matches while the commit a merge takes does not

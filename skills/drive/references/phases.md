@@ -226,8 +226,10 @@ just recorded as reviewed.
 
 ## LAND — PR through the bots
 
-**Enter when:** the panel cleared this checkout, `cleared` still equals the tip, the gate
-is green, the base is an ancestor of the tip, and the worktree is clean. LAND is *derived* from those facts,
+**Enter when:** the panel cleared this checkout, `cleared` still equals the tip, the base
+is an ancestor of the tip, and the worktree is clean. Those three are what LAND is derived
+from; the gate was HARDEN's exit condition and is already spent by the time LAND is
+reachable — the detector cannot check it and does not claim to. LAND is *derived* from those facts,
 never read from `DRIVE.md` (ADR 0002) — a record claiming LAND is a stale or hand-edited
 file and `drive-status` will say so.
 
@@ -330,7 +332,7 @@ branch. Do not leave it uncommitted either — the next BUILD would start from a
 and silently carry the previous bead's closure into its diff. Instead:
 
 - **A scoped bead remains** → carry the closure commit (plus the `DRIVE.md` update) into
-  the next bead's branch, where it rides that PR through the panel and both bots.
+  the next bead's branch, where it rides that PR through the panel and the configured bots.
 - **The scope is empty** → open one small metadata PR (bead closure + final `DRIVE.md`)
   and land it through the same gates. Write it as `**Phase:** DONE · **Pending:** metadata
   PR #N` so a resumed session queries `#N` instead of stopping at a DONE that never landed.
