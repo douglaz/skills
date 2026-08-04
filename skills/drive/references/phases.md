@@ -220,8 +220,11 @@ DS=<the drive-status path resolved in Phase 0>
 # fetching origin/$BASE would validate freshness against a stale fork branch. Ask the PR
 # for its base repo and fetch from there.
 BASE=$("$DS" --json | jq -r '.default_branch')
-BASE_REPO=$(gh pr view --json baseRepository -q '.baseRepository.owner.login + "/" + .baseRepository.name' 2>/dev/null)
-BASE_REMOTE=$([ -n "$BASE_REPO" ] && echo "https://github.com/$BASE_REPO.git" || echo origin)
+# REST, not `gh pr view --json baseRepository` — that field does not exist, and without
+# `set -e` the failure is silent and falls back to origin, i.e. the fork.
+PRNUM=$(gh pr view --json number -q .number 2>/dev/null) || { echo "no PR — cannot resolve base repo"; exit 1; }
+BASE_REMOTE=$(gh api "repos/{owner}/{repo}/pulls/$PRNUM" --jq .base.repo.clone_url 2>/dev/null) \
+  || { echo "cannot resolve base repository"; exit 1; }
 # Explicit DESTINATION refspec. `git fetch origin "$BASE"` updates only FETCH_HEAD — in a
 # --single-branch clone the configured refspec covers just the feature branch, so
 # refs/remotes/origin/$BASE is never created and base_fresh stays null forever, failing
@@ -299,8 +302,11 @@ BASE=$("$DS" --json | jq -r '.default_branch')
 # Re-derived here: this snippet runs in a different session from HARDEN's, after the whole
 # bot-round cycle, so it cannot inherit variables from it. A fork PR merges into the
 # upstream base repo while `origin` is your fork.
-BASE_REPO=$(gh pr view --json baseRepository -q '.baseRepository.owner.login + "/" + .baseRepository.name' 2>/dev/null)
-BASE_REMOTE=$([ -n "$BASE_REPO" ] && echo "https://github.com/$BASE_REPO.git" || echo origin)
+# REST, not `gh pr view --json baseRepository` — that field does not exist, and without
+# `set -e` the failure is silent and falls back to origin, i.e. the fork.
+PRNUM=$(gh pr view --json number -q .number 2>/dev/null) || { echo "no PR — cannot resolve base repo"; exit 1; }
+BASE_REMOTE=$(gh api "repos/{owner}/{repo}/pulls/$PRNUM" --jq .base.repo.clone_url 2>/dev/null) \
+  || { echo "cannot resolve base repository"; exit 1; }
 git fetch -q "$BASE_REMOTE" "+refs/heads/$BASE:refs/remotes/origin/$BASE" \
   || { echo "fetch failed — base unknown, do NOT merge"; exit 1; }
 [ "$("$DS" --json | jq -r '.base_fresh')" = "true" ] || { echo "REBASE FIRST"; exit 1; }

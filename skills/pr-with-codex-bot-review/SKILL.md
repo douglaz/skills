@@ -389,10 +389,22 @@ Merge when the reaction-based check passes:
      is outstanding, and that CodeRabbit (if configured) is green — failing closed on any
      API error, missing tool, or unparseable response.
 
+     Resolve it from the installed skill directory, the same way `drive` resolves
+     `drive-status` — skill commands run from the *driven* repo, which has no
+     `scripts/bot-gate`, so a bare relative path fails with "No such file or directory"
+     and blocks LAND:
+
      ```bash
-     scripts/bot-gate 42 && gh pr merge 42 --squash --delete-branch \
+     for d in "$HOME/.claude/skills/pr-with-codex-bot-review" \
+              "${CODEX_HOME:-$HOME/.codex}/skills/pr-with-codex-bot-review" \
+              "$HOME/.agents/skills/pr-with-codex-bot-review"; do
+       [ -x "$d/scripts/bot-gate" ] && { BOT_GATE="$d/scripts/bot-gate"; break; }
+     done
+     "$BOT_GATE" 42 && gh pr merge 42 --squash --delete-branch \
        --match-head-commit "$(git rev-parse HEAD)"
      ```
+
+     If none resolve you are running from a checkout: invoke it by its path there.
 
      It is a script, not a snippet here, because this logic was written three times as
      prose and was wrong three different ways: it enforced nothing (a trailing `echo`

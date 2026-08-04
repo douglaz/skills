@@ -5,9 +5,11 @@
 # finding list has stopped changing. Any doubt exits non-zero: an API failure, an
 # unsettled comment list, or a missing signal is NOT clearance.
 #
-# It does NOT gate on the finding COUNT — see the note above VERDICT. Whether each listed
-# finding is fixed or answered is a judgement it reports rather than decides, because no
-# legitimate action can drive that count to zero.
+# It gates on UNRESOLVED bot review threads, not on a raw comment count. A raw count is
+# unsatisfiable — an answered false positive stays anchored to the tip forever, and GitHub
+# re-anchors unresolved comments to each new head — while ignoring findings entirely would
+# let a real one merge. Thread resolution is the disposition signal that distinguishes
+# them, and it is the one the author controls by acting.
 #
 # Usage: bot-gate <pr-number> [--settle-seconds N] [--json]
 #
@@ -76,16 +78,24 @@ WRAPPER_TIP=$(printf '%s' "$REVIEWS" | jq -r --arg tip "$TIP" '
 # own comment, and counting that reply would make the gate unsatisfiable. Resolution
 # state lives in GraphQL review threads; this reports the count for judgement and gates
 # only on whether it is STABLE, which is the part a human cannot eyeball reliably.
-count_bot_comments() {
-  local out
-  out=$(api "repos/$REPO/pulls/$PR/comments") || return 1
-  printf '%s' "$out" | jq -r --arg tip "$TIP" '
-    [.[][] | select(.commit_id==$tip) | select(.user.login|endswith("[bot]"))] | length'
+# UNRESOLVED bot threads, via GraphQL. This is the measure that satisfies both failure
+# modes: gating on a raw comment count is unsatisfiable (an answered false positive stays
+# anchored forever), while not gating at all lets a genuinely unaddressed finding merge.
+# Thread resolution is the disposition signal — you resolve a thread once you have fixed
+# or answered it — so it blocks what should block and clears what should clear.
+count_unresolved_bot_threads() {
+  gh api graphql -f query='
+    query($o:String!,$r:String!,$n:Int!){ repository(owner:$o,name:$r){ pullRequest(number:$n){
+      reviewThreads(first:100){ nodes { isResolved comments(first:1){ nodes { author{login} } } } } } } }' \
+    -F o="${REPO%%/*}" -F r="${REPO##*/}" -F n="$PR" \
+    --jq '[.data.repository.pullRequest.reviewThreads.nodes[]
+           | select(.isResolved==false)
+           | select(.comments.nodes[0].author.login|endswith("[bot]"))] | length' 2>/dev/null
 }
-A=$(count_bot_comments) || { echo "BLOCKED: comments query failed" >&2; exit 3; }
+A=$(count_unresolved_bot_threads) || { echo "BLOCKED: thread query failed" >&2; exit 3; }
 sleep "$SETTLE"
-B=$(count_bot_comments) || { echo "BLOCKED: comments query failed on re-check" >&2; exit 3; }
-[[ "$A" =~ ^[0-9]+$ && "$B" =~ ^[0-9]+$ ]] || { echo "BLOCKED: cannot parse comments" >&2; exit 3; }
+B=$(count_unresolved_bot_threads) || { echo "BLOCKED: thread query failed on re-check" >&2; exit 3; }
+[[ "$A" =~ ^[0-9]+$ && "$B" =~ ^[0-9]+$ ]] || { echo "BLOCKED: cannot parse threads" >&2; exit 3; }
 
 SETTLED=false; [[ "$A" == "$B" ]] && SETTLED=true
 
@@ -100,16 +110,13 @@ else
   CR_STATE="query-failed"
 fi
 
-# CLEAR does NOT require zero bot comments. Section 6 prescribes answering a misread
-# finding with evidence rather than changing code, so the bot comment stays anchored to
-# the tip - and GitHub re-anchors unresolved comments to each new head, so pushing does
-# not clear it either. Gating on the count is unsatisfiable by any legitimate action:
-# the deadlock this script exists to end, reproduced once already.
-# Gated: a wrapper naming this tip, a SETTLED list (what a human cannot eyeball), and
-# CodeRabbit neither failing nor unknown. Whether each finding is fixed-or-answered is a
-# judgement, reported below.
+# Two reviewers disagreed here and both were right about a real hazard: gating on the raw
+# comment count is unsatisfiable (answered findings stay anchored), while not gating lets
+# an unaddressed finding merge. Unresolved THREADS is the measure that satisfies both —
+# resolving a thread is how the author records a disposition, so it clears when the work
+# is done and blocks when it is not.
 VERDICT="BLOCKED"
-if [[ "$WRAPPER_TIP" -gt 0 ]] && $SETTLED \
+if [[ "$WRAPPER_TIP" -gt 0 ]] && $SETTLED && [[ "$B" -eq 0 ]] \
    && { [[ "$CR_STATE" == "absent" ]] || [[ "$CR_STATE" == "SUCCESS" ]]; }; then
   VERDICT="CLEAR"
 fi
@@ -118,17 +125,17 @@ if $JSON; then
   jq -n --arg tip "$TIP" --arg v "$VERDICT" --arg cr "$CR_STATE" \
         --argjson w "$WRAPPER_TIP" --argjson a "$A" --argjson b "$B" \
         --arg settled "$SETTLED" \
-    '{tip:$tip,verdict:$v,wrapper_on_tip:$w,bot_comments_first:$a,bot_comments_after:$b,
+    '{tip:$tip,verdict:$v,wrapper_on_tip:$w,unresolved_first:$a,unresolved_after:$b,
       settled:($settled=="true"),coderabbit:$cr}'
 else
   printf 'tip              %s\n' "${TIP:0:10}"
   printf 'codex wrapper    %s on this tip\n' "$WRAPPER_TIP"
-  printf 'bot comments     %s -> %s (settled: %s)\n' "$A" "$B" "$SETTLED"
+  printf 'unresolved bot   %s -> %s thread(s) (settled: %s)\n' "$A" "$B" "$SETTLED"
   printf 'coderabbit       %s\n' "$CR_STATE"
   printf '\nverdict: %s\n' "$VERDICT"
   [[ "$WRAPPER_TIP" -eq 0 ]] && printf '  ⚠ no wrapper names this tip. The bot may have finished with only a +1 (it does\n    that on a clean round) — in which case nothing proves WHICH tree it read. Push or\n    `@codex review` to get a wrapper, or accept the round explicitly and say so.\n'
   $SETTLED || printf '  ⚠ comment count changed during the settle window — findings are still arriving.\n'
-  [[ "$B" -gt 0 ]] && printf '  ⚠ %s bot comment(s) anchored to this tip — REVIEW THEM. Not a blocker: an answered\n    false positive stays anchored forever. Each must be fixed, or answered with evidence.\n' "$B"
+  [[ "$B" -gt 0 ]] && printf '  ⚠ %s UNRESOLVED bot thread(s). Fix each, or answer it with evidence and resolve the\n    thread — resolving is how you record that it was dispositioned.\n' "$B"
   [[ "$CR_STATE" == "query-failed" ]] && printf '  ⚠ CodeRabbit status could not be queried — not the same as "not configured".\n'
   [[ "$CR_STATE" == "SUCCESS" ]] && printf '  note: CodeRabbit SUCCESS can be a rate-limit SKIP. Read its "Files skipped from\n    review" list before treating it as a review.\n'
 fi
