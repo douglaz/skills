@@ -177,8 +177,19 @@ else
   # `gh pr checks` exits non-zero when checks are pending or failing as well as on error,
   # so fall back to the rollup to tell those apart rather than guessing.
   if ROLLUP=$(gh pr view "$PR" -R "$REPO" --json statusCheckRollup 2>/dev/null); then
-    CR=$(printf %s "$ROLLUP" | jq -r '[.statusCheckRollup[]? | select((.context // .name)=="CodeRabbit") | (.state // .conclusion)] | first // ""' 2>/dev/null)
-    CR_STATE="${CR:-absent}"
+    # Presence and state are separate questions. A PENDING CheckRun has no `.state` and a
+    # null `.conclusion`, so `(.state // .conclusion)` yields nothing — and reading that
+    # as `absent` cleared past a review that was still running. Ask first whether an entry
+    # exists, and only then what its state is; an entry with no terminal state is pending.
+    CR_PRESENT=$(printf %s "$ROLLUP" | jq -r '[.statusCheckRollup[]? | select((.context // .name)=="CodeRabbit")] | length' 2>/dev/null)
+    if [[ "$CR_PRESENT" =~ ^[0-9]+$ ]] && [[ "$CR_PRESENT" -gt 0 ]]; then
+      CR=$(printf %s "$ROLLUP" | jq -r '[.statusCheckRollup[]? | select((.context // .name)=="CodeRabbit") | ((.state // .conclusion) // "")] | map(select(length>0)) | first // ""' 2>/dev/null)
+      CR_STATE="${CR:-PENDING}"
+    elif [[ "$CR_PRESENT" =~ ^[0-9]+$ ]]; then
+      CR_STATE="absent"
+    else
+      CR_STATE="query-failed"
+    fi
   else
     CR_STATE="query-failed"
   fi
@@ -217,11 +228,19 @@ ROUND_ACTIVE=false
 if [[ -n "$WRAPPER_AT" ]]; then
   # Pipe to jq rather than `--jq`, like every other query here: it keeps the raw response
   # inspectable and lets the fixture stub answer without reimplementing gh's filtering.
-  EYES_AT=$(gh api "repos/$REPO/issues/$PR/reactions" 2>/dev/null \
-    | jq -r '[.[] | select(.user.login=="chatgpt-codex-connector[bot]") | select(.content=="eyes") | .created_at] | max // ""' 2>/dev/null || echo "")
-  if [[ -n "$EYES_AT" ]]; then
-    E=$(iso_to_epoch "$EYES_AT"); W=$(iso_to_epoch "$WRAPPER_AT")
-    [[ -n "$E" && -n "$W" ]] && (( E > W )) && ROUND_ACTIVE=true
+  # --paginate like every other endpoint here, and fail CLOSED: a failed query or an
+  # unparseable timestamp is doubt, and doubt is not clearance. Previously both were
+  # indistinguishable from "no eyes reaction", which cleared.
+  if REACTIONS=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/reactions" 2>/dev/null); then
+    EYES_AT=$(printf '%s' "$REACTIONS" \
+      | jq -r '[.[][] | select(.user.login=="chatgpt-codex-connector[bot]") | select(.content=="eyes") | .created_at] | max // ""' 2>/dev/null || echo "")
+    if [[ -n "$EYES_AT" ]]; then
+      E=$(iso_to_epoch "$EYES_AT"); W=$(iso_to_epoch "$WRAPPER_AT")
+      if [[ -n "$E" && -n "$W" ]]; then (( E > W )) && ROUND_ACTIVE=true
+      else ROUND_ACTIVE=true; fi   # cannot compare -> assume a round is running
+    fi
+  else
+    echo "BLOCKED: reactions query failed" >&2; exit 3
   fi
 fi
 
@@ -244,9 +263,15 @@ else
   printf 'coderabbit       %s\n' "$CR_STATE"
   printf '\nverdict: %s\n' "$VERDICT"
   [[ "$WRAPPER_TIP" -eq 0 ]] && printf '  ⚠ no wrapper names this tip. The bot may have finished with only a +1 (it does\n    that on a clean round) — in which case nothing proves WHICH tree it read. Push or\n    `@codex review` to get a wrapper, or accept the round explicitly and say so.\n'
-  $SETTLED && : || { $DATE_UNPARSED \
-    && printf '  ⚠ could not parse the wrapper timestamp (%s), so its age is unknown — not settled.\n' "$WRAPPER_AT" \
-    || printf '  ⚠ unresolved-thread count changed during the settle window — findings are still arriving.\n'; }
+  if ! $SETTLED; then
+    if $DATE_UNPARSED; then
+      printf '  ⚠ could not parse the wrapper timestamp (%s), so its age is unknown — not settled.\n' "$WRAPPER_AT"
+    elif [[ -z "$WRAPPER_AT" ]]; then
+      : # no wrapper at all — the wrapper warning above already says so; the count is fine
+    else
+      printf '  ⚠ unresolved-thread count changed during the settle window — findings are still arriving.\n'
+    fi
+  fi
   [[ "$B" -gt 0 ]] && printf '  ⚠ %s UNRESOLVED bot thread(s). Fix each, or answer it with evidence and resolve the\n    thread — resolving is how you record that it was dispositioned.\n' "$B"
   [[ "$CR_STATE" == "query-failed" ]] && printf '  ⚠ CodeRabbit status could not be queried — not the same as "not configured".\n'
   $ROUND_ACTIVE && printf '  ⚠ an `eyes` reaction is newer than the wrapper — a fresh round is running on this\n    same tip. Wait for it to finish.\n'

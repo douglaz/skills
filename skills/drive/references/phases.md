@@ -322,7 +322,9 @@ BASE=$("$DS" --json | jq -r '.default_branch')
 # upstream base repo while `origin` is your fork.
 # REST, not `gh pr view --json baseRepository` — that field does not exist, and without
 # `set -e` the failure is silent and falls back to origin, i.e. the fork.
-PRNUM=$(gh pr view --json number -q .number 2>/dev/null) || { echo "no PR — cannot resolve base repo"; exit 1; }
+UP2=$(gh repo view --json nameWithOwner,parent -q '.parent.nameWithOwner // .nameWithOwner' 2>/dev/null)
+BR2=$(git branch --show-current)
+PRNUM=$(gh pr view "$BR2" ${UP2:+-R} ${UP2:+"$UP2"} --json number -q .number 2>/dev/null) || { echo "no PR — cannot resolve base repo"; exit 1; }
 UP=$(gh repo view --json nameWithOwner,parent -q '.parent.nameWithOwner // .nameWithOwner')
 BASE_REMOTE=$(gh api "repos/$UP/pulls/$PRNUM" --jq .base.repo.clone_url 2>/dev/null) \
   || { echo "cannot resolve base repository"; exit 1; }

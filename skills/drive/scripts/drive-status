@@ -26,6 +26,7 @@ DEFAULT_BRANCH=""
 # construction — a vacuous check that would report base_fresh=true forever while the real
 # target advances.
 BASE_ORIGIN="none"
+_RFLAG=()
 if command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   # OPEN only. `gh pr view` falls back to the most recent CLOSED or MERGED PR on the
   # branch (this script guards PR_STATE on OPEN/* for the same reason), and HARDEN
@@ -254,7 +255,10 @@ elif ! git remote -v 2>/dev/null | grep -qi 'github\.com'; then
   # would be a claim we have not checked, so name the reason instead.
   PR_STATE="n/a-non-github"
 else
-  if PR_JSON=$(gh pr view --json number,state,reviewDecision 2>/dev/null) && [[ -n "$PR_JSON" ]]; then
+  # Same -R + selector as the base lookup: a bare `gh pr view` resolves against the fork,
+  # so PR_STATE would read `none` on a fork clone — which also makes the merged-head
+  # exemption downstream dead code, since it gates on PR_STATE == MERGED/*.
+  if PR_JSON=$(gh pr view "${_RFLAG[@]}" --json number,state,reviewDecision 2>/dev/null) && [[ -n "$PR_JSON" ]]; then
     PR_NUM=$(echo "$PR_JSON" | jq -r '.number // ""' 2>/dev/null)
           # reviewDecision is an empty STRING when undecided, not null, so `//` never
       # fires — test for emptiness explicitly or the label is dead in the common case.

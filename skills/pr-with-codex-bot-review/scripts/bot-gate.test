@@ -22,9 +22,9 @@ f() { cat "$FIX/$1" 2>/dev/null || echo "$2"; }
 case "$*" in
   *"repo view"*nameWithOwner*)  f repo.txt "owner/repo" ;;
   *"pr view"*number*)           f prnum.txt "16" ;;
-  *"pr checks"*)                f checks.json '[]' ;;
+  *"pr checks"*)                [ -f "$FIX/checksfail" ] && exit 1; f checks.json '[]' ;;
   *"pr view"*statusCheckRollup*) f rollup.json '{"statusCheckRollup":[]}' ;;
-  *reactions*)                  f reactions.json '[]' ;;
+  *reactions*)                  [ -f "$FIX/reactionsfail" ] && exit 1; f reactions.json '[[]]' ;;
   *graphql*)                    f threads.json '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}' ;;
   *"pulls/"*"/reviews"*)        f reviews.json '[[]]' ;;
   *"issues/"*"/comments"*)      f issues.json '[[]]' ;;
@@ -121,8 +121,27 @@ check "walkthrough mentioning rate limiting still clears" 0
 
 # A fresh `eyes` newer than the wrapper means a round is running on the same tip.
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-printf '[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":"%s"}]' "$NOW_UTC" > "$FIX/reactions.json"
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":"%s"}]]' "$NOW_UTC" > "$FIX/reactions.json"
 check "active round (eyes newer than wrapper) blocks" 1
+
+# The active-round guard must fail CLOSED. Neither of these was covered by the happy-path
+# case above: reverting the fail-closed logic left it green, which is how an untested
+# branch hides.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":"not-a-date"}]]' > "$FIX/reactions.json"
+check "unparseable eyes timestamp blocks" 1
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo 'x' > "$FIX/reactionsfail"
+check "reactions query failure is exit 3" 3
+
+# A PENDING CheckRun has no `.state` and a null `.conclusion`. Reading that as "absent"
+# cleared past a review that was still running — the fail-open half that survived the
+# name/state fix.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo 'CHECKSFAIL' > "$FIX/checksfail"
+echo '{"statusCheckRollup":[{"__typename":"CheckRun","name":"CodeRabbit","conclusion":null}]}' > "$FIX/rollup.json"
+check "pending CheckRun CodeRabbit blocks" 1
 
 new_fix; touch "$FIX/FAIL"
 check "API failure is exit 3, never clearance" 3

@@ -410,7 +410,7 @@ Merge when the reaction-based check passes:
      If none resolve you are running from a checkout: invoke it by its path there.
 
      `scripts/bot-gate.test` runs it against a stubbed `gh` with canned API responses —
-     eight cases, each one a defect a reviewer actually found: a forged wrapper login, a
+     sixteen cases, each one a defect a reviewer actually found: a forged wrapper login, a
      `[bot]`-suffix filter that matched nothing, a settle window satisfied by two zeros in
      the delivery gap, a CodeRabbit rate-limit skip, an API failure. Run it after touching
      the gate; every case has been shown to go red against the real bug.
@@ -485,7 +485,8 @@ Check before merging, and make it `exit 1` rather than print: a bare `git status
 itself — so a dirty tree aborts *after* the squash has already landed. Stash if the change
 matters; discard only after looking, because `git checkout -- .` is not recoverable.
 
-`reset --hard` rather than `pull` because squash-merge rewrites history.
+`checkout -B` rather than `pull` because squash-merge rewrites history — the branch is
+repointed at the merge target, not merged with it.
 
 ## Iteration patterns observed
 
