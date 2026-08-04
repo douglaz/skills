@@ -502,7 +502,7 @@ printf '\nphase: %s   (source: %s)\n' "$PHASE" "$PHASE_SOURCE"
 # LAND is derived, so a RECORDED LAND is a stale or hand-edited file. Say so rather than
 # silently ignoring the line — an unexplained discard is the failure this warns about.
 $RECORDED_LAND && printf '  ⚠ DRIVE.md records `Phase: LAND`, which is no longer a recordable phase — LAND is\n    derived from `cleared == tip` with a fresh base. The line was IGNORED. Rewrite it to\n    HARDEN; the record should never claim a phase only this checkout can prove.\n'
-$DONE_ON_BRANCH && printf '  ⚠ DRIVE.md says DONE but this branch has %s unmerged commit(s) — that record\n    describes the state AFTER this PR lands. Treating it as HARDEN: these commits are\n    unreviewed and go through the panel like any others.\n' "$BRANCH_COMMITS"
+[[ "$PHASE" != "LAND" ]] && $DONE_ON_BRANCH && printf '  ⚠ DRIVE.md says DONE but this branch has %s unmerged commit(s) — that record\n    describes the state AFTER this PR lands. Treating it as HARDEN: these commits are\n    unreviewed and go through the panel like any others.\n' "$BRANCH_COMMITS"
 $DONE_PENDING && printf '  ⚠ DONE is pending metadata PR #%s, so this is WAITING_FOR_MERGE, not DONE. Query that\n    PR: merged means the drive really is done; open means go finish landing it.\n' "$DRIVE_PENDING"
 # Silent otherwise: clearance matches but the tree moved, and every SHA check still passes.
 $LAND_BLOCKED_DIRTY && printf '  ⚠ clearance matches the tip and the base is fresh, but the worktree is dirty\n    (%s modified, %s untracked) — so this is NOT LAND. Those edits are not in the commit\n    a merge would take. Commit and re-clear, or discard them.\n' "$DIRTY_COUNT" "$UNTRACKED"
@@ -512,9 +512,13 @@ $LAND_BLOCKED_DIRTY && printf '  ⚠ clearance matches the tip and the base is f
 # whether the Phase line is malformed or missing entirely — warn on both.
 if [[ "$DRIVE_MD" == "present" ]] && ! $RECORD_VALID && ! $RECORDED_LAND; then
   printf '  ⚠ DRIVE.md is present but no usable Phase line was found (%s) — IGNORED, this\n    phase came from the tree. Valid: SHAPE GRAPH BUILD PROVE HARDEN DONE (not LAND).\n' "${DRIVE_PHASE:-none}"
-elif $RECORD_VALID && [[ "$DRIVE_PHASE" != "$TREE_PHASE" && "$PHASE_SOURCE" != derived* ]]; then
-  # Suppressed for a derived phase: neither record nor tree won, so "the record wins"
-  # would contradict the line above it.
+elif $RECORD_VALID && [[ "$DRIVE_PHASE" != "$TREE_PHASE" ]] && [[ "$PHASE" == "$DRIVE_PHASE" ]]; then
+  # Only when the record ACTUALLY won, i.e. PHASE is still what the record said. Every
+  # override path (derived LAND, DONE-on-branch, DONE-pending) already printed its own
+  # explanation above; adding "the record wins — override only with a stated reason" under
+  # it hands the driver two contradictory instructions and invites overriding the very
+  # downgrade just imposed. Keying on PHASE == DRIVE_PHASE covers every override, present
+  # and future, rather than naming them one at a time and missing the next one.
   printf '  ⚠ the record says %s, the tree looks like %s. The record wins — it is written at\n    every transition and several phases are indistinguishable from git. Override only\n    with a stated reason.\n' "$DRIVE_PHASE" "$TREE_PHASE"
 fi
 [[ "$UNTRACKED" -gt 0 ]] && printf '  ⚠ %s untracked file(s) — codex reviewers are BLIND to these; git add before review.\n' "$UNTRACKED"

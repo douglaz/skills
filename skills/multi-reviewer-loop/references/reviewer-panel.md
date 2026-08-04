@@ -104,14 +104,17 @@ Both reviewers start together and neither sees the other's output.
 
 ```bash
 RC_TIMEOUT=1500   # 25 min; a normal pass is 5-15
+# Homebrew coreutils installs GNU timeout as `gtimeout`; hardcoding `timeout` makes both
+# reviewers exit command-not-found on macOS and the loop can never reach clean.
+TO=$(command -v timeout || command -v gtimeout) || { echo "no GNU timeout — see below"; }
 
-timeout --kill-after=60 "$RC_TIMEOUT" \
+"$TO" --kill-after=60 "$RC_TIMEOUT" \
   codex review --base "$DIFF_BASE" \
   -c 'model="gpt-5.6-sol"' -c 'model_reasoning_effort="xhigh"' \
   </dev/null >"$CODEX_OUT" 2>"$CODEX_ERR" &
 CODEX_PID=$!
 
-timeout --kill-after=60 "$RC_TIMEOUT" \
+"$TO" --kill-after=60 "$RC_TIMEOUT" \
   claude -p "$(cat "$FABLE_PROMPT_FILE")" \
   --model fable \
   --effort high \
@@ -425,7 +428,7 @@ effort, and the three tool flags), pointing at this prompt file and these output
 files:
 
 ```bash
-timeout --kill-after=60 1500 \
+"$(command -v timeout || command -v gtimeout)" --kill-after=60 1500 \
   claude -p "$(cat "$REVIEW_DIR/fable-consistency-prompt.txt")" \
   --model fable --effort high --output-format json \
   --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \

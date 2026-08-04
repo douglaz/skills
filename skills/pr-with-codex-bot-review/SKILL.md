@@ -347,11 +347,25 @@ For each P-badge finding:
 
 Merge when the reaction-based check passes:
 
-- Codex bot reaction on PR body is `+1`, **and** the tree it reacted to is the tip. Pass
-  that SHA as `--match-head-commit` when you merge, so a push landing between the check
-  and the merge makes the merge refuse rather than take an unreviewed head. The
-  reaction carries no SHA; its review wrapper does (`**Reviewed commit:** <sha>`). Compare
-  that against the head — a `+1` left before your last force-push approves the old tree.
+- Codex bot reaction on PR body is `+1`, **and that `+1` belongs to the current round.**
+  The reaction carries no SHA, only a timestamp; its review wrapper carries the SHA
+  (`**Reviewed commit:** <sha>`). Two separate things must hold, and a wrapper for the new
+  head does not establish the second:
+  1. The latest wrapper's `Reviewed commit:` equals the tip.
+  2. The `+1` is **newer than your last push**. A surviving `+1` from before a
+     force-push, plus a fresh wrapper, plus a momentary zero line-comments (the wrapper
+     often lands before the findings do) satisfies a naive check and merges before the
+     findings arrive.
+
+  ```bash
+  gh api repos/<owner>/<repo>/issues/<N>/reactions \
+    --jq '.[] | select(.user.login|startswith("chatgpt-codex-connector")) | .created_at'
+  git log -1 --format=%cI HEAD    # reaction must be LATER than this
+  ```
+
+  If the reaction predates the push, the bot has not finished this round — wait, or
+  `@codex review`. Then pass `git rev-parse HEAD` to `--match-head-commit` at merge time
+  so a push landing after this check makes the merge refuse rather than take it.
 - CI is green.
 - CodeRabbit status check is `SUCCESS` **and it was a review, not a skip** — check the
   "Files skipped from review" list per the query above. Absent from the rollup entirely

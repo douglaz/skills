@@ -46,8 +46,8 @@ The default panel is two reviewers, run in parallel every pass:
 | `fable` | `claude -p "<review prompt>" --model fable --effort high --output-format json` | Repo-aware, reads beyond the diff |
 
 Both CLIs must be on `PATH` and authenticated. `jq` is needed to unwrap the
-Claude reviewer's JSON, and GNU `timeout` (with `--kill-after`) to bound each
-reviewer — both CLIs can hang indefinitely, writing nothing and never exiting.
+Claude reviewer's JSON, and GNU `timeout` — named `timeout`, or `gtimeout` from
+Homebrew coreutils; resolve it once with `command -v` — to bound each reviewer — both CLIs can hang indefinitely, writing nothing and never exiting.
 
 - If **both** are missing, stop and tell the user to install them.
 - If **one** is missing or unauthenticated, run the loop with the survivor and
@@ -206,11 +206,12 @@ For each pass `N` from `1` to `MAX_PASSES`:
 
    ```bash
    PASS_ID=$(printf '%02d' "$N")
-   timeout --kill-after=60 1500 codex review --base "$DIFF_BASE" \
+   TO=$(command -v timeout || command -v gtimeout)   # gtimeout on Homebrew coreutils
+   "$TO" --kill-after=60 1500 codex review --base "$DIFF_BASE" \
      -c 'model="gpt-5.6-sol"' -c 'model_reasoning_effort="xhigh"' \
      </dev/null >"$REVIEW_DIR/pass-${PASS_ID}.codex.txt" 2>"$REVIEW_DIR/pass-${PASS_ID}.codex.stderr.txt" &
    CODEX_PID=$!
-   timeout --kill-after=60 1500 \
+   "$TO" --kill-after=60 1500 \
      claude -p "$(cat "$FABLE_PROMPT_FILE")" --model fable --effort high --output-format json \
      --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
      --disallowedTools "Edit,Write,NotebookEdit" \

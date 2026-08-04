@@ -469,7 +469,10 @@ implement → review loop for each bead.
     tracked `.beads/*.jsonl`, so do **not** commit it straight to the default branch —
     it would reach the branch unreviewed. Carry the closure commit into the next bead's
     branch, where it rides that PR; when the queue is empty and there is no next branch,
-    open one small metadata PR for it. Do not leave it uncommitted either, or the next
+    open one small metadata PR for it **and land it** — carry it through review and merge
+    like any other. Opening it is not enough: until it merges, the closure never reaches
+    the default branch and a fresh clone still shows the bead open, which is the failure
+    this reviewed path exists to prevent. The drain is not done until that PR is merged. Do not leave it uncommitted either, or the next
     run starts from a dirty base and silently carries the previous closure into its diff.
 
     Verify it landed: an *explicit* `br sync --flush-only` propagates a real exit code,
@@ -481,7 +484,9 @@ implement → review loop for each bead.
     awareness, and import is last-write-wins, so the closure leaks. See
     `docs/adr/0003-bead-closure-stays-post-merge.md` for the code evidence.
 
-12. **Loop.** Return to `br ready --limit 10`. Stop when the queue is empty,
+12. **Loop.** Return to `br ready --limit 10`. Stop when the queue is empty **and** any
+    final metadata PR from step 11 has merged — an open closure PR means the drain is
+    still in flight, however empty the queue looks. Stop when the queue is empty,
     the user says stop, a bead needs human product/security judgment, or a
     P0/P1 dogfood bead interrupts the queue.
 

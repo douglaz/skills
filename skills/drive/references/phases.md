@@ -273,9 +273,13 @@ again immediately before merging:
 
 ```bash
 DS=<the drive-status path resolved in Phase 0>
-git fetch -q origin
-[ "$("$DS" --json | jq -r '.base_fresh')" = "true" ] || echo "REBASE FIRST"
+git fetch -q origin || { echo "fetch failed — base unknown, do NOT merge"; exit 1; }
+[ "$("$DS" --json | jq -r '.base_fresh')" = "true" ] || { echo "REBASE FIRST"; exit 1; }
 ```
+
+Both `exit 1`. This is the last check before the merge, so a warning that returns 0 lets
+`gh pr merge` run anyway — and a failed fetch leaves a stale tracking ref, which makes the
+freshness test pass on information that is simply old.
 
 Through `drive-status`, not a hand-rolled `merge-base` — same reason as HARDEN's
 precondition 3: only the detector resolves `origin/HEAD`-unset clones and non-`main`
