@@ -218,8 +218,10 @@ For each pass `N` from `1` to `MAX_PASSES`:
      --disallowedTools "Edit,Write,NotebookEdit" \
      </dev/null >"$REVIEW_DIR/pass-${PASS_ID}.fable.raw.json" 2>"$REVIEW_DIR/pass-${PASS_ID}.fable.stderr.txt" &
    FABLE_PID=$!
-   wait "$CODEX_PID"; CODEX_RC=$?
-   wait "$FABLE_PID"; FABLE_RC=$?
+   # `|| VAR=$?` — a timeout kill returns 124/137, and under `set -e` the bare
+   # `; VAR=$?` form terminates the shell before the status is ever captured.
+   CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?
+   FABLE_RC=0; wait "$FABLE_PID" || FABLE_RC=$?
    ```
 
    **Do not pass focus text as a `codex review` argument.** `codex review` rejects

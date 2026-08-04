@@ -121,12 +121,26 @@ run `second-model-bead-audit` by default after the graph meets these gates.
 
 4. Apply only justified changes with `br`.
 5. Flush mutations with `br sync --flush-only` and require it to SUCCEED (`&&`, or check
-   `$?`) — an explicit sync propagates a real exit code. Then confirm the JSONL changed
-   (`git status --porcelain -- '*.beads*.jsonl'`). The sync's own exit code covers its
-   write; the JSONL check is what catches an *auto*-flush silently swallowed by the `br`
-   mutations earlier in the round. Expect output only
-   when the round actually changed something: a late round that applies zero justified
-   changes is a healthy convergence signal, not a failed flush.
+   `$?`) — an explicit sync propagates a real exit code. The sync's own exit code covers
+   its write; a JSONL check is what catches an *auto*-flush silently swallowed by the `br`
+   mutations earlier in the round.
+
+   Take that check against a **pre-round baseline**, not against `HEAD`. `git status
+   --porcelain` compares the worktree with the last commit, so once the JSONL is dirty from
+   an earlier round it stays dirty — and every later round then "confirms" a write it never
+   made, which is exactly the swallowed auto-flush this is here to catch:
+
+   ```bash
+   beads_fingerprint() { cat .beads/*.jsonl 2>/dev/null | cksum; }
+   BEFORE=$(beads_fingerprint)
+   # ... apply this round's `br` mutations, then:
+   br sync --flush-only || { echo "flush failed"; exit 1; }
+   [ "$(beads_fingerprint)" != "$BEFORE" ] || { echo "round changed nothing on disk"; exit 1; }
+   ```
+
+   Only require the change when the round actually applied mutations. A late round that
+   applies zero justified changes leaves the fingerprint equal, and that is a healthy
+   convergence signal, not a failed flush.
 6. Write a round summary:
    - beads added, rewritten, merged, closed, or reprioritized
    - findings ledger entries closed this round

@@ -156,9 +156,15 @@ BOT_LOGIN="chatgpt-codex-connector[bot]"
 # `.commit_id` (the API's own full 40-char SHA), not a 7-char prefix matched out of the
 # body: 28 bits collides in a large history and can be ground out deliberately, which
 # would let a stale wrapper stand in as approval of the current tree.
+# `submitted_at` must be present, not just the commit_id. GitHub omits that field on
+# PENDING reviews — a draft that was never submitted — so an unsubmitted review naming the
+# tip used to satisfy the wrapper count while leaving WRAPPER_AT empty. That combination is
+# the worst one available: the active-round check below is guarded on WRAPPER_AT, so it
+# would not run at all, and the verdict saw a wrapper on the tip with nothing contradicting
+# it. A review nobody submitted is not evidence that anybody read anything.
 WRAPPER_JSON=$(printf '%s' "$REVIEWS" | jq -c --arg tip "$TIP" --arg bot "$BOT_LOGIN" '
   [.[][] | select(.user.login==$bot) | select(.user.type=="Bot")
-   | select(.commit_id==$tip)]
+   | select(.commit_id==$tip) | select((.submitted_at // "") != "")]
   | {n: length, latest: (max_by(.submitted_at).submitted_at // "")}' 2>/dev/null)
 WRAPPER_TIP=$(printf '%s' "$WRAPPER_JSON" | jq -r '.n' 2>/dev/null)
 WRAPPER_AT=$(printf '%s' "$WRAPPER_JSON" | jq -r '.latest' 2>/dev/null)
@@ -383,8 +389,11 @@ if [[ -n "${CRC:-}" ]]; then
     && CR_CONFIGURED=true
 fi
 
+# WRAPPER_AT is required alongside the count: it is the reference point the active-round
+# check needs, so a wrapper without one means that check never ran, and a check that did
+# not run has not passed.
 VERDICT="BLOCKED"
-if [[ "$WRAPPER_TIP" -gt 0 ]] && ! $ROUND_ACTIVE && [[ "$UNRESOLVED" -eq 0 ]] \
+if [[ "$WRAPPER_TIP" -gt 0 ]] && [[ -n "$WRAPPER_AT" ]] && ! $ROUND_ACTIVE && [[ "$UNRESOLVED" -eq 0 ]] \
    && { { [[ "$CR_STATE" == "absent" ]] && ! $CR_CONFIGURED && $NO_CR; } \
         || { [[ "$CR_STATE" == "SUCCESS" ]] && ! $CR_SKIPPED; }; }; then
   VERDICT="NO_PENDING_EVIDENCE"
@@ -431,4 +440,10 @@ else
   $CR_SKIPPED && printf '  ⚠ CodeRabbit reported SUCCESS but its walkthrough mentions a rate limit or a paused\n    review — nobody reviewed this. `@coderabbitai review` and wait.\n'
 fi
 
-[[ "$VERDICT" == "NO_PENDING_EVIDENCE" ]] && exit 0 || exit 1
+# `query-failed` is the "cannot determine" case the header reserves exit 3 for, and it must
+# not collapse into an ordinary block: a caller distinguishing "the bots are not done" from
+# "I could not find out" gets the wrong answer, and a retry loop keyed on exit 1 would spin
+# on an outage forever.
+[[ "$VERDICT" == "NO_PENDING_EVIDENCE" ]] && exit 0
+[[ "$CR_STATE" == "query-failed" ]] && exit 3
+exit 1

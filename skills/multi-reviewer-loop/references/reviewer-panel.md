@@ -126,8 +126,12 @@ CODEX_PID=$!
   </dev/null >"$FABLE_RAW" 2>"$FABLE_ERR" &
 FABLE_PID=$!
 
-wait "$CODEX_PID"; CODEX_RC=$?
-wait "$FABLE_PID"; FABLE_RC=$?
+# `|| VAR=$?`, not `; VAR=$?`. A timeout kill makes `wait` return 124/137, and under
+# `set -e` — which this file assumes at line 99 — the bare form terminates the shell right
+# there: CODEX_RC is never assigned, Fable is never reaped, and the degraded-pass and
+# two-consecutive-timeout handling below never runs. The `||` keeps errexit off the hook.
+CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?
+FABLE_RC=0; wait "$FABLE_PID" || FABLE_RC=$?
 ```
 
 **Do not drop the `timeout`.** Either reviewer can hang indefinitely — no output, no
@@ -369,6 +373,7 @@ that is both committed-changed and currently dirty appears twice.
 
 ```bash
 CONSISTENCY_OUT="$REVIEW_DIR/consistency.fable.txt"
+CONSISTENCY_RC=0
 CONSISTENCY_RAW="$REVIEW_DIR/consistency.fable.raw.json"
 
 # -z everywhere: NUL-delimited output is the only form that survives a path
@@ -446,8 +451,10 @@ TO=$(command -v timeout || command -v gtimeout) \
   --model fable --effort high --output-format json \
   --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
   --disallowedTools "Edit,Write,NotebookEdit" \
-  </dev/null >"$CONSISTENCY_RAW" 2>"$REVIEW_DIR/consistency.fable.stderr.txt"
-CONSISTENCY_RC=$?      # capture BEFORE any pipeline replaces it
+  </dev/null >"$CONSISTENCY_RAW" 2>"$REVIEW_DIR/consistency.fable.stderr.txt" \
+  || CONSISTENCY_RC=$?   # `||`, so a 124/137 timeout under `set -e` does not kill the
+                         # shell before the status is captured — and captured BEFORE any
+                         # pipeline replaces it
 [[ "$CONSISTENCY_RC" -eq 0 ]] \
   || { echo "consistency reviewer exited $CONSISTENCY_RC (124/137 = timeout) — NOT clean"; exit 1; }
 jq -er 'if .is_error then error(.result // "err") else (.result // empty) end' \

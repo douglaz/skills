@@ -32,7 +32,7 @@ case "$*" in
   *"pr view"*headRefOid*)       cat "$FIX/prhead.txt" 2>/dev/null || echo "" ;;
   *"pr view"*number*)           f prnum.txt "16" ;;
   *"pr checks"*)                [ -f "$FIX/checksfail" ] && exit 1; f checks.json '[]' ;;
-  *"pr view"*statusCheckRollup*) f rollup.json '{"statusCheckRollup":[]}' ;;
+  *"pr view"*statusCheckRollup*) [ -f "$FIX/rollupfail" ] && exit 1; f rollup.json '{"statusCheckRollup":[]}' ;;
   *reactions*)                  [ -f "$FIX/reactionsfail" ] && exit 1; f reactions.json '[[]]' ;;
   *graphql*)                    f threads.json '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}' ;;
   *"pulls/"*"/reviews"*)        f reviews.json '[[]]' ;;
@@ -325,6 +325,29 @@ check "local HEAD behind the PR head is exit 3" 3
 
 new_fix; touch "$FIX/FAIL"
 check "API failure is exit 3, never clearance" 3
+
+# A PENDING review is a draft nobody submitted, and GitHub omits `submitted_at` on it. It
+# named the tip, so it satisfied the wrapper count — while leaving WRAPPER_AT empty, which
+# is what the active-round check is guarded on. So the check never ran and the verdict saw
+# an unopposed wrapper. Two ways to reintroduce it, so assert against both.
+new_fix
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]","type":"Bot"},"state":"PENDING","commit_id":"%s","body":"draft"}]]' "$TIP" > "$FIX/reviews.json"
+threads 0 > "$FIX/threads.json"
+check "an unsubmitted (PENDING) wrapper blocks" 1
+
+# ...and the belt-and-braces half: a submitted_at that is present but empty.
+new_fix
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]","type":"Bot"},"submitted_at":"","commit_id":"%s","body":"x"}]]' "$TIP" > "$FIX/reviews.json"
+threads 0 > "$FIX/threads.json"
+check "a wrapper with an empty submitted_at blocks" 1
+
+# "Cannot determine" is exit 3, and CodeRabbit is the one path that reached the verdict
+# with an unknown state: both status queries failing set CR_STATE=query-failed, which then
+# exited 1 like an ordinary block. A caller cannot tell "not done" from "could not ask",
+# and a retry loop keyed on exit 1 would spin on an outage forever.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo 'x' > "$FIX/checksfail"; echo 'x' > "$FIX/rollupfail"
+check "both CodeRabbit status queries failing is exit 3" 3
 
 # --- what exit 0 says it means ---
 

@@ -443,7 +443,7 @@ Merge when the reaction-based check passes:
      shorter version of it here.
 
      `scripts/bot-gate.test` runs it against a stubbed `gh` with canned API responses —
-     forty cases, each one a defect a reviewer actually found: a forged wrapper
+     forty-three cases, each one a defect a reviewer actually found: a forged wrapper
      login, a `[bot]`-suffix filter that matched nothing, an unrelated app's unresolved
      thread holding the merge, a CodeRabbit rate-limit skip, an API failure. Run it after
      touching the gate; every case has been shown to go red against the real bug.
@@ -496,8 +496,10 @@ Merge when the reaction-based check passes:
   A "Files skipped from review" list is different: it names files CodeRabbit judged
   trivial and chose not to read. The gate prints that list and does not block on it —
   read it and disagree if you want to, but it is a vendor's judgement call, not a failure.
-  Absent from the rollup entirely (repo has no CodeRabbit) is still fine; there is nothing
-  to wait for.
+  Absent from the rollup entirely is only fine when the repo genuinely has no CodeRabbit,
+  and the gate will not take your word for it implicitly: it clears an absent check only
+  when you pass `--no-coderabbit` **and** the PR carries no CodeRabbit comment. On a fresh
+  PR, "absent" and "installed but not started yet" look identical, so absence alone blocks.
 - No unresolved review threads from **either gated bot** — `chatgpt-codex-connector` or
   `coderabbitai`. Not "any account GitHub types as a Bot": counting those let an unrelated
   app hold the merge over something this skill has no opinion about, with no way for the

@@ -46,8 +46,8 @@ cleared) live under the git dir and are correctly absent from a fresh clone.
 
 LAND is *derived*, never recorded: a commit cannot honestly say its own SHA was reviewed,
 because writing the record changes the SHA. `Phase:` never records LAND — it is computed
-from `cleared == tip`, a base still fresh enough that the squash lands the reviewed tree,
-and a clean worktree — post-clearance edits are not in the commit a merge would take. See `docs/adr/` for that decision and two others.
+from `cleared == tip`, the current base still being the one the panel reviewed, that base
+still being fresh enough that the squash lands the reviewed tree, and a clean worktree — post-clearance edits are not in the commit a merge would take. See `docs/adr/` for that decision and two others.
 
 A short stop-list still ends a turn. It does not cover landing the drive's own work —
 its branch, its PR, `--force-with-lease` on that branch, the squash-merge once gates are
@@ -318,7 +318,7 @@ Exit 0 says `NO_PENDING_EVIDENCE`, not "cleared", and the distinction is the poi
 neither bot emits a round-terminal signal, so every conclusion is drawn from absence over a
 bounded observation window, which the JSON reports both ends of. It is a stop sign, not a
 green light — where the forge can enforce a rule server-side, put it there instead.
-`scripts/bot-gate.test` exercises it against a stubbed `gh` — forty cases, each one
+`scripts/bot-gate.test` exercises it against a stubbed `gh` — forty-three cases, each one
 a defect found in review, each shown to go red against the real bug.
 
 ### galtland-architecture

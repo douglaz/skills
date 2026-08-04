@@ -10,8 +10,14 @@ Accepted. Supersedes the settle-window and skipped-file clauses described in
 ## Context
 
 `scripts/bot-gate` decides whether a PR's review bots have finished with the current tip.
-Its exit code is chained straight into `gh pr merge` in the documented usage, so exit 0 is
-a merge authorization in practice whatever the prose says.
+It is a merge *prerequisite*, not merge authorization: § 8 of the skill runs the
+base-freshness ancestor test before merging, which this gate never looks at, and the skill
+explicitly forbids chaining `bot-gate && gh pr merge`.
+
+That prohibition postdates the problem below. The chain WAS the documented usage while
+this predicate grew, which is why exit 0 was a merge authorization in practice whatever
+the prose said — and why the wording of the verdict had to change rather than only the
+docs around it.
 
 Across roughly twenty review findings, the CLEAR condition grew to six conjuncts. Every
 finding was real and every fix was correct, yet the rate of new findings did not fall.

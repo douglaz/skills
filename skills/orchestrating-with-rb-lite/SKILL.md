@@ -481,7 +481,11 @@ implement → review loop for each bead.
     # effect, so a FAILED merge still leaves you somewhere plausible-looking — and step 11
     # then closes the bead for a merge that never happened, which is the exact state this
     # skill's reviewed-closure path exists to prevent.
-    gh pr merge <pr> -R "$R" --squash --delete-branch \
+    # Pin the head. `gh pr checks` passed against whatever the head was THEN; nothing binds
+    # the merge to it, so a force-push in between squashes a tree no check ran on.
+    MERGING_SHA=$(gh pr view <pr> -R "$R" --json headRefOid -q .headRefOid)
+    [ -n "$MERGING_SHA" ] || { echo "cannot resolve the PR head"; exit 1; }
+    gh pr merge <pr> -R "$R" --squash --delete-branch --match-head-commit "$MERGING_SHA" \
       || { echo "merge did not land — do NOT close the bead"; exit 1; }
     # Reset from where the merge LANDED. On a fork clone `origin` is your fork and does
     # not contain the upstream squash commit, so resetting to origin/$BASE silently starts
@@ -489,6 +493,14 @@ implement → review loop for each bead.
     # conflicts with it.
     git fetch "https://github.com/$R.git" "+refs/heads/$BASE:refs/remotes/upstream/$BASE" \
       || { echo "cannot fetch the merge target"; exit 1; }
+    # `checkout -B` moves the branch ref unconditionally, and a clean worktree does not
+    # protect committed work: any local commit on $BASE that upstream lacks becomes
+    # unreachable. Fast-forward only, and stop rather than guess on divergence.
+    if git show-ref --verify --quiet "refs/heads/$BASE" \
+       && ! git merge-base --is-ancestor "$BASE" "refs/remotes/upstream/$BASE"; then
+      echo "local $BASE has commits upstream does not — refusing to reset; rebase or push them first"
+      exit 1
+    fi
     git checkout -B "$BASE" "refs/remotes/upstream/$BASE" \
       || { echo "cannot reset to the merge target"; exit 1; }
     nix build
