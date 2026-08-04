@@ -457,7 +457,7 @@ implement → review loop for each bead.
     authoritative build gate before taking the next bead:
 
     ```bash
-    gh pr merge <pr> --squash --delete-branch
+    gh pr merge <pr> --squash --delete-branch   # add -R <upstream> on a fork clone
     git fetch origin main
     git reset --hard origin/main
     nix build

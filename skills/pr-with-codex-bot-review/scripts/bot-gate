@@ -30,7 +30,8 @@ SETTLE=120
 JSON=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --settle-seconds) SETTLE="$2"; shift 2 ;;
+    --settle-seconds) [[ $# -ge 2 ]] || { echo "--settle-seconds needs a value" >&2; exit 2; }
+                      SETTLE="$2"; shift 2 ;;
     --json)           JSON=true; shift ;;
     *)                echo "unknown arg: $1" >&2; exit 2 ;;
   esac
@@ -46,13 +47,15 @@ for c in gh jq git; do
   command -v "$c" >/dev/null 2>&1 || { echo "BLOCKED: $c not on PATH" >&2; exit 3; }
 done
 
-# From the PR, not from `gh repo view`: on a fork clone the latter names YOUR fork, while
-# PR numbers, reviews and threads all belong to the base repo — every query would 404 and
-# the gate would sit at exit 3 forever.
-PR_URL=$(gh pr view "$PR" --json url -q .url 2>/dev/null) \
-  || { echo "BLOCKED: cannot resolve PR $PR" >&2; exit 3; }
-REPO=$(printf '%s' "$PR_URL" | sed -E 's#^https?://[^/]+/([^/]+/[^/]+)/pull/.*#\1#')
-[[ "$REPO" == */* ]] || { echo "BLOCKED: cannot parse repo from $PR_URL" >&2; exit 3; }
+# Resolve the UPSTREAM repo once, then pass `-R` to every call. On a fork clone the PR
+# number belongs to upstream, but a bare `gh pr view N` resolves it against the fork —
+# finding nothing, or worse, a different PR that happens to share the number. `.parent`
+# is the upstream when this repo is a fork, and the repo itself otherwise.
+REPO=$(gh repo view --json nameWithOwner,parent -q '.parent.nameWithOwner // .nameWithOwner' 2>/dev/null) \
+  || { echo "BLOCKED: cannot resolve repo" >&2; exit 3; }
+[[ "$REPO" == */* ]] || { echo "BLOCKED: cannot parse repo: $REPO" >&2; exit 3; }
+gh pr view "$PR" -R "$REPO" --json number -q .number >/dev/null 2>&1 \
+  || { echo "BLOCKED: PR $PR not found in $REPO" >&2; exit 3; }
 TIP=$(git rev-parse --verify --quiet HEAD) \
   || { echo "BLOCKED: no HEAD" >&2; exit 3; }
 
@@ -126,7 +129,7 @@ SETTLED=false; [[ "$A" == "$B" ]] && SETTLED=true
 # "query failed" is not "not configured": mapping both to absent would let a transient
 # network or auth failure satisfy CLEAR on a repo that DOES gate on CodeRabbit, against
 # this script's own fail-closed contract.
-if ROLLUP=$(gh pr view "$PR" --json statusCheckRollup 2>/dev/null); then
+if ROLLUP=$(gh pr view "$PR" -R "$REPO" --json statusCheckRollup 2>/dev/null); then
   CR=$(printf %s "$ROLLUP" | jq -r '[.statusCheckRollup[]? | select(.context=="CodeRabbit") | .state] | first // ""' 2>/dev/null)
   CR_STATE="${CR:-absent}"
 else

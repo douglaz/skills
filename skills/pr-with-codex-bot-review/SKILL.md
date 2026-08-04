@@ -400,7 +400,10 @@ Merge when the reaction-based check passes:
               "$HOME/.agents/skills/pr-with-codex-bot-review"; do
        [ -x "$d/scripts/bot-gate" ] && { BOT_GATE="$d/scripts/bot-gate"; break; }
      done
-     "$BOT_GATE" 42 && gh pr merge 42 --squash --delete-branch \
+     # -R the upstream: on a fork clone a bare `gh pr merge 42` resolves 42 against YOUR
+     # fork. `.parent` is upstream when this repo is a fork, the repo itself otherwise.
+     R=$(gh repo view --json nameWithOwner,parent -q '.parent.nameWithOwner // .nameWithOwner')
+     "$BOT_GATE" 42 && gh pr merge 42 -R "$R" --squash --delete-branch \
        --match-head-commit "$(git rev-parse HEAD)"
      ```
 
@@ -453,7 +456,8 @@ ignoring the actual signal.**
 
 ```bash
 [ -z "$(git status --porcelain)" ] || { echo "tree dirty — do NOT merge"; exit 1; }
-gh pr merge <N> --squash --delete-branch --match-head-commit "$(git rev-parse HEAD)"
+R=$(gh repo view --json nameWithOwner,parent -q '.parent.nameWithOwner // .nameWithOwner')
+gh pr merge <N> -R "$R" --squash --delete-branch --match-head-commit "$(git rev-parse HEAD)"
 git checkout master
 git fetch origin master && git reset --hard origin/master
 nix build                                    # confirm master is healthy

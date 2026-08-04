@@ -226,7 +226,10 @@ BASE=$("$DS" --json | jq -r '.default_branch')
 # hard PR requirement here would deadlock every drive at its first HARDEN. Ask the PR when
 # there is one; otherwise ask whether this repo is a fork; otherwise origin is the target.
 if PRNUM=$(gh pr view --json number -q .number 2>/dev/null) && [ -n "$PRNUM" ]; then
-  BASE_REMOTE=$(gh api "repos/{owner}/{repo}/pulls/$PRNUM" --jq .base.repo.clone_url 2>/dev/null) \
+  # -R the upstream: `{owner}/{repo}` expands to the CURRENT repo, which on a fork is
+  # yours, not where the PR lives.
+  UP=$(gh repo view --json nameWithOwner,parent -q '.parent.nameWithOwner // .nameWithOwner')
+  BASE_REMOTE=$(gh api "repos/$UP/pulls/$PRNUM" --jq .base.repo.clone_url 2>/dev/null) \
     || { echo "cannot resolve base repository"; exit 1; }
 else
   BASE_REMOTE=$(gh repo view --json parent -q '.parent.url // ""' 2>/dev/null)
@@ -293,7 +296,8 @@ wait for one. CodeRabbit's check is per-commit, but a `SUCCESS` may be a *skip* 
 **2. Do not demand `merged SHA == reviewed SHA`.** The merge is a squash, so it always
 creates a new commit; that equality is unsatisfiable by construction.
 
-Pin the head in the merge itself — `gh pr merge <N> --squash --match-head-commit "$(git rev-parse HEAD)"`
+Pin the head in the merge itself — `gh pr merge <N> -R "$UP" --squash --match-head-commit "$(git rev-parse HEAD)"`
+(`-R` because a bare PR number resolves against the current repo, which on a fork is yours)
 (the **full** OID; the wrapper's SHA may be abbreviated, which would refuse every merge).
 Between comparing SHAs and merging, another push can land; `--match-head-commit` makes the
 merge refuse rather than take the newer, unreviewed head. Base drift in that same window is
