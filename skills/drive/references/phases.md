@@ -344,8 +344,14 @@ survives a force-push, so a stale one reads exactly like approval of the current
 ```bash
 gh api --paginate --slurp repos/<owner>/<repo>/pulls/<N>/reviews \
   | jq -r '[.[][] | select(.user.login=="chatgpt-codex-connector[bot]" and .user.type=="Bot")
-            | .body | capture("Reviewed commit:[^0-9a-f]*(?<sha>[0-9a-f]{7,40})").sha] | last'
+            | .commit_id] | last'
 ```
+
+`.commit_id`, not a SHA scraped out of the body. § 7 of `pr-with-codex-bot-review` gives
+the security reason (seven hex characters collide and can be ground out); the operational
+one is that jq's `capture` *errors* on a non-matching input rather than skipping it, so a
+single review whose body lacks the phrase aborts the whole filter and the snippet prints
+nothing at all — hiding every round's SHA, including the current one.
 
 Collect across pages and take `last`: the endpoint returns reviews oldest-first, and after
 several rounds a bare stream prints one SHA per round with no indication which is current.

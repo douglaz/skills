@@ -468,8 +468,17 @@ implement → review loop for each bead.
 9. **CI.** Capture the head *before* waiting, then wait for green:
 
     ```bash
+    # R is resolved HERE, not in step 10: this is its first use, and an unset $R sends gh
+    # an empty -R (or aborts under nounset), so every drain stopped before CI.
+    R=$(gh repo view --json nameWithOwner,parent -q '.parent.nameWithOwner // .nameWithOwner')
     MERGING_SHA=$(gh pr view <pr> -R "$R" --json headRefOid -q .headRefOid)
     [ -n "$MERGING_SHA" ] || { echo "cannot resolve the PR head"; exit 1; }
+    # Bind it to the commit that was actually reviewed. The remote head is only the right
+    # thing to merge if it IS your local HEAD — the tree rb-lite ran on and step 7's gates
+    # passed on. If the branch moved since step 8, green CI would otherwise merge code no
+    # panel and no gate ever saw.
+    [ "$MERGING_SHA" = "$(git rev-parse HEAD)" ] \
+      || { echo "PR head $MERGING_SHA is not the reviewed local HEAD — re-run the panel"; exit 1; }
     gh pr checks <pr> -R "$R" --watch
     ```
 
@@ -533,7 +542,16 @@ implement → review loop for each bead.
 
     Verify it landed: an *explicit* `br sync --flush-only` propagates a real exit code,
     but the automatic flush after `br update` swallows its error, so check the JSONL
-    actually changed (`git status --porcelain -- '*.beads*.jsonl'`).
+    actually changed — before/after, not "is it dirty". A drain carries the previous
+    bead's closure forward uncommitted, so from the second bead on the file is already
+    dirty and a bare dirtiness test passes without this write happening at all:
+
+    ```bash
+    beads_fingerprint() { cat .beads/*.jsonl ./*.beads.jsonl ./.beads.jsonl 2>/dev/null | cksum; }
+    BEFORE=$(beads_fingerprint)
+    br update <bead-id> -s closed || { echo "br update failed"; exit 1; }
+    [ "$(beads_fingerprint)" != "$BEFORE" ] || { echo "not persisted"; exit 1; }
+    ```
 
     Closing on the feature branch before the merge is **not** a safe shortcut, however
     transactional it looks — the beads DB is shared across branches with no git

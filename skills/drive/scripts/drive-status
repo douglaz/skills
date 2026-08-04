@@ -337,10 +337,16 @@ _c_lc=$(printf '%s' "$DRIVE_CLEARED" | tr '[:upper:]' '[:lower:]')
 # hand-trimmed) is UNVERIFIED, and unverified is not the same as verified-and-fine — the
 # same rule BASE_FRESH follows three lines down. The cost is one extra clearance for a
 # drive that was already in flight; the warning below says so.
+# No `:-HEAD` fallback. With BASE_REF empty there is nothing to compare against, and
+# resolving HEAD instead compares the marker's base SHA to the TIP — which never matches,
+# so a perfectly good marker read `false` and the warning told the driver "the PR base
+# moved (marker X, now Y)" while naming the tip as the base. The truthful state is
+# "unresolvable", which is what n/a means and what BASE_FRESH already reports; the remedy
+# is establishing a base ref, not re-running the panel.
 CLEARED_BASE_MATCHES="n/a"
-if [[ -n "$DRIVE_CLEARED_BASE" ]]; then
+if [[ -n "$DRIVE_CLEARED_BASE" && -n "$BASE_REF" ]]; then
   _b_lc=$(printf '%s' "$DRIVE_CLEARED_BASE" | tr '[:upper:]' '[:lower:]')
-  _cur_base=$(git rev-parse --verify --quiet "${BASE_REF:-HEAD}" 2>/dev/null || echo "")
+  _cur_base=$(git rev-parse --verify --quiet "$BASE_REF" 2>/dev/null || echo "")
   if [[ -n "$_cur_base" && "$_cur_base" == "$_b_lc"* ]]; then CLEARED_BASE_MATCHES=true
   else CLEARED_BASE_MATCHES=false; fi
 fi

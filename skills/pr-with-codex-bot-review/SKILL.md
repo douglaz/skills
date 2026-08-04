@@ -566,6 +566,15 @@ gh pr merge <N> -R "$R" --squash --delete-branch --match-head-commit "$(git rev-
 # branch is still checked out.
 git fetch "https://github.com/$R.git" "+refs/heads/$BASE:refs/remotes/upstream/$BASE" \
   || { echo "cannot fetch the merge target"; exit 1; }
+# `checkout -B` repoints the branch ref unconditionally, and a clean worktree does not
+# protect COMMITTED work: a local bead closure or DRIVE.md update on $BASE awaiting its
+# metadata PR — a state this skill's own LAND flow produces — becomes unreachable except
+# via reflog. Fast-forward only; stop rather than guess on divergence.
+if git show-ref --verify --quiet "refs/heads/$BASE" \
+   && ! git merge-base --is-ancestor "$BASE" "refs/remotes/upstream/$BASE"; then
+  echo "local $BASE has commits upstream does not — refusing to reset; push or rebase them first"
+  exit 1
+fi
 git checkout -B "$BASE" "refs/remotes/upstream/$BASE"
 nix build                                    # confirm the base is healthy
 ```

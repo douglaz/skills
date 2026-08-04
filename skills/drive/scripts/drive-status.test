@@ -155,6 +155,14 @@ check "guessed base refuses LAND" HARDEN
 new_repo; printf '# A\n' > "$REPO/AGENTS.md"
 check "a dirty AGENTS.md does not imply BUILD" SHAPE
 
+# With no base ref resolvable, `cleared_base` has nothing to compare against. Falling back
+# to HEAD compared the marker's BASE sha to the TIP, which never matches — so a valid
+# marker read false and the warning blamed a moved PR base while printing the tip as "now".
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+echo x > "$FIX/ghfail"; G remote remove origin 2>/dev/null || true
+G branch -D master 2>/dev/null || true
+check_field "no base ref leaves cleared_base unverified" cleared_base_matches null
+
 # The header promises exit 0 even when signals are missing.
 new_repo
 ( cd "$REPO" && PATH="$WORK/bin:$PATH" FIX="$FIX" "$DS" >/dev/null 2>&1 )
