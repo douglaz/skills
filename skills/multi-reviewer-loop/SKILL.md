@@ -253,8 +253,9 @@ For each pass `N` from `1` to `MAX_PASSES`:
    - **Ambiguous**: exit 0, no `[P*]` items, no explicit clean signal. Do not
      treat as clean — surface the log.
    - **Failed**: non-zero exit, `is_error: true` in the Claude JSON, or empty
-     output. **Exit 124 is the timeout** and counts here — a reviewer that ran out
-     of time reviewed nothing. Record it, drop that reviewer from this pass, and mark
+     output. **Exit 124 or 137 is the timeout** and counts here — a reviewer that ran
+     out of time reviewed nothing. (137 is the `--kill-after` path, used when the
+     reviewer ignored TERM.) Record it, drop that reviewer from this pass, and mark
      the pass `DEGRADED`. See the recovery rules in the reviewer-panel reference.
 
 4. Merge the two finding lists into `pass-NN.merged.md`. Dedupe on *claim*, not
@@ -402,7 +403,7 @@ Stop early and surface the issue if any of these happen:
   sighting is not evidence the fix failed. Quote the line that closes it and
   reject; do not re-fix something already fixed.
 - a reviewer's output is ambiguous or empty twice in a row
-- a reviewer times out (exit 124) twice in a row — the hang is the finding; stop and
+- a reviewer times out (exit 124 or 137) twice in a row — the hang is the finding; stop and
   say so rather than starting a third pass that may sit for an hour
 - both reviewers fail in the same pass (nothing reviewed the code)
 - a finding remains plausible but fixing it would require a larger architectural

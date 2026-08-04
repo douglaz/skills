@@ -189,8 +189,9 @@ ready bead if the queue is not empty, and the exact reason the loop stopped.
   fmt/clippy) on the landed diff; for high-stakes work add a **separate
   adversarial result-review** (e.g. `codex exec` over the committed diff) — the
   panel's `clean` is one input, not the gate. See "Verify the landed diff."
-- In backlog-drain mode, one bead equals one branch and one PR. Do not batch
-  unrelated beads into one rb-lite run.
+- In backlog-drain mode, one bead equals one branch and one **work** PR. Do not batch
+  unrelated beads into one rb-lite run. The final closure/metadata PR (step 11) is not a
+  second work PR and is not covered by this rule — it carries bookkeeping only.
 - Pre-existing backlog beads are immutable input. If a bead is ambiguous or
   its acceptance criteria are weak, ask the user before launching rb-lite.
 - File rb-lite/tooling dogfood findings as fresh beads immediately. P0/P1

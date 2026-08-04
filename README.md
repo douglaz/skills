@@ -61,7 +61,8 @@ Ships with `scripts/drive-status`, a read-only detector that prints branch, gate
 bead counts, PR state, specs, the cleared SHA, and an inferred phase (`--json` for
 scripting). It also flags the failures that are otherwise invisible: a base that advanced
 after clearance (a squash merge would then land a tree nobody reviewed, while every SHA
-still matches), and a `DONE` record whose closure PR has not merged.
+still matches), and a `DONE` record that names a closure PR — it reports `WAITING_FOR_MERGE` and hands
+you the number to query, deliberately not calling the forge itself.
 
 ### agents-md
 

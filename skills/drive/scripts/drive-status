@@ -21,7 +21,13 @@ BRANCH=$(git branch --show-current 2>/dev/null || echo "")
 # would report base_fresh=true while the tree GitHub actually squashes onto has moved.
 DEFAULT_BRANCH=""
 if command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
-  DEFAULT_BRANCH=$(gh pr view --json baseRefName -q .baseRefName 2>/dev/null || echo "")
+  # OPEN only. `gh pr view` falls back to the most recent CLOSED or MERGED PR on the
+  # branch (this script guards PR_STATE on OPEN/* for the same reason), and HARDEN
+  # clearance runs BEFORE the PR is opened — so an abandoned PR that targeted a release
+  # branch would win, and freshness would be validated against a base the upcoming PR
+  # will not use.
+  DEFAULT_BRANCH=$(gh pr view --json baseRefName,state \
+    -q 'select(.state=="OPEN") | .baseRefName' 2>/dev/null || echo "")
 fi
 [[ -z "$DEFAULT_BRANCH" ]] && DEFAULT_BRANCH=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
 # Probe remote candidates too: a fresh clone of a single branch has origin/main but no
@@ -403,7 +409,19 @@ PHASE_WAS="$PHASE_SOURCE"
 # commits are still not ancestors of it and BRANCH_COMMITS stays > 0 — downgrading there
 # would send an already-landed branch back through review and land it twice. That state is
 # cleanup-pending, not unreviewed work.
-if [[ "$PHASE" == "DONE" && "$BRANCH_COMMITS" -gt 0 && "$PR_STATE" != MERGED/* ]]; then
+# `-gt 0` alone is not evidence of "no unreviewed work": BRANCH_COMMITS is also 0 when the
+# base ref could not be resolved at all, which is exactly the single-branch-clone case. And
+# a MERGED PR only excuses commits that ARE the merged head — a commit added afterwards is
+# new work, and `gh pr view` keeps returning the merged PR forever. So: downgrade unless
+# the base is unknown (unknown != safe), and treat MERGED as an exemption only while HEAD
+# is still the head that merged.
+_BASE_KNOWN=false; [[ -n "$BASE_REF" ]] && _BASE_KNOWN=true
+_MERGED_AT_HEAD=false
+if [[ "$PR_STATE" == MERGED/* ]] && command -v gh >/dev/null 2>&1; then
+  [[ "$(gh pr view --json headRefOid -q .headRefOid 2>/dev/null)" == "$HEAD_SHA" ]] && _MERGED_AT_HEAD=true
+fi
+if [[ "$PHASE" == "DONE" ]] && ! $_MERGED_AT_HEAD \
+   && { [[ "$BRANCH_COMMITS" -gt 0 ]] || ! $_BASE_KNOWN; }; then
   DONE_ON_BRANCH=true
   PHASE="HARDEN"
   PHASE_SOURCE="$([[ "$PHASE_WAS" == "DRIVE.md" ]] && echo "DRIVE.md" || echo "tree") (DONE, but this branch has unreviewed commits)"

@@ -392,8 +392,16 @@ Merge when the reaction-based check passes:
      ```bash
      c() { gh api --paginate repos/<owner>/<repo>/pulls/<N>/comments \
              --jq "[.[] | select(.commit_id==\"$(git rev-parse HEAD)\")] | length"; }
-     a=$(c); sleep 120; b=$(c); [ "$a" = "$b" ] || echo "still arriving — wait"
+     a=$(c) || { echo "comment query failed — do NOT merge"; exit 1; }
+     sleep 120
+     b=$(c) || { echo "comment query failed — do NOT merge"; exit 1; }
+     [ "$a" = "$b" ] || { echo "findings still arriving"; exit 1; }
+     [ "$a" = "0" ] || { echo "$a unresolved finding(s) on this tip"; exit 1; }
      ```
+
+     All four `exit 1`. A failed query must not read as "no comments" — two empty strings
+     compare equal — and stability alone is not enough: a settled count of *three* is
+     still three findings. The last line is the one that enforces the invariant.
 
      `--match-head-commit` does not help here: the tip is unchanged, so the merge succeeds
      and simply lands before the findings arrive.
@@ -475,9 +483,10 @@ body.
 PR #191 (a README docs PR) had `+1` from the bot 13 minutes BEFORE I merged.
 I'd been waiting another full cycle for nothing.
 
-**Always query `issues/<N>/reactions` first** — it's the cheapest completion signal.
-Approval of *this* head takes the § 7 check as well: the reaction must post-date your
-last push, and the wrapper's SHA must equal the tip.
+**Reactions are the cheapest completion signal**, but approval of *this* head is the
+§ 7 check: a wrapper whose `Reviewed commit:` equals the tip, with the comment list
+settled. Do not require the reaction to post-date anything — § 7 explains why that
+deadlocks.
 
 ### "Force-pushing breaks the bot's auto-trigger"
 

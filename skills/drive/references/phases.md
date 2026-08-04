@@ -78,7 +78,9 @@ Write it to `DRIVE.md`'s `Scope:` line before the first bead, so a resumed sessi
 inherits the boundary along with the goal. Within scope, take the
 highest-priority bead; ties break toward whatever unblocks the most work.
 
-One bead = one branch = one rb-lite run = one PR = one squash merge = one bead closed.
+One bead = one branch = one rb-lite run = one **work** PR = one squash merge = one bead
+closed. (The closure that lands after the last bead may need its own small metadata PR —
+see § LAND. That is bookkeeping, not a second work PR, and this rule does not forbid it.)
 Never two runs on one branch, never two beads in one run.
 
 Write the task file with the scope budget from Guard 2 — exact file list, LOC budget,

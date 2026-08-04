@@ -137,7 +137,10 @@ loop reported "still running" the whole time because an empty output file is
 indistinguishable from a slow one. `--kill-after` matters too: a process ignoring
 `TERM` needs the follow-up `KILL`.
 
-Exit **124 is a reviewer failure**, never clean and never ambiguous. Record it, drop
+Exit **124 — and 137** are reviewer failures, never clean and never ambiguous. 124 is the
+TERM path; a reviewer that ignores TERM is killed by `--kill-after` and returns **137**,
+which is the very case that flag exists for. Counting only 124 lets the loop spend another
+full timeout on the same hung reviewer. Record it, drop
 that reviewer from the pass, and mark the pass `DEGRADED` — the same as any other
 non-zero exit.
 
@@ -146,8 +149,12 @@ non-zero exit.
 Check elapsed time against the 5-15 minute norm before assuming progress:
 
 ```bash
-ps -eo pid,etimes,args | grep -E '[c]odex review|[c]laude -p'
+ps -eo pid,etime,args | grep -E '[c]odex review|[c]laude -p'
 ```
+
+`etime` (`[[dd-]hh:]mm:ss`), not `etimes` (raw seconds): `etimes` is a GNU extension and
+macOS `ps` rejects it with a keyword error — on the platform the `gtimeout` fallback
+exists to support.
 
 An empty output file is not evidence of work. If a reviewer is far past the norm,
 kill it **by exact PID** — never `pkill -f`, which matches your own shell and other
