@@ -289,9 +289,15 @@ if [[ "$CR_STATE" == "SUCCESS" || "$CR_STATE" == "absent" ]]; then
     # the newest comment overall picks a reply and reads as "not skipped". Scanning ALL
     # history is the opposite error: a stale rate-limit notice would block forever and the
     # prescribed retrigger could never clear it.
+    # Ordered by `updated_at`, NOT `created_at`. Editing in place is the whole point of
+    # CodeRabbit's status comment, and an edit moves only `updated_at` — so whenever the
+    # live status lives in an OLDER comment that was just rewritten, created_at ordering
+    # picks a staler sibling instead. Both directions are wrong: a current `review paused`
+    # loses to a later-created success and clears, and a stale rate-limit marker outranks a
+    # successful retrigger and blocks forever.
     [[ "$CR_STATE" == "SUCCESS" ]] && printf '%s' "$CRC" | jq -e '[[.[][] | select(.user.login=="coderabbitai[bot]")
         | select(.body|test("auto-generated comment:";"i"))]
-      | sort_by(.created_at) | last // empty
+      | sort_by(.updated_at // .created_at) | last // empty
       | select(.body|test("review (paused|skipped)|rate limited by coderabbit|reviews subject to \\[?rate limits";"i"))] | length > 0' \
       >/dev/null 2>&1 && CR_SKIPPED=true
   else
@@ -348,7 +354,7 @@ fi
 CR_SKIPLIST=""
 if [[ "$CR_STATE" == "SUCCESS" ]] && ! $CR_SKIPPED && [[ -n "${CRC:-}" ]]; then
   CR_SKIPLIST=$(printf '%s' "$CRC" | jq -r '[.[][] | select(.user.login=="coderabbitai[bot]")
-      | select(.body|test("auto-generated comment:";"i"))] | sort_by(.created_at) | last // empty | .body' 2>/dev/null \
+      | select(.body|test("auto-generated comment:";"i"))] | sort_by(.updated_at // .created_at) | last // empty | .body' 2>/dev/null \
     | awk '
         tolower($0) ~ /files skipped from review/ {
           inskip=1

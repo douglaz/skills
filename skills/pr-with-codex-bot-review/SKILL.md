@@ -443,7 +443,7 @@ Merge when the reaction-based check passes:
      shorter version of it here.
 
      `scripts/bot-gate.test` runs it against a stubbed `gh` with canned API responses —
-     thirty-seven cases, each one a defect a reviewer actually found: a forged wrapper
+     forty cases, each one a defect a reviewer actually found: a forged wrapper
      login, a `[bot]`-suffix filter that matched nothing, an unrelated app's unresolved
      thread holding the merge, a CodeRabbit rate-limit skip, an API failure. Run it after
      touching the gate; every case has been shown to go red against the real bug.
