@@ -22,6 +22,7 @@ f() { cat "$FIX/$1" 2>/dev/null || echo "$2"; }
 case "$*" in
   *"repo view"*nameWithOwner*)  f repo.txt "owner/repo" ;;
   *"pr view"*number*)           f prnum.txt "16" ;;
+  *"pr view"*files*)            f prfiles.json '{"files":[]}' ;;
   *"pr checks"*)                [ -f "$FIX/checksfail" ] && exit 1; f checks.json '[]' ;;
   *"pr view"*statusCheckRollup*) f rollup.json '{"statusCheckRollup":[]}' ;;
   *reactions*)                  [ -f "$FIX/reactionsfail" ] && exit 1; f reactions.json '[[]]' ;;
@@ -94,22 +95,22 @@ new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"
 echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
 # CodeRabbit's real wording: the phrase is broken by a markdown link, so a naive
 # "reviews are subject to rate limits" pattern misses it entirely (it did).
-printf '[[{"user":{"login":"coderabbitai[bot]"},"body":"Your plan includes PR reviews subject to [rate limits](https://docs.coderabbit.ai/x)."}]]' > "$FIX/issues.json"
+printf '[[{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\\nYour plan includes PR reviews subject to [rate limits](https://docs.coderabbit.ai/x)."}]]' > "$FIX/issues.json"
 check "CodeRabbit rate-limit notice (real wording) blocks" 1
 
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
-printf '[[{"user":{"login":"coderabbitai[bot]"},"body":"<!-- auto-generated comment: review paused by coderabbit.ai -->"}]]' > "$FIX/issues.json"
+printf '[[{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: review paused by coderabbit.ai -->"}]]' > "$FIX/issues.json"
 check "CodeRabbit paused-review marker blocks" 1
 
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
-printf '[[{"user":{"login":"coderabbitai[bot]"},"body":"Files skipped from review due to trivial changes: docs/x.md"}]]' > "$FIX/issues.json"
+printf '[[{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes: docs/x.md"}]]' > "$FIX/issues.json"
 check "permitted file skips do not block" 0
 
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
-printf '[[{"user":{"login":"coderabbitai[bot]"},"body":"walkthrough, all files reviewed"}]]' > "$FIX/issues.json"
+printf '[[{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nwalkthrough, all files reviewed"}]]' > "$FIX/issues.json"
 check "CodeRabbit genuine SUCCESS clears" 0
 
 # A walkthrough that merely DISCUSSES rate limiting must not be read as a skip — the old
@@ -123,6 +124,34 @@ check "walkthrough mentioning rate limiting still clears" 0
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":"%s"}]]' "$NOW_UTC" > "$FIX/reactions.json"
 check "active round (eyes newer than wrapper) blocks" 1
+
+# A newer REPLY must not mask an older status comment's skip notice: CodeRabbit's replies
+# interleave with its status body, so "latest comment" picks a reply that says nothing.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
+printf '[[{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-01-01","body":"<!-- auto-generated comment: review paused by coderabbit.ai -->"},{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-02-01","body":"<!-- This is an auto-generated reply by CodeRabbit --> thanks"}]]' > "$FIX/issues.json"
+check "newer reply does not mask a skip notice" 1
+
+# But a genuinely newer STATUS comment must clear a stale skip — the retrigger must work.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
+printf '[[{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-01-01","body":"<!-- auto-generated comment: rate limited by coderabbit.ai -->"},{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-02-01","body":"<!-- auto-generated comment: summarize by coderabbit.ai --> walkthrough"}]]' > "$FIX/issues.json"
+check "newer status comment clears a stale skip" 0
+
+# A skip list covering a file the PR CHANGES must block; one covering unrelated files
+# must not. Ignoring the marker entirely let central files merge unreviewed; blocking on
+# it deadlocked every permitted skip.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
+printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes:\\n- src/core.py\\n"}]]' > "$FIX/issues.json"
+echo '{"files":[{"path":"src/core.py"}]}' > "$FIX/prfiles.json"
+check "skip covering a CHANGED file blocks" 1
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
+printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes:\\n- docs/other.md\\n"}]]' > "$FIX/issues.json"
+echo '{"files":[{"path":"src/core.py"}]}' > "$FIX/prfiles.json"
+check "skip of an unrelated file still clears" 0
 
 # The active-round guard must fail CLOSED. Neither of these was covered by the happy-path
 # case above: reverting the fail-closed logic left it green, which is how an untested

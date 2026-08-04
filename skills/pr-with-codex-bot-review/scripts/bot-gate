@@ -183,8 +183,17 @@ else
     # exists, and only then what its state is; an entry with no terminal state is pending.
     CR_PRESENT=$(printf %s "$ROLLUP" | jq -r '[.statusCheckRollup[]? | select((.context // .name)=="CodeRabbit")] | length' 2>/dev/null)
     if [[ "$CR_PRESENT" =~ ^[0-9]+$ ]] && [[ "$CR_PRESENT" -gt 0 ]]; then
-      CR=$(printf %s "$ROLLUP" | jq -r '[.statusCheckRollup[]? | select((.context // .name)=="CodeRabbit") | ((.state // .conclusion) // "")] | map(select(length>0)) | first // ""' 2>/dev/null)
-      CR_STATE="${CR:-PENDING}"
+      # ANY matching entry without a terminal state means a run is in flight. Picking the
+      # first non-empty state would select a stale SUCCESS sitting beside a pending rerun.
+      CR_ANY_PENDING=$(printf %s "$ROLLUP" | jq -r '[.statusCheckRollup[]? | select((.context // .name)=="CodeRabbit") | select((((.state // .conclusion) // "") | length) == 0)] | length' 2>/dev/null)
+      if [[ "$CR_ANY_PENDING" =~ ^[0-9]+$ ]] && [[ "$CR_ANY_PENDING" -gt 0 ]]; then
+        CR_STATE="PENDING"
+      else
+        # Worst state wins over the set, so a FAILURE beside a SUCCESS still blocks.
+        CR=$(printf %s "$ROLLUP" | jq -r '[.statusCheckRollup[]? | select((.context // .name)=="CodeRabbit") | ((.state // .conclusion) // "")]
+              | if any(.[]; . != "SUCCESS") then (map(select(. != "SUCCESS")) | first) else "SUCCESS" end' 2>/dev/null)
+        CR_STATE="${CR:-PENDING}"
+      fi
     elif [[ "$CR_PRESENT" =~ ^[0-9]+$ ]]; then
       CR_STATE="absent"
     else
@@ -213,7 +222,15 @@ if [[ "$CR_STATE" == "SUCCESS" ]]; then
     # would block forever on a walkthrough that merely discusses rate limiting, and the
     # "Files skipped from review" header covers skips the skill explicitly permits — that
     # list is for reading, not for blocking.
-    printf '%s' "$CRC" | jq -e '[.[][] | select(.user.login=="coderabbitai[bot]")
+    # The latest STATUS comment, not the latest comment of any kind. CodeRabbit posts
+    # `auto-generated comment:` status/walkthrough bodies and edits them in place, while
+    # `auto-generated reply` bodies interleave and say nothing about review state — taking
+    # the newest comment overall picks a reply and reads as "not skipped". Scanning ALL
+    # history is the opposite error: a stale rate-limit notice would block forever and the
+    # prescribed retrigger could never clear it.
+    printf '%s' "$CRC" | jq -e '[[.[][] | select(.user.login=="coderabbitai[bot]")
+        | select(.body|test("auto-generated comment:";"i"))]
+      | sort_by(.created_at) | last // empty
       | select(.body|test("review (paused|skipped)|rate limited by coderabbit|reviews subject to \\[?rate limits";"i"))] | length > 0' \
       >/dev/null 2>&1 && CR_SKIPPED=true
   else
@@ -244,8 +261,26 @@ if [[ -n "$WRAPPER_AT" ]]; then
   fi
 fi
 
+# A "Files skipped from review" list is only benign when it covers files this PR did not
+# meaningfully change. Ignoring the marker entirely (to avoid blocking on permitted skips)
+# meant a central source file could be skipped and still merge; blocking on the marker
+# meant every permitted skip deadlocked. Compare the two lists instead.
+CR_SKIPPED_CHANGED=""
+if [[ "$CR_STATE" == "SUCCESS" ]] && ! $CR_SKIPPED && [[ -n "${CRC:-}" ]]; then
+  SKIPLIST=$(printf '%s' "$CRC" | jq -r '[.[][] | select(.user.login=="coderabbitai[bot]")
+      | select(.body|test("auto-generated comment:";"i"))] | sort_by(.created_at) | last // empty | .body' 2>/dev/null \
+    | sed -n '/[Ff]iles skipped from review/,/^$/p' | grep -oE '[A-Za-z0-9._/-]+\.[A-Za-z0-9]+' | sort -u)
+  if [[ -n "$SKIPLIST" ]]; then
+    # Pipe to jq rather than `-q`, like every other query here — it keeps the raw
+    # response inspectable and lets the fixture stub answer without reimplementing gh.
+    CHANGED=$(gh pr view "$PR" -R "$REPO" --json files 2>/dev/null | jq -r '.files[]?.path' 2>/dev/null | sort -u)
+    CR_SKIPPED_CHANGED=$(comm -12 <(printf '%s\n' "$SKIPLIST") <(printf '%s\n' "$CHANGED") | head -20)
+  fi
+fi
+
 VERDICT="BLOCKED"
 if [[ "$WRAPPER_TIP" -gt 0 ]] && $SETTLED && ! $ROUND_ACTIVE && [[ "$B" -eq 0 ]] \
+   && [[ -z "$CR_SKIPPED_CHANGED" ]] \
    && { [[ "$CR_STATE" == "absent" ]] || { [[ "$CR_STATE" == "SUCCESS" ]] && ! $CR_SKIPPED; }; }; then
   VERDICT="CLEAR"
 fi
@@ -253,9 +288,10 @@ fi
 if $JSON; then
   jq -n --arg tip "$TIP" --arg v "$VERDICT" --arg cr "$CR_STATE" \
         --argjson w "$WRAPPER_TIP" --argjson a "$A" --argjson b "$B" \
-        --arg settled "$SETTLED" --arg cr_skipped "$CR_SKIPPED" --arg round_active "$ROUND_ACTIVE" \
+        --arg settled "$SETTLED" --arg cr_skipped "$CR_SKIPPED" --arg round_active "$ROUND_ACTIVE" --arg skipped_changed "$CR_SKIPPED_CHANGED" \
     '{tip:$tip,verdict:$v,wrapper_on_tip:$w,unresolved_first:$a,unresolved_after:$b,
-      settled:($settled=="true"),coderabbit:$cr,coderabbit_skipped:($cr_skipped=="true"),round_active:($round_active=="true")}'
+      settled:($settled=="true"),coderabbit:$cr,coderabbit_skipped:($cr_skipped=="true"),round_active:($round_active=="true"),
+      skipped_changed_files:($skipped_changed|split("\n")|map(select(length>0)))}'
 else
   printf 'tip              %s\n' "${TIP:0:10}"
   printf 'codex wrapper    %s on this tip\n' "$WRAPPER_TIP"
@@ -275,6 +311,7 @@ else
   [[ "$B" -gt 0 ]] && printf '  ⚠ %s UNRESOLVED bot thread(s). Fix each, or answer it with evidence and resolve the\n    thread — resolving is how you record that it was dispositioned.\n' "$B"
   [[ "$CR_STATE" == "query-failed" ]] && printf '  ⚠ CodeRabbit status could not be queried — not the same as "not configured".\n'
   $ROUND_ACTIVE && printf '  ⚠ an `eyes` reaction is newer than the wrapper — a fresh round is running on this\n    same tip. Wait for it to finish.\n'
+  [[ -n "$CR_SKIPPED_CHANGED" ]] && printf '  ⚠ CodeRabbit skipped file(s) this PR changes — nobody reviewed them:\n%s\n' "$(printf '%s' "$CR_SKIPPED_CHANGED" | sed 's/^/      /')"
   $CR_SKIPPED && printf '  ⚠ CodeRabbit reported SUCCESS but its walkthrough mentions a rate limit or skipped\n    files — nobody reviewed those. `@coderabbitai review` and wait.\n'
 fi
 

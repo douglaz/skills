@@ -447,9 +447,16 @@ TO=$(command -v timeout || command -v gtimeout) \
   --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
   --disallowedTools "Edit,Write,NotebookEdit" \
   </dev/null >"$CONSISTENCY_RAW" 2>"$REVIEW_DIR/consistency.fable.stderr.txt"
+CONSISTENCY_RC=$?      # capture BEFORE any pipeline replaces it
+[[ "$CONSISTENCY_RC" -eq 0 ]] \
+  || { echo "consistency reviewer exited $CONSISTENCY_RC (124/137 = timeout) — NOT clean"; }
 jq -er 'if .is_error then error(.result // "err") else (.result // empty) end' \
   <"$CONSISTENCY_RAW" >"$CONSISTENCY_OUT"
 ```
+
+A timed-out reviewer can still leave syntactically valid JSON on disk — killed during
+teardown, say — and `jq` succeeding on it would replace the 124/137 with 0. Capture the
+reviewer's own status first; a pass that did not finish is never clean.
 
 On a `--reviewers codex` pinned run, use
 `codex exec --sandbox read-only "$(cat ...)" </dev/null` with the same prompt instead

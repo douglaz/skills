@@ -245,7 +245,14 @@ fi
 # with "REBASE FIRST" that no rebase can fix. Verified.
 git fetch -q "$BASE_REMOTE" "+refs/heads/$BASE:refs/remotes/origin/$BASE" \
   || { echo "fetch failed — base unknown, do NOT clear"; exit 1; }
-BF=$("$DS" --json | jq -r '.base_fresh')
+# One call, and assert it is still talking about the SAME base. A second `drive-status`
+# can resolve a different default_branch if its PR lookup transiently fails, so a
+# base_fresh=true for `main` could be accepted while the ref actually fetched was
+# `origin/release`.
+DSJ=$("$DS" --json)
+[ "$(printf %s "$DSJ" | jq -r '.default_branch')" = "$BASE" ] \
+  || { echo "base changed under the check (want $BASE) — NOT cleared"; exit 1; }
+BF=$(printf %s "$DSJ" | jq -r '.base_fresh')
 [ "$BF" = "true" ] || { [ "$BF" = "null" ] \
   && { echo "base could not be established (base_origin=guessed) — set origin/HEAD or open the PR first; NOT cleared"; exit 1; } \
   || { echo "REBASE FIRST — behind base; NOT cleared"; exit 1; }; }
