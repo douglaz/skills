@@ -432,7 +432,9 @@ effort, and the three tool flags), pointing at this prompt file and these output
 files:
 
 ```bash
-"$(command -v timeout || command -v gtimeout)" --kill-after=60 1500 \
+TO=$(command -v timeout || command -v gtimeout) \
+  || { echo "no GNU timeout — see the panel invocation above"; exit 1; }
+"$TO" --kill-after=60 1500 \
   claude -p "$(cat "$REVIEW_DIR/fable-consistency-prompt.txt")" \
   --model fable --effort high --output-format json \
   --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \

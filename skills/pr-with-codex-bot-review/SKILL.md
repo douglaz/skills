@@ -76,7 +76,7 @@ the same PR:
    gh api repos/<owner>/<repo>/pulls/<N>/comments      # actual findings
    ```
 
-When checking whether the bot has weighed in, query reactions FIRST (cheapest signal,
+When checking whether the bot has weighed in, reactions are the cheapest signal (
 the cheapest completion signal — but see § 7 before treating it as approval of the
 current head), then line comments (for findings if any). Findings are
 encoded with markdown priority badges:
@@ -284,7 +284,7 @@ other things — don't sit on the pull. If CI fails on something unrelated to yo
 and continue. Diagnose the flake into a follow-up bead/issue rather than blocking the
 current PR.
 
-### 5. Wait for the bot's reaction signal
+### 5. Wait for the bot to finish a round
 
 The bot's reaction on the PR body tells you whether it has *finished a round*. Don't fall
 back to "wait some minutes and assume" when this is one API call away — but read § 7
@@ -312,7 +312,8 @@ stuck):
 gh pr comment <N> --body "@codex review"
 ```
 
-After a force-push, the bot's prior review and reaction reference the old SHA. The
+After a force-push, the bot's prior review names the old SHA (and its reaction names
+nothing at all). The
 bot often re-reviews automatically on a new push, but re-comment `@codex review` if
 you don't see a new reaction or review after ~10 min.
 
@@ -348,7 +349,7 @@ For each P-badge finding:
   `git commit --amend --no-edit` then `git push --force-with-lease`. For larger
   follow-ups, separate commits are fine — the squash absorbs them.
 
-### 7. Decide based on reaction, not on time
+### 7. Decide based on the wrapper, not on time
 
 Merge when the reaction-based check passes:
 
@@ -383,9 +384,19 @@ Merge when the reaction-based check passes:
 
   1. A wrapper exists whose `Reviewed commit:` equals the tip. That is the bot stating,
      with a SHA, which tree it read.
-  2. No unresolved line comments against the tip, re-queried *immediately* before the
-     merge — the wrapper often lands before the findings do, so an earlier read is not
-     evidence.
+  2. No unresolved line comments against the tip — and the comment list has **settled**.
+     The wrapper can land before its own line comments, so a single query can fall inside
+     that delivery gap and read zero findings that are seconds away. Query twice, a couple
+     of minutes apart, and require the same result both times:
+
+     ```bash
+     c() { gh api --paginate repos/<owner>/<repo>/pulls/<N>/comments \
+             --jq "[.[] | select(.commit_id==\"$(git rev-parse HEAD)\")] | length"; }
+     a=$(c); sleep 120; b=$(c); [ "$a" = "$b" ] || echo "still arriving — wait"
+     ```
+
+     `--match-head-commit` does not help here: the tip is unchanged, so the merge succeeds
+     and simply lands before the findings arrive.
   3. If a `+1` exists, it is consistent with (1) and (2); if it does not, that is normal
      on a PR the bot has ever had findings on, and is not a reason to wait.
 
@@ -404,16 +415,18 @@ Don't merge when:
 
 - Codex bot reaction is `eyes` (still reviewing) — wait, even if CI is green.
 - Codex bot has unaddressed line comments (`P0`/`P1`/`P2`/`P3`) referencing the current head.
-- Codex bot has no reaction yet — `@codex review` to wake it up; don't preemptively merge.
+- No wrapper for the current tip yet — `@codex review` to wake it up. (A missing *reaction*
+  is not itself a blocker; see the merge conditions above.)
 - CodeRabbit status is `PENDING` — wait, even if codex already approved.
 - CodeRabbit status is `FAILURE` or it left unaddressed line comments on the current head — address.
 - CodeRabbit returned `SUCCESS` by skipping files this change actually touches — re-trigger.
 - CI failed and you haven't determined whether it's flaky or real.
-- You force-pushed and reaction still references the old SHA — wait at least 10 min
-  after the force-push, or `@codex review` (and `@coderabbitai review`) to re-trigger.
+- You force-pushed and no wrapper names the new tip yet — wait, or `@codex review` (and
+  `@coderabbitai review`) to re-trigger. Reactions carry no SHA, so the wrapper is the
+  only thing that can tell you which tree was read.
 
-**The reaction is what matters; clock-time waits are a code smell that suggests
-you're ignoring the actual signal.**
+**The wrapper is what matters; clock-time waits are a code smell that suggests you're
+ignoring the actual signal.**
 
 ### 8. Squash-merge and clean up
 

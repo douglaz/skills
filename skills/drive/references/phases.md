@@ -192,25 +192,16 @@ the one that will land.
 
 Three preconditions, all of which must hold, and every one of which has bitten:
 
-0. **The committed tree is the tree the panel read.** A mutating commit hook
-   (`lint-staged`, a formatter, a codegen step) rewrites content during `git commit`, so
-   the commit you are about to clear can differ from what the panel reviewed — and the
-   clean-worktree check below still passes, because the hook staged its own changes.
-   Compare the tree objects, not the status:
-
-   ```bash
-   git diff --quiet HEAD -- . && [ "$(git rev-parse HEAD^{tree})" = "$REVIEWED_TREE" ] \
-     || { echo "commit hook altered the tree — re-run the panel"; exit 1; }
-   ```
-
-   where `REVIEWED_TREE=$(git rev-parse HEAD^{tree})` was captured when the panel went
-   clean. If the repo has no such hook this is a no-op; if it does, this is the only
-   check that catches it.
-1. **The tree is clean.** `multi-reviewer-loop` deliberately leaves its fixes uncommitted,
+1. **The tree is clean, and the final panel ran on the committed tree.** `multi-reviewer-loop` deliberately leaves its fixes uncommitted,
    and reviews tracked working-tree changes — so `git rev-parse HEAD` at that moment names
    a commit that does *not* contain what was just reviewed. Recording it would make
    `cleared == tip` true while the reviewed fixes are absent from the commit and the PR.
-   Commit first, then clear.
+   Commit first, *then* run the final panel, then clear. Ordering it that way also closes
+   the mutating-commit-hook case: a `lint-staged`-style hook rewrites content during
+   `git commit`, so a panel that ran before the commit reviewed a tree the commit no
+   longer has — and the clean-worktree check still passes, because the hook staged its
+   own changes. Panelling the committed tree makes that unrepresentable rather than
+   something to detect.
 2. **The fetch succeeded.** A failed fetch leaves a stale tracking ref, and an ancestry
    check against a stale ref reports fresh when it is not.
 3. **The base is an ancestor of the tip** — via `drive-status`, not a hand-rolled check.
@@ -224,7 +215,12 @@ DS=<the drive-status path resolved in Phase 0>
 # Name the ref: a --single-branch clone's refspec covers only the feature branch, so a
 # bare `git fetch origin` never creates origin/<base> and freshness stays unknowable.
 BASE=$("$DS" --json | jq -r '.default_branch')
-git fetch -q origin "$BASE" || { echo "fetch failed — base unknown, do NOT clear"; exit 1; }
+# Explicit DESTINATION refspec. `git fetch origin "$BASE"` updates only FETCH_HEAD — in a
+# --single-branch clone the configured refspec covers just the feature branch, so
+# refs/remotes/origin/$BASE is never created and base_fresh stays null forever, failing
+# with "REBASE FIRST" that no rebase can fix. Verified.
+git fetch -q origin "+refs/heads/$BASE:refs/remotes/origin/$BASE" \
+  || { echo "fetch failed — base unknown, do NOT clear"; exit 1; }
 [ "$("$DS" --json | jq -r '.base_fresh')" = "true" ] || { echo "REBASE FIRST — not cleared"; exit 1; }
 
 STATE=$(git rev-parse --git-path drive/state)
@@ -292,7 +288,9 @@ again immediately before merging:
 
 ```bash
 DS=<the drive-status path resolved in Phase 0>
-git fetch -q origin || { echo "fetch failed — base unknown, do NOT merge"; exit 1; }
+BASE=$("$DS" --json | jq -r '.default_branch')
+git fetch -q origin "+refs/heads/$BASE:refs/remotes/origin/$BASE" \
+  || { echo "fetch failed — base unknown, do NOT merge"; exit 1; }
 [ "$("$DS" --json | jq -r '.base_fresh')" = "true" ] || { echo "REBASE FIRST"; exit 1; }
 ```
 

@@ -399,7 +399,11 @@ $RECORD_VALID && PHASE_SOURCE="DRIVE.md" || PHASE_SOURCE="tree"
 # left to review here.
 DONE_ON_BRANCH=false
 PHASE_WAS="$PHASE_SOURCE"
-if [[ "$PHASE" == "DONE" && "$BRANCH_COMMITS" -gt 0 ]]; then
+# Not once the branch's PR has MERGED: a squash merge makes a new commit, so this branch's
+# commits are still not ancestors of it and BRANCH_COMMITS stays > 0 — downgrading there
+# would send an already-landed branch back through review and land it twice. That state is
+# cleanup-pending, not unreviewed work.
+if [[ "$PHASE" == "DONE" && "$BRANCH_COMMITS" -gt 0 && "$PR_STATE" != MERGED/* ]]; then
   DONE_ON_BRANCH=true
   PHASE="HARDEN"
   PHASE_SOURCE="$([[ "$PHASE_WAS" == "DRIVE.md" ]] && echo "DRIVE.md" || echo "tree") (DONE, but this branch has unreviewed commits)"
