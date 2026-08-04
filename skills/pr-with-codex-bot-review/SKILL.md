@@ -410,7 +410,7 @@ Merge when the reaction-based check passes:
      If none resolve you are running from a checkout: invoke it by its path there.
 
      `scripts/bot-gate.test` runs it against a stubbed `gh` with canned API responses —
-     twenty-eight cases, each one a defect a reviewer actually found: a forged wrapper login, a
+     thirty-one cases, each one a defect a reviewer actually found: a forged wrapper login, a
      `[bot]`-suffix filter that matched nothing, a settle window satisfied by two zeros in
      the delivery gap, a CodeRabbit rate-limit skip, an API failure. Run it after touching
      the gate; every case has been shown to go red against the real bug.
@@ -423,6 +423,11 @@ Merge when the reaction-based check passes:
      emits one result per page). Shell embedded in documentation cannot be run, so none
      of those were caught by reading. Exit codes: 0 clear, 1 blocked, 2 usage, 3 cannot
      determine — and "cannot determine" is never clearance.
+
+     On a repo with no CodeRabbit, pass `--no-coderabbit`. The gate cannot infer it: the
+     app can be installed org-wide with no repo config, and on a fresh PR "absent" is
+     indistinguishable from "installed but not started" — so it refuses rather than
+     guess.
 
      A `BLOCKED` with `wrapper 0` may just be a clean round the bot signalled with only a
      `+1`: it leaves no wrapper then, so nothing proves which tree it read. Get a wrapper

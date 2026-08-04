@@ -485,8 +485,14 @@ fi
 # DONE while a fresh clone still saw the bead open. (`AHEAD` is not usable for this: it
 # needs @{upstream} configured and reads "?" otherwise.) What the default branch changes
 # is the remedy, not whether to downgrade, so only the warning text differs below.
+# Dirty or untracked work also invalidates a DONE record: the final DRIVE.md can be
+# written as DONE before the metadata PR number exists, leaving the closure JSONL and the
+# record uncommitted while BRANCH_COMMITS is still 0 — so a resumed drive would stop before
+# opening or landing the closure PR, and a fresh clone would still see the bead open.
+_DONE_DIRTY=false
+[[ "$DIRTY_COUNT" -gt 0 || "$UNTRACKED" -gt 0 ]] && _DONE_DIRTY=true
 if [[ "$PHASE" == "DONE" ]] && ! $_MERGED_AT_HEAD \
-   && { [[ "$BRANCH_COMMITS" -gt 0 ]] || ! $_BASE_KNOWN; }; then
+   && { [[ "$BRANCH_COMMITS" -gt 0 ]] || ! $_BASE_KNOWN || $_DONE_DIRTY; }; then
   DONE_ON_BRANCH=true
   PHASE="HARDEN"
   PHASE_SOURCE="$([[ "$PHASE_WAS" == "DRIVE.md" ]] && echo "DRIVE.md" || echo "tree") (DONE, but this branch has unreviewed commits)"
@@ -602,7 +608,8 @@ printf '\nphase: %s   (source: %s)\n' "$PHASE" "$PHASE_SOURCE"
 # silently ignoring the line — an unexplained discard is the failure this warns about.
 $RECORDED_LAND && printf '  ⚠ DRIVE.md records `Phase: LAND`, which is no longer a recordable phase — LAND is\n    derived from `cleared == tip`, a fresh base and a clean tree. The line was IGNORED. Rewrite it to\n    HARDEN; the record should never claim a phase only this checkout can prove.\n'
 $DONE_ON_BRANCH && [[ "$PHASE" != "LAND" && "$BRANCH_COMMITS" -eq 0 ]] && printf '  ⚠ %s says DONE but the base ref could not be resolved, so whether this branch has\n    unreviewed commits is unknown — unknown is not safe. Treating it as HARDEN.\n' "$PHASE_WAS"
-$DONE_ON_BRANCH && $ON_DEFAULT && [[ "$PHASE" != "LAND" ]] && printf '  ⚠ %s says DONE but %s has %s unpushed commit(s) — a fresh clone would still see the\n    bead open. Push them, or carry them into the next branch; do NOT report DONE.\n' "$PHASE_WAS" "${BRANCH:-HEAD}" "$BRANCH_COMMITS"
+$DONE_ON_BRANCH && $_DONE_DIRTY && [[ "$PHASE" != "LAND" ]] && printf '  ⚠ %s says DONE but the tree is dirty (%s modified, %s untracked) — closure metadata\n    that is not committed has not landed anywhere. Finish it before reporting DONE.\n' "$PHASE_WAS" "$DIRTY_COUNT" "$UNTRACKED"
+$DONE_ON_BRANCH && ! $_DONE_DIRTY && $ON_DEFAULT && [[ "$PHASE" != "LAND" ]] && printf '  ⚠ %s says DONE but %s has %s unpushed commit(s) — a fresh clone would still see the\n    bead open. Push them, or carry them into the next branch; do NOT report DONE.\n' "$PHASE_WAS" "${BRANCH:-HEAD}" "$BRANCH_COMMITS"
 $DONE_ON_BRANCH && ! $ON_DEFAULT && [[ "$PHASE" != "LAND" && "$BRANCH_COMMITS" -gt 0 ]] && printf '  ⚠ %s says DONE but this branch has %s unmerged commit(s) — that record\n    describes the state AFTER this PR lands. Treating it as HARDEN: these commits are\n    unreviewed and go through the panel like any others.\n' "$PHASE_WAS" "$BRANCH_COMMITS"
 $DONE_PENDING && printf '  ⚠ DONE is pending metadata PR #%s, so this is WAITING_FOR_MERGE, not DONE. Query that\n    PR: merged means the drive really is done; open means go finish landing it.\n' "$DRIVE_PENDING"
 # Silent otherwise: clearance matches but the tree moved, and every SHA check still passes.

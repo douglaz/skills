@@ -129,6 +129,12 @@ G checkout -q master
 record '**Phase:** DONE'
 check "unpushed closure on the default branch is not DONE" HARDEN
 
+# A DONE record written before the closure is committed: uncommitted metadata has landed
+# nowhere, so a resumed drive must not stop.
+new_repo; G checkout -q master; record '**Phase:** DONE'; G push -q origin master
+printf 'closure\n' > "$REPO/pending.jsonl"
+check "DONE with uncommitted closure metadata is not DONE" HARDEN
+
 # Base resolution: a base picked BECAUSE HEAD descends from it makes the ancestry test
 # vacuous, so freshness must be reported unknown rather than true.
 new_repo; add_code; record '**Phase:** HARDEN'; clear_at

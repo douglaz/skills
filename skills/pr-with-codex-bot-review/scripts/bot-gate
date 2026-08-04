@@ -11,7 +11,7 @@
 # let a real one merge. Thread resolution is the disposition signal that distinguishes
 # them, and it is the one the author controls by acting.
 #
-# Usage: bot-gate <pr-number> [--settle-seconds N] [--json]
+# Usage: bot-gate <pr-number> [--settle-seconds N] [--no-coderabbit] [--json]
 #
 # This exists as a script rather than a snippet in SKILL.md because the same logic was
 # written three times as prose and was wrong three different ways: it enforced nothing
@@ -28,10 +28,12 @@ set -uo pipefail
 PR="${1:-}"; shift || true
 SETTLE=120
 JSON=false
+NO_CR=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --settle-seconds) [[ $# -ge 2 ]] || { echo "--settle-seconds needs a value" >&2; exit 2; }
                       SETTLE="$2"; shift 2 ;;
+    --no-coderabbit)  NO_CR=true; shift ;;
     --json)           JSON=true; shift ;;
     *)                echo "unknown arg: $1" >&2; exit 2 ;;
   esac
@@ -54,10 +56,18 @@ done
 REPO=$(gh repo view --json nameWithOwner,parent -q '.parent.nameWithOwner // .nameWithOwner' 2>/dev/null) \
   || { echo "BLOCKED: cannot resolve repo" >&2; exit 3; }
 [[ "$REPO" == */* ]] || { echo "BLOCKED: cannot parse repo: $REPO" >&2; exit 3; }
-gh pr view "$PR" -R "$REPO" --json number -q .number >/dev/null 2>&1 \
-  || { echo "BLOCKED: PR $PR not found in $REPO" >&2; exit 3; }
 TIP=$(git rev-parse --verify --quiet HEAD) \
   || { echo "BLOCKED: no HEAD" >&2; exit 3; }
+
+PR_HEAD=$(gh pr view "$PR" -R "$REPO" --json headRefOid -q .headRefOid 2>/dev/null) \
+  || { echo "BLOCKED: PR $PR not found in $REPO" >&2; exit 3; }
+[[ -n "$PR_HEAD" ]] || { echo "BLOCKED: cannot read the PR head" >&2; exit 3; }
+# The gate reasons about local HEAD, so a stale or behind checkout would otherwise be
+# cleared by a wrapper for a commit the remote has moved past. The documented merge pins
+# --match-head-commit and would refuse later, but a JSON consumer reading `verdict` gets
+# no such protection.
+[[ "$PR_HEAD" == "$TIP" ]] \
+  || { echo "BLOCKED: local HEAD ${TIP:0:10} is not the PR head ${PR_HEAD:0:10}" >&2; exit 3; }
 
 # ISO-8601 -> epoch, portably. GNU date wants -d; BSD/macOS date treats -d as the set-DST
 # flag and errors, which would leave the wrapper age unknowable and the gate permanently
@@ -90,9 +100,12 @@ REVIEWS=$(api "repos/$REPO/pulls/$PR/reviews") \
 # `chatgpt-codex-connector-attacker` satisfies a prefix test — which would let an outside
 # account forge the wrapper this gate treats as proof of review.
 BOT_LOGIN="chatgpt-codex-connector[bot]"
+# `.commit_id` (the API's own full 40-char SHA), not a 7-char prefix matched out of the
+# body: 28 bits collides in a large history and can be ground out deliberately, which
+# would let a stale wrapper stand in as approval of the current tree.
 WRAPPER_JSON=$(printf '%s' "$REVIEWS" | jq -c --arg tip "$TIP" --arg bot "$BOT_LOGIN" '
   [.[][] | select(.user.login==$bot) | select(.user.type=="Bot")
-   | select(.body|test("Reviewed commit:[^0-9a-f]*"+$tip[0:7]))]
+   | select(.commit_id==$tip)]
   | {n: length, latest: (max_by(.submitted_at).submitted_at // "")}' 2>/dev/null)
 WRAPPER_TIP=$(printf '%s' "$WRAPPER_JSON" | jq -r '.n' 2>/dev/null)
 WRAPPER_AT=$(printf '%s' "$WRAPPER_JSON" | jq -r '.latest' 2>/dev/null)
@@ -305,9 +318,12 @@ if [[ "$CR_STATE" == "SUCCESS" ]] && ! $CR_SKIPPED && [[ -n "${CRC:-}" ]]; then
   fi
 fi
 
-# "No check run for this head yet" is not "CodeRabbit is not installed". If it has ever
-# commented on this PR it is configured, so an absent current-head signal means it has not
-# started — a delayed app would otherwise begin reviewing after the merge already ran.
+# "No CodeRabbit signal" is genuinely undecidable from any query: it can be installed
+# org-wide with no repo config (this repo has none and it is active), and on a freshly
+# opened PR there is neither a check nor a comment yet — so a delayed app would begin
+# reviewing after the merge already ran. Same-PR history can only prove it IS configured,
+# never that it is not. Absence therefore clears only when the operator says so with
+# --no-coderabbit; there is no query that can say it for them.
 CR_CONFIGURED=false
 if [[ -n "${CRC:-}" ]]; then
   printf '%s' "$CRC" | jq -e '[.[][] | select(.user.login=="coderabbitai[bot]")] | length > 0' >/dev/null 2>&1 \
@@ -317,7 +333,7 @@ fi
 VERDICT="BLOCKED"
 if [[ "$WRAPPER_TIP" -gt 0 ]] && $SETTLED && ! $ROUND_ACTIVE && [[ "$B" -eq 0 ]] \
    && [[ -z "$CR_SKIPPED_CHANGED" ]] \
-   && { { [[ "$CR_STATE" == "absent" ]] && ! $CR_CONFIGURED; } \
+   && { { [[ "$CR_STATE" == "absent" ]] && ! $CR_CONFIGURED && $NO_CR; } \
         || { [[ "$CR_STATE" == "SUCCESS" ]] && ! $CR_SKIPPED; }; }; then
   VERDICT="CLEAR"
 fi
@@ -346,6 +362,7 @@ else
     fi
   fi
   [[ "$B" -gt 0 ]] && printf '  ⚠ %s UNRESOLVED bot thread(s). Fix each, or answer it with evidence and resolve the\n    thread — resolving is how you record that it was dispositioned.\n' "$B"
+  [[ "$CR_STATE" == "absent" ]] && ! $CR_CONFIGURED && ! $NO_CR && printf '  ⚠ no CodeRabbit signal at all — on a new PR that is indistinguishable from "installed\n    but not started yet". Wait, or pass --no-coderabbit if this repo genuinely has none.\n'
   [[ "$CR_STATE" == "absent" ]] && $CR_CONFIGURED && printf '  ⚠ CodeRabbit has commented on this PR but has no check for THIS head yet — it has\n    not started reviewing it. Wait, or `@coderabbitai review`.\n'
   [[ "$CR_STATE" == "query-failed" ]] && printf '  ⚠ CodeRabbit status could not be queried — not the same as "not configured".\n'
   $ROUND_ACTIVE && printf '  ⚠ an `eyes` reaction is newer than the wrapper — a fresh round is running on this\n    same tip. Wait for it to finish.\n'
