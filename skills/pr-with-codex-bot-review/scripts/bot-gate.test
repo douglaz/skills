@@ -22,7 +22,7 @@ f() { cat "$FIX/$1" 2>/dev/null || echo "$2"; }
 case "$*" in
   *"repo view"*nameWithOwner*)  f repo.txt "owner/repo" ;;
   *"pr view"*number*)           f prnum.txt "16" ;;
-  *"pr view"*files*)            [ -f "$FIX/prfilesfail" ] && exit 1; f prfiles.json '{"files":[]}' ;;
+  *"pulls/"*"/files"*)          [ -f "$FIX/prfilesfail" ] && exit 1; f prfiles.json '[[]]' ;;
   *"pr checks"*)                [ -f "$FIX/checksfail" ] && exit 1; f checks.json '[]' ;;
   *"pr view"*statusCheckRollup*) f rollup.json '{"statusCheckRollup":[]}' ;;
   *reactions*)                  [ -f "$FIX/reactionsfail" ] && exit 1; f reactions.json '[[]]' ;;
@@ -144,21 +144,37 @@ check "newer status comment clears a stale skip" 0
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
 printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes:\\n- src/core.py\\n"}]]' > "$FIX/issues.json"
-echo '{"files":[{"path":"src/core.py"}]}' > "$FIX/prfiles.json"
+printf '[[{"filename":"%s"}]]' 'src/core.py' > "$FIX/prfiles.json"
 check "skip covering a CHANGED file blocks" 1
 
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
 printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes:\\n- docs/other.md\\n"}]]' > "$FIX/issues.json"
-echo '{"files":[{"path":"src/core.py"}]}' > "$FIX/prfiles.json"
+printf '[[{"filename":"%s"}]]' 'src/core.py' > "$FIX/prfiles.json"
 check "skip of an unrelated file still clears" 0
+
+# Markdown formats CodeRabbit really uses: backticked, **bold**, and extensionless. The
+# filter used to run before the markdown strip, so anything ending in a non-alphanumeric
+# was rejected — and requiring a dot-extension dropped extensionless paths, which this
+# repo's own deliverables are.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
+printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes:\\n- `skills/x/scripts/bot-gate` (2 hunks)\\n"}]]' > "$FIX/issues.json"
+printf '[[{"filename":"skills/x/scripts/bot-gate"}]]' > "$FIX/prfiles.json"
+check "backticked extensionless skipped path blocks" 1
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
+printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes:\\n* **src/bold.py** (3 hunks)\\n"}]]' > "$FIX/issues.json"
+printf '[[{"filename":"src/bold.py"}]]' > "$FIX/prfiles.json"
+check "bold skipped path blocks" 1
 
 # A skipped path containing a space must still intersect: an ASCII token regex reduced
 # `src/my file.py` to `file.py`, which matched nothing and cleared.
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
 printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes:\\n- src/my file.py\\n"}]]' > "$FIX/issues.json"
-echo '{"files":[{"path":"src/my file.py"}]}' > "$FIX/prfiles.json"
+printf '[[{"filename":"%s"}]]' 'src/my file.py' > "$FIX/prfiles.json"
 check "skipped path with a space still blocks" 1
 
 # CodeRabbit configured (it has commented) but no check for THIS head yet must block —

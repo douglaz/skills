@@ -43,8 +43,12 @@ if command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   # once --repo is given ("argument required when using the --repo flag"), so pass the
   # branch name. Without -R at all, a fork clone resolves against the fork, where the PR
   # is not.
+  # Expanded as ${_RFLAG[@]+"${_RFLAG[@]}"} at every use: a bare "${arr[@]}" on an EMPTY
+  # array is an unbound-variable fatal under `set -u` in bash <= 4.3, and macOS ships
+  # /bin/bash 3.2 — which would abort the detector in exactly the degraded-gh case its
+  # header promises to tolerate ("Exits 0 even when signals are missing").
   _RFLAG=(); [[ -n "$_UP" && -n "$BRANCH" ]] && _RFLAG=("$BRANCH" -R "$_UP")
-  DEFAULT_BRANCH=$(gh pr view "${_RFLAG[@]}" --json baseRefName,state \
+  DEFAULT_BRANCH=$(gh pr view ${_RFLAG[@]+"${_RFLAG[@]}"} --json baseRefName,state \
     -q 'select(.state=="OPEN") | .baseRefName' 2>/dev/null || echo "")
   [[ -n "$DEFAULT_BRANCH" ]] && BASE_ORIGIN="pr"
 fi
@@ -258,7 +262,7 @@ else
   # Same -R + selector as the base lookup: a bare `gh pr view` resolves against the fork,
   # so PR_STATE would read `none` on a fork clone — which also makes the merged-head
   # exemption downstream dead code, since it gates on PR_STATE == MERGED/*.
-  if PR_JSON=$(gh pr view "${_RFLAG[@]}" --json number,state,reviewDecision 2>/dev/null) && [[ -n "$PR_JSON" ]]; then
+  if PR_JSON=$(gh pr view ${_RFLAG[@]+"${_RFLAG[@]}"} --json number,state,reviewDecision 2>/dev/null) && [[ -n "$PR_JSON" ]]; then
     PR_NUM=$(echo "$PR_JSON" | jq -r '.number // ""' 2>/dev/null)
           # reviewDecision is an empty STRING when undecided, not null, so `//` never
       # fires — test for emptiness explicitly or the label is dead in the common case.
@@ -451,7 +455,7 @@ _MERGED_AT_HEAD=false
 if [[ "$PR_STATE" == MERGED/* ]] && command -v gh >/dev/null 2>&1; then
   # Same -R + selector as the base lookup above: a bare `gh pr view` on a fork clone
   # queries the fork, so the merged-head exemption would never recognise its own PR.
-  [[ "$(gh pr view "${_RFLAG[@]}" --json headRefOid -q .headRefOid 2>/dev/null)" == "$HEAD_SHA" ]] \
+  [[ "$(gh pr view ${_RFLAG[@]+"${_RFLAG[@]}"} --json headRefOid -q .headRefOid 2>/dev/null)" == "$HEAD_SHA" ]] \
     && _MERGED_AT_HEAD=true
 fi
 # Not on the default branch: committed-but-unpushed closure commits there are the legacy

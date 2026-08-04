@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# drive-status.test — fixture tests for the phase derivation.
+#
+# Same argument as bot-gate.test: this is decision logic whose failure direction is an
+# unreviewed merge, and whose consumers (phases.md's clearance snippets) `exit 1` on its
+# JSON. Every case below is a behaviour a reviewer asked for or a defect found in review.
+#
+# Usage: ./drive-status.test        (exits 0 if all pass)
+
+set -uo pipefail
+HERE=$(cd "$(dirname "$0")" && pwd)
+DS="$HERE/drive-status"
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+PASS=0; FAIL=0
+
+# gh is stubbed so the tests never touch the network and can model a degraded forge.
+mkdir -p "$WORK/bin"
+cat > "$WORK/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+[ -f "$FIX/ghfail" ] && exit 1
+case "$*" in
+  *"repo view"*parent*)   cat "$FIX/upstream.txt" 2>/dev/null || echo "owner/repo" ;;
+  *"pr view"*baseRefName*) cat "$FIX/prbase.txt"  2>/dev/null || echo "" ;;
+  *"pr view"*headRefOid*) cat "$FIX/prhead.txt"   2>/dev/null || echo "" ;;
+  *"pr view"*number*)     cat "$FIX/prview.json"  2>/dev/null || echo "" ;;
+  *"repo view"*)          echo "owner/repo" ;;
+  *) echo "" ;;
+esac
+exit 0
+STUB
+chmod +x "$WORK/bin/gh"
+
+G() { git -C "$REPO" -c user.email=t@t -c user.name=t "$@"; }
+phase() { ( cd "$REPO" && PATH="$WORK/bin:$PATH" FIX="$FIX" "$DS" --json | jq -r '.phase' ); }
+field() { ( cd "$REPO" && PATH="$WORK/bin:$PATH" FIX="$FIX" "$DS" --json | jq -r ".$1" ); }
+
+check() {  # $1 name, $2 expected phase
+  local got; got=$(phase)
+  if [[ "$got" == "$2" ]]; then PASS=$((PASS+1)); printf '  ok   %-48s (%s)\n' "$1" "$got"
+  else FAIL=$((FAIL+1)); printf '  FAIL %-48s want %s got %s\n' "$1" "$2" "$got"; fi
+}
+check_field() {  # $1 name, $2 field, $3 expected
+  local got; got=$(field "$2")
+  if [[ "$got" == "$3" ]]; then PASS=$((PASS+1)); printf '  ok   %-48s (%s=%s)\n' "$1" "$2" "$got"
+  else FAIL=$((FAIL+1)); printf '  FAIL %-48s %s want %s got %s\n' "$1" "$2" "$3" "$got"; fi
+}
+
+new_repo() {  # a feature branch one commit ahead of master, with an origin
+  REPO="$WORK/r"; FIX="$WORK/fix"
+  rm -rf "$REPO" "$FIX"; mkdir -p "$REPO" "$FIX"
+  git init -q "$REPO"; G branch -M master
+  printf 'x\n' > "$REPO/README.md"; G add -A; G commit -q -m init
+  git init -q --bare "$WORK/origin.git" 2>/dev/null || true
+  G remote add origin "$WORK/origin.git" 2>/dev/null || true
+  G push -q origin master 2>/dev/null || true
+  G checkout -q -b feat
+  echo master > "$FIX/prbase.txt"
+}
+add_code()   { printf 'c\n' > "$REPO/a.py"; G add -A; G commit -q -m work; }
+record()     { printf '%s\n' "$1" > "$REPO/DRIVE.md"; G add -A; G commit -q -m rec; }
+clear_at()   { mkdir -p "$REPO/.git/drive"; printf 'cleared=%s\n' "${1:-$(G rev-parse HEAD)}" > "$REPO/.git/drive/state"; }
+
+echo "drive-status fixtures"
+
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+check "cleared == tip, base fresh, clean tree" LAND
+
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at "deadbeef1234"
+check "stale clearance refuses LAND" HARDEN
+
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+printf 'edit\n' >> "$REPO/a.py"
+check "dirty worktree refuses LAND" HARDEN
+
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+printf 'new\n' > "$REPO/untracked.py"
+check "untracked file refuses LAND" HARDEN
+
+new_repo; add_code; record '**Phase:** HARDEN'
+check "no clearance marker refuses LAND" HARDEN
+
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at "$(G rev-parse HEAD | tr 'a-f' 'A-F')"
+check "uppercase marker still matches" LAND
+
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at "$(G rev-parse HEAD | cut -c1-10)"
+check "abbreviated marker still matches" LAND
+
+new_repo; add_code; record '**Phase:** LAND'
+check "a recorded LAND is ignored" HARDEN
+
+new_repo; add_code; record '**Phase:** DONE'
+check "DONE on a branch with unmerged commits" HARDEN
+
+new_repo; add_code; record '**Phase:** DONE'; clear_at
+check "DONE-on-branch then cleared derives LAND" LAND
+
+new_repo; record '**Phase:** DONE · **Pending:** metadata PR #7'
+G checkout -q master; G merge -q feat 2>/dev/null || true
+check "landed DONE with a pending closure PR" WAITING_FOR_MERGE
+
+# Base resolution: a base picked BECAUSE HEAD descends from it makes the ancestry test
+# vacuous, so freshness must be reported unknown rather than true.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+echo x > "$FIX/ghfail"; G remote remove origin 2>/dev/null || true
+check_field "guessed base reports unknown freshness" base_fresh null
+check "guessed base refuses LAND" HARDEN
+
+# AGENTS.md is a doc; classifying it as code sent a fresh repo to BUILD.
+new_repo; printf '# A\n' > "$REPO/AGENTS.md"
+check "a dirty AGENTS.md does not imply BUILD" SHAPE
+
+# The header promises exit 0 even when signals are missing.
+new_repo
+( cd "$REPO" && PATH="$WORK/bin:$PATH" FIX="$FIX" "$DS" >/dev/null 2>&1 )
+rc=$?
+if [[ "$rc" -eq 0 ]]; then PASS=$((PASS+1)); echo "  ok   no DRIVE.md still exits 0                      (0)"
+else FAIL=$((FAIL+1)); echo "  FAIL no DRIVE.md still exits 0                      got $rc"; fi
+
+echo
+echo "passed $PASS, failed $FAIL"
+[[ "$FAIL" -eq 0 ]]

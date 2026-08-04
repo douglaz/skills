@@ -113,7 +113,9 @@ If none resolve, you are running from a checkout rather than an install: run
 infer the phase by hand.
 
 It prints repo, branch, cleanliness, gate command, bead counts, PR state, spec files, the
-cleared SHA, and an inferred phase. Read it, then confirm the inference against `DRIVE.md`
+cleared SHA, and an inferred phase. `scripts/drive-status.test` covers the derivation —
+fifteen cases against scratch repos and a stubbed `gh`, each shown to go red against a
+real defect. Run it after touching the phase logic. Read it, then confirm the inference against `DRIVE.md`
 if present. **Never guess the phase.**
 
 ### Install the working agreement, once per repo
