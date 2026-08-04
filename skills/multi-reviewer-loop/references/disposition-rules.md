@@ -108,7 +108,8 @@ correct.
 
 When a `FIX` is warranted but the proposed remedy is heavier than the problem,
 `SIMPLIFY`: make the smallest change that closes the real hole, not the largest
-the finding implies.
+the finding implies. That is about the *weight* of the mechanism, not its reach —
+it still applies at every site of the class, per the per-finding workflow below.
 
 ## Meta-signals across passes
 
@@ -123,6 +124,13 @@ the finding implies.
   Stop adding. Run a skeptical / over-specification audit (an inverted pass that
   hunts what to *cut*, not what to add) and reconcile, rather than spending more
   normal passes.
+- **The other cause of a flat count is line-by-line fixing, and it needs the
+  opposite correction.** If the new findings are mostly "this rule is stale in a
+  file you did not edit" or "the snippet you fixed has a sibling that still has the
+  bug", you are not over-building — you are under-sweeping. Cutting would remove
+  correct material and leave the drift. Go back and close each finding as a class
+  (see the per-finding workflow above). Diagnose by asking whether a finding is
+  about something the last pass *added* (audit) or *failed to update* (sweep).
 - **A reviewer going quiet is a convergence signal, not a broken reviewer.** If
   one reviewer has reported clean for two or more consecutive passes while the
   other keeps producing findings, the quiet one is telling you the core is done
@@ -154,8 +162,13 @@ For each finding you `FIX` or `DEFER`:
 
 1. Read the referenced code and nearby context
 2. Inspect any claimed safeguard, test, or doc before deciding
-3. Make the smallest correct fix when fixing
-4. Re-read the edited code
+3. Make the smallest fix that closes the **whole class** — not the smallest fix to
+   the cited line. Small in mechanism, complete in coverage: a reviewer cites the
+   one site it read, and the same rule, snippet, or corrected fact usually appears
+   in two or three other places that are now stale, or outright contradicting the
+   site you just fixed. Grep a distinctive phrase before moving on.
+4. Re-read the edited code, and `grep -rn` the stale phrasing repo-wide to confirm
+   the class is gone — not just the one file
 5. Note the disposition, the source tag, and the evidence in `"$PASS_NOTES"`
 
 For each `CONFLICT`:

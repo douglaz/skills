@@ -391,10 +391,11 @@ $RECORD_VALID && PHASE_SOURCE="DRIVE.md" || PHASE_SOURCE="tree"
 # normally; the WAITING_FOR_MERGE state below is for the landed record, where nothing is
 # left to review here.
 DONE_ON_BRANCH=false
+PHASE_WAS="$PHASE_SOURCE"
 if [[ "$PHASE" == "DONE" && "$BRANCH_COMMITS" -gt 0 ]]; then
   DONE_ON_BRANCH=true
   PHASE="HARDEN"
-  PHASE_SOURCE="DRIVE.md (DONE, but this branch has unreviewed commits)"
+  PHASE_SOURCE="$([[ "$PHASE_WAS" == "DRIVE.md" ]] && echo "DRIVE.md" || echo "tree") (DONE, but this branch has unreviewed commits)"
 fi
 # LAND is DERIVED, never read. It is admissible exactly when a panel cleared this tip and
 # the work is otherwise finished — which is what HARDEN resolving means. Deriving it here
@@ -476,7 +477,7 @@ if $JSON; then
       land_blocked_dirty:($land_blocked_dirty=="true"),
       done_on_branch:($done_on_branch=="true"),
       phase_disagreement:(($record_valid=="true") and $drive_phase!=$tree_phase
-                          and ($phase_source|startswith("derived")|not))}' 2>/dev/null \
+                          and $phase==$drive_phase)}' 2>/dev/null \
   || {
     # jq-free fallback. Escape backslashes then quotes: git permits `"` in a branch name
     # and a repo path may contain either, so raw interpolation can emit invalid JSON.

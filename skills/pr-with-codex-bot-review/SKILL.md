@@ -362,15 +362,32 @@ Merge when the reaction-based check passes:
      often lands before the findings do) satisfies a naive check and merges before the
      findings arrive.
 
+  Anchor the reaction to the **wrapper for the current head**, not to a git timestamp.
+  `git log -1 --format=%cI` is the commit's authored/amended time, not when it was
+  pushed — an amended commit can easily predate a stale `+1` — and it says nothing about
+  whether the bot's round has finished:
+
   ```bash
+  # the wrapper for THIS head, and when it landed
+  gh api --paginate --slurp repos/<owner>/<repo>/pulls/<N>/reviews \
+    | jq -r --arg tip "$(git rev-parse HEAD)" '
+        [.[][] | select(.user.login|startswith("chatgpt-codex-connector"))
+         | select(.body|test("Reviewed commit:[^0-9a-f]*"+$tip[0:7]))] | last | .submitted_at'
+  # the +1 specifically — not `eyes`, which means the round is still running
   gh api repos/<owner>/<repo>/issues/<N>/reactions \
-    --jq '.[] | select(.user.login|startswith("chatgpt-codex-connector")) | .created_at'
-  git log -1 --format=%cI HEAD    # reaction must be LATER than this
+    --jq '.[] | select(.user.login|startswith("chatgpt-codex-connector"))
+          | select(.content=="+1") | .created_at'
   ```
 
-  If the reaction predates the push, the bot has not finished this round — wait, or
-  `@codex review`. Then pass `git rev-parse HEAD` to `--match-head-commit` at merge time
-  so a push landing after this check makes the merge refuse rather than take it.
+  The `+1` must be **at or after** that wrapper's `submitted_at`. Filter on
+  `content=="+1"`: a fresh `eyes` is the bot telling you it is *still reviewing*, and an
+  unfiltered query would read it as post-push activity. If there is no wrapper for the
+  tip, or no `+1` after it, the round is not finished — wait, or `@codex review`. The
+  wrapper can also land before the line comments do, so re-check comments against the tip
+  immediately before merging rather than reusing an earlier read.
+
+  Then pass `git rev-parse HEAD` to `--match-head-commit` at merge time so a push landing
+  after this check makes the merge refuse rather than take it.
 - CI is green.
 - CodeRabbit status check is `SUCCESS` **and it was a review, not a skip** — check the
   "Files skipped from review" list per the query above. Absent from the rollup entirely

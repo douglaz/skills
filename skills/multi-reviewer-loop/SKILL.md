@@ -298,6 +298,36 @@ Otherwise:
    independently — including when the two reviewers describe the same root cause
    from different angles.
 
+   **A finding names a class, not a line.** This is the single highest-leverage
+   habit in the loop, and skipping it is what makes a run take six passes instead
+   of two. A reviewer cites the one site it happened to read; the same mistake is
+   usually elsewhere too. Before you mark a finding fixed, search the repo for
+   every other instance of that class and fix them in the same edit:
+
+   - a rule stated in one file is usually restated in two or three others — grep a
+     distinctive phrase from it, not just the file you were pointed at
+   - a snippet with a bug (`echo` where it needed `exit 1`, a missing flag, an
+     unbounded command) usually has siblings that were copied from it
+   - a fact corrected in one place (an exit code, a condition, a command name)
+     leaves every other statement of it stale, and the stale ones now *contradict*
+     the fixed one — a worse state than before you started
+
+   Measured on one real run: findings per pass went 13 → 7 → 11 → 7 → 6 → 8 → 6,
+   and **most findings after pass 2 were drift introduced by the previous pass's
+   fixes** — a rule updated at the cited site and left stale two files over. Rising
+   or flat counts late in a loop usually mean fixes are being applied line-by-line.
+
+   **Prefer a guard keyed on the condition over one keyed on named cases.** A check
+   written as "suppress this when the phase came from *X*" silently re-breaks the
+   moment someone adds state *Y*; the same check written as "suppress this unless
+   the record actually won" covers *Y* and everything after it. When a finding says
+   "you handled case X but not case Y", that is the tell — do not add Y to the list,
+   replace the list with the property the cases share.
+
+   After the edits, spend one command confirming the class is gone repo-wide
+   (`grep -rn '<the stale phrasing>' .`) rather than re-reading the file you just
+   changed. Quote that check in the pass summary.
+
 2. Order by confidence, then priority: `BOTH` findings first (two independent
    reads agree), then single-source findings by priority. Agreement is a
    prioritization signal, not a license to skip verification, and it is *not* a
@@ -395,6 +425,22 @@ stops converging:
 
 More normal passes will not converge these; they grow the change. The audit is
 the corrective.
+
+**Two different causes produce that same rising-count symptom, and they need
+opposite corrections — diagnose before you reach for the audit.** Read a sample of
+the last pass's findings and ask what each one *is*:
+
+- **New mechanism acquiring its own edge cases** (a check you added now needs its
+  own error handling, a flag now needs a fallback) → over-specification. Run § 4a
+  and cut.
+- **The same rule stale in a file you didn't edit**, a snippet's sibling still
+  carrying the bug you fixed, a fact corrected in one place and now contradicting
+  its restatement elsewhere → not over-specification at all. That is line-by-line
+  fixing, and the corrective is the class sweep in § 3.1, not cutting. Cutting here
+  removes correct material and leaves the drift.
+
+The tell is whether a finding is about something the previous pass *added* (audit)
+or something the previous pass *failed to update* (sweep).
 
 **Falling severity is not the same as done.** P1 counts dropping pass over pass
 feels like convergence, and usually is — but both reviewers are re-reading the

@@ -339,6 +339,20 @@ and silently carry the previous bead's closure into its diff. Instead:
   `N` does not exist until the PR is open, so amend it in afterwards — the first pushed
   head is never the one that merges.
 
+  **That record is only on the metadata branch until it merges**, so a fresh clone of the
+  default branch cannot see it: it finds the old `DRIVE.md` and an open bead, and would
+  re-enter BUILD or HARDEN and duplicate the closure. `drive-status` cannot help — it
+  reads PR state for the *current* branch, and a clone sitting on the default branch has
+  none. So the discovery path is the forge, and it belongs in the resume checklist:
+
+  ```bash
+  gh pr list --state open --json number,headRefName,title   # is a closure PR in flight?
+  ```
+
+  **Before re-entering BUILD or HARDEN from a fresh clone with unresolved beads, run that
+  query.** An open closure PR means the drive is `WAITING_FOR_MERGE`, not unfinished —
+  land that PR rather than starting the work again.
+
 And verify the closure actually happened. `br close` exits 0 even when the flush that
 writes the JSONL failed, because the error is caught and logged at debug level:
 
@@ -371,7 +385,9 @@ closed). Scope matters here as much as at BUILD entry: a scoped goal is DONE whe
 is empty, not when the repository is. Waiting on the global backlog turns a finished
 milestone into an open-ended drain the user never asked for.
 
-**Unless a `Pending:` PR has not merged.** A record reading `DONE · Pending: metadata PR
+**Unless a closure PR is still open.** From a fresh clone this is not visible in the
+record at all (see LAND above) — check `gh pr list --state open` before concluding the
+drive is unfinished. A record reading `DONE · Pending: metadata PR
 #N` means "DONE once #N merges" — the merged file cannot state its own post-merge status,
 so the driver queries. `drive-status` reports that state as `WAITING_FOR_MERGE`, not
 `DONE`, precisely so a resumed session goes and lands the PR instead of reporting a
