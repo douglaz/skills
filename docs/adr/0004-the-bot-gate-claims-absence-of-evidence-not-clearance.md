@@ -107,3 +107,55 @@ Where the forge can enforce a rule server-side — required status checks, requi
 conversation resolution — that is the better home for it. Those rules are decidable and
 cannot be skipped by forgetting to run a script. This gate remains a stop sign for a human
 who still owns the merge.
+
+---
+
+## Amendment, 2026-08-04: CodeRabbit is removed from the verdict
+
+The decision above left CodeRabbit as one of the three surviving conditions, on the
+assumption that a `SUCCESS` status on the head meant CodeRabbit had reviewed that head.
+Running the reworked gate against this PR disproved it.
+
+CodeRabbit's status is a **PR-level signal**: it lands on whatever head exists when the bot
+posts it, and carries nothing that binds it to a tree. Observed on PR #16:
+
+```
+18:55:40Z  f69bf01 pushed
+18:55:55Z  CodeRabbit's status comment updated, still carrying "Reviews paused"
+18:56:55Z  CodeRabbit posts  success / "Review completed"  on f69bf01
+           CodeRabbit review comments anchored to f69bf01: 0
+```
+
+CodeRabbit had auto-paused the PR ("this branch is under active development"), so it cannot
+have reviewed f69bf01 — and stamped it green anyway, 75 seconds after the push. Five of the
+last six heads carry a green status with no review; only `310a35d` has comments anchored to
+it. The gate's own accidental block on the pause marker was the only thing standing between
+that and a false clear.
+
+Nothing available distinguishes "reviewed and found nothing" from "never reviewed": the
+status has a null `target_url`, the walkthrough carries no SHA or reviewed-commit marker,
+and CodeRabbit's only head-bound artifact is `commit_id` on line comments, which exist only
+when it has findings.
+
+Two alternatives were rejected. Requiring a comment anchored to the tip would prove it read
+the tree, and would deadlock every PR that converges — a clean round leaves no comment.
+Moving the requirement into branch protection does not help either, because the signal
+already *is* a commit status on the head, so a required check reads the same green.
+
+**Decision.** CodeRabbit no longer affects the verdict, which becomes three conditions: a
+*submitted* codex review naming the tip, no `eyes` reaction newer than it, and zero
+unresolved review threads from either gated bot. `--no-coderabbit` is removed and rejected
+with an explanation; the "absence is undecidable" problem it existed for dissolves with it.
+
+CodeRabbit's status, its rate-limit and paused markers, and its skipped-files list are all
+still **printed** — the same call made for the skip list above, for the same reason: a bug
+in report-only parsing costs a human information, not a merge. Its review threads still
+gate, because those carry disposition and are head-anchored.
+
+Consequences, stated plainly. A rate-limit skip no longer blocks a merge; the gate says so
+in its output and a human decides. A CodeRabbit query failure is no longer exit 3, because
+it can no longer make the answer indeterminate — refusing a decidable PR because a warning
+could not be rendered is the wrong trade.
+
+This does not weaken the convergence test above; it applies it. A condition was found to be
+measuring nothing, so it was removed rather than repaired.

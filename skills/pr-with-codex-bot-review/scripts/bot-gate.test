@@ -64,9 +64,8 @@ threads() {  # $1 = count of unresolved threads, $2 = GraphQL author login (defa
   printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[%s]}}}}}' "$nodes"
 }
 
-run() {  # runs the gate, stdout on fd 1; adds --no-coderabbit when no check fixture exists
-  local extra=(); [[ -f "$FIX/checks.json" ]] || extra=(--no-coderabbit)
-  PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 "${extra[@]}" 2>/dev/null
+run() {  # runs the gate, stdout on fd 1
+  PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 2>/dev/null
 }
 check() {  # $1 = name, $2 = expected exit
   local name=$1 want=$2
@@ -133,12 +132,12 @@ cr_success
 # CodeRabbit's real wording: the phrase is broken by a markdown link, so a naive
 # "reviews are subject to rate limits" pattern misses it entirely (it did).
 printf '[[{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\\nYour plan includes PR reviews subject to [rate limits](https://docs.coderabbit.ai/x)."}]]' > "$FIX/issues.json"
-check "CodeRabbit rate-limit notice (real wording) blocks" 1
+check_reports "rate-limit notice (real wording) is reported" "rate-limited or its review is paused"
 
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 cr_success
 printf '[[{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: review paused by coderabbit.ai -->"}]]' > "$FIX/issues.json"
-check "CodeRabbit paused-review marker blocks" 1
+check_reports "paused-review marker is reported" "rate-limited or its review is paused"
 
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 cr_success
@@ -231,9 +230,11 @@ new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"
 printf 'not json at all' > "$FIX/reactions.json"
 check "unparseable reactions body is exit 3" 3
 
+# The comments payload feeds only the report now, so a bad body costs the note, not the
+# answer. Reactions and reviews still fail closed below — those feed the verdict.
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 cr_success; printf '<html>502 Bad Gateway</html>' > "$FIX/issues.json"
-check "unparseable PR-comments body is exit 3" 3
+check "unparseable PR-comments body does not block" 0
 
 new_fix; printf 'not json' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 check "unparseable reviews body is exit 3" 3
@@ -254,14 +255,14 @@ check "unparseable wrapper timestamp blocks" 1
 # not the same as "not installed".
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nwalkthrough"}]]' > "$FIX/issues.json"
-check "configured CodeRabbit with no check for this head blocks" 1
+check_reports "no check for this head is reported as absent" "coderabbit       absent"
 
 # A newer REPLY must not mask an older status comment's skip notice: CodeRabbit's replies
 # interleave with its status body, so "latest comment" picks a reply that says nothing.
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 cr_success
 printf '[[{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-01-01","body":"<!-- auto-generated comment: review paused by coderabbit.ai -->"},{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-02-01","body":"<!-- This is an auto-generated reply by CodeRabbit --> thanks"}]]' > "$FIX/issues.json"
-check "newer reply does not mask a skip notice" 1
+check_reports "a newer reply does not mask the skip notice" "rate-limited or its review is paused"
 
 # Editing in place is what CodeRabbit's status comment IS, and an edit moves only
 # `updated_at`. So the live status can sit in an OLDER comment that was just rewritten,
@@ -270,7 +271,7 @@ check "newer reply does not mask a skip notice" 1
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 cr_success
 printf '[[{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-01-01","updated_at":"2026-03-01","body":"<!-- auto-generated comment: review paused by coderabbit.ai -->"},{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-02-01","updated_at":"2026-02-01","body":"<!-- auto-generated comment: summarize by coderabbit.ai --> walkthrough"}]]' > "$FIX/issues.json"
-check "an edited status outranks a later-created one" 1
+check_reports "an edited status outranks a later-created one" "rate-limited or its review is paused"
 
 # ...and the blocking direction: a stale rate-limit marker must not outrank a retrigger
 # whose status comment was edited after it.
@@ -283,7 +284,7 @@ check "an edited success outranks a stale rate limit" 0
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 cr_success
 printf '[[{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-02-01","body":"<!-- auto-generated comment: review paused by coderabbit.ai -->"},{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-01-01","body":"<!-- auto-generated comment: summarize by coderabbit.ai --> walkthrough"}]]' > "$FIX/issues.json"
-check "missing updated_at falls back to created_at" 1
+check_reports "missing updated_at falls back to created_at" "rate-limited or its review is paused"
 
 # But a genuinely newer STATUS comment must clear a stale skip — the retrigger must work.
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
@@ -297,14 +298,27 @@ check "newer status comment clears a stale skip" 0
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 echo 'CHECKSFAIL' > "$FIX/checksfail"
 echo '{"statusCheckRollup":[{"__typename":"CheckRun","name":"CodeRabbit","conclusion":null}]}' > "$FIX/rollup.json"
-check "pending CheckRun CodeRabbit blocks" 1
+check_reports "a pending CheckRun is reported as PENDING" "coderabbit       PENDING" 
 
-# No CodeRabbit signal at all is undecidable on a fresh PR, so it must not clear without
-# the operator saying the repo has none.
+# No CodeRabbit signal at all used to block until the operator asserted --no-coderabbit.
+# Both are gone: absence cannot be established by any query, and it no longer needs to be.
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 >/dev/null 2>&1
-[[ $? == 1 ]] && { PASS=$((PASS+1)); echo "  ok   no CodeRabbit signal blocks without opt-out (exit 1)"; } \
-              || { FAIL=$((FAIL+1)); echo "  FAIL no CodeRabbit signal blocks without opt-out"; }
+check "no CodeRabbit signal at all does not block" 0
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 --no-coderabbit >/dev/null 2>&1
+[[ $? == 2 ]] && { PASS=$((PASS+1)); echo "  ok   --no-coderabbit is rejected, not ignored   (exit 2)"; } \
+              || { FAIL=$((FAIL+1)); echo "  FAIL --no-coderabbit is rejected, not ignored"; }
+
+# THE case this rework exists for. CodeRabbit auto-paused PR #16 and then stamped
+# `success`/"Review completed" on f69bf01 75 seconds after the push, with zero of its
+# comments anchored there. A green CodeRabbit beside a pause marker must NOT block (it is
+# not evidence either way) and must still be VISIBLE, or the human loses the only cue that
+# nobody reviewed this tree.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success
+printf '[[{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-01-01","updated_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\n<!-- auto-generated comment: review paused by coderabbit.ai -->\\n> ## Reviews paused\\n<!-- walkthrough_start -->walkthrough"}]]' > "$FIX/issues.json"
+check_reports "green + paused is reported and does not block" "rate-limited or its review is paused"
 
 # --- integrity of the wrapper itself ---
 
@@ -347,7 +361,7 @@ check "a wrapper with an empty submitted_at blocks" 1
 # and a retry loop keyed on exit 1 would spin on an outage forever.
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 echo 'x' > "$FIX/checksfail"; echo 'x' > "$FIX/rollupfail"
-check "both CodeRabbit status queries failing is exit 3" 3
+check_reports "unreadable CodeRabbit status is reported, not fatal" "coderabbit       query-failed"
 
 # --- what exit 0 says it means ---
 
@@ -366,7 +380,7 @@ fi
 # The observation window must be reported at BOTH ends. "As of instant T" is false — these
 # reads are not atomic — so a consumer needs the interval to judge staleness itself.
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-J=$(PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 --no-coderabbit --json 2>/dev/null)
+J=$(PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 --json 2>/dev/null)
 if printf '%s' "$J" | jq -e '.observed_from and .observed_to and .claim and (.verdict=="NO_PENDING_EVIDENCE")' >/dev/null 2>&1; then
   PASS=$((PASS+1)); echo "  ok   JSON carries the claim and both window ends (bounded claim)"
 else
@@ -377,7 +391,7 @@ fi
 # "nothing indicated an unfinished round" in the same object as `"verdict": "BLOCKED"`,
 # which a machine reader taking it at face value would have exactly backwards.
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 3 > "$FIX/threads.json"
-J=$(PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 --no-coderabbit --json 2>/dev/null)
+J=$(PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 --json 2>/dev/null)
 if printf '%s' "$J" | jq -e '(.verdict=="BLOCKED") and (.claim==null)' >/dev/null 2>&1; then
   PASS=$((PASS+1)); echo "  ok   a BLOCKED verdict asserts no claim         (bounded claim)"
 else
@@ -387,7 +401,7 @@ fi
 # --settle-seconds is REJECTED, not ignored: a caller passing it believes it is buying a
 # guarantee, and quietly accepting the flag would keep that belief alive.
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 --settle-seconds 0 --no-coderabbit >/dev/null 2>&1
+PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 --settle-seconds 0 >/dev/null 2>&1
 [[ $? == 2 ]] && { PASS=$((PASS+1)); echo "  ok   --settle-seconds is rejected, not ignored  (exit 2)"; } \
               || { FAIL=$((FAIL+1)); echo "  FAIL --settle-seconds is rejected, not ignored"; }
 

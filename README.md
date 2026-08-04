@@ -308,17 +308,21 @@ Best fit: you want a GitHub PR carried from local changes through review-bot
 feedback and merge.
 
 Ships with `scripts/bot-gate`, which reports whether anything says the review bots are
-still working on the *current* tip, or have left findings nobody dispositioned: a review
-naming this tip, no `eyes` reaction newer than it, zero unresolved threads from either
-gated bot, and CodeRabbit green when configured. It fails closed on any API error or
-missing tool — exit 0, 1 blocked, 2 usage, 3 cannot determine, and "cannot determine" is
-never clearance.
+still working on the *current* tip, or have left findings nobody dispositioned: a submitted
+review naming this tip, no `eyes` reaction newer than it, and zero unresolved threads from
+either gated bot. It fails closed on any API error or missing tool — exit 0, 1 blocked,
+2 usage, 3 cannot determine, and "cannot determine" is never clearance.
+
+CodeRabbit's status is printed and ignored. It is a PR-level signal, not evidence about a
+tree: measured on this repo, CodeRabbit stamped `success`/"Review completed" on a commit
+75 seconds after it was pushed while its own reviews were paused. Its review threads still
+gate; its green does not.
 
 Exit 0 says `NO_PENDING_EVIDENCE`, not "cleared", and the distinction is the point:
 neither bot emits a round-terminal signal, so every conclusion is drawn from absence over a
 bounded observation window, which the JSON reports both ends of. It is a stop sign, not a
 green light — where the forge can enforce a rule server-side, put it there instead.
-`scripts/bot-gate.test` exercises it against a stubbed `gh` — forty-three cases, each one
+`scripts/bot-gate.test` exercises it against a stubbed `gh` — forty-five cases, each one
 a defect found in review, each shown to go red against the real bug.
 
 ### galtland-architecture

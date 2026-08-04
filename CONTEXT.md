@@ -56,6 +56,12 @@ _Avoid_: clearance, cleared, approved, green, bot sign-off
 A command that proves the repo is healthy, judged by its real exit code.
 _Avoid_: check, build, CI
 
+**PR-level signal**:
+A bot state attached to a pull request rather than to a tree. It moves to whatever head
+exists when the bot posts it, so it may describe work done on a different commit — or no
+work at all. Never evidence about a tree, however green it looks.
+_Avoid_: green, passing, the check, bot approval
+
 **Bot round**:
 One cycle of a forge review bot examining a pushed head and the author answering it.
 Distinct from a panel: bots review what was pushed, panels review what is about to be.

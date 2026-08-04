@@ -398,10 +398,18 @@ Merge when the reaction-based check passes:
 
   1. A wrapper exists whose `Reviewed commit:` equals the tip. That is the bot stating,
      with a SHA, which tree it read.
-  2. Run **`scripts/bot-gate <PR>`** and require exit 0. It checks that a review from the
-     codex bot names this tip, that no `eyes` reaction post-dates it, that zero review
-     threads from either gated bot are unresolved, and that CodeRabbit (if configured) is
-     green — failing closed on any API error, missing tool, or unparseable response.
+  2. Run **`scripts/bot-gate <PR>`** and require exit 0. Three conditions: a *submitted*
+     codex review naming this tip, no `eyes` reaction post-dating it, and zero unresolved
+     review threads from either gated bot. It fails closed on any API error, missing tool,
+     or unparseable response in the signals that feed those three.
+
+     **CodeRabbit's status is not one of them, deliberately.** It is a PR-level signal — it
+     lands on whatever head exists when the bot posts it and carries nothing binding it to
+     a tree. Measured here: CodeRabbit auto-paused this PR and then stamped
+     `success`/"Review completed" on a commit 75 seconds after it was pushed, with none of
+     its comments anchored there. The gate prints its state, its rate-limit and paused
+     markers, and its skipped-files list, and lets you decide. Its review *threads* still
+     gate, because those are head-anchored and carry disposition. See ADR 0004.
 
      **Know what exit 0 claims, because it is weaker than "the bots cleared this."** The
      verdict is `NO_PENDING_EVIDENCE`, and it means: across API reads finishing at a
@@ -443,7 +451,7 @@ Merge when the reaction-based check passes:
      shorter version of it here.
 
      `scripts/bot-gate.test` runs it against a stubbed `gh` with canned API responses —
-     forty-three cases, each one a defect a reviewer actually found: a forged wrapper
+     forty-five cases, each one a defect a reviewer actually found: a forged wrapper
      login, a `[bot]`-suffix filter that matched nothing, an unrelated app's unresolved
      thread holding the merge, a CodeRabbit rate-limit skip, an API failure. Run it after
      touching the gate; every case has been shown to go red against the real bug.
@@ -474,10 +482,10 @@ Merge when the reaction-based check passes:
      of those were caught by reading. Exit codes: 0 clear, 1 blocked, 2 usage, 3 cannot
      determine — and "cannot determine" is never clearance.
 
-     On a repo with no CodeRabbit, pass `--no-coderabbit`. The gate cannot infer it: the
-     app can be installed org-wide with no repo config, and on a fresh PR "absent" is
-     indistinguishable from "installed but not started" — so it refuses rather than
-     guess.
+     `--no-coderabbit` is gone, and rejected with an explanation rather than accepted and
+     ignored. It existed to assert a fact no query could establish — whether the app is
+     installed at all, given it can be enabled org-wide with no repo config and "absent"
+     looks identical to "not started yet" on a fresh PR. Nothing depends on that fact now.
 
      A `BLOCKED` with `wrapper 0` may just be a clean round the bot signalled with only a
      `+1`: it leaves no wrapper then, so nothing proves which tree it read. Get a wrapper
@@ -491,15 +499,19 @@ Merge when the reaction-based check passes:
   Then pass `git rev-parse HEAD` to `--match-head-commit` at merge time so a push landing
   after this check makes the merge refuse rather than take it.
 - CI is green.
-- CodeRabbit status check is `SUCCESS` **and it was a review, not a rate-limit skip or a
-  paused review** — those mean nobody reviewed anything, and the gate blocks on them.
+- CodeRabbit's status is **read, not required** — the gate does not act on it. A `SUCCESS`
+  beside a rate-limit or paused marker means nobody reviewed anything, and the gate prints
+  that rather than blocking, because its green says nothing about this tree either way.
+  If you want its opinion on what you are about to merge, `@coderabbitai resume` (it
+  auto-pauses on fast-moving branches) or `@coderabbitai review`, and wait for comments
+  anchored to this head.
   A "Files skipped from review" list is different: it names files CodeRabbit judged
   trivial and chose not to read. The gate prints that list and does not block on it —
   read it and disagree if you want to, but it is a vendor's judgement call, not a failure.
-  Absent from the rollup entirely is only fine when the repo genuinely has no CodeRabbit,
-  and the gate will not take your word for it implicitly: it clears an absent check only
-  when you pass `--no-coderabbit` **and** the PR carries no CodeRabbit comment. On a fresh
-  PR, "absent" and "installed but not started yet" look identical, so absence alone blocks.
+  Absent from the rollup entirely is reported and nothing more. It used to block until the
+  operator asserted `--no-coderabbit`, because on a fresh PR "absent" and "installed but
+  not started yet" are indistinguishable — a real problem that stopped mattering once the
+  status stopped counting.
 - No unresolved review threads from **either gated bot** — `chatgpt-codex-connector` or
   `coderabbitai`. Not "any account GitHub types as a Bot": counting those let an unrelated
   app hold the merge over something this skill has no opinion about, with no way for the

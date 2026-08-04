@@ -26,13 +26,30 @@
 #
 # Any doubt exits non-zero: an API failure or a missing signal is NOT clearance.
 #
+# CODERABBIT DOES NOT GATE. Its status is reported and ignored, because it is a PR-level
+# signal, not evidence about a tree: it lands on whatever head exists when the bot posts
+# it. Measured on this repo's PR #16 — CodeRabbit auto-paused the PR, and 75 seconds after
+# f69bf01 was pushed it stamped `success` / "Review completed" on that commit, with zero of
+# its comments anchored there. Five of the last six heads carry a green status and no
+# review. Nothing distinguishes the two cases: the status has a null target_url, the
+# walkthrough carries no SHA, and CodeRabbit's only head-bound artifact is `commit_id` on
+# line comments, which exist only when it has findings — so a genuinely clean round is
+# indistinguishable from no round at all.
+#
+# Requiring a comment anchored to the tip would prove it read this tree, and would deadlock
+# every PR that converges. Branch protection does not help either: the signal already IS a
+# commit status on the head, so a required check reads the same green.
+#
+# What survives is CodeRabbit's REVIEW THREADS, which carry disposition and are counted
+# below, and its markers, which are printed so a human can see that nobody reviewed.
+#
 # It gates on UNRESOLVED bot review threads, not on a raw comment count. A raw count is
 # unsatisfiable — an answered false positive stays anchored to the tip forever, and GitHub
 # re-anchors unresolved comments to each new head — while ignoring findings entirely would
 # let a real one merge. Thread resolution is the disposition signal that distinguishes
 # them, and it is the one the author controls by acting.
 #
-# Usage: bot-gate <pr-number> [--no-coderabbit] [--json]
+# Usage: bot-gate <pr-number> [--json]
 #
 # This exists as a script rather than a snippet in SKILL.md because the same logic was
 # written three times as prose and was wrong three different ways: it enforced nothing
@@ -68,18 +85,19 @@ set -uo pipefail
 
 PR="${1:-}"; shift || true
 JSON=false
-NO_CR=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     # Removed rather than accepted-and-ignored: a caller passing it believes it is buying
     # a guarantee, and silently taking the flag would keep that belief alive.
     --settle-seconds) echo "--settle-seconds was removed: the settle window it configured defended against a delivery gap that does not exist (see the header)" >&2; exit 2 ;;
-    --no-coderabbit)  NO_CR=true; shift ;;
+    # Removed with the CodeRabbit clause: it was an operator assertion standing in for a
+    # fact no query could establish, and nothing now depends on that fact.
+    --no-coderabbit)  echo "--no-coderabbit was removed: CodeRabbit no longer affects the verdict (see the header)" >&2; exit 2 ;;
     --json)           JSON=true; shift ;;
     *)                echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
-[[ -n "$PR" ]] || { echo "usage: bot-gate <pr-number> [--no-coderabbit] [--json]" >&2; exit 2; }
+[[ -n "$PR" ]] || { echo "usage: bot-gate <pr-number> [--json]" >&2; exit 2; }
 [[ "$PR" =~ ^[0-9]+$ ]] || { echo "PR must be a number" >&2; exit 2; }
 
 # Both ends of the observation interval are reported: the claim is bounded by a window,
@@ -281,7 +299,11 @@ CR_SKIPPED=false
 # commented here before but has no check for this head yet", which must block.
 if [[ "$CR_STATE" == "SUCCESS" || "$CR_STATE" == "absent" ]]; then
   if CRC=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/comments" 2>/dev/null); then
-    require_json "PR comments" "$CRC"
+    # NOT require_json: this payload feeds only the printed CodeRabbit notes now. An
+    # unparseable body costs the report, and refusing to answer a decidable question
+    # because a warning could not be rendered is the wrong trade. The reactions and reviews
+    # payloads still fail closed, because those do feed the verdict.
+    printf '%s' "$CRC" | jq -e 'type' >/dev/null 2>&1 || { CR_STATE="query-failed"; CRC=""; }
     # CodeRabbit's own markers, verified against its real output: the plan notice reads
     # "PR reviews subject to [rate limits](...)" — a markdown link, so the phrase is not
     # contiguous — and the HTML marker is "review paused"/"rate limited by coderabbit.ai".
@@ -377,25 +399,11 @@ if [[ "$CR_STATE" == "SUCCESS" ]] && ! $CR_SKIPPED && [[ -n "${CRC:-}" ]]; then
     | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | grep -v '^$' | sort -u | head -20)
 fi
 
-# "No CodeRabbit signal" is genuinely undecidable from any query: it can be installed
-# org-wide with no repo config (this repo has none and it is active), and on a freshly
-# opened PR there is neither a check nor a comment yet — so a delayed app would begin
-# reviewing after the merge already ran. Same-PR history can only prove it IS configured,
-# never that it is not. Absence therefore clears only when the operator says so with
-# --no-coderabbit; there is no query that can say it for them.
-CR_CONFIGURED=false
-if [[ -n "${CRC:-}" ]]; then
-  printf '%s' "$CRC" | jq -e '[.[][] | select(.user.login=="coderabbitai[bot]")] | length > 0' >/dev/null 2>&1 \
-    && CR_CONFIGURED=true
-fi
-
 # WRAPPER_AT is required alongside the count: it is the reference point the active-round
 # check needs, so a wrapper without one means that check never ran, and a check that did
 # not run has not passed.
 VERDICT="BLOCKED"
-if [[ "$WRAPPER_TIP" -gt 0 ]] && [[ -n "$WRAPPER_AT" ]] && ! $ROUND_ACTIVE && [[ "$UNRESOLVED" -eq 0 ]] \
-   && { { [[ "$CR_STATE" == "absent" ]] && ! $CR_CONFIGURED && $NO_CR; } \
-        || { [[ "$CR_STATE" == "SUCCESS" ]] && ! $CR_SKIPPED; }; }; then
+if [[ "$WRAPPER_TIP" -gt 0 ]] && [[ -n "$WRAPPER_AT" ]] && ! $ROUND_ACTIVE && [[ "$UNRESOLVED" -eq 0 ]]; then
   VERDICT="NO_PENDING_EVIDENCE"
 fi
 OBSERVED_TO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -424,26 +432,23 @@ else
   printf 'tip              %s\n' "${TIP:0:10}"
   printf 'codex wrapper    %s naming this tip\n' "$WRAPPER_TIP"
   printf 'unresolved bot   %s thread(s)\n' "$UNRESOLVED"
-  printf 'coderabbit       %s\n' "$CR_STATE"
+  printf 'coderabbit       %s   (reported, does not gate)\n' "$CR_STATE"
   printf 'observed         %s .. %s\n' "$OBSERVED_FROM" "$OBSERVED_TO"
   printf '\nverdict: %s\n' "$VERDICT"
   [[ "$VERDICT" == "NO_PENDING_EVIDENCE" ]] && printf '  = %s\n' "$CLAIM"
   [[ "$WRAPPER_TIP" -eq 0 ]] && printf '  ⚠ no review from the codex bot names this tip, so nothing proves WHICH tree it read.\n    Push or `@codex review` to get one, or accept the round explicitly and say so.\n'
   [[ "$UNRESOLVED" -gt 0 ]] && printf '  ⚠ %s UNRESOLVED bot thread(s). Fix each, or answer it with evidence and resolve the\n    thread — resolving is how you record that it was dispositioned.\n' "$UNRESOLVED"
-  [[ "$CR_STATE" == "absent" ]] && ! $CR_CONFIGURED && ! $NO_CR && printf '  ⚠ no CodeRabbit signal at all — on a new PR that is indistinguishable from "installed\n    but not started yet". Wait, or pass --no-coderabbit if this repo genuinely has none.\n'
-  [[ "$CR_STATE" == "absent" ]] && $CR_CONFIGURED && printf '  ⚠ CodeRabbit has commented on this PR but has no check for THIS head yet — it has\n    not started reviewing it. Wait, or `@coderabbitai review`.\n'
-  [[ "$CR_STATE" == "query-failed" ]] && printf '  ⚠ CodeRabbit status could not be queried — not the same as "not configured".\n'
+  [[ "$CR_STATE" == "query-failed" ]] && printf '  · CodeRabbit status could not be queried.\n'
   $ROUND_ACTIVE && printf '  ⚠ an `eyes` reaction is newer than the wrapper — a fresh round is running on this\n    same tip. Wait for it to finish.\n'
   # Reported, never gated — see the CR_SKIPLIST block. Every file here is one this PR
   # changes, since that is the only kind CodeRabbit can skip; read the list and decide.
   [[ -n "$CR_SKIPLIST" ]] && printf '  · CodeRabbit skipped these file(s) as trivial — it did not review them:\n%s\n' "$(printf '%s' "$CR_SKIPLIST" | sed 's/^/      /')"
-  $CR_SKIPPED && printf '  ⚠ CodeRabbit reported SUCCESS but its walkthrough mentions a rate limit or a paused\n    review — nobody reviewed this. `@coderabbitai review` and wait.\n'
+  $CR_SKIPPED && printf '  · CodeRabbit is rate-limited or its review is paused, so its status describes no\n    review at all. This does NOT block — read it and decide. `@coderabbitai resume`\n    (or `review`) if you want its opinion on this tree.\n'
 fi
 
-# `query-failed` is the "cannot determine" case the header reserves exit 3 for, and it must
-# not collapse into an ordinary block: a caller distinguishing "the bots are not done" from
-# "I could not find out" gets the wrong answer, and a retry loop keyed on exit 1 would spin
-# on an outage forever.
+# A CodeRabbit query failure used to be exit 3, correctly, while CodeRabbit could change
+# the verdict — "I could not find out" is not "not done". It no longer can, so failing to
+# read it is missing REPORT data, not doubt about the answer, and exiting 3 would refuse a
+# decidable PR because a warning could not be printed. Exit follows the verdict.
 [[ "$VERDICT" == "NO_PENDING_EVIDENCE" ]] && exit 0
-[[ "$CR_STATE" == "query-failed" ]] && exit 3
 exit 1

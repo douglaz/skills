@@ -433,8 +433,8 @@ good diff and the cap is spent on real findings.
 
 ### Squash-merge, then clean up
 
-**Exit gate:** merged at a tip every configured bot read with no pending round and no
-undispositioned finding, with a fresh base, branch reset, bead
+**Exit gate:** merged at a tip the codex bot read with no pending round, no undispositioned
+finding from either bot, with a fresh base, branch reset, bead
 closed (`br close <id>`), `DRIVE.md` updated — the last two through a reviewed path.
 
 `br close` cannot ride this branch. It is tempting to think it can: `.beads/issues.jsonl`
