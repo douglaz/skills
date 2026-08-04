@@ -59,6 +59,16 @@ gh pr view "$PR" -R "$REPO" --json number -q .number >/dev/null 2>&1 \
 TIP=$(git rev-parse --verify --quiet HEAD) \
   || { echo "BLOCKED: no HEAD" >&2; exit 3; }
 
+# ISO-8601 -> epoch, portably. GNU date wants -d; BSD/macOS date treats -d as the set-DST
+# flag and errors, which would leave the wrapper age unknowable and the gate permanently
+# BLOCKED on a platform this repo explicitly supports (see the gtimeout fallback).
+iso_to_epoch() {
+  date -u -d "$1" +%s 2>/dev/null && return 0
+  date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$1" +%s 2>/dev/null && return 0
+  return 1
+}
+DATE_UNPARSED=false
+
 # --slurp, then pipe to jq: --paginate applies --jq per page, so a filter passed with
 # --jq emits one result per page and any comparison against a single value breaks once
 # the endpoint spans more than one page.
@@ -137,9 +147,14 @@ B=$(count_unresolved_bot_threads) || { echo "BLOCKED: thread query failed on re-
 SETTLED=false
 if [[ "$A" == "$B" ]]; then
   if [[ -n "$WRAPPER_AT" ]]; then
-    W_EPOCH=$(date -u -d "$WRAPPER_AT" +%s 2>/dev/null || echo "")
+    W_EPOCH=$(iso_to_epoch "$WRAPPER_AT")
     NOW=$(date -u +%s)
-    [[ -n "$W_EPOCH" ]] && (( NOW - W_EPOCH >= SETTLE )) && SETTLED=true
+    if [[ -n "$W_EPOCH" ]]; then
+      (( NOW - W_EPOCH >= SETTLE )) && SETTLED=true
+    else
+      # Could not parse the timestamp: that is doubt, not settlement.
+      DATE_UNPARSED=true
+    fi
   fi
 fi
 
@@ -148,8 +163,12 @@ fi
 # network or auth failure satisfy CLEAR on a repo that DOES gate on CodeRabbit, against
 # this script's own fail-closed contract.
 if ROLLUP=$(gh pr view "$PR" -R "$REPO" --json statusCheckRollup 2>/dev/null); then
-  CR=$(printf %s "$ROLLUP" | jq -r '[.statusCheckRollup[]? | select(.context=="CodeRabbit") | .state] | first // ""' 2>/dev/null)
-  CR_STATE="${CR:-absent}"
+  if CR=$(printf %s "$ROLLUP" | jq -er '[.statusCheckRollup[]? | select(.context=="CodeRabbit") | .state] | first // ""' 2>/dev/null); then
+    CR_STATE="${CR:-absent}"
+  else
+    # gh returned 0 but the body would not parse. "Could not read" is not "not configured".
+    CR_STATE="query-failed"
+  fi
 else
   CR_STATE="query-failed"
 fi
@@ -192,7 +211,9 @@ else
   printf 'coderabbit       %s\n' "$CR_STATE"
   printf '\nverdict: %s\n' "$VERDICT"
   [[ "$WRAPPER_TIP" -eq 0 ]] && printf '  ⚠ no wrapper names this tip. The bot may have finished with only a +1 (it does\n    that on a clean round) — in which case nothing proves WHICH tree it read. Push or\n    `@codex review` to get a wrapper, or accept the round explicitly and say so.\n'
-  $SETTLED || printf '  ⚠ comment count changed during the settle window — findings are still arriving.\n'
+  $SETTLED && : || { $DATE_UNPARSED \
+    && printf '  ⚠ could not parse the wrapper timestamp (%s), so its age is unknown — not settled.\n' "$WRAPPER_AT" \
+    || printf '  ⚠ unresolved-thread count changed during the settle window — findings are still arriving.\n'; }
   [[ "$B" -gt 0 ]] && printf '  ⚠ %s UNRESOLVED bot thread(s). Fix each, or answer it with evidence and resolve the\n    thread — resolving is how you record that it was dispositioned.\n' "$B"
   [[ "$CR_STATE" == "query-failed" ]] && printf '  ⚠ CodeRabbit status could not be queried — not the same as "not configured".\n'
   $CR_SKIPPED && printf '  ⚠ CodeRabbit reported SUCCESS but its walkthrough mentions a rate limit or skipped\n    files — nobody reviewed those. `@coderabbitai review` and wait.\n'

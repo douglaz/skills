@@ -32,7 +32,18 @@ if command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   # clearance runs BEFORE the PR is opened — so an abandoned PR that targeted a release
   # branch would win, and freshness would be validated against a base the upcoming PR
   # will not use.
-  DEFAULT_BRANCH=$(gh pr view --json baseRefName,state \
+  # -R the upstream: on a fork clone `gh pr view` resolves against the fork, where the PR
+  # does not exist — so this path silently never fires in exactly the case it was added
+  # for (a PR targeting a release or stacked branch).
+  _UP=$(gh repo view --json nameWithOwner,parent -q '.parent.nameWithOwner // .nameWithOwner' 2>/dev/null || echo "")
+  # Array, not `${_UP:+-R "$_UP"}` — the quotes inside that expansion are literal, so the
+  # flag arrives malformed and the lookup silently returns nothing.
+  # `-R` requires an explicit PR selector — gh cannot infer one from the current branch
+  # once --repo is given ("argument required when using the --repo flag"), so pass the
+  # branch name. Without -R at all, a fork clone resolves against the fork, where the PR
+  # is not.
+  _RFLAG=(); [[ -n "$_UP" && -n "$BRANCH" ]] && _RFLAG=("$BRANCH" -R "$_UP")
+  DEFAULT_BRANCH=$(gh pr view "${_RFLAG[@]}" --json baseRefName,state \
     -q 'select(.state=="OPEN") | .baseRefName' 2>/dev/null || echo "")
   [[ -n "$DEFAULT_BRANCH" ]] && BASE_ORIGIN="pr"
 fi

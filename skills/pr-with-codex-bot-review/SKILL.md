@@ -365,11 +365,11 @@ Merge when the reaction-based check passes:
   # the wrapper for THIS head, and when it landed
   gh api --paginate --slurp repos/<owner>/<repo>/pulls/<N>/reviews \
     | jq -r --arg tip "$(git rev-parse HEAD)" '
-        [.[][] | select(.user.login|startswith("chatgpt-codex-connector"))
+        [.[][] | select(.user.login=="chatgpt-codex-connector[bot]" and .user.type=="Bot")
          | select(.body|test("Reviewed commit:[^0-9a-f]*"+$tip[0:7]))] | last | .submitted_at'
   # the +1 specifically — not `eyes`, which means the round is still running
   gh api repos/<owner>/<repo>/issues/<N>/reactions \
-    --jq '.[] | select(.user.login|startswith("chatgpt-codex-connector"))
+    --jq '.[] | select(.user.login=="chatgpt-codex-connector[bot]" and .user.type=="Bot")
           | select(.content=="+1") | .created_at'
   ```
 
@@ -465,12 +465,13 @@ ignoring the actual signal.**
 R=$(gh repo view --json nameWithOwner,parent -q '.parent.nameWithOwner // .nameWithOwner')
 BASE=$(gh pr view <N> -R "$R" --json baseRefName -q .baseRefName)
 gh pr merge <N> -R "$R" --squash --delete-branch --match-head-commit "$(git rev-parse HEAD)"
-git checkout "$BASE"
-# Reset from where the merge actually landed. On a fork, `origin` is your fork and may not
-# contain it at all, so `git reset --hard origin/$BASE` would silently start the next bead
-# from a tree without the code you just merged.
-git fetch "https://github.com/$R.git" "+refs/heads/$BASE:refs/remotes/upstream/$BASE"
-git reset --hard "refs/remotes/upstream/$BASE"
+# Fetch BEFORE checkout. In a single-branch fork clone neither a local `$BASE` nor
+# `origin/$BASE` exists, so `git checkout "$BASE"` fails — and with no error handling the
+# reset then runs against whatever branch is still checked out. Reset from where the merge
+# actually landed: `origin` is your fork and may not contain it at all.
+git fetch "https://github.com/$R.git" "+refs/heads/$BASE:refs/remotes/upstream/$BASE" \
+  || { echo "cannot fetch the merge target"; exit 1; }
+git checkout -B "$BASE" "refs/remotes/upstream/$BASE"
 nix build                                    # confirm master is healthy
 ```
 

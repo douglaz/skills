@@ -284,7 +284,7 @@ survives a force-push, so a stale one reads exactly like approval of the current
 
 ```bash
 gh api --paginate --slurp repos/<owner>/<repo>/pulls/<N>/reviews \
-  | jq -r '[.[][] | select(.user.login|startswith("chatgpt-codex-connector"))
+  | jq -r '[.[][] | select(.user.login=="chatgpt-codex-connector[bot]" and .user.type=="Bot")
             | .body | capture("Reviewed commit:[^0-9a-f]*(?<sha>[0-9a-f]{7,40})").sha] | last'
 ```
 

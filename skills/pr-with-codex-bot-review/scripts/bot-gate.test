@@ -98,6 +98,14 @@ check "CodeRabbit genuine SUCCESS clears" 0
 new_fix; touch "$FIX/FAIL"
 check "API failure is exit 3, never clearance" 3
 
+# An unparseable wrapper timestamp must BLOCK, not clear. This is the fail-closed half of
+# the macOS `date -d` problem and it is testable anywhere; the BSD fallback path itself
+# cannot be exercised on Linux, since shadowing GNU `-d` leaves no working `date -j`
+# either — that half is verified by inspection against the documented BSD syntax.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "not-a-timestamp" > "$FIX/reviews.json"
+threads 0 > "$FIX/threads.json"
+check "unparseable wrapper timestamp blocks" 1
+
 echo
 echo "passed $PASS, failed $FAIL"
 [[ "$FAIL" -eq 0 ]]
