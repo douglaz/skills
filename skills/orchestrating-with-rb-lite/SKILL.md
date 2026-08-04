@@ -99,7 +99,7 @@ The default reviewer panel runs three reviewers concurrently:
 
 - `codex review --base "$BASE"`
 - `claude -p ... --output-format json | jq ...`
-- `npx -y @google/gemini-cli --policy "$RUN_DIR/gemini-policy.toml" ...`
+- `npx -y @google/gemini-cli@0.53.1 --policy "$RUN_DIR/gemini-policy.toml" ...`
 
 `codex` and `claude` must be on PATH for the default panel to behave as
 intended and must also be authenticated. The default Claude reviewer needs
@@ -113,6 +113,23 @@ rb-lite process. For source/path installs, check the host shell. Gemini is
 opportunistic: if `npx` or Gemini credentials are missing, that reviewer fails
 and the panel can still proceed with the remaining successful reviewers. If you
 intentionally want a different panel, write `.rb-lite-reviewers` before running.
+
+**The Gemini version is pinned, and pinned exactly.** `npx -y` installs and runs
+whatever the registry serves at that moment, so an unpinned `@google/gemini-cli`
+means a compromised upstream release executes here with the repo checked out,
+credentials present, and — in the `.rb-lite-reviewers` line below —
+`--approval-mode yolo`. A range like `@^0.53.1` would still auto-take patch
+releases, which is the same path through a narrower door.
+
+The cost is staleness: upstream ships roughly weekly, so this pin ages. Bump it
+deliberately rather than dropping it — `npm view @google/gemini-cli version` for
+the current release, then change it in both places (here and the
+`.rb-lite-reviewers` example). A reviewer a few versions behind is a much smaller
+problem than one that installs anything.
+
+An exact pin is not a lockfile: it closes the auto-upgrade path, not every
+supply-chain path. If you want more than that, vendor the CLI or install it with
+an integrity hash instead of reaching for `npx` at all.
 
 Backlog-drain mode additionally needs `br` for bead selection/state and `gh`
 for PR creation/checks/merge. Require **`br` ≥ 0.1.45**: older builds corrupt
@@ -800,7 +817,7 @@ root before running, with one shell command per line:
 # .rb-lite-reviewers
 codex review --base "$BASE"
 set -o pipefail; claude -p "Review the diff vs $BASE. Before asserting the diff violates or overstates an invariant, or any claim about behavior in code the diff does not show, verify it by reading that code and cite file:line, else mark it a QUESTION not a finding. Tag findings P0/P1/P2/P3. Output 'No findings.' if clean." --permission-mode acceptEdits --output-format json --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch,Task,TaskOutput,TaskStop,Monitor" | jq -er 'if .is_error then error(.result // "claude reviewer returned is_error") else (.result // empty) end'
-if [[ -e node_modules/@google/gemini-cli || -L node_modules/@google/gemini-cli || -e node_modules/.bin/gemini || -L node_modules/.bin/gemini ]]; then printf "%s\n" "rb-lite: refusing to run Gemini reviewer because this repository has a local Gemini CLI package/bin that npx could prefer; customize this reviewer only if intentional" >&2; exit 1; fi; npx -y @google/gemini-cli --policy "$RUN_DIR/gemini-policy.toml" --approval-mode yolo -p "Review the diff vs $BASE. Before asserting the diff violates or overstates an invariant, or any claim about behavior in code the diff does not show, verify it by reading that code and cite file:line, else mark it a QUESTION not a finding. Tag findings P0/P1/P2/P3. Output 'No findings.' if clean."
+if [[ -e node_modules/@google/gemini-cli || -L node_modules/@google/gemini-cli || -e node_modules/.bin/gemini || -L node_modules/.bin/gemini ]]; then printf "%s\n" "rb-lite: refusing to run Gemini reviewer because this repository has a local Gemini CLI package/bin that npx could prefer; customize this reviewer only if intentional" >&2; exit 1; fi; npx -y @google/gemini-cli@0.53.1 --policy "$RUN_DIR/gemini-policy.toml" --approval-mode yolo -p "Review the diff vs $BASE. Before asserting the diff violates or overstates an invariant, or any claim about behavior in code the diff does not show, verify it by reading that code and cite file:line, else mark it a QUESTION not a finding. Tag findings P0/P1/P2/P3. Output 'No findings.' if clean."
 # Skeptical reviewer: hunts over-specification instead of bugs, so the panel has counter-pressure against scope creep
 set -o pipefail; claude -p "Review the diff vs $BASE for OVER-SPECIFICATION, not bugs. Flag any mechanism, handling, config, or abstraction that is NOT required for correctness, security, or data-safety and could be cut, simplified, or deferred. For each, give: what it is, why it isn't strictly required (what already covers the case), and a recommendation. Tag each finding 'P2: CUT', 'P2: SIMPLIFY', or 'P2: DEFER'. Do not flag missing behavior or bugs; another reviewer owns that. Output 'No findings.' if the diff is already minimal for its goal." --permission-mode acceptEdits --output-format json --allowedTools "Bash,Read,Glob,Grep" | jq -er 'if .is_error then error(.result // "skeptic reviewer returned is_error") else (.result // empty) end'
 (my-linter --json || true) | wrap-as-p-tags
