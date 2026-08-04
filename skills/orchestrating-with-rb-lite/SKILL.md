@@ -452,8 +452,8 @@ implement → review loop for each bead.
    rerun failed jobs via `gh run rerun <id> --failed`; do not keep changing
    product code just to dodge a flake.
 
-10. **Merge and reset.** Squash-merge the PR, delete the branch, fetch the
-    base branch, reset local state to the remote base, and rerun the
+10. **Merge and reset.** Squash-merge the PR, delete the branch, then reset local state
+    to *where the merge landed* — not to `origin`, which on a fork is your own copy — and rerun the
     authoritative build gate before taking the next bead:
 
     ```bash
@@ -464,10 +464,10 @@ implement → review loop for each bead.
     # not contain the upstream squash commit, so resetting to origin/$BASE silently starts
     # the next bead from a tree missing the one just merged — its PR then replays or
     # conflicts with it.
-    git fetch "https://github.com/$R.git" "+refs/heads/$BASE:refs/remotes/upstream/$BASE"
-    git checkout -B "$BASE" "refs/remotes/upstream/$BASE"
-    git fetch origin main
-    git reset --hard origin/main
+    git fetch "https://github.com/$R.git" "+refs/heads/$BASE:refs/remotes/upstream/$BASE" \
+      || { echo "cannot fetch the merge target"; exit 1; }
+    git checkout -B "$BASE" "refs/remotes/upstream/$BASE" \
+      || { echo "cannot reset to the merge target"; exit 1; }
     nix build
     ```
 

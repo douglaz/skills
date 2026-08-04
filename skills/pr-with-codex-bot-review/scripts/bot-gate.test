@@ -153,6 +153,20 @@ printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-
 echo '{"files":[{"path":"src/core.py"}]}' > "$FIX/prfiles.json"
 check "skip of an unrelated file still clears" 0
 
+# A skipped path containing a space must still intersect: an ASCII token regex reduced
+# `src/my file.py` to `file.py`, which matched nothing and cleared.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
+printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes:\\n- src/my file.py\\n"}]]' > "$FIX/issues.json"
+echo '{"files":[{"path":"src/my file.py"}]}' > "$FIX/prfiles.json"
+check "skipped path with a space still blocks" 1
+
+# CodeRabbit configured (it has commented) but no check for THIS head yet must block —
+# `absent` is not the same as "not installed".
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nwalkthrough"}]]' > "$FIX/issues.json"
+check "configured CodeRabbit with no check for this head blocks" 1
+
 # ...and the changed-files query must fail closed too. The suite had knobs for the
 # reactions and checks endpoints but not this one, so the fail-open lived in a branch no
 # fixture reached.

@@ -337,7 +337,13 @@ BASE_REMOTE=$(gh api "repos/$UP/pulls/$PRNUM" --jq .base.repo.clone_url 2>/dev/n
   || { echo "cannot resolve base repository"; exit 1; }
 git fetch -q "$BASE_REMOTE" "+refs/heads/$BASE:refs/remotes/origin/$BASE" \
   || { echo "fetch failed — base unknown, do NOT merge"; exit 1; }
-BF=$("$DS" --json | jq -r '.base_fresh')
+# One call, asserted to still name the same base: a second `drive-status` can resolve a
+# different default_branch if its PR lookup transiently fails, so base_fresh=true for
+# `main` would be accepted while the ref actually fetched was `origin/release`.
+DSJ2=$("$DS" --json)
+[ "$(printf %s "$DSJ2" | jq -r '.default_branch')" = "$BASE" ] \
+  || { echo "base changed under the check (want $BASE) — do NOT merge"; exit 1; }
+BF=$(printf %s "$DSJ2" | jq -r '.base_fresh')
 # null != false. false = genuinely behind base, and a rebase fixes it. null = the base was
 # GUESSED (no authoritative source), so freshness was never computed and no rebase can
 # help — the fix is establishing a real base, e.g. `git remote set-head origin -a`.

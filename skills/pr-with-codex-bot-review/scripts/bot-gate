@@ -213,7 +213,9 @@ fi
 # nobody reviewed them — and since the documented usage chains this exit code straight
 # into `gh pr merge`, a warning is not enough. Inspect the walkthrough before believing it.
 CR_SKIPPED=false
-if [[ "$CR_STATE" == "SUCCESS" ]]; then
+# Fetched for `absent` too: that is how we tell "CodeRabbit is not installed" from "it has
+# commented here before but has no check for this head yet", which must block.
+if [[ "$CR_STATE" == "SUCCESS" || "$CR_STATE" == "absent" ]]; then
   if CRC=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/comments" 2>/dev/null); then
     # CodeRabbit's own markers, verified against its real output: the plan notice reads
     # "PR reviews subject to [rate limits](...)" — a markdown link, so the phrase is not
@@ -228,7 +230,7 @@ if [[ "$CR_STATE" == "SUCCESS" ]]; then
     # the newest comment overall picks a reply and reads as "not skipped". Scanning ALL
     # history is the opposite error: a stale rate-limit notice would block forever and the
     # prescribed retrigger could never clear it.
-    printf '%s' "$CRC" | jq -e '[[.[][] | select(.user.login=="coderabbitai[bot]")
+    [[ "$CR_STATE" == "SUCCESS" ]] && printf '%s' "$CRC" | jq -e '[[.[][] | select(.user.login=="coderabbitai[bot]")
         | select(.body|test("auto-generated comment:";"i"))]
       | sort_by(.created_at) | last // empty
       | select(.body|test("review (paused|skipped)|rate limited by coderabbit|reviews subject to \\[?rate limits";"i"))] | length > 0' \
@@ -269,7 +271,9 @@ CR_SKIPPED_CHANGED=""
 if [[ "$CR_STATE" == "SUCCESS" ]] && ! $CR_SKIPPED && [[ -n "${CRC:-}" ]]; then
   SKIPLIST=$(printf '%s' "$CRC" | jq -r '[.[][] | select(.user.login=="coderabbitai[bot]")
       | select(.body|test("auto-generated comment:";"i"))] | sort_by(.created_at) | last // empty | .body' 2>/dev/null \
-    | sed -n '/[Ff]iles skipped from review/,/^$/p' | grep -oE '[A-Za-z0-9._/-]+\.[A-Za-z0-9]+' | sort -u)
+    | sed -n '/[Ff]iles skipped from review/,/^$/p' \
+    | sed -E 's/^[[:space:]]*[-*][[:space:]]*//; s/[[:space:]]*\([0-9]+ hunks?\)[[:space:]]*$//' \
+    | grep -E '\.[A-Za-z0-9]+$' | sed -E 's/^`|`$//g' | sort -u)
   if [[ -n "$SKIPLIST" ]]; then
     # Pipe to jq rather than `-q`, like every other query here — it keeps the raw
     # response inspectable and lets the fixture stub answer without reimplementing gh.
@@ -287,10 +291,20 @@ if [[ "$CR_STATE" == "SUCCESS" ]] && ! $CR_SKIPPED && [[ -n "${CRC:-}" ]]; then
   fi
 fi
 
+# "No check run for this head yet" is not "CodeRabbit is not installed". If it has ever
+# commented on this PR it is configured, so an absent current-head signal means it has not
+# started — a delayed app would otherwise begin reviewing after the merge already ran.
+CR_CONFIGURED=false
+if [[ -n "${CRC:-}" ]]; then
+  printf '%s' "$CRC" | jq -e '[.[][] | select(.user.login=="coderabbitai[bot]")] | length > 0' >/dev/null 2>&1 \
+    && CR_CONFIGURED=true
+fi
+
 VERDICT="BLOCKED"
 if [[ "$WRAPPER_TIP" -gt 0 ]] && $SETTLED && ! $ROUND_ACTIVE && [[ "$B" -eq 0 ]] \
    && [[ -z "$CR_SKIPPED_CHANGED" ]] \
-   && { [[ "$CR_STATE" == "absent" ]] || { [[ "$CR_STATE" == "SUCCESS" ]] && ! $CR_SKIPPED; }; }; then
+   && { { [[ "$CR_STATE" == "absent" ]] && ! $CR_CONFIGURED; } \
+        || { [[ "$CR_STATE" == "SUCCESS" ]] && ! $CR_SKIPPED; }; }; then
   VERDICT="CLEAR"
 fi
 
@@ -318,6 +332,7 @@ else
     fi
   fi
   [[ "$B" -gt 0 ]] && printf '  ⚠ %s UNRESOLVED bot thread(s). Fix each, or answer it with evidence and resolve the\n    thread — resolving is how you record that it was dispositioned.\n' "$B"
+  [[ "$CR_STATE" == "absent" ]] && $CR_CONFIGURED && printf '  ⚠ CodeRabbit has commented on this PR but has no check for THIS head yet — it has\n    not started reviewing it. Wait, or `@coderabbitai review`.\n'
   [[ "$CR_STATE" == "query-failed" ]] && printf '  ⚠ CodeRabbit status could not be queried — not the same as "not configured".\n'
   $ROUND_ACTIVE && printf '  ⚠ an `eyes` reaction is newer than the wrapper — a fresh round is running on this\n    same tip. Wait for it to finish.\n'
   [[ -n "$CR_SKIPPED_CHANGED" ]] && printf '  ⚠ CodeRabbit skipped file(s) this PR changes — nobody reviewed them:\n%s\n' "$(printf '%s' "$CR_SKIPPED_CHANGED" | sed 's/^/      /')"
