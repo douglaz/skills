@@ -445,7 +445,10 @@ PHASE_WAS="$PHASE_SOURCE"
 _BASE_KNOWN=false; [[ -n "$BASE_REF" ]] && _BASE_KNOWN=true
 _MERGED_AT_HEAD=false
 if [[ "$PR_STATE" == MERGED/* ]] && command -v gh >/dev/null 2>&1; then
-  [[ "$(gh pr view --json headRefOid -q .headRefOid 2>/dev/null)" == "$HEAD_SHA" ]] && _MERGED_AT_HEAD=true
+  # Same -R + selector as the base lookup above: a bare `gh pr view` on a fork clone
+  # queries the fork, so the merged-head exemption would never recognise its own PR.
+  [[ "$(gh pr view "${_RFLAG[@]}" --json headRefOid -q .headRefOid 2>/dev/null)" == "$HEAD_SHA" ]] \
+    && _MERGED_AT_HEAD=true
 fi
 # Not on the default branch: committed-but-unpushed closure commits there are the legacy
 # stranded state, and "go through the panel like any others" is unfollowable — they are not

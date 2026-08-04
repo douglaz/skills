@@ -162,15 +162,26 @@ fi
 # "query failed" is not "not configured": mapping both to absent would let a transient
 # network or auth failure satisfy CLEAR on a repo that DOES gate on CodeRabbit, against
 # this script's own fail-closed contract.
-if ROLLUP=$(gh pr view "$PR" -R "$REPO" --json statusCheckRollup 2>/dev/null); then
-  if CR=$(printf %s "$ROLLUP" | jq -er '[.statusCheckRollup[]? | select(.context=="CodeRabbit") | .state] | first // ""' 2>/dev/null); then
+# `gh pr checks` normalises both rollup shapes. A StatusContext carries context/state; a
+# CheckRun carries name/conclusion — selecting only on `.context` missed a CheckRun-shaped
+# CodeRabbit entirely, read it as "not configured", and cleared past a pending or failed
+# review.
+if CHECKS=$(gh pr checks "$PR" -R "$REPO" --json name,state 2>/dev/null); then
+  if CR=$(printf %s "$CHECKS" | jq -er '[.[]? | select(.name=="CodeRabbit") | .state] | first // ""' 2>/dev/null); then
     CR_STATE="${CR:-absent}"
   else
     # gh returned 0 but the body would not parse. "Could not read" is not "not configured".
     CR_STATE="query-failed"
   fi
 else
-  CR_STATE="query-failed"
+  # `gh pr checks` exits non-zero when checks are pending or failing as well as on error,
+  # so fall back to the rollup to tell those apart rather than guessing.
+  if ROLLUP=$(gh pr view "$PR" -R "$REPO" --json statusCheckRollup 2>/dev/null); then
+    CR=$(printf %s "$ROLLUP" | jq -r '[.statusCheckRollup[]? | select((.context // .name)=="CodeRabbit") | (.state // .conclusion)] | first // ""' 2>/dev/null)
+    CR_STATE="${CR:-absent}"
+  else
+    CR_STATE="query-failed"
+  fi
 fi
 
 # Two reviewers disagreed here and both were right about a real hazard: gating on the raw
@@ -184,16 +195,38 @@ fi
 CR_SKIPPED=false
 if [[ "$CR_STATE" == "SUCCESS" ]]; then
   if CRC=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/comments" 2>/dev/null); then
+    # CodeRabbit's own markers, verified against its real output: the plan notice reads
+    # "PR reviews subject to [rate limits](...)" — a markdown link, so the phrase is not
+    # contiguous — and the HTML marker is "review paused"/"rate limited by coderabbit.ai".
+    # A bare "rate limit" match
+    # would block forever on a walkthrough that merely discusses rate limiting, and the
+    # "Files skipped from review" header covers skips the skill explicitly permits — that
+    # list is for reading, not for blocking.
     printf '%s' "$CRC" | jq -e '[.[][] | select(.user.login=="coderabbitai[bot]")
-      | select(.body|test("rate limit|Review skipped|Files skipped from review";"i"))] | length > 0' \
+      | select(.body|test("review (paused|skipped)|rate limited by coderabbit|reviews subject to \\[?rate limits";"i"))] | length > 0' \
       >/dev/null 2>&1 && CR_SKIPPED=true
   else
     CR_STATE="query-failed"
   fi
 fi
 
+# A new round can start on an UNCHANGED tip (`@codex review`), so an aged wrapper plus
+# resolved threads is not proof nothing is in flight. An `eyes` reaction newer than the
+# latest wrapper means the bot is reviewing right now.
+ROUND_ACTIVE=false
+if [[ -n "$WRAPPER_AT" ]]; then
+  # Pipe to jq rather than `--jq`, like every other query here: it keeps the raw response
+  # inspectable and lets the fixture stub answer without reimplementing gh's filtering.
+  EYES_AT=$(gh api "repos/$REPO/issues/$PR/reactions" 2>/dev/null \
+    | jq -r '[.[] | select(.user.login=="chatgpt-codex-connector[bot]") | select(.content=="eyes") | .created_at] | max // ""' 2>/dev/null || echo "")
+  if [[ -n "$EYES_AT" ]]; then
+    E=$(iso_to_epoch "$EYES_AT"); W=$(iso_to_epoch "$WRAPPER_AT")
+    [[ -n "$E" && -n "$W" ]] && (( E > W )) && ROUND_ACTIVE=true
+  fi
+fi
+
 VERDICT="BLOCKED"
-if [[ "$WRAPPER_TIP" -gt 0 ]] && $SETTLED && [[ "$B" -eq 0 ]] \
+if [[ "$WRAPPER_TIP" -gt 0 ]] && $SETTLED && ! $ROUND_ACTIVE && [[ "$B" -eq 0 ]] \
    && { [[ "$CR_STATE" == "absent" ]] || { [[ "$CR_STATE" == "SUCCESS" ]] && ! $CR_SKIPPED; }; }; then
   VERDICT="CLEAR"
 fi
@@ -201,9 +234,9 @@ fi
 if $JSON; then
   jq -n --arg tip "$TIP" --arg v "$VERDICT" --arg cr "$CR_STATE" \
         --argjson w "$WRAPPER_TIP" --argjson a "$A" --argjson b "$B" \
-        --arg settled "$SETTLED" --arg cr_skipped "$CR_SKIPPED" \
+        --arg settled "$SETTLED" --arg cr_skipped "$CR_SKIPPED" --arg round_active "$ROUND_ACTIVE" \
     '{tip:$tip,verdict:$v,wrapper_on_tip:$w,unresolved_first:$a,unresolved_after:$b,
-      settled:($settled=="true"),coderabbit:$cr,coderabbit_skipped:($cr_skipped=="true")}'
+      settled:($settled=="true"),coderabbit:$cr,coderabbit_skipped:($cr_skipped=="true"),round_active:($round_active=="true")}'
 else
   printf 'tip              %s\n' "${TIP:0:10}"
   printf 'codex wrapper    %s on this tip\n' "$WRAPPER_TIP"
@@ -216,6 +249,7 @@ else
     || printf '  ⚠ unresolved-thread count changed during the settle window — findings are still arriving.\n'; }
   [[ "$B" -gt 0 ]] && printf '  ⚠ %s UNRESOLVED bot thread(s). Fix each, or answer it with evidence and resolve the\n    thread — resolving is how you record that it was dispositioned.\n' "$B"
   [[ "$CR_STATE" == "query-failed" ]] && printf '  ⚠ CodeRabbit status could not be queried — not the same as "not configured".\n'
+  $ROUND_ACTIVE && printf '  ⚠ an `eyes` reaction is newer than the wrapper — a fresh round is running on this\n    same tip. Wait for it to finish.\n'
   $CR_SKIPPED && printf '  ⚠ CodeRabbit reported SUCCESS but its walkthrough mentions a rate limit or skipped\n    files — nobody reviewed those. `@coderabbitai review` and wait.\n'
 fi
 

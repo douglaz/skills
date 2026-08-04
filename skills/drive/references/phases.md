@@ -225,7 +225,11 @@ BASE=$("$DS" --json | jq -r '.default_branch')
 # The first clearance runs BEFORE any PR exists — that is the prescribed ordering — so a
 # hard PR requirement here would deadlock every drive at its first HARDEN. Ask the PR when
 # there is one; otherwise ask whether this repo is a fork; otherwise origin is the target.
-if PRNUM=$(gh pr view --json number -q .number 2>/dev/null) && [ -n "$PRNUM" ]; then
+UP=$(gh repo view --json nameWithOwner,parent -q '.parent.nameWithOwner // .nameWithOwner' 2>/dev/null)
+BR=$(git branch --show-current)
+# `-R` needs an explicit selector — gh cannot infer the PR from the branch once --repo is
+# given — and without `-R` a fork clone looks for the PR in the fork, where it is not.
+if PRNUM=$(gh pr view "$BR" ${UP:+-R} ${UP:+"$UP"} --json number -q .number 2>/dev/null) && [ -n "$PRNUM" ]; then
   # -R the upstream: `{owner}/{repo}` expands to the CURRENT repo, which on a fork is
   # yours, not where the PR lives.
   UP=$(gh repo view --json nameWithOwner,parent -q '.parent.nameWithOwner // .nameWithOwner')

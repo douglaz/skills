@@ -22,7 +22,9 @@ f() { cat "$FIX/$1" 2>/dev/null || echo "$2"; }
 case "$*" in
   *"repo view"*nameWithOwner*)  f repo.txt "owner/repo" ;;
   *"pr view"*number*)           f prnum.txt "16" ;;
+  *"pr checks"*)                f checks.json '[]' ;;
   *"pr view"*statusCheckRollup*) f rollup.json '{"statusCheckRollup":[]}' ;;
+  *reactions*)                  f reactions.json '[]' ;;
   *graphql*)                    f threads.json '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}' ;;
   *"pulls/"*"/reviews"*)        f reviews.json '[[]]' ;;
   *"issues/"*"/comments"*)      f issues.json '[[]]' ;;
@@ -36,9 +38,12 @@ chmod +x "$WORK/bin/gh"
 # bash, git, jq and coreutils resolve normally. Replacing PATH outright fails on distros
 # where bash does not live in /bin (exit 127 for everything).
 
-OLD_UTC=$(date -u -d '2000-01-01' +%Y-%m-%dT%H:%M:%SZ)
+# Fixed literals, not `date -d`: that is GNU-only, and on BSD it would leave these empty
+# and fail the CLEAR fixtures — the suite reproducing the very portability bug it exists
+# to catch. Only NOW needs the clock, and `date -u +FORMAT` is portable.
+OLD_UTC="2000-01-01T00:00:00Z"
+FUTURE_UTC="2999-01-01T00:00:00Z"
 NOW_UTC=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-FUTURE_UTC=$(date -u -d "+1 hour" +%Y-%m-%dT%H:%M:%SZ)
 
 wrapper() {  # $1 = login, $2 = submitted_at  (shape matches `gh api --paginate --slurp`)
   printf '[[{"user":{"login":"%s","type":"Bot"},"submitted_at":"%s","body":"Reviewed commit: `%s`"}]]' \
@@ -86,14 +91,38 @@ new_fix; wrapper "chatgpt-codex-connector-attacker" "$OLD_UTC" > "$FIX/reviews.j
 check "spoofed login (prefix match) blocks" 1
 
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-echo '{"statusCheckRollup":[{"context":"CodeRabbit","state":"SUCCESS"}]}' > "$FIX/rollup.json"
-printf '[[{"user":{"login":"coderabbitai[bot]"},"body":"Review skipped due to rate limit"}]]' > "$FIX/issues.json"
-check "CodeRabbit rate-limit skip blocks" 1
+echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
+# CodeRabbit's real wording: the phrase is broken by a markdown link, so a naive
+# "reviews are subject to rate limits" pattern misses it entirely (it did).
+printf '[[{"user":{"login":"coderabbitai[bot]"},"body":"Your plan includes PR reviews subject to [rate limits](https://docs.coderabbit.ai/x)."}]]' > "$FIX/issues.json"
+check "CodeRabbit rate-limit notice (real wording) blocks" 1
 
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-echo '{"statusCheckRollup":[{"context":"CodeRabbit","state":"SUCCESS"}]}' > "$FIX/rollup.json"
+echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
+printf '[[{"user":{"login":"coderabbitai[bot]"},"body":"<!-- auto-generated comment: review paused by coderabbit.ai -->"}]]' > "$FIX/issues.json"
+check "CodeRabbit paused-review marker blocks" 1
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
+printf '[[{"user":{"login":"coderabbitai[bot]"},"body":"Files skipped from review due to trivial changes: docs/x.md"}]]' > "$FIX/issues.json"
+check "permitted file skips do not block" 0
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
 printf '[[{"user":{"login":"coderabbitai[bot]"},"body":"walkthrough, all files reviewed"}]]' > "$FIX/issues.json"
 check "CodeRabbit genuine SUCCESS clears" 0
+
+# A walkthrough that merely DISCUSSES rate limiting must not be read as a skip — the old
+# bare `rate limit` substring blocked such a PR forever.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
+printf '[[{"user":{"login":"coderabbitai[bot]"},"body":"Adds a rate limit to the API client"}]]' > "$FIX/issues.json"
+check "walkthrough mentioning rate limiting still clears" 0
+
+# A fresh `eyes` newer than the wrapper means a round is running on the same tip.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":"%s"}]' "$NOW_UTC" > "$FIX/reactions.json"
+check "active round (eyes newer than wrapper) blocks" 1
 
 new_fix; touch "$FIX/FAIL"
 check "API failure is exit 3, never clearance" 3
