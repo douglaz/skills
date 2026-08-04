@@ -352,20 +352,13 @@ For each P-badge finding:
 
 Merge when the reaction-based check passes:
 
-- Codex bot reaction on PR body is `+1`, **and that `+1` belongs to the current round.**
-  The reaction carries no SHA, only a timestamp; its review wrapper carries the SHA
-  (`**Reviewed commit:** <sha>`). Two separate things must hold, and a wrapper for the new
-  head does not establish the second:
-  1. The latest wrapper's `Reviewed commit:` equals the tip.
-  2. The `+1` is **newer than your last push**. A surviving `+1` from before a
-     force-push, plus a fresh wrapper, plus a momentary zero line-comments (the wrapper
-     often lands before the findings do) satisfies a naive check and merges before the
-     findings arrive.
+- The codex bot has finished **this** round on **this** head. The reaction carries no
+  SHA, only a timestamp, so it cannot establish that by itself; the review wrapper carries
+  the SHA (`**Reviewed commit:** <sha>`) and is what binds the review to the tree.
 
-  Anchor the reaction to the **wrapper for the current head**, not to a git timestamp.
-  `git log -1 --format=%cI` is the commit's authored/amended time, not when it was
-  pushed — an amended commit can easily predate a stale `+1` — and it says nothing about
-  whether the bot's round has finished:
+  (Do not substitute a git timestamp for this. `git log -1 --format=%cI` is the commit's
+  authored/amended time, not when it was pushed, so an amended commit can predate an old
+  reaction and the comparison proves nothing.)
 
   ```bash
   # the wrapper for THIS head, and when it landed
@@ -379,12 +372,25 @@ Merge when the reaction-based check passes:
           | select(.content=="+1") | .created_at'
   ```
 
-  The `+1` must be **at or after** that wrapper's `submitted_at`. Filter on
-  `content=="+1"`: a fresh `eyes` is the bot telling you it is *still reviewing*, and an
-  unfiltered query would read it as post-push activity. If there is no wrapper for the
-  tip, or no `+1` after it, the round is not finished — wait, or `@codex review`. The
-  wrapper can also land before the line comments do, so re-check comments against the tip
-  immediately before merging rather than reusing an earlier read.
+  **The wrapper is the gate; the `+1` only corroborates.** Do not require the `+1` to
+  post-date the wrapper — measured on a 7-round PR, the bot left **6 wrappers and zero
+  reactions**, because `+1` appears only on a round it finds nothing in. GitHub also
+  allows one reaction per user per item, so a `+1` from an earlier clean round may persist
+  with its original `created_at` and never refresh. Requiring a fresh `+1` deadlocks both
+  cases.
+
+  What must hold before merging:
+
+  1. A wrapper exists whose `Reviewed commit:` equals the tip. That is the bot stating,
+     with a SHA, which tree it read.
+  2. No unresolved line comments against the tip, re-queried *immediately* before the
+     merge — the wrapper often lands before the findings do, so an earlier read is not
+     evidence.
+  3. If a `+1` exists, it is consistent with (1) and (2); if it does not, that is normal
+     on a PR the bot has ever had findings on, and is not a reason to wait.
+
+  Filter reactions on `content=="+1"` when you do read them: a fresh `eyes` means the bot
+  is *still reviewing*, and an unfiltered query counts it as approval-shaped activity.
 
   Then pass `git rev-parse HEAD` to `--match-head-commit` at merge time so a push landing
   after this check makes the merge refuse rather than take it.

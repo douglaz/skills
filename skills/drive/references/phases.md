@@ -192,6 +192,20 @@ the one that will land.
 
 Three preconditions, all of which must hold, and every one of which has bitten:
 
+0. **The committed tree is the tree the panel read.** A mutating commit hook
+   (`lint-staged`, a formatter, a codegen step) rewrites content during `git commit`, so
+   the commit you are about to clear can differ from what the panel reviewed — and the
+   clean-worktree check below still passes, because the hook staged its own changes.
+   Compare the tree objects, not the status:
+
+   ```bash
+   git diff --quiet HEAD -- . && [ "$(git rev-parse HEAD^{tree})" = "$REVIEWED_TREE" ] \
+     || { echo "commit hook altered the tree — re-run the panel"; exit 1; }
+   ```
+
+   where `REVIEWED_TREE=$(git rev-parse HEAD^{tree})` was captured when the panel went
+   clean. If the repo has no such hook this is a no-op; if it does, this is the only
+   check that catches it.
 1. **The tree is clean.** `multi-reviewer-loop` deliberately leaves its fixes uncommitted,
    and reviews tracked working-tree changes — so `git rev-parse HEAD` at that moment names
    a commit that does *not* contain what was just reviewed. Recording it would make
@@ -207,7 +221,10 @@ Three preconditions, all of which must hold, and every one of which has bitten:
 ```bash
 DS=<the drive-status path resolved in Phase 0>
 [ -z "$(git status --porcelain)" ] || { echo "tree dirty — commit first, do NOT clear"; exit 1; }
-git fetch -q origin || { echo "fetch failed — base unknown, do NOT clear"; exit 1; }
+# Name the ref: a --single-branch clone's refspec covers only the feature branch, so a
+# bare `git fetch origin` never creates origin/<base> and freshness stays unknowable.
+BASE=$("$DS" --json | jq -r '.default_branch')
+git fetch -q origin "$BASE" || { echo "fetch failed — base unknown, do NOT clear"; exit 1; }
 [ "$("$DS" --json | jq -r '.base_fresh')" = "true" ] || { echo "REBASE FIRST — not cleared"; exit 1; }
 
 STATE=$(git rev-parse --git-path drive/state)
@@ -357,8 +374,14 @@ And verify the closure actually happened. `br close` exits 0 even when the flush
 writes the JSONL failed, because the error is caught and logged at debug level:
 
 ```bash
-br close <id>; git status --porcelain -- '*.beads*.jsonl'   # must be non-empty
+br close <id> || { echo "br close failed"; exit 1; }
+[ -n "$(git status --porcelain -- '*.beads*.jsonl')" ] \
+  || { echo "closure not persisted — auto-flush was swallowed"; exit 1; }
 ```
+
+`&&`/`||`, not `;`: a semicolon discards `br close`'s exit status, and `git status` exits
+0 whether or not it printed anything — so the pair would report success on a closure that
+never happened.
 
 The assertion holds only where a mutation definitely occurred, as it did here. A flush
 over a graph that was already committed and unchanged legitimately reports nothing, so a

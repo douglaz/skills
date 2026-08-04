@@ -206,7 +206,8 @@ For each pass `N` from `1` to `MAX_PASSES`:
 
    ```bash
    PASS_ID=$(printf '%02d' "$N")
-   TO=$(command -v timeout || command -v gtimeout)   # gtimeout on Homebrew coreutils
+   TO=$(command -v timeout || command -v gtimeout) \
+     || { echo "no GNU timeout — see references/reviewer-panel.md"; exit 1; }
    "$TO" --kill-after=60 1500 codex review --base "$DIFF_BASE" \
      -c 'model="gpt-5.6-sol"' -c 'model_reasoning_effort="xhigh"' \
      </dev/null >"$REVIEW_DIR/pass-${PASS_ID}.codex.txt" 2>"$REVIEW_DIR/pass-${PASS_ID}.codex.stderr.txt" &

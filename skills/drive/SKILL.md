@@ -219,7 +219,8 @@ A phase closes on evidence or it does not close.
   closed bead is not a closed bead until you have seen the JSONL change:
 
   ```bash
-  br close <id>; git status --porcelain -- '*.beads*.jsonl'   # must be non-empty
+  br close <id> || { echo "br close failed"; exit 1; }
+  [ -n "$(git status --porcelain -- '*.beads*.jsonl')" ] || { echo "not persisted"; exit 1; }
   ```
 
 
@@ -314,8 +315,8 @@ lands rather than this checkout; and a `DONE` record with an unmerged `Pending:`
 an ancestor of that tip, and a clean worktree. All three: edits made after clearance leave
 `HEAD` untouched, so the marker still matches while the commit a merge takes does not
 contain them. A commit cannot honestly record that its own SHA was reviewed, because writing the
-record changes the SHA — so the record does not try. `Phase:` stops at HARDEN and LAND is
-computed. This is why there is no write-ahead, no "leave the line alone during re-review"
+record changes the SHA — so the record does not try. `Phase:` simply never names LAND;
+it is computed. This is why there is no write-ahead, no "leave the line alone during re-review"
 rule, and no downgrade path for an unproven LAND: nothing can claim LAND falsely because
 nothing claims it at all. (ADR 0002.)
 

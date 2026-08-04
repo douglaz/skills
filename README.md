@@ -45,7 +45,7 @@ root carries the committed narrative, while per-checkout facts (which tree the p
 cleared) live under the git dir and are correctly absent from a fresh clone.
 
 LAND is *derived*, never recorded: a commit cannot honestly say its own SHA was reviewed,
-because writing the record changes the SHA. `Phase:` stops at HARDEN and LAND is computed
+because writing the record changes the SHA. `Phase:` never records LAND — it is computed
 from `cleared == tip`, a base still fresh enough that the squash lands the reviewed tree,
 and a clean worktree — post-clearance edits are not in the commit a merge would take. See `docs/adr/` for that decision and two others.
 

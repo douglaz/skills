@@ -106,7 +106,8 @@ Both reviewers start together and neither sees the other's output.
 RC_TIMEOUT=1500   # 25 min; a normal pass is 5-15
 # Homebrew coreutils installs GNU timeout as `gtimeout`; hardcoding `timeout` makes both
 # reviewers exit command-not-found on macOS and the loop can never reach clean.
-TO=$(command -v timeout || command -v gtimeout) || { echo "no GNU timeout — see below"; }
+TO=$(command -v timeout || command -v gtimeout) \
+  || { echo "no GNU timeout (nor gtimeout) — bound the pass another way; see below"; exit 1; }
 
 "$TO" --kill-after=60 "$RC_TIMEOUT" \
   codex review --base "$DIFF_BASE" \
@@ -190,8 +191,11 @@ Notes on the flags:
   file" is what covers the rest. If that matters for your repo, drop `Bash` and
   hand the reviewer a pre-computed diff on stdin instead.
 - The `timeout` wrapper in the invocation above is **not optional** — see the note
-  there. Without GNU `timeout` on the host, bound the pass some other way and say so
-  in the summary; an unbounded reviewer can hang the whole loop silently.
+  there. The guard `exit 1`s rather than warning: with `$TO` empty the invocation becomes
+  `"" --kill-after=…`, i.e. exit 127 for both reviewers, which is a confusing way to
+  discover a missing dependency. If the host genuinely has neither binary, bound the pass
+  some other way and say so in the summary; an unbounded reviewer can hang the loop
+  silently.
 
 ## Unwrapping the Claude reviewer's output
 

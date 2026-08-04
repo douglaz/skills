@@ -16,7 +16,14 @@ ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || {
 cd "$ROOT" || exit 0
 
 BRANCH=$(git branch --show-current 2>/dev/null || echo "")
-DEFAULT_BRANCH=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
+# The PR's own base outranks every heuristic below: a PR can target a release or stacked
+# branch rather than the repo default, and validating freshness against the wrong base
+# would report base_fresh=true while the tree GitHub actually squashes onto has moved.
+DEFAULT_BRANCH=""
+if command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
+  DEFAULT_BRANCH=$(gh pr view --json baseRefName -q .baseRefName 2>/dev/null || echo "")
+fi
+[[ -z "$DEFAULT_BRANCH" ]] && DEFAULT_BRANCH=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
 # Probe remote candidates too: a fresh clone of a single branch has origin/main but no
 # local main, and without this BASE_REF stays empty, BRANCH_COMMITS reads 0, and HARDEN
 # becomes unreachable for committed work.
@@ -503,7 +510,7 @@ printf '\nphase: %s   (source: %s)\n' "$PHASE" "$PHASE_SOURCE"
 # LAND is derived, so a RECORDED LAND is a stale or hand-edited file. Say so rather than
 # silently ignoring the line — an unexplained discard is the failure this warns about.
 $RECORDED_LAND && printf '  ⚠ DRIVE.md records `Phase: LAND`, which is no longer a recordable phase — LAND is\n    derived from `cleared == tip`, a fresh base and a clean tree. The line was IGNORED. Rewrite it to\n    HARDEN; the record should never claim a phase only this checkout can prove.\n'
-[[ "$PHASE" != "LAND" ]] && $DONE_ON_BRANCH && printf '  ⚠ DRIVE.md says DONE but this branch has %s unmerged commit(s) — that record\n    describes the state AFTER this PR lands. Treating it as HARDEN: these commits are\n    unreviewed and go through the panel like any others.\n' "$BRANCH_COMMITS"
+[[ "$PHASE" != "LAND" ]] && $DONE_ON_BRANCH && printf '  ⚠ %s says DONE but this branch has %s unmerged commit(s) — that record\n    describes the state AFTER this PR lands. Treating it as HARDEN: these commits are\n    unreviewed and go through the panel like any others.\n' "$PHASE_WAS" "$BRANCH_COMMITS"
 $DONE_PENDING && printf '  ⚠ DONE is pending metadata PR #%s, so this is WAITING_FOR_MERGE, not DONE. Query that\n    PR: merged means the drive really is done; open means go finish landing it.\n' "$DRIVE_PENDING"
 # Silent otherwise: clearance matches but the tree moved, and every SHA check still passes.
 $LAND_BLOCKED_DIRTY && printf '  ⚠ clearance matches the tip and the base is fresh, but the worktree is dirty\n    (%s modified, %s untracked) — so this is NOT LAND. Those edits are not in the commit\n    a merge would take. Commit and re-clear, or discard them.\n' "$DIRTY_COUNT" "$UNTRACKED"
