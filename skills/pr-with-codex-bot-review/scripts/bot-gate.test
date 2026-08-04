@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# bot-gate.test — fixture tests for bot-gate, run with a stubbed `gh`.
+#
+# Every case here corresponds to a real defect found in review. bot-gate had four separate
+# fail-open bugs and two deadlocks across its first day, each caught only by a reviewer
+# reading it; these assert the behaviour instead.
+#
+# Usage: ./bot-gate.test          (exits 0 if all pass)
+
+set -uo pipefail
+HERE=$(cd "$(dirname "$0")" && pwd)
+GATE="$HERE/bot-gate"
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+PASS=0; FAIL=0
+
+# The stub reads $FIX (a directory of canned responses) and answers by endpoint shape.
+mkdir -p "$WORK/bin"
+cat > "$WORK/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+f() { cat "$FIX/$1" 2>/dev/null || echo "$2"; }
+case "$*" in
+  *"repo view"*nameWithOwner*)  f repo.txt "owner/repo" ;;
+  *"pr view"*number*)           f prnum.txt "16" ;;
+  *"pr view"*statusCheckRollup*) f rollup.json '{"statusCheckRollup":[]}' ;;
+  *graphql*)                    f threads.json '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}' ;;
+  *"pulls/"*"/reviews"*)        f reviews.json '[[]]' ;;
+  *"issues/"*"/comments"*)      f issues.json '[[]]' ;;
+  *) echo "[]" ;;
+esac
+[ -f "$FIX/FAIL" ] && exit 1
+exit 0
+STUB
+chmod +x "$WORK/bin/gh"
+# Only `gh` is stubbed: $WORK/bin is PREPENDED to the real PATH so it shadows gh while
+# bash, git, jq and coreutils resolve normally. Replacing PATH outright fails on distros
+# where bash does not live in /bin (exit 127 for everything).
+
+OLD_UTC=$(date -u -d '2000-01-01' +%Y-%m-%dT%H:%M:%SZ)
+NOW_UTC=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+FUTURE_UTC=$(date -u -d "+1 hour" +%Y-%m-%dT%H:%M:%SZ)
+
+wrapper() {  # $1 = login, $2 = submitted_at  (shape matches `gh api --paginate --slurp`)
+  printf '[[{"user":{"login":"%s","type":"Bot"},"submitted_at":"%s","body":"Reviewed commit: `%s`"}]]' \
+    "$1" "$2" "$TIP"
+}
+threads() {  # $1 = count of unresolved bot threads
+  local n=$1 nodes=""
+  for ((i=0;i<n;i++)); do nodes="$nodes${nodes:+,}{\"isResolved\":false,\"comments\":{\"nodes\":[{\"author\":{\"__typename\":\"Bot\",\"login\":\"chatgpt-codex-connector\"}}]}}"; done
+  printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[%s]}}}}}' "$nodes"
+}
+
+check() {  # $1 = name, $2 = expected exit
+  local name=$1 want=$2
+  PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 --settle-seconds 0 >/dev/null 2>&1
+  local got=$?
+  if [[ "$got" == "$want" ]]; then PASS=$((PASS+1)); printf '  ok   %-46s (exit %s)\n' "$name" "$got"
+  else FAIL=$((FAIL+1)); printf '  FAIL %-46s want %s got %s\n' "$name" "$want" "$got"; fi
+}
+
+# A real repo so `git rev-parse HEAD` works.
+git init -q "$WORK/repo"; cd "$WORK/repo"
+git -c user.email=t@t -c user.name=t commit -q --allow-empty -m x
+TIP=$(git rev-parse HEAD)
+
+new_fix() { FIX="$WORK/fix"; rm -rf "$FIX"; mkdir -p "$FIX"; echo "owner/repo" > "$FIX/repo.txt"; echo 16 > "$FIX/prnum.txt"; }
+
+echo "bot-gate fixtures"
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+check "clean: aged wrapper, 0 unresolved, no CodeRabbit" 0
+
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+check "no wrapper for tip blocks" 1
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 3 > "$FIX/threads.json"
+check "unresolved bot threads block" 1
+
+# A wrapper dated in the FUTURE is younger than any window, so the age check can be
+# exercised with settle 0 — passing a large --settle-seconds would make the gate really
+# sleep that long. Also covers clock skew between the runner and GitHub.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$FUTURE_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+check "wrapper younger than settle window blocks" 1
+
+new_fix; wrapper "chatgpt-codex-connector-attacker" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+check "spoofed login (prefix match) blocks" 1
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo '{"statusCheckRollup":[{"context":"CodeRabbit","state":"SUCCESS"}]}' > "$FIX/rollup.json"
+printf '[[{"user":{"login":"coderabbitai[bot]"},"body":"Review skipped due to rate limit"}]]' > "$FIX/issues.json"
+check "CodeRabbit rate-limit skip blocks" 1
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo '{"statusCheckRollup":[{"context":"CodeRabbit","state":"SUCCESS"}]}' > "$FIX/rollup.json"
+printf '[[{"user":{"login":"coderabbitai[bot]"},"body":"walkthrough, all files reviewed"}]]' > "$FIX/issues.json"
+check "CodeRabbit genuine SUCCESS clears" 0
+
+new_fix; touch "$FIX/FAIL"
+check "API failure is exit 3, never clearance" 3
+
+echo
+echo "passed $PASS, failed $FAIL"
+[[ "$FAIL" -eq 0 ]]
