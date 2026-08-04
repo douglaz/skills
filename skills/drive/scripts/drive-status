@@ -323,8 +323,11 @@ HEAD_SHA=$(git rev-parse --verify --quiet HEAD 2>/dev/null || echo "")
 CLEARED_MATCHES_TIP=false
 _c_lc=$(printf '%s' "$DRIVE_CLEARED" | tr '[:upper:]' '[:lower:]')
 [[ -n "$_c_lc" && -n "$HEAD_SHA" && "$HEAD_SHA" == "$_c_lc"* ]] && CLEARED_MATCHES_TIP=true
-# ...and the base must still be the one the panel diffed against. Absent in the marker
-# (a pre-upgrade state file) counts as unverified, not as matching.
+# ...and the base must still be the one the panel diffed against. `== true`, not
+# `!= false`: a marker with no `cleared_base` line (written before this field existed, or
+# hand-trimmed) is UNVERIFIED, and unverified is not the same as verified-and-fine — the
+# same rule BASE_FRESH follows three lines down. The cost is one extra clearance for a
+# drive that was already in flight; the warning below says so.
 CLEARED_BASE_MATCHES="n/a"
 if [[ -n "$DRIVE_CLEARED_BASE" ]]; then
   _b_lc=$(printf '%s' "$DRIVE_CLEARED_BASE" | tr '[:upper:]' '[:lower:]')
@@ -505,7 +508,7 @@ fi
 # `cleared == tip` — untouched. Reproduced: dirty=1, phase=LAND, no warning.
 LAND_BLOCKED_DIRTY=false
 if [[ "$PHASE" == "HARDEN" ]] && $CLEARED_MATCHES_TIP && [[ "$BASE_FRESH" == "true" ]] \
-   && [[ "$CLEARED_BASE_MATCHES" != "false" ]]; then
+   && [[ "$CLEARED_BASE_MATCHES" == "true" ]]; then
   if [[ "$DIRTY_COUNT" -eq 0 && "$UNTRACKED" -eq 0 ]]; then
     PHASE="LAND"
     PHASE_SOURCE="derived (cleared == tip, base fresh, tree clean)"
@@ -603,6 +606,7 @@ $DONE_ON_BRANCH && $ON_DEFAULT && [[ "$PHASE" != "LAND" ]] && printf '  ⚠ %s s
 $DONE_ON_BRANCH && ! $ON_DEFAULT && [[ "$PHASE" != "LAND" && "$BRANCH_COMMITS" -gt 0 ]] && printf '  ⚠ %s says DONE but this branch has %s unmerged commit(s) — that record\n    describes the state AFTER this PR lands. Treating it as HARDEN: these commits are\n    unreviewed and go through the panel like any others.\n' "$PHASE_WAS" "$BRANCH_COMMITS"
 $DONE_PENDING && printf '  ⚠ DONE is pending metadata PR #%s, so this is WAITING_FOR_MERGE, not DONE. Query that\n    PR: merged means the drive really is done; open means go finish landing it.\n' "$DRIVE_PENDING"
 # Silent otherwise: clearance matches but the tree moved, and every SHA check still passes.
+[[ "$CLEARED_BASE_MATCHES" == "n/a" ]] && $CLEARED_MATCHES_TIP && printf '  ⚠ the clearance marker has no `cleared_base` — it predates that field, so the base the\n    panel diffed against is unknown. Re-clear (one panel run); LAND is refused until then.\n'
 [[ "$CLEARED_BASE_MATCHES" == "false" ]] && printf '  ⚠ the PR base moved since clearance (marker %s, now %s) — the panel diffed a\n    different surface. Re-run it.\n' "${DRIVE_CLEARED_BASE:0:10}" "$(git rev-parse --short=10 "${BASE_REF:-HEAD}" 2>/dev/null)"
 $LAND_BLOCKED_DIRTY && printf '  ⚠ clearance matches the tip and the base is fresh, but the worktree is dirty\n    (%s modified, %s untracked) — so this is NOT LAND. Those edits are not in the commit\n    a merge would take. Commit and re-clear, or discard them.\n' "$DIRTY_COUNT" "$UNTRACKED"
 # Base drift is invisible in every SHA the driver checks, so it has to be surfaced here.

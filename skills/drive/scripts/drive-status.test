@@ -62,7 +62,10 @@ new_repo() {  # a feature branch one commit ahead of master, with an origin
 }
 add_code()   { printf 'c\n' > "$REPO/a.py"; G add -A; G commit -q -m work; }
 record()     { printf '%s\n' "$1" > "$REPO/DRIVE.md"; G add -A; G commit -q -m rec; }
-clear_at()   { mkdir -p "$REPO/.git/drive"; printf 'cleared=%s\n' "${1:-$(G rev-parse HEAD)}" > "$REPO/.git/drive/state"; }
+clear_at()   { mkdir -p "$REPO/.git/drive"
+               { printf 'cleared=%s\n' "${1:-$(G rev-parse HEAD)}"
+                 printf 'cleared_base=%s\n' "$(G rev-parse master)"; } > "$REPO/.git/drive/state"; }
+clear_tip_only() { mkdir -p "$REPO/.git/drive"; printf 'cleared=%s\n' "$(G rev-parse HEAD)" > "$REPO/.git/drive/state"; }
 
 echo "drive-status fixtures"
 
@@ -105,15 +108,19 @@ G checkout -q master; G merge -q feat 2>/dev/null || true; G push -q origin mast
 check "landed DONE with a pending closure PR" WAITING_FOR_MERGE
 
 # A PR retargeted after clearance expands the diff the panel reviewed without moving HEAD.
+# Written directly, not appended: the parser takes the FIRST cleared_base line, so
+# appending a second leaves the good one in force and the case passes vacuously.
 new_repo; add_code; record '**Phase:** HARDEN'
-clear_at
-printf 'cleared_base=%s\n' "$(G rev-parse master)" >> "$REPO/.git/drive/state"
+mkdir -p "$REPO/.git/drive"
+{ printf 'cleared=%s\n' "$(G rev-parse HEAD)"; printf 'cleared_base=deadbeef1234\n'; } > "$REPO/.git/drive/state"
+check "clearance whose base moved refuses LAND" HARDEN
+
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
 check "clearance with a matching base derives LAND" LAND
 
-new_repo; add_code; record '**Phase:** HARDEN'
-clear_at
-printf 'cleared_base=deadbeef1234\n' >> "$REPO/.git/drive/state"
-check "clearance whose base moved refuses LAND" HARDEN
+# A marker with no cleared_base at all is UNVERIFIED, not grandfathered.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_tip_only
+check "clearance without a recorded base refuses LAND" HARDEN
 
 # A closure committed locally on the default branch, never pushed: reporting DONE there
 # meant a fresh clone still saw the bead open.

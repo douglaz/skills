@@ -271,7 +271,16 @@ CR_SKIPPED_CHANGED=""
 if [[ "$CR_STATE" == "SUCCESS" ]] && ! $CR_SKIPPED && [[ -n "${CRC:-}" ]]; then
   SKIPLIST=$(printf '%s' "$CRC" | jq -r '[.[][] | select(.user.login=="coderabbitai[bot]")
       | select(.body|test("auto-generated comment:";"i"))] | sort_by(.created_at) | last // empty | .body' 2>/dev/null \
-    | sed -n '/[Ff]iles skipped from review/,/^#|^<\/details>/p' \
+    | awk '
+        tolower($0) ~ /files skipped from review/ {
+          inskip=1
+          # Inline form: the path can sit on the header line after the colon.
+          if (match($0, /:[[:space:]]*[^[:space:]].*$/)) print substr($0, RSTART+1)
+          next
+        }
+        inskip && (/^<\/details>/ || /^#/ || tolower($0) ~ /files selected for processing/ \
+                   || tolower($0) ~ /^[[:space:]]*<summary>/) { inskip=0 }
+        inskip' \
     | sed -E 's/^[[:space:]]*[-*][[:space:]]+//' \
     | sed -E 's/[[:space:]]*\([0-9]+ hunks?\)[[:space:]]*$//' \
     | sed -E 's/`//g; s/\*\*//g' \

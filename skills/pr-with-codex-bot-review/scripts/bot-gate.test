@@ -106,7 +106,25 @@ check "CodeRabbit paused-review marker blocks" 1
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
 printf '[[{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes: docs/x.md"}]]' > "$FIX/issues.json"
+printf '[[{"filename":"src/core.py"}]]' > "$FIX/prfiles.json"
 check "permitted file skips do not block" 0
+
+# The inline form must still be PARSED — the earlier fixture asserted it "does not block"
+# only because the path was unreachable, which encoded a fail-open as expected behaviour.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
+printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes: src/core.py"}]]' > "$FIX/issues.json"
+printf '[[{"filename":"src/core.py"}]]' > "$FIX/prfiles.json"
+check "inline skip naming a changed file blocks" 1
+
+# Content AFTER the skip section must not be swallowed: a "Files selected for processing"
+# list names files CodeRabbit REVIEWED, and treating them as skipped deadlocked every real
+# walkthrough.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
+printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes:\\n- docs/unrelated.md\\n</details>\\nFiles selected for processing:\\n- src/core.py\\n"}]]' > "$FIX/issues.json"
+printf '[[{"filename":"src/core.py"}]]' > "$FIX/prfiles.json"
+check "reviewed-files list after the skip section clears" 0
 
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"
