@@ -311,7 +311,8 @@ Ships with `scripts/bot-gate`, which reports whether anything says the review bo
 still working on the *current* tip, or have left findings nobody dispositioned: a submitted
 review naming this tip, no `eyes` reaction newer than it, no `base_ref_changed` newer than
 it either (a retarget grows the diff without moving the head), and zero unresolved threads
-from either gated bot. It fails closed on any API error or missing tool — exit 0, 1 blocked,
+from either gated bot. It fails closed on any API error or missing tool **in the signals that feed those four** —
+a CodeRabbit query failure is reported and does not block, deliberately. Exit 0, 1 blocked,
 2 usage, 3 cannot determine, and "cannot determine" is never clearance.
 
 CodeRabbit's status is printed and ignored. It is a PR-level signal, not evidence about a

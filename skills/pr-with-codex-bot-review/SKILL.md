@@ -370,7 +370,8 @@ For each P-badge finding:
 
 ### 7. Decide based on the wrapper, not on time
 
-Merge when the reaction-based check passes:
+Merge when the **wrapper**-based check passes — the reaction is corroboration, never the
+condition:
 
 - The codex bot has finished **this** round on **this** head. The reaction carries no
   SHA, only a timestamp, so it cannot establish that by itself; the review wrapper carries
@@ -449,6 +450,9 @@ Merge when the reaction-based check passes:
               "$HOME/.agents/skills/pr-with-codex-bot-review"; do
        [ -x "$d/scripts/bot-gate" ] && { BOT_GATE="$d/scripts/bot-gate"; break; }
      done
+     # Guard the resolution. Unset, `"$BOT_GATE" 42` runs an empty command and its non-zero
+     # status reads as "the gate blocked this PR" when the gate was never found.
+     [ -n "${BOT_GATE:-}" ] || { echo "bot-gate not found — see below"; exit 1; }
      "$BOT_GATE" 42 || exit 1
      ```
 

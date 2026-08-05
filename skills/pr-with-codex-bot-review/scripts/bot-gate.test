@@ -387,10 +387,10 @@ printf '[[{"user":{"login":"chatgpt-codex-connector[bot]","type":"Bot"},"submitt
 threads 0 > "$FIX/threads.json"
 check "a wrapper with an empty submitted_at blocks" 1
 
-# "Cannot determine" is exit 3, and CodeRabbit is the one path that reached the verdict
-# with an unknown state: both status queries failing set CR_STATE=query-failed, which then
-# exited 1 like an ordinary block. A caller cannot tell "not done" from "could not ask",
-# and a retry loop keyed on exit 1 would spin on an outage forever.
+# CodeRabbit's state is REPORTED, so failing to read it cannot make the verdict
+# indeterminate — exit follows the other four conditions. This was exit 3 while CodeRabbit
+# still gated (correctly: "could not ask" is not "not done"), and ADR 0004 changed what
+# the gate claims, not this fixture's shape. Do not "restore" exit 3 here.
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 echo 'x' > "$FIX/checksfail"; echo 'x' > "$FIX/rollupfail"
 check_reports "unreadable CodeRabbit status is reported, not fatal" "coderabbit       query-failed"

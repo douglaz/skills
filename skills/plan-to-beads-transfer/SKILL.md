@@ -41,6 +41,19 @@ Stop and report plan gaps when any of these are still fuzzy:
 
 ## Workflow
 
+**Before step 1**, capture the baseline the persistence check at step 10 compares
+against. It must be taken before any `br` mutation, and `MUTATED` must be set as you go —
+the fingerprint alone cannot tell "wrote nothing" from "had nothing to write":
+
+```bash
+beads_fingerprint() {   # portable: macOS sort has no -z and BSD xargs has no -r
+  git ls-files -co --exclude-standard -- '*.beads.jsonl' '.beads/*.jsonl' \
+    | LC_ALL=C sort | while IFS= read -r f; do printf '%s ' "$f"; cksum < "$f"; done | cksum
+}
+BEFORE=$(beads_fingerprint)
+MUTATED=0   # set to 1 at each `br create`/`update`/`close` you actually issue
+```
+
 1. Establish the current graph baseline before creating anything:
 
    ```bash
@@ -84,15 +97,11 @@ Stop and report plan gaps when any of these are still fuzzy:
     wrote anything, so the bare check cannot support the guarantee it claims.
 
     ```bash
-    beads_fingerprint() {   # portable: macOS sort has no -z and BSD xargs has no -r
-      git ls-files -co --exclude-standard -- '*.beads.jsonl' '.beads/*.jsonl' \
-        | LC_ALL=C sort | while IFS= read -r f; do printf '%s ' "$f"; cksum < "$f"; done | cksum
-    }
-    BEFORE=$(beads_fingerprint)     # before step 1's br mutations
-    # Set MUTATED=1 at each `br create`/`update`/`close` you actually issue. A run that
-    # issues none is a no-op, not a failure, and only a flag you set can tell them apart —
-    # the fingerprint alone cannot, since both look like "nothing changed".
-    MUTATED=0
+    # $BEFORE and $MUTATED come from the setup block above step 1 — they have to, because
+    # every `br` mutation happens in steps 1-9. Capturing them here would take the
+    # fingerprint AFTER the writes and reset the flag, leaving the assertion below unable
+    # to fail: a check that runs but cannot detect anything.
+    [ -n "${BEFORE:-}" ] || { echo "BEFORE unset — run the setup block before step 1"; exit 1; }
     br sync --flush-only || { echo "flush failed"; exit 1; }
     # Only assert drift when this run actually issued a mutating `br` command. A refresh
     # whose graph already matches, or a convergence round with zero justified changes, is a

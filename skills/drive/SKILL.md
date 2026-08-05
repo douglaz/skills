@@ -127,8 +127,14 @@ block is present *and* current. If it says absent or stale, invoke `agents-md` w
 
 These rules only bind agents that read them, and `AGENTS.md` is the only place they travel
 — including to the rb-lite implementers and reviewer panels this skill spawns. `agents-md`
-writes but never commits: leave the edit uncommitted and let the first BUILD branch carry
-it through review like any other change.
+writes but never commits.
+
+**Who carries the edit depends on where the drive entered.** If a BUILD branch is coming,
+leave it uncommitted and let that branch carry it through review like any other change. If
+one is not — a drive resuming at HARDEN or LAND, or the tiny-change path that skips BUILD
+outright — that instruction has no addressee, and the edit sits dirty until LAND's
+clean-tree guard refuses the merge. Commit it onto the current branch instead and let the
+panel and the bots review it there. Do not leave it for a branch that will never exist.
 
 ### Reading the `pr` field
 

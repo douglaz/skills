@@ -391,7 +391,9 @@ several rounds a bare stream prints one SHA per round with no indication which i
 (`--slurp` cannot combine with `--jq`, hence the pipe.)
 
 If the codex bot reacted `+1` with no wrapper, you have no SHA anchor: `@codex review` and
-wait for one. CodeRabbit's check is per-commit, but a `SUCCESS` may be a *skip* — read the
+CodeRabbit's status is a **PR-level signal**, not per-commit: it lands on whatever head
+exists when the bot posts it, so a green on the tip is not evidence about the tip. ADR 0004
+records the measurement. `bot-gate` prints it and does not gate on it; neither should you.
 "Files skipped from review" list and re-trigger unless the skip was expected.
 
 **2. Do not demand `merged SHA == reviewed SHA`.** The merge is a squash, so it always

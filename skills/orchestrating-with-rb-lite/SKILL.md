@@ -574,7 +574,21 @@ implement → review loop for each bead.
     awareness, and import is last-write-wins, so the closure leaks. See
     `docs/adr/0003-bead-closure-stays-post-merge.md` for the code evidence.
 
-12. **Loop.** Return to `br ready --limit 10`. Stop when the queue is empty **and** any
+12. **Loop.** Return to `br ready --limit 10` — but **on a resumed drain, look for an
+    in-flight closure PR before selecting work.** A closure lives on its metadata branch
+    until it merges, so a fresh clone of the default branch sees the old JSONL with the
+    bead still open and will happily rebuild and re-merge work that is already done. The
+    queue cannot tell you this; only the forge can:
+
+    ```bash
+    UP=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
+    gh pr list -R "$UP" --state open --json number,headRefName,title   # closure PR in flight?
+    ```
+
+    If one is open, land it before taking another bead. `drive`'s resume checklist does
+    the same discovery for the same reason (`skills/drive/references/phases.md` § LAND).
+
+    Stop when the queue is empty **and** any
     final metadata PR from step 11 has merged — an open closure PR means the drain is
     still in flight, however empty the queue looks. Also stop when
     the user says stop, a bead needs human product/security judgment, or a
