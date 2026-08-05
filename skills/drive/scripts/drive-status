@@ -32,6 +32,7 @@ BASE_ORIGIN="none"
 # `_RFLAG` was initialized unconditionally for this exact reason; `_UP` was not.
 _UP=""
 _RREPO=""
+_BASE_REPO_UNKNOWN=false
 _RFLAG=()
 if command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   # OPEN only. `gh pr view` falls back to the most recent CLOSED or MERGED PR on the
@@ -47,7 +48,11 @@ if command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   # its base. Pick the candidate whose PR head is this checkout's HEAD; that is the only
   # question with one answer. bot-gate and § 8 resolve the same way.
   _SELF_R=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "")
-  _PARENT=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end' 2>/dev/null || echo "")
+  _PARENT_RESOLVED=true
+  if ! _PARENT=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end' 2>/dev/null); then
+    _PARENT=""
+    _PARENT_RESOLVED=false
+  fi
   _HEAD_NOW=$(git rev-parse --verify --quiet HEAD 2>/dev/null || echo "")
   # PR IDENTITY, then head match as a tiebreak — not head match as the entry condition.
   # Local HEAD is routinely ahead of the PR head mid-HARDEN (an unpushed commit), and
@@ -70,8 +75,17 @@ if command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
     [[ "$_oid" == "$_HEAD_NOW" ]] && { _UP="$_c"; break; }  # exact head wins outright
   done
   # `-R` still needs a repo even with no PR: fall back to the parent when there is one, so
-  # the lookup below asks the place a PR would live. This is NOT pr_repo.
-  _RREPO="${_UP:-${_PARENT:-$_SELF_R}}"
+  # the lookup below asks the place a PR would live. A failed parent query is UNKNOWN, not
+  # proof this is not a fork: falling back to the fork there validates against the wrong
+  # merge target and can derive LAND over a stale base. This is NOT pr_repo.
+  if [[ -n "$_UP" ]]; then
+    _RREPO="$_UP"
+  elif $_PARENT_RESOLVED; then
+    _RREPO="${_PARENT:-$_SELF_R}"
+  else
+    _RREPO=""
+    _BASE_REPO_UNKNOWN=true
+  fi
   # An array, so the flag and its value stay two words without relying on how a `${x:+...}`
   # expansion splits. (The often-repeated claim that quotes inside `${_UP:+-R "$_UP"}` are
   # literal is FALSE — verified: `x="a b"; printf '[%s]' ${x:+-R "$x"}` prints `[-R][a b]`.
@@ -447,7 +461,8 @@ fi
 if $ON_DEFAULT && [[ "$PR_STATE" == OPEN* ]]; then ON_DEFAULT=false; fi
 
 BASE_FRESH="n/a"
-if [[ -n "$BASE_REF" && -n "$HEAD_SHA" && "$BASE_ORIGIN" != "guessed" ]] && ! $ON_DEFAULT; then
+if [[ -n "$BASE_REF" && -n "$HEAD_SHA" && "$BASE_ORIGIN" != "guessed" ]] \
+   && ! $_BASE_REPO_UNKNOWN && ! $ON_DEFAULT; then
   if git merge-base --is-ancestor "$BASE_REF" HEAD 2>/dev/null; then BASE_FRESH=true; else BASE_FRESH=false; fi
 fi
 
@@ -762,6 +777,7 @@ fi
 $LAND_BLOCKED_DIRTY && printf '  ⚠ clearance matches the tip and the base is fresh, but the worktree is dirty\n    (%s modified, %s untracked) — so this is NOT LAND. Those edits are not in the commit\n    a merge would take. Commit and re-clear, or discard them.\n' "$DIRTY_COUNT" "$UNTRACKED"
 # Base drift is invisible in every SHA the driver checks, so it has to be surfaced here.
 [[ "$BASE_FRESH" == "false" ]] && printf '  ⚠ %s has advanced since this branch forked. A squash merge replays onto the CURRENT\n    base, so what lands is a tree no panel and no bot reviewed — while every SHA still\n    matches. Rebase or merge base in, then re-clear before merging.\n' "${BASE_REF:-the base}"
+$_BASE_REPO_UNKNOWN && printf '  ⚠ the parent-repository lookup failed, so the merge target is unknown. The fork itself\n    is not a safe fallback: its base may lag upstream. LAND is refused until base_repo resolves.\n'
 # A present DRIVE.md whose phase cannot be used is the silently-resolved fallback
 # whether the Phase line is malformed or missing entirely — warn on both.
 if [[ "$DRIVE_MD" == "present" ]] && ! $RECORD_VALID && ! $RECORDED_LAND; then

@@ -207,7 +207,8 @@ mkdir -p "$STATE_DIR"
 # The OID as well as the name. A same-named base that is force-pushed BACKWARD while the
 # panel runs leaves panel_base equal and the rewound base still an ancestor of HEAD, so a
 # name-only pin agrees and clearance records a base the panel never diffed against.
-_PB=$("$DS" --json | jq -r '.default_branch')
+_DSP=$("$DS" --json)
+_PB=$(printf %s "$_DSP" | jq -r '.default_branch')
 # FETCH BEFORE PINNING. Two failures share this cause. Pinning `origin/$_PB` unfetched
 # records whatever the last fetch left there, so the clearance-time comparison reads the
 # same stale ref on both sides and passes vacuously — the check cannot see the rewind it
@@ -225,8 +226,9 @@ _PB=$("$DS" --json | jq -r '.default_branch')
 # pr_repo named the fork, so this pinned the fork's base tip while the clearance snippet
 # below fetched the PARENT's into the same ref. The OID check then failed on every attempt
 # and told you to re-run the panel, which re-pinned the same ref. Both snippets read
-# base_repo now, so they cannot disagree.
-_UPP=$("$DS" --json | jq -r '.base_repo // ""')
+# base_repo now, so they cannot disagree. Read both fields from one snapshot: two detector
+# calls can transiently resolve different PRs and pair repo B with repo A's branch.
+_UPP=$(printf %s "$_DSP" | jq -r '.base_repo // ""')
 [ -n "$_UPP" ] && _UPP="https://github.com/$_UPP" || _UPP=origin
 git fetch -q "$_UPP" "+refs/heads/$_PB:refs/remotes/origin/$_PB" \
   || { echo "cannot fetch $_PB — the panel's base is unknown, do NOT start the panel"; exit 1; }
@@ -275,7 +277,8 @@ DS=<the drive-status path resolved in Phase 0>
 # On a fork PR `origin` is YOUR fork, while GitHub merges into the upstream base repo —
 # fetching origin/$BASE would validate freshness against a stale fork branch. Ask the PR
 # for its base repo and fetch from there.
-BASE=$("$DS" --json | jq -r '.default_branch')
+DS_PRE=$("$DS" --json)
+BASE=$(printf %s "$DS_PRE" | jq -r '.default_branch')
 # Precondition 4. Everything below validates whatever base is CURRENT — so if the PR was
 # retargeted mid-panel, the fetch, the ancestry test and the recorded `cleared_base` would
 # all agree about a branch no reviewer diffed against. Compare with what was pinned before
@@ -302,9 +305,9 @@ PANEL_BASE_OID=$(sed -n 's/^panel_base_oid=//p' "$STATE_DIR/panel" 2>/dev/null |
 # parent's, and the OID assertion failed on every attempt — telling you to re-run a
 # 15-minute panel that re-pinned the same ref. Eleven sites in this repo have now gone
 # wrong re-deriving the upstream; the detector computes it once and both snippets read it.
-# Its own call: $DSJ below is deliberately taken AFTER the fetch, to read a freshness that
-# only exists once the ref is updated. This one has to run before it.
-BASE_REMOTE=$("$DS" --json | jq -r '.base_repo // ""')
+# DS_PRE pairs the branch and repository in one resolution. $DSJ below is deliberately
+# taken AFTER the fetch, to read a freshness that only exists once the ref is updated.
+BASE_REMOTE=$(printf %s "$DS_PRE" | jq -r '.base_repo // ""')
 [ -n "$BASE_REMOTE" ] && BASE_REMOTE="https://github.com/$BASE_REMOTE" || BASE_REMOTE=origin
 git fetch -q "$BASE_REMOTE" "+refs/heads/$BASE:refs/remotes/origin/$BASE" \
   || { echo "fetch failed — base unknown, do NOT clear"; exit 1; }
@@ -422,13 +425,13 @@ again immediately before merging:
 
 ```bash
 DS=<the drive-status path resolved in Phase 0>
-BASE=$("$DS" --json | jq -r '.default_branch')
 # Re-derived here: this snippet runs in a different session from HARDEN's, after the whole
 # bot-round cycle, so it cannot inherit variables from it. A fork PR merges into the
 # upstream base repo while `origin` is your fork.
 # REST, not `gh pr view --json baseRepository` — that field does not exist, and without
 # `set -e` the failure is silent and falls back to origin, i.e. the fork.
 DSJ2_PRE=$("$DS" --json)   # before the fetch; $DSJ2 below is taken after it, deliberately
+BASE=$(printf %s "$DSJ2_PRE" | jq -r '.default_branch')
 # Same single resolution as clearance uses. Hand-rolling it here forced the parent, so a
 # fork-hosted PR was invisible and LAND could never merge it — and it could disagree with
 # the ref the panel was pinned against, which is the deadlock the pre-panel pin hit.
@@ -602,14 +605,15 @@ closed). Scope matters here as much as at BUILD entry: a scoped goal is DONE whe
 is empty, not when the repository is. Waiting on the global backlog turns a finished
 milestone into an open-ended drain the user never asked for.
 
-**Unless a closure PR is still open.** From a fresh clone this is not visible in the
-record at all (see LAND above) — check `gh pr list -R <upstream> --state open` before
-concluding the drive is unfinished — a bare `gh pr list` in a fork clone queries the fork,
-where the closure PR is not. A record reading `DONE · Pending: metadata PR
+**Unless a closure PR is still unmerged.** From a fresh clone this is not visible in the
+record at all (see LAND above) — check `gh pr list -R <upstream> --state all` before
+concluding the drive is unfinished. An OPEN one still needs landing; a CLOSED-but-unmerged
+one must be reopened or replaced rather than rebuilding the bead. A bare `gh pr list` in a
+fork clone queries the fork, where the closure PR is not. A record reading `DONE · Pending: metadata PR
 #N` means "DONE once #N merges" — the merged file cannot state its own post-merge status,
 so the driver queries. `drive-status` reports that state as `WAITING_FOR_MERGE`, not
 `DONE`, precisely so a resumed session goes and lands the PR instead of reporting a
-finished drive whose closure is still open.
+finished drive whose closure is still unmerged.
 
 Report what landed, what is deferred and why, and stop. This is the one place a summary is
 legitimately the end of the turn.

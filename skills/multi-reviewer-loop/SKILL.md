@@ -171,12 +171,12 @@ a reviewer.
      # else: no open PR — leave DIFF_BASE unset and try the next candidate.
      ```
 
-   **A candidate equal to HEAD is INELIGIBLE — skip it and keep going down the ladder.**
-   On a pushed feature branch `@{upstream}` is `origin/<feature>`, which resolves to HEAD;
-   `git diff` against it is empty and both reviewers return clean having read nothing. That
-   is the normal pre-PR HARDEN state, so treat it as "this candidate does not qualify" and
-   fall through to `origin/HEAD` or the forge default — not as a hard failure, which would
-   stop the panel in the very state the drive prescribes.
+   **The feature branch's HEAD-equal upstream is INELIGIBLE — skip that ref and keep going
+   down the ladder.** On a pushed feature branch `@{upstream}` is `origin/<feature>`, which
+   resolves to HEAD; `git diff` against it is empty and both reviewers return clean having
+   read nothing. Other candidates may legitimately equal HEAD when the entire review
+   surface is staged, unstaged, or untracked work on a branch just cut from the base, so
+   OID equality alone cannot disqualify them.
 
    Only when the ladder is EXHAUSTED with no eligible candidate is it a resolution
    failure. Say so and stop then; do not review air.
@@ -194,10 +194,13 @@ a reviewer.
             origin/main main origin/master master; do
      [ -n "$c" ] || continue
      git rev-parse --verify --quiet "$c" >/dev/null 2>&1 || continue
-     [ "$(git rev-parse "$c")" = "$(git rev-parse HEAD)" ] && continue   # equals HEAD: skip
+     if [ -n "$UPSTREAM" ] && [ "$c" = "$UPSTREAM" ] \
+        && [ "$(git rev-parse "$c")" = "$(git rev-parse HEAD)" ]; then
+       continue   # the feature tracking ref would hide all worktree-only changes
+     fi
      DIFF_BASE="$c"; break
    done
-   [ -n "${DIFF_BASE:-}" ] || { echo "no base candidate resolves to anything but HEAD"; exit 1; }
+   [ -n "${DIFF_BASE:-}" ] || { echo "no eligible base candidate resolves"; exit 1; }
    ```
    - current branch upstream from `git rev-parse --abbrev-ref --symbolic-full-name @{upstream}`
    - remote default branch from `git symbolic-ref refs/remotes/origin/HEAD`

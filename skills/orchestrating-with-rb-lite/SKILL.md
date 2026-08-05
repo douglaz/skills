@@ -521,8 +521,12 @@ implement → review loop for each bead.
       [ "$_h" = "$MERGING_SHA" ] && { R="$_r"; break; }
     done
     [ -n "$R" ] || { echo "cannot find PR <pr> for the pinned SHA"; exit 1; }
-    BASE=$(gh pr view <pr> -R "$R" --json baseRefName -q .baseRefName)
-    [ -n "$BASE" ] || { echo "cannot resolve the base branch"; exit 1; }
+    PR_REFS=$(gh pr view <pr> -R "$R" --json baseRefName,headRefName) \
+      || { echo "cannot resolve the PR branches"; exit 1; }
+    BASE=$(printf %s "$PR_REFS" | jq -r '.baseRefName // ""')
+    HEAD_BRANCH=$(printf %s "$PR_REFS" | jq -r '.headRefName // ""')
+    [ -n "$BASE" ] && [ -n "$HEAD_BRANCH" ] \
+      || { echo "cannot resolve the PR branches"; exit 1; }
     # Check the merge's exit status. `--delete-branch` makes gh switch branches as a side
     # effect, so a FAILED merge still leaves you somewhere plausible-looking — and step 11
     # then closes the bead for a merge that never happened, which is the exact state this
@@ -565,11 +569,16 @@ implement → review loop for each bead.
       || { echo "cannot fetch the merge target"; echo "  (on a private repo cloned over SSH this is usually missing git credentials for https, not a missing base)"; exit 1; }
     # `checkout -B` moves the branch ref unconditionally, and a clean worktree does not
     # protect committed work: any local commit on $BASE that upstream lacks becomes
-    # unreachable. Fast-forward only, and stop rather than guess on divergence.
+    # unreachable. A same-name fork PR is different: local $BASE is the feature head, and
+    # the squash commit cannot contain it. Allow only the verified, pinned PR head itself;
+    # a later local commit still refuses the reset.
     if git show-ref --verify --quiet "refs/heads/$BASE" \
        && ! git merge-base --is-ancestor "$BASE" "refs/remotes/upstream/$BASE"; then
-      echo "local $BASE has commits upstream does not — refusing to reset; rebase or push them first"
-      exit 1
+      if [ "$HEAD_BRANCH" != "$BASE" ] \
+         || [ "$(git rev-parse "refs/heads/$BASE")" != "$MERGING_SHA" ]; then
+        echo "local $BASE has commits upstream does not — refusing to reset; rebase or push them first"
+        exit 1
+      fi
     fi
     git checkout -B "$BASE" "refs/remotes/upstream/$BASE" \
       || { echo "cannot reset to the merge target"; exit 1; }

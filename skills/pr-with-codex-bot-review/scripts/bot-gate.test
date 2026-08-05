@@ -254,6 +254,13 @@ printf '[[{"event":"base_ref_changed","created_at":"%s"}]]' "$OLD_UTC" > "$FIX/t
 printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$MID_UTC" > "$FIX/issues.json"
 check "a retarget followed by an explicit review clears" 0
 
+# Mentioning the command in prose does not request a round. Treating any substring match
+# as explicit lets quoted instructions post-date a retarget and clear a diff no bot read.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$NEW_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"base_ref_changed","created_at":"%s"}]]' "$OLD_UTC" > "$FIX/timeline.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"per the skill, run `@codex review` after retargeting"}]]' "$MID_UTC" > "$FIX/issues.json"
+check "quoted review text does not clear a retarget" 1
+
 # The bot can read the old diff, then the base can move, then the bot can submit its
 # wrapper. The wrapper is newer than the move but still describes the old surface.
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$NEW_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
@@ -350,6 +357,18 @@ fi
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$NOW_UTC" > "$FIX/issues.json"
 check "a rerun requested after the wrapper blocks" 1
+
+# The two consumers want OPPOSITE errors, so they get different matches. BLOCKING takes
+# the loose one: a decorated but real trigger must still block, and a false positive here
+# only makes you wait. Anchoring this direction — which the first fix for the clearing hole
+# did — means `@codex review please` stops blocking while that round is in flight.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review please"}]]' "$NOW_UTC" > "$FIX/issues.json"
+check "a decorated real trigger still blocks" 1
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review - retargeted to main"}]]' "$NOW_UTC" > "$FIX/issues.json"
+check "a trigger with a trailing note still blocks" 1
 
 # ...and one from BEFORE the wrapper is the normal case: it is the round that produced it.
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$NOW_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"

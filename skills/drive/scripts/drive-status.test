@@ -19,6 +19,9 @@ mkdir -p "$WORK/bin"
 cat > "$WORK/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 [ -f "$FIX/ghfail" ] && exit 1
+if [ -f "$FIX/parentfail" ] && [[ "$*" == *"repo view"*parent* ]]; then
+  exit 1
+fi
 if [ -f "$FIX/no-pr" ] && [[ "$*" == *"pr view"* ]]; then
   printf '%s\n' "$*" >> "$FIX/gh.calls"
   exit 1
@@ -260,6 +263,16 @@ echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/self.t
 echo "upstream/repo" > "$FIX/default-repo.txt"; echo release > "$FIX/default-branch.txt"
 touch "$FIX/no-pr"
 check_field "a pre-PR fork uses the parent default branch" default_branch release
+
+# A failed parent query is not evidence that this is a non-fork. Falling back to the
+# fork itself makes its stale base look authoritative and can promote a cleared tree to
+# LAND even though the real upstream base was never resolved.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+echo "forkowner/repo" > "$FIX/self.txt"
+touch "$FIX/parentfail" "$FIX/no-pr"
+check_field "a failed parent lookup leaves base repo unknown" base_repo null
+check_field "a failed parent lookup leaves freshness unknown" base_fresh null
+check "a failed parent lookup refuses LAND" HARDEN
 
 # The later forge fallback must keep the selected repository too. A transient failure in
 # the first selected-repo query must not make the fallback silently query the fork.

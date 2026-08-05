@@ -309,9 +309,27 @@ if [[ -n "$WRAPPER_AT" ]] && [[ -n "${ALL_COMMENTS:-}" ]]; then
   # EVERY trigger, not `last`. Taking only the final one meant an undated trigger followed
   # by an older dated one was invisible — the same collapse passes 8-11 swept out of the
   # retarget and eyes checks, left in the one site added after them.
-  _TRIGGERS=$(printf '%s' "$ALL_COMMENTS" \
-    | jq -r '.[][] | select((.body // "") | test("@codex[[:space:]]+review"; "i"))
-             | if ((.created_at // "") | length) == 0 then "@undated@" else .created_at end' 2>/dev/null) \
+  # TWO matches, because the two consumers want opposite errors.
+  #
+  # BLOCKING (RERUN_REQUESTED) takes the LOOSE match: any mention might be a real trigger,
+  # and missing one clears the gate while a requested round is in flight. A false positive
+  # here only makes you wait.
+  #
+  # CLEARING (LAST_REVIEW_REQUEST_BEFORE_WRAPPER) takes the STRICT, command-only match: it
+  # is the evidence that a post-retarget round actually ran, so a prose sentence or a code
+  # fence quoting `@codex review` must not count — that admits a diff no bot read.
+  #
+  # One list for both is wrong in whichever direction it is tuned. Anchoring both (as the
+  # first fix for the clearing hole did) means `@codex review please` — a real trigger —
+  # stops blocking.
+  _mk_triggers() {  # $1 = jq test expression
+    printf '%s' "$ALL_COMMENTS" \
+      | jq -r --arg re "$1" '.[][] | select((.body // "") | test($re; "i"))
+               | if ((.created_at // "") | length) == 0 then "@undated@" else .created_at end' 2>/dev/null
+  }
+  _TRIGGERS=$(_mk_triggers "@codex[[:space:]]+review") \
+    || { echo "BLOCKED: cannot read PR comments" >&2; exit 3; }
+  _TRIGGERS_STRICT=$(_mk_triggers "^[[:space:]]*@codex[[:space:]]+review[[:space:]]*$") \
     || { echo "BLOCKED: cannot read PR comments" >&2; exit 3; }
   if [[ -n "$_TRIGGERS" ]]; then
     [[ -n "$_W" ]] || RERUN_REQUESTED=true
@@ -319,12 +337,18 @@ if [[ -n "$WRAPPER_AT" ]] && [[ -n "${ALL_COMMENTS:-}" ]]; then
       _T=$(iso_to_epoch "$_tt")
       if [[ -z "$_T" ]]; then RERUN_REQUESTED=true
       elif [[ -n "$_W" ]] && (( _T >= _W )); then RERUN_REQUESTED=true; fi
-      if [[ -n "$_T" && -n "$_W" ]] && (( _T < _W )) \
+    done <<< "$_TRIGGERS"
+  fi
+  # Clearing evidence comes only from the strict list.
+  if [[ -n "$_TRIGGERS_STRICT" && -n "$_W" ]]; then
+    while IFS= read -r _ts; do
+      _T=$(iso_to_epoch "$_ts") || true
+      if [[ -n "$_T" ]] && (( _T < _W )) \
          && { [[ -z "$LAST_REVIEW_REQUEST_BEFORE_WRAPPER" ]] \
               || (( _T > LAST_REVIEW_REQUEST_BEFORE_WRAPPER )); }; then
         LAST_REVIEW_REQUEST_BEFORE_WRAPPER="$_T"
       fi
-    done <<< "$_TRIGGERS"
+    done <<< "$_TRIGGERS_STRICT"
   fi
 fi
 

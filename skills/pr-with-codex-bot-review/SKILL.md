@@ -577,8 +577,12 @@ for _c in ${UP:+"$UP"} "$SELF"; do
     && { R="$_c"; break; }
 done
 [ -n "$R" ] || { echo "no PR <N> whose head is this tree in ${UP:+$UP or }$SELF"; exit 1; }
-BASE=$(gh pr view <N> -R "$R" --json baseRefName -q .baseRefName)
-[ -n "$BASE" ] || { echo "cannot resolve the base branch"; exit 1; }
+PR_REFS=$(gh pr view <N> -R "$R" --json baseRefName,headRefName) \
+  || { echo "cannot resolve the PR branches"; exit 1; }
+BASE=$(printf %s "$PR_REFS" | jq -r '.baseRefName // ""')
+HEAD_BRANCH=$(printf %s "$PR_REFS" | jq -r '.headRefName // ""')
+[ -n "$BASE" ] && [ -n "$HEAD_BRANCH" ] \
+  || { echo "cannot resolve the PR branches"; exit 1; }
 
 # Fetch the base BEFORE merging, not after, because the answer decides whether to merge at
 # all. Bot rounds take time and the base moves during them; `bot-gate` reasons about the
@@ -646,11 +650,16 @@ git fetch "https://github.com/$R.git" "+refs/heads/$BASE:refs/remotes/upstream/$
 # `checkout -B` repoints the branch ref unconditionally, and a clean worktree does not
 # protect COMMITTED work: a local bead closure or DRIVE.md update on $BASE awaiting its
 # metadata PR — a state this skill's own LAND flow produces — becomes unreachable except
-# via reflog. Fast-forward only; stop rather than guess on divergence.
+# via reflog. The exception is a same-name fork PR: local $BASE is the verified feature
+# head, and a squash commit does not descend from it. Matching the reviewed OID distinguishes
+# that head from later local-only commits, which must still stop the reset.
 if git show-ref --verify --quiet "refs/heads/$BASE" \
    && ! git merge-base --is-ancestor "$BASE" "refs/remotes/upstream/$BASE"; then
-  echo "local $BASE has commits upstream does not — refusing to reset; push or rebase them first"
-  exit 1
+  if [ "$HEAD_BRANCH" != "$BASE" ] \
+     || [ "$(git rev-parse "refs/heads/$BASE")" != "$REVIEWED_TIP" ]; then
+    echo "local $BASE has commits upstream does not — refusing to reset; push or rebase them first"
+    exit 1
+  fi
 fi
 git checkout -B "$BASE" "refs/remotes/upstream/$BASE" \
   || { echo "cannot reset to the merge target — do NOT treat what follows as a check of it"; exit 1; }
