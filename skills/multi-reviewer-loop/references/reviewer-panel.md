@@ -318,7 +318,7 @@ code yourself.
 | Claude reviewer returns prose but no `[P*]` and no `No findings.` | `$FABLE_OUT` | Ambiguous, not clean. Re-run once; if it repeats, the prompt file is likely truncated — rewrite it. |
 | `.permission_denials` contains `Bash`/`Read`/`Glob`/`Grep` | `$FABLE_RAW` | The reviewer was blocked from looking. Confirm `--allowedTools` lists every tool in `--tools`, then re-run that reviewer. |
 | `.permission_denials` contains only `Edit`/`Write`/`NotebookEdit` | `$FABLE_RAW` | Working as intended — the read-only guard fired. Not a failure; do not re-run. |
-| Either reviewer times out (exit 124) | the partial output file | Treat as failed for that pass. Do not mine a truncated review for findings. |
+| Either reviewer times out (exit 124 **or 137**) | the partial output file | Treat as failed for that pass. Do not mine a truncated review for findings. 137 is the `--kill-after` path — counting only 124 spends another full timeout on the same hung reviewer. |
 | Both fail in the same pass | both stderr files | Stop the loop. Nothing reviewed the code; report `BLOCKED`. |
 
 A pass that lost a reviewer is `DEGRADED`. The loop can still fix what the

@@ -410,8 +410,9 @@ Merge when the reaction-based check passes:
      codex review naming this tip, no `eyes` reaction post-dating it, no `base_ref_changed`
      post-dating it either (a retarget grows the diff without moving the head, so the
      review covered less than it appears to), and zero unresolved review threads from
-     either gated bot. It fails closed on any API error, missing tool,
-     or unparseable response in the signals that feed those three.
+     either gated bot. It fails closed on any API error, missing tool, or unparseable
+     response in the signals that feed all four — the timeline query behind the retarget
+     check included.
 
      **CodeRabbit's status is not one of them, deliberately.** It is a PR-level signal — it
      lands on whatever head exists when the bot posts it and carries nothing binding it to
@@ -716,15 +717,20 @@ the commit message anyway, so the PR title is mostly cosmetic.
 
 ## Reference: real PR examples from this session
 
+These are observations from real PRs, kept as history. Where a lesson here reads as
+advice about *reactions*, § 5 and § 7 supersede it: reactions were the doctrine when
+these were written, and measuring 19 rounds later showed `+1` firing zero times. The
+events are still accurate; the conclusions drawn from them at the time were not.
+
 | PR | What happened | Lesson |
 |---|---|---|
-| #186 | Small schema fix; bot reacted `+1` 4 min after merge (raced) | Reaction is the signal; check it before merging |
+| #186 | Small schema fix; bot reacted `+1` 4 min after merge (raced) | The merge beat the round. A reaction cannot tell you this — it carries no SHA; § 7's wrapper check is what would have caught it |
 | #187 | 9ni.8.5 reconciliation; bot left review wrapper, no findings, no reaction in window | Sometimes the bot doesn't react at all on substantial PRs; line comments are then the source of truth |
 | #189 | Issue #188 first attempt; bot left findings, addressed; final reaction `+1` | Standard happy-path flow |
 | #190 | 9ni.8.6 parsimonious-creation; CI failed on rebase clippy, fixed with amend, second pass green; bot `+1` | Rebase before squash to catch lint regressions |
-| #191 | README docs; bot reacted `+1` 13 min before I merged but I didn't check | I was looking at the wrong API; reactions are cheap |
+| #191 | README docs; bot reacted `+1` 13 min before I merged but I didn't check | I was looking at the wrong API. Cheap to read — but a `+1` is not the merge condition, and later measurement found it fires on almost no round at all |
 | #192 | force-complete amendment loss; bot found P2 about empty-amendment status text → fixed → `+1` | P2 still worth addressing |
 | #193 | Issue #188 reopen attempt; bot pass-2 found P1 about retry session; addressed → `+1` | Saw "addressing P1 introduces new P1" |
 | #194 | `contains` injection; bot's two rounds both flagged subschema issues, merged anyway, then OpenAI rejected the schema in production → reverted | Bot can't catch what local tests don't catch; reality bites |
 | #195 | Revert + replacement (codex-only enum narrowing), CI flake on rerun → green; bot `+1` | Distinguish flake from regression |
-| #196 | Drop `--output-schema` entirely (architectural fix); bot reacted `+1` 30 min after open; I almost waited another cycle for nothing | The reaction signal would have saved a cycle |
+| #196 | Drop `--output-schema` entirely (architectural fix); bot reacted `+1` 30 min after open; I almost waited another cycle for nothing | Do not wait on a cycle you cannot observe. Running § 7 answers it; waiting for a reaction that may never come is the stall this table used to recommend |

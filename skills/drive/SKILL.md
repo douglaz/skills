@@ -168,7 +168,7 @@ wants to re-run a phase.
 | **BUILD** | A ready bead exists | `orchestrating-with-rb-lite` (one bead = one branch) | rb-lite exits clean **and** you independently ran the gate |
 | **PROVE** | Bead's deliverable is a test/gate, or the change touches money/data/infra | gate folded into the BUILD task, **or** a separate test bead run through `testing-with-rb-lite` — decide *before* BUILD starts, since a second rb-lite run on the same branch is forbidden | The gate **ran** and printed green, with the real exit code |
 | **HARDEN** | Branch has unreviewed substantive code | `multi-reviewer-loop` (its "ask the user at the end" step is satisfied by the drive goal — keep going; its stop-list still applies), then a final pinned `codex review --base <ref>` | `multi-reviewer-loop` reports `CLEAN` — both reviewers clean **and** its consistency pass clean, on the same tree; gate green at a real exit code |
-| **LAND** | The panel cleared this checkout, `cleared` still equals the tip, the base is an ancestor of it, and the worktree is clean (derived, never recorded — see Guard 4). Exit needs `bot-gate` at `NO_PENDING_EVIDENCE` — no bot exposes a terminal "cleared" signal, so waiting for one never ends (ADR 0004) | `pr-with-codex-bot-review` | `bot-gate` exits 0 (`NO_PENDING_EVIDENCE`) and no bot thread is left unresolved — never "the bots cleared it", which ADR 0004 shows cannot be observed; base still fresh at merge time, squash-merged, branch reset; bead closed and `DRIVE.md` updated **by a reviewed path** |
+| **LAND** | The panel cleared this checkout, `cleared` still equals the tip, the base is an ancestor of it *and* is still the base the panel reviewed, and the worktree is clean (derived, never recorded — see Guard 4). Exit needs `bot-gate` at `NO_PENDING_EVIDENCE` — no bot exposes a terminal "cleared" signal, so waiting for one never ends (ADR 0004) | `pr-with-codex-bot-review` | `bot-gate` exits 0 (`NO_PENDING_EVIDENCE`) and no bot thread is left unresolved — never "the bots cleared it", which ADR 0004 shows cannot be observed; base still fresh at merge time, squash-merged, branch reset; bead closed and `DRIVE.md` updated **by a reviewed path** |
 | → **BUILD** | More ready beads **in scope** | — | loop until the scoped set is empty — not the repository backlog |
 | **DONE** | The scope is empty — not the repository backlog | — | Any outstanding closure has merged. A `Pending:` PR that has not merged is `WAITING_FOR_MERGE`, not DONE |
 
@@ -337,7 +337,8 @@ lands rather than this checkout; and a `DONE` record with an unmerged `Pending:`
 `WAITING_FOR_MERGE`.
 
 **`Phase:` never reads `LAND`.** LAND is *derived* — from `cleared == tip`, a base still
-an ancestor of that tip, and a clean worktree. All three: edits made after clearance leave
+an ancestor of that tip, that base still being the one the panel reviewed
+(`cleared_base`), and a clean worktree. All four: edits made after clearance leave
 `HEAD` untouched, so the marker still matches while the commit a merge takes does not
 contain them. A commit cannot honestly record that its own SHA was reviewed, because writing the
 record changes the SHA — so the record does not try. `Phase:` simply never names LAND;
@@ -346,10 +347,13 @@ rule, and no downgrade path for an unproven LAND: nothing can claim LAND falsely
 nothing claims it at all. (ADR 0002.)
 
 **The volatile store, never committed, at `$(git rev-parse --git-path drive/state)`.**
-One fact matters — `cleared=<sha>`, naming the tree a panel actually cleared:
+Two facts matter: which tree a panel cleared, and which base it diffed that tree against.
+A marker carrying only the first is refused — retargeting a PR to an older ancestor grows
+the reviewed surface without moving `HEAD`, so `cleared` alone still matches:
 
 ```text
 cleared=4456b8c0b8f1e2d3...
+cleared_base=9f2a1c77e30b4d55...
 ```
 
 Under the git dir, not the worktree, so it needs no `.gitignore` entry and survives
@@ -358,7 +362,7 @@ Under the git dir, not the worktree, so it needs no `.gitignore` entry and survi
 **Do not write it from here.** The moment a panel reports clean is precisely when the tree
 is *dirty* — `multi-reviewer-loop` leaves its fixes uncommitted — so writing `HEAD` at that
 instant records a commit the panel never saw. The guarded snippet in
-`references/phases.md` § HARDEN has the three preconditions; use it.
+`references/phases.md` § HARDEN has the four preconditions; use it.
 
 A fresh clone has narrative but no clearance. That is correct: clearance is a claim about
 a panel run in *this* checkout. Re-run the panel.

@@ -350,8 +350,8 @@ just recorded as reviewed.
 ## LAND — PR through the bots
 
 **Enter when:** the panel cleared this checkout, `cleared` still equals the tip, the base
-is an ancestor of the tip, and the worktree is clean. Those three are what LAND is derived
-from; the gate was HARDEN's exit condition and is already spent by the time LAND is
+is an ancestor of the tip *and* still the one recorded in `cleared_base`, and the worktree
+is clean. Those four are what LAND is derived from; the gate was HARDEN's exit condition and is already spent by the time LAND is
 reachable — the detector cannot check it and does not claim to. LAND is *derived* from those facts,
 never read from `DRIVE.md` (ADR 0002) — a record claiming LAND is a stale or hand-edited
 file and `drive-status` will say so.
