@@ -136,9 +136,16 @@ run `second-model-bead-audit` by default after the graph meets these gates.
        | LC_ALL=C sort | while IFS= read -r f; do printf '%s ' "$f"; cksum < "$f"; done | cksum
    }
    BEFORE=$(beads_fingerprint)
+   MUTATED=0   # set to 1 at each `br` mutation this round actually applies
    # ... apply this round's `br` mutations, then:
    br sync --flush-only || { echo "flush failed"; exit 1; }
-   [ "$(beads_fingerprint)" != "$BEFORE" ] || { echo "round changed nothing on disk"; exit 1; }
+   # Only assert drift when this run actually issued a mutating `br` command. A refresh
+   # whose graph already matches, or a convergence round with zero justified changes, is a
+   # legitimate no-op — the prose below says so, and an unconditional check calls it a
+   # failure.
+   if [ "${MUTATED:-0}" = 1 ]; then
+     [ "$(beads_fingerprint)" != "$BEFORE" ] || { echo "round changed nothing on disk"; exit 1; }
+   fi
    ```
 
    Only require the change when the round actually applied mutations. A late round that

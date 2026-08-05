@@ -508,6 +508,19 @@ implement → review loop for each bead.
     [ -n "${MERGING_SHA:-}" ] || { echo "MERGING_SHA unset — capture it in step 9"; exit 1; }
     gh pr merge <pr> -R "$R" --squash --delete-branch --match-head-commit "$MERGING_SHA" \
       || { echo "merge did not land — do NOT close the bead"; exit 1; }
+
+    # `gh pr merge` returning 0 means the PR was accepted for merging — which, in a repo with a
+    # required merge queue, means ENQUEUED, not landed. Fetching now would read the still-old
+    # base and any caller that closes a tracker item here would close it for a merge that has
+    # not happened. Wait for the state to actually reach MERGED.
+    for _ in $(seq 1 60); do
+      _ST=$(gh pr view <pr> -R "$R" --json state -q .state 2>/dev/null || echo "")
+      [ "$_ST" = "MERGED" ] && break
+      [ "$_ST" = "CLOSED" ] && { echo "PR was closed without merging"; exit 1; }
+      sleep 10
+    done
+    [ "$_ST" = "MERGED" ] || { echo "PR still not merged (state=$_ST) — do NOT proceed"; exit 1; }
+
     # Reset from where the merge LANDED. On a fork clone `origin` is your fork and does
     # not contain the upstream squash commit, so resetting to origin/$BASE silently starts
     # the next bead from a tree missing the one just merged — its PR then replays or

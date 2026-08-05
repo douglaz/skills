@@ -283,7 +283,13 @@ UP=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.own
 BR=$(git branch --show-current)
 # `-R` needs an explicit selector — gh cannot infer the PR from the branch once --repo is
 # given — and without `-R` a fork clone looks for the PR in the fork, where it is not.
-if PRNUM=$(gh pr view "$BR" ${UP:+-R} ${UP:+"$UP"} --json number -q .number 2>/dev/null) && [ -n "$PRNUM" ]; then
+# The head LABEL, not the branch name: gh matches `-R <upstream>` lookups against
+# `<forkowner>:<branch>` for a cross-repo PR, so a bare branch finds nothing on exactly the
+# fork clones `-R` is here for. drive-status builds the same selector and its suite pins
+# the form; this snippet needs it too or LAND is unreachable on a fork.
+_SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "")
+_SEL="$BR"; [ -n "$UP" ] && [ -n "$_SELF" ] && [ "$UP" != "$_SELF" ] && _SEL="${_SELF%%/*}:$BR"
+if PRNUM=$(gh pr view "$_SEL" ${UP:+-R} ${UP:+"$UP"} --json number -q .number 2>/dev/null) && [ -n "$PRNUM" ]; then
   # -R the upstream: `{owner}/{repo}` expands to the CURRENT repo, which on a fork is
   # yours, not where the PR lives.
   UP=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
@@ -391,7 +397,10 @@ wait for one. CodeRabbit's check is per-commit, but a `SUCCESS` may be a *skip* 
 **2. Do not demand `merged SHA == reviewed SHA`.** The merge is a squash, so it always
 creates a new commit; that equality is unsatisfiable by construction.
 
-Pin the head in the merge itself — `gh pr merge <N> -R "$UP" --squash --match-head-commit "$(git rev-parse HEAD)"`
+Pin the head in the merge itself, using **the tip `bot-gate` checked** rather than a fresh
+`git rev-parse HEAD` — see `pr-with-codex-bot-review` § 8, which captures it from the
+gate's JSON. A re-read pins whatever is current, so an amend landing after the gate gets
+pinned to itself and is accepted
 (`-R` because a bare PR number resolves against the current repo, which on a fork is yours)
 (the **full** OID; the wrapper's SHA may be abbreviated, which would refuse every merge).
 Between comparing SHAs and merging, another push can land; `--match-head-commit` makes the
@@ -412,7 +421,13 @@ BASE=$("$DS" --json | jq -r '.default_branch')
 # `set -e` the failure is silent and falls back to origin, i.e. the fork.
 UP2=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end' 2>/dev/null)
 BR2=$(git branch --show-current)
-PRNUM=$(gh pr view "$BR2" ${UP2:+-R} ${UP2:+"$UP2"} --json number -q .number 2>/dev/null) || { echo "no PR — cannot resolve base repo"; exit 1; }
+# The head LABEL, not the branch name: gh matches `-R <upstream>` lookups against
+# `<forkowner>:<branch>` for a cross-repo PR, so a bare branch finds nothing on exactly the
+# fork clones `-R` is here for. drive-status builds the same selector and its suite pins
+# the form; this snippet needs it too or LAND is unreachable on a fork.
+_SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "")
+_SEL2="$BR2"; [ -n "$UP2" ] && [ -n "$_SELF" ] && [ "$UP2" != "$_SELF" ] && _SEL2="${_SELF%%/*}:$BR2"
+PRNUM=$(gh pr view "$_SEL2" ${UP2:+-R} ${UP2:+"$UP2"} --json number -q .number 2>/dev/null) || { echo "no PR — cannot resolve base repo"; exit 1; }
 UP=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
 BASE_REMOTE=$(gh api "repos/$UP/pulls/$PRNUM" --jq .base.repo.clone_url 2>/dev/null) \
   || { echo "cannot resolve base repository"; exit 1; }

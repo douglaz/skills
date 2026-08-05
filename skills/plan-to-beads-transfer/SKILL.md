@@ -89,8 +89,18 @@ Stop and report plan gaps when any of these are still fuzzy:
         | LC_ALL=C sort | while IFS= read -r f; do printf '%s ' "$f"; cksum < "$f"; done | cksum
     }
     BEFORE=$(beads_fingerprint)     # before step 1's br mutations
+    # Set MUTATED=1 at each `br create`/`update`/`close` you actually issue. A run that
+    # issues none is a no-op, not a failure, and only a flag you set can tell them apart —
+    # the fingerprint alone cannot, since both look like "nothing changed".
+    MUTATED=0
     br sync --flush-only || { echo "flush failed"; exit 1; }
-    [ "$(beads_fingerprint)" != "$BEFORE" ] || { echo "transfer wrote nothing"; exit 1; }
+    # Only assert drift when this run actually issued a mutating `br` command. A refresh
+    # whose graph already matches, or a convergence round with zero justified changes, is a
+    # legitimate no-op — the prose below says so, and an unconditional check calls it a
+    # failure.
+    if [ "${MUTATED:-0}" = 1 ]; then
+      [ "$(beads_fingerprint)" != "$BEFORE" ] || { echo "transfer wrote nothing"; exit 1; }
+    fi
     ```
 
     A transfer that created beads must report a change. A re-run whose graph already

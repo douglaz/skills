@@ -506,8 +506,10 @@ Merge when the reaction-based check passes:
   Filter reactions on `content=="+1"` when you do read them: a fresh `eyes` means the bot
   is *still reviewing*, and an unfiltered query counts it as approval-shaped activity.
 
-  Then pass `git rev-parse HEAD` to `--match-head-commit` at merge time so a push landing
-  after this check makes the merge refuse rather than take it.
+  Then pin the merge to **the tip this gate just checked** — § 8 captures it from the
+  gate's own JSON. Re-reading `git rev-parse HEAD` at merge time looks equivalent and is
+  not: it re-adopts whatever is current, so an amend landing in between gets pinned to
+  itself and GitHub *accepts* it. The pin only guards when it names the reviewed tree.
 - CI is green.
 - CodeRabbit's status is **read, not required** — the gate does not act on it. A `SUCCESS`
   beside a rate-limit or paused marker means nobody reviewed anything, and the gate prints
@@ -580,6 +582,15 @@ git merge-base --is-ancestor "refs/remotes/upstream/$BASE" HEAD \
 # it. An amend landing between § 7 and here then produces a BLOCKED gate whose tip is the
 # new head, the equality check compares the new head to itself and passes, and the merge
 # takes the unreviewed tree — the exact outcome this pin exists to refuse.
+# Re-resolved here: this block re-derives $R and $BASE so it can run standalone, and an
+# unset $BOT_GATE would execute an empty command and report "do NOT merge" for a gate that
+# was merely not found.
+for d in "$HOME/.claude/skills/pr-with-codex-bot-review" \
+         "${CODEX_HOME:-$HOME/.codex}/skills/pr-with-codex-bot-review" \
+         "$HOME/.agents/skills/pr-with-codex-bot-review"; do
+  [ -x "$d/scripts/bot-gate" ] && { BOT_GATE="$d/scripts/bot-gate"; break; }
+done
+[ -n "${BOT_GATE:-}" ] || { echo "bot-gate not found — resolve it as in § 7"; exit 1; }
 GATE_JSON=$("$BOT_GATE" <N> --json) || { echo "bot-gate says do NOT merge"; exit 1; }
 [ "$(printf %s "$GATE_JSON" | jq -r .verdict)" = "NO_PENDING_EVIDENCE" ] \
   || { echo "gate verdict is not NO_PENDING_EVIDENCE"; exit 1; }
@@ -588,6 +599,18 @@ REVIEWED_TIP=$(printf %s "$GATE_JSON" | jq -r .tip)
   || { echo "local HEAD moved since the gate ran — re-run § 7"; exit 1; }
 gh pr merge <N> -R "$R" --squash --delete-branch --match-head-commit "$REVIEWED_TIP" \
   || { echo "merge did not land — do NOT proceed"; exit 1; }
+
+# `gh pr merge` returning 0 means the PR was accepted for merging — which, in a repo with a
+# required merge queue, means ENQUEUED, not landed. Fetching now would read the still-old
+# base and any caller that closes a tracker item here would close it for a merge that has
+# not happened. Wait for the state to actually reach MERGED.
+for _ in $(seq 1 60); do
+  _ST=$(gh pr view <N> -R "$R" --json state -q .state 2>/dev/null || echo "")
+  [ "$_ST" = "MERGED" ] && break
+  [ "$_ST" = "CLOSED" ] && { echo "PR was closed without merging"; exit 1; }
+  sleep 10
+done
+[ "$_ST" = "MERGED" ] || { echo "PR still not merged (state=$_ST) — do NOT proceed"; exit 1; }
 
 # Re-fetch after the merge: the ref above predates the squash commit. Reset from where the
 # merge actually landed — `origin` is your fork and may not contain it at all. Fetch before
@@ -609,10 +632,12 @@ git checkout -B "$BASE" "refs/remotes/upstream/$BASE"
 nix build                                    # confirm the base is healthy
 ```
 
-`--match-head-commit` takes the **full 40-char OID** — pass `git rev-parse HEAD`, not the
-wrapper's SHA, which may be abbreviated and would then make every merge refuse with no
-hint why. The wrapper SHA is for the § 7 *comparison*; this pin is what makes the merge
-itself refuse a head that changed underneath you.
+`--match-head-commit` takes the **full 40-char OID**, which is why the snippet pins
+`$REVIEWED_TIP` from the gate's JSON: it is already the full SHA, and it is the tip the
+gate actually checked. Do not substitute `git rev-parse HEAD` here — that re-reads the
+current head, so an amend after the gate ran gets pinned to itself and merges unreviewed.
+Nor the wrapper's body SHA, which may be abbreviated and would make every merge refuse
+with no hint why.
 
 Check before merging, and make it `exit 1` rather than print: a bare `git status
 --porcelain` exits 0 either way, and `--delete-branch` makes `gh pr merge` switch branches
