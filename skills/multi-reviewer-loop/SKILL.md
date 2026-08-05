@@ -704,9 +704,13 @@ finding precisely enough for someone else to act on, which by itself kills the v
   fixing (findings are hypotheses, and one may be wrong); after each fix sweep the whole
   artifact for the same claim **by concept, not by phrase**; read back every passage you
   splice into; add no new mechanism; plus your environment and scope guards.
-- **You keep anything the implementer cannot safely touch** — a tool-managed database, a
-  ticket tracker, anything where hand-editing the file corrupts it. Say so explicitly in
-  the prompt and expect those findings back.
+- **Tool-managed state is delegable too — through the tool, never the file.** A ticket
+  tracker or database whose on-disk form is a single JSONL line per record is corrupted by
+  hand-editing, so the instinct is to keep those findings yourself. Measured: that instinct
+  cost more than it saved. The orchestrator's own shell command-substituted the backticks
+  in a double-quoted update and silently blanked three field names in a record. Delegating
+  the same work with one rule — *use the CLI, never edit the file* — landed clean and the
+  database still parsed. Name the tool, forbid the file, and require a read-back.
 - **Snapshot first.** The implementer has write access; `git` is the undo.
 
 This is not `rb-lite`. That loop hands over the whole task and reviews the result; this
