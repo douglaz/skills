@@ -545,7 +545,8 @@ and silently carry the previous bead's closure into its diff. Instead:
   ```bash
   UP=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
   gh pr list -R "$UP" --state all --limit 200 --json number,state,headRefName,title,body \
-    --jq '.[] | select(.headRefName + " " + .title + " " + (.body // "") | test("'"$BEAD_ID"'"; "i"))'
+    | jq --arg id "$BEAD_ID" '.[] | select($id != "" and ([.headRefName, .title, (.body // "")]
+        | join(" ") | ascii_downcase | split("[^a-z0-9-]+"; null) | index($id | ascii_downcase)))'
   ```
 
 Keyed on the **bead id**, not a branch-naming convention — nothing here mandates one, so

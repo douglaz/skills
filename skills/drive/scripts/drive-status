@@ -142,6 +142,11 @@ BRANCH_COMMITS=0
 if [[ -n "$BASE_REF" ]] && ! git merge-base --is-ancestor HEAD "$BASE_REF" 2>/dev/null; then
   BRANCH_COMMITS=$(git rev-list --count "$BASE_REF..HEAD" 2>/dev/null || echo 0)
 fi
+# Name equality is not identity. On a fork PR `forkowner:main -> upstream:main` the branch
+# and the base share a name while living in different repositories — treating that as "on
+# the default branch" left BASE_FRESH at n/a and made LAND unreachable for the whole fork
+# workflow. An open PR whose head is this branch proves it is a feature branch whatever it
+# is called.
 ON_DEFAULT=false
 [[ -n "$BRANCH" && "$BRANCH" == "$DEFAULT_BRANCH" ]] && ON_DEFAULT=true
 # Classify a newline-separated path list as bead / doc / code. Used for BOTH the working
@@ -388,6 +393,13 @@ fi
 # is fatal rather than a warning: a stale ref makes this test compare against an older base
 # and answer in the clearing direction. The freshness of the answer is the caller's job;
 # reporting which ref was used is this script's.
+# Name equality is not identity, and this can only be settled once PR_STATE is known.
+# On a fork PR `forkowner:main -> upstream:main` the branch and the base share a name while
+# living in different repositories — treating that as "on the default branch" leaves
+# BASE_FRESH at n/a and makes derived LAND unreachable for the whole fork workflow. An open
+# PR whose head is this branch proves it is a feature branch whatever it is called.
+if $ON_DEFAULT && [[ "$PR_STATE" == OPEN* ]]; then ON_DEFAULT=false; fi
+
 BASE_FRESH="n/a"
 if [[ -n "$BASE_REF" && -n "$HEAD_SHA" && "$BASE_ORIGIN" != "guessed" ]] && ! $ON_DEFAULT; then
   if git merge-base --is-ancestor "$BASE_REF" HEAD 2>/dev/null; then BASE_FRESH=true; else BASE_FRESH=false; fi
@@ -540,7 +552,13 @@ if [[ "$PHASE" == "DONE" ]] \
    && { { [[ "$BRANCH_COMMITS" -gt 0 ]] && ! $_MERGED_AT_HEAD; } || ! $_BASE_KNOWN || $_DONE_DIRTY; }; then
   DONE_ON_BRANCH=true
   PHASE="HARDEN"
-  PHASE_SOURCE="$([[ "$PHASE_WAS" == "DRIVE.md" ]] && echo "DRIVE.md" || echo "tree") (DONE, but this branch has unreviewed commits)"
+  # Name the disjunct that actually fired. One string for three causes asserted commits
+  # that may not exist — and a --json consumer sees only this field, not the human warnings
+  # below, which were fixed for exactly this reason one pass earlier.
+  if [[ "$BRANCH_COMMITS" -gt 0 ]]; then _DONE_WHY="this branch has unreviewed commits"
+  elif ! $_BASE_KNOWN; then _DONE_WHY="the base ref could not be resolved"
+  else _DONE_WHY="the tree is dirty, so the closure is not committed"; fi
+  PHASE_SOURCE="$([[ "$PHASE_WAS" == "DRIVE.md" ]] && echo "DRIVE.md" || echo "tree") (DONE, but $_DONE_WHY)"
 fi
 # LAND is DERIVED, never read. It is admissible exactly when a panel cleared this tip and
 # the work is otherwise finished — which is what HARDEN resolving means. Deriving it here

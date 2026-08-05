@@ -86,8 +86,20 @@ done
 # number belongs to upstream, but a bare `gh pr view N` resolves it against the fork —
 # finding nothing, or worse, a different PR that happens to share the number. `.parent`
 # is the upstream when this repo is a fork, and the repo itself otherwise.
-REPO=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end' 2>/dev/null) \
+# Upstream FIRST, but not unconditionally: a fork can host its own PRs, and redirecting
+# those to the parent either finds nothing or — worse, if the parent happens to have a PR
+# with the same number — inspects an unrelated PR's reviews and threads and reports on it.
+# Try upstream, and fall back to this repo when the PR is not there.
+SELF_REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null) \
   || { echo "BLOCKED: cannot resolve repo" >&2; exit 3; }
+UP_REPO=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end' 2>/dev/null || echo "")
+REPO="$SELF_REPO"
+if [[ -n "$UP_REPO" ]]; then
+  if gh pr view "$PR" -R "$UP_REPO" --json number >/dev/null 2>&1; then REPO="$UP_REPO"
+  elif ! gh pr view "$PR" -R "$SELF_REPO" --json number >/dev/null 2>&1; then
+    echo "BLOCKED: PR $PR not found in $UP_REPO or $SELF_REPO" >&2; exit 3
+  fi
+fi
 [[ "$REPO" == */* ]] || { echo "BLOCKED: cannot parse repo: $REPO" >&2; exit 3; }
 TIP=$(git rev-parse --verify --quiet HEAD) \
   || { echo "BLOCKED: no HEAD" >&2; exit 3; }
@@ -309,8 +321,15 @@ fi
 # commits nobody read. So a wrapper that predates the last base change is stale even though
 # every SHA still matches.
 #
-# `base_ref_changed` is a real timeline event with a timestamp, so this is decidable — the
-# kind of clause ADR 0004 asks for, not another inference from absence. Fails closed: an
+# Three event types, not one. GitHub documents `automatic_base_change_succeeded` (and
+# `_failed`) separately from `base_ref_changed`, and the automatic variant fires in exactly
+# the stacked-PR case this guards: B targets A, A merges and is deleted after B's review
+# was submitted, GitHub retargets B to the default branch, and B's diff grows to include
+# A's squash — with B's head untouched, so every SHA still matches. Matching only the
+# manual event left that open. The `_failed` variant is included because an attempted
+# retarget is still doubt about which surface the review covered.
+# These are real timeline events with timestamps, so this is decidable — the kind of clause
+# ADR 0004 asks for, not another inference from absence. Fails closed: an
 # unreadable timeline or an unparseable timestamp is doubt.
 RETARGETED_AFTER_REVIEW=false
 if [[ -n "$WRAPPER_AT" ]]; then
@@ -329,7 +348,9 @@ if [[ -n "$WRAPPER_AT" ]]; then
     # retarget happened" and "one retarget I cannot date" collapse again, one level below
     # where they last did. There is no empty-string value that means only one of them.
     BASE_CHANGED_ATS=$(printf '%s' "$TL" \
-      | jq -r '.[][] | select(.event=="base_ref_changed") | (.created_at // "@undated@")' 2>/dev/null) \
+      | jq -r '.[][] | select(.event=="base_ref_changed"
+                             or .event=="automatic_base_change_succeeded"
+                             or .event=="automatic_base_change_failed") | (.created_at // "@undated@")' 2>/dev/null) \
       || { echo "BLOCKED: cannot read the PR timeline" >&2; exit 3; }
     W2=$(iso_to_epoch "$WRAPPER_AT")
     if [[ -n "$BASE_CHANGED_ATS" ]]; then

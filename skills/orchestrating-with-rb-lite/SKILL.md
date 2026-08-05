@@ -468,11 +468,16 @@ implement → review loop for each bead.
 9. **CI.** Capture the head *before* waiting, then wait for green:
 
     ```bash
+    # Persisted to a file, not just a shell variable. Steps 9 and 10 usually run as
+    # separate tool calls, so a variable set here is gone by the merge — and the guard
+    # there would then abort a correct drain with "local HEAD moved". Under the git dir,
+    # so it is per-checkout and never committed (ADR 0001).
     # R is resolved HERE, not in step 10: this is its first use, and an unset $R sends gh
     # an empty -R (or aborts under nounset), so every drain stopped before CI.
     R=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
     MERGING_SHA=$(gh pr view <pr> -R "$R" --json headRefOid -q .headRefOid)
     [ -n "$MERGING_SHA" ] || { echo "cannot resolve the PR head"; exit 1; }
+    printf '%s\n' "$MERGING_SHA" > "$(git rev-parse --git-path rb-lite-merging-sha)"
     # Bind it to the commit that was actually reviewed. The remote head is only the right
     # thing to merge if it IS your local HEAD — the tree rb-lite ran on and step 7's gates
     # passed on. If the branch moved since step 8, green CI would otherwise merge code no
@@ -516,9 +521,11 @@ implement → review loop for each bead.
       || { echo "local HEAD moved since step 9 — re-run the panel and the checks"; exit 1; }
     git merge-base --is-ancestor "refs/remotes/upstream/$BASE" "$MERGING_SHA" \
       || { echo "REBASE FIRST — $BASE advanced since the review"; exit 1; }
-    # $MERGING_SHA comes from step 9, captured BEFORE CI ran. Re-reading it here would
-    # pin whatever is current — including a force-push that no check ever saw.
-    [ -n "${MERGING_SHA:-}" ] || { echo "MERGING_SHA unset — capture it in step 9"; exit 1; }
+    # Read back from step 9's file: captured BEFORE CI ran, and surviving the shell
+    # boundary between steps. Re-deriving it here would pin whatever is current, including
+    # a force-push no check ever saw.
+    MERGING_SHA=$(cat "$(git rev-parse --git-path rb-lite-merging-sha)" 2>/dev/null || echo "")
+    [ -n "$MERGING_SHA" ] || { echo "no pinned SHA — re-run step 9"; exit 1; }
     gh pr merge <pr> -R "$R" --squash --delete-branch --match-head-commit "$MERGING_SHA" \
       || { echo "merge did not land — do NOT close the bead"; exit 1; }
 
@@ -592,7 +599,8 @@ implement → review loop for each bead.
     ```bash
     UP=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
     gh pr list -R "$UP" --state all --limit 200 --json number,state,headRefName,title,body \
-    --jq '.[] | select(.headRefName + " " + .title + " " + (.body // "") | test("'"$BEAD_ID"'"; "i"))'
+    | jq --arg id "$BEAD_ID" '.[] | select($id != "" and ([.headRefName, .title, (.body // "")]
+        | join(" ") | ascii_downcase | split("[^a-z0-9-]+"; null) | index($id | ascii_downcase)))'
     ```
 
     Keyed on the **bead id**, not a branch-naming convention, and `--limit 200` because
