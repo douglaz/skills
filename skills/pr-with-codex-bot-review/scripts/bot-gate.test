@@ -33,6 +33,7 @@ case "$*" in
   *"pr view"*number*)           f prnum.txt "16" ;;
   *"pr checks"*)                [ -f "$FIX/checksfail" ] && exit 1; f checks.json '[]' ;;
   *"pr view"*statusCheckRollup*) [ -f "$FIX/rollupfail" ] && exit 1; f rollup.json '{"statusCheckRollup":[]}' ;;
+  *timeline*)                   [ -f "$FIX/timelinefail" ] && exit 1; f timeline.json '[[]]' ;;
   *reactions*)                  [ -f "$FIX/reactionsfail" ] && exit 1; f reactions.json '[[]]' ;;
   *graphql*)                    f threads.json '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}' ;;
   *"pulls/"*"/reviews"*)        f reviews.json '[[]]' ;;
@@ -205,6 +206,26 @@ cr_success; cr_skip '- src/my file.py' > "$FIX/issues.json"
 check_reports "path containing a space is parsed whole" "src/my file.py"
 
 # --- rounds in flight ---
+
+# A retarget expands the PR's diff without moving its head, so `commit_id` still matches
+# while part of the diff was never read. `base_ref_changed` carries a timestamp, so this is
+# decidable rather than another inference from absence.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"base_ref_changed","created_at":"%s"}]]' "$NOW_UTC" > "$FIX/timeline.json"
+check "a retarget after the review blocks" 1
+
+# ...but one BEFORE the review is exactly the normal case — retarget, then re-review.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$NOW_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"base_ref_changed","created_at":"%s"}]]' "$OLD_UTC" > "$FIX/timeline.json"
+check "a retarget before the review does not block" 0
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"base_ref_changed","created_at":"not-a-date"}]]' > "$FIX/timeline.json"
+check "an unparseable retarget timestamp blocks" 1
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo 'x' > "$FIX/timelinefail"
+check "timeline query failure is exit 3" 3
 
 # A fresh `eyes` newer than the wrapper means a round is running on the same tip.
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"

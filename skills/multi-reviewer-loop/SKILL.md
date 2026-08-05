@@ -275,8 +275,15 @@ For each pass `N` from `1` to `MAX_PASSES`:
    - tokens line from stderr, if present
    - log file paths
 
-6. In chat, show only a compact summary — and if this pass produced findings, see § 3.6
-   on launching the next pass *before* writing it:
+6. **If this pass produced findings, do not stop here — go straight to § 3.** The summary
+   below belongs to a pass that is *finished*, and a pass with findings is not: the fixes,
+   the validation, and the next pass's launch all still have to happen. Emitting it now
+   ends the turn at the pre-fix boundary, which is the same stall § 3.6 exists to prevent,
+   one step earlier. § 3.7 is where a findings pass reports, and by then the next pass is
+   already running.
+
+   Show this only when the pass was clean (so § 3 has nothing to do) or when a § 4 stop
+   condition fires — the cases where stopping is the correct outcome rather than a lapse:
 
    ```text
    PASS N/MAX  [DEGRADED if a reviewer failed]

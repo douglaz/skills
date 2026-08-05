@@ -204,7 +204,12 @@ mkdir -p "$STATE_DIR"
 # Pin what the panel is about to read. GitHub allows retargeting a PR at any moment,
 # including while a 15-minute panel runs, and a retarget moves the reviewed surface
 # without moving HEAD — so every SHA the clearance records would still match.
-{ printf 'panel_base=%s\n' "$("$DS" --json | jq -r '.default_branch')"
+# The OID as well as the name. A same-named base that is force-pushed BACKWARD while the
+# panel runs leaves panel_base equal and the rewound base still an ancestor of HEAD, so a
+# name-only pin agrees and clearance records a base the panel never diffed against.
+_PB=$("$DS" --json | jq -r '.default_branch')
+{ printf 'panel_base=%s\n' "$_PB"
+  printf 'panel_base_oid=%s\n' "$(git rev-parse "origin/$_PB" 2>/dev/null || echo unknown)"
   printf 'panel_tip=%s\n' "$(git rev-parse HEAD)"; } > "$STATE_DIR/panel" \
   || { echo "could not pin the panel's inputs"; exit 1; }
 ```
@@ -254,6 +259,11 @@ PANEL_TIP=$(sed -n 's/^panel_tip=//p' "$STATE_DIR/panel" 2>/dev/null | head -1)
   || { echo "PR retargeted during review ($PANEL_BASE -> $BASE) — re-run the panel; NOT cleared"; exit 1; }
 [ "$PANEL_TIP" = "$(git rev-parse HEAD)" ] \
   || { echo "HEAD moved since the panel ran — re-run it; NOT cleared"; exit 1; }
+PANEL_BASE_OID=$(sed -n 's/^panel_base_oid=//p' "$STATE_DIR/panel" 2>/dev/null | head -1)
+[ -n "$PANEL_BASE_OID" ] && [ "$PANEL_BASE_OID" != "unknown" ] \
+  || { echo "the panel's base OID was never pinned — re-run the panel; NOT cleared"; exit 1; }
+[ "$PANEL_BASE_OID" = "$(git rev-parse "origin/$BASE")" ] \
+  || { echo "base $BASE moved under the panel ($PANEL_BASE_OID -> $(git rev-parse --short "origin/$BASE")) — re-run it; NOT cleared"; exit 1; }
 # REST, not `gh pr view --json baseRepository` — that field does not exist, and without
 # `set -e` the failure is silent and falls back to origin, i.e. the fork.
 # The first clearance runs BEFORE any PR exists — that is the prescribed ordering — so a
@@ -397,6 +407,13 @@ git fetch -q "$BASE_REMOTE" "+refs/heads/$BASE:refs/remotes/origin/$BASE" \
 DSJ2=$("$DS" --json)
 [ "$(printf %s "$DSJ2" | jq -r '.default_branch')" = "$BASE" ] \
   || { echo "base changed under the check (want $BASE) — do NOT merge"; exit 1; }
+# The clearance must still name the base it was written against. Retargeting to an OLDER
+# ancestor after clearance leaves HEAD untouched and the new base still an ancestor of it,
+# so base_fresh stays true and the name check agrees with itself — while the PR's diff has
+# silently grown to include commits no panel read. cleared_base is the only field that
+# notices, so assert it here and not only at clearance time.
+[ "$(printf %s "$DSJ2" | jq -r '.cleared_base_matches')" = "true" ] \
+  || { echo "clearance was recorded against a different base — re-run the panel; do NOT merge"; exit 1; }
 BF=$(printf %s "$DSJ2" | jq -r '.base_fresh')
 # null != false. false = genuinely behind base, and a rebase fixes it. null = the base was
 # GUESSED (no authoritative source), so freshness was never computed and no rebase can
@@ -491,7 +508,7 @@ writes the JSONL failed, because the error is caught and logged at debug level:
 # dirtiness test passes without this close having written anything — the exact swallowed
 # auto-flush it is here to catch. Guard 1 in SKILL.md states the same rule; this is the
 # third site of it.
-beads_fingerprint() { cat .beads/*.jsonl ./*.beads.jsonl ./.beads.jsonl 2>/dev/null | cksum; }
+beads_fingerprint() { git ls-files -z -co --exclude-standard -- '*.beads.jsonl' '.beads/*.jsonl' | sort -z | xargs -0 -r cat | cksum; }
 BEFORE=$(beads_fingerprint)
 br close <id> || { echo "br close failed"; exit 1; }
 [ "$(beads_fingerprint)" != "$BEFORE" ] \

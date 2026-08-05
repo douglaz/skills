@@ -160,7 +160,7 @@ check "a dirty AGENTS.md does not imply BUILD" SHAPE
 # marker read false and the warning blamed a moved PR base while printing the tip as "now".
 new_repo; add_code; record '**Phase:** HARDEN'; clear_at
 echo x > "$FIX/ghfail"; G remote remove origin 2>/dev/null || true
-G branch -D master 2>/dev/null || true
+G branch -D master >/dev/null 2>&1 || true
 check_field "no base ref leaves cleared_base unverified" cleared_base_matches null
 
 # The header promises exit 0 even when signals are missing.

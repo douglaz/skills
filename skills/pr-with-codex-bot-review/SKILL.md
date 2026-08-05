@@ -109,8 +109,10 @@ is also done. CodeRabbit's signals:
    `SUCCESS` is not the same as "reviewed", and there are two different ways it can lie.
 
    **A rate limit or a paused review means nobody reviewed anything.** The check is green
-   because CodeRabbit never ran. `@coderabbitai review` to re-trigger and wait; `bot-gate`
-   blocks on this.
+   because CodeRabbit never ran. `bot-gate` prints that and does **not** block on it — it
+   stopped gating on CodeRabbit entirely (ADR 0004), so this is information for you, not a
+   wait state. `@coderabbitai resume` (it auto-pauses on fast-moving branches) or
+   `@coderabbitai review` if you want its opinion before merging.
 
    **A "Files skipped from review" list is a narrower claim**: CodeRabbit ran, judged some
    files trivial or similar to previous changes, and did not read them. Every file on that
@@ -451,7 +453,7 @@ Merge when the reaction-based check passes:
      shorter version of it here.
 
      `scripts/bot-gate.test` runs it against a stubbed `gh` with canned API responses —
-     forty-five cases, each one a defect a reviewer actually found: a forged wrapper
+     forty-nine cases, each one a defect a reviewer actually found: a forged wrapper
      login, a `[bot]`-suffix filter that matched nothing, an unrelated app's unresolved
      thread holding the merge, a CodeRabbit rate-limit skip, an API failure. Run it after
      touching the gate; every case has been shown to go red against the real bug.

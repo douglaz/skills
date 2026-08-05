@@ -547,7 +547,7 @@ implement → review loop for each bead.
     dirty and a bare dirtiness test passes without this write happening at all:
 
     ```bash
-    beads_fingerprint() { cat .beads/*.jsonl ./*.beads.jsonl ./.beads.jsonl 2>/dev/null | cksum; }
+    beads_fingerprint() { git ls-files -z -co --exclude-standard -- '*.beads.jsonl' '.beads/*.jsonl' | sort -z | xargs -0 -r cat | cksum; }
     BEFORE=$(beads_fingerprint)
     br update <bead-id> -s closed || { echo "br update failed"; exit 1; }
     [ "$(beads_fingerprint)" != "$BEFORE" ] || { echo "not persisted"; exit 1; }

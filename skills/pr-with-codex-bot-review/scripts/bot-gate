@@ -339,6 +339,32 @@ if [[ "$CR_STATE" == "SUCCESS" || "$CR_STATE" == "absent" ]]; then
   fi
 fi
 
+# A retarget expands the reviewed surface without moving the head. `commit_id` proves which
+# TREE the bot read; it says nothing about which DIFF, and a PR retargeted to an older
+# ancestor after the review still has the same head while its diff has grown to include
+# commits nobody read. So a wrapper that predates the last base change is stale even though
+# every SHA still matches.
+#
+# `base_ref_changed` is a real timeline event with a timestamp, so this is decidable — the
+# kind of clause ADR 0004 asks for, not another inference from absence. Fails closed: an
+# unreadable timeline or an unparseable timestamp is doubt.
+RETARGETED_AFTER_REVIEW=false
+if [[ -n "$WRAPPER_AT" ]]; then
+  if TL=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/timeline" 2>/dev/null); then
+    require_json "timeline" "$TL"
+    BASE_CHANGED_AT=$(printf '%s' "$TL" \
+      | jq -r '[.[][] | select(.event=="base_ref_changed") | .created_at] | max // ""' 2>/dev/null) \
+      || { echo "BLOCKED: cannot read the PR timeline" >&2; exit 3; }
+    if [[ -n "$BASE_CHANGED_AT" ]]; then
+      B=$(iso_to_epoch "$BASE_CHANGED_AT"); W2=$(iso_to_epoch "$WRAPPER_AT")
+      if [[ -n "$B" && -n "$W2" ]]; then (( B > W2 )) && RETARGETED_AFTER_REVIEW=true
+      else RETARGETED_AFTER_REVIEW=true; fi
+    fi
+  else
+    echo "BLOCKED: timeline query failed" >&2; exit 3
+  fi
+fi
+
 # A new round can start on an UNCHANGED tip (`@codex review`), so a wrapper plus resolved
 # threads is not proof nothing is in flight. An `eyes` reaction newer than the latest
 # wrapper means the bot is reviewing right now.
@@ -409,7 +435,8 @@ fi
 # check needs, so a wrapper without one means that check never ran, and a check that did
 # not run has not passed.
 VERDICT="BLOCKED"
-if [[ "$WRAPPER_TIP" -gt 0 ]] && [[ -n "$WRAPPER_AT" ]] && ! $ROUND_ACTIVE && [[ "$UNRESOLVED" -eq 0 ]]; then
+if [[ "$WRAPPER_TIP" -gt 0 ]] && [[ -n "$WRAPPER_AT" ]] && ! $ROUND_ACTIVE \
+   && ! $RETARGETED_AFTER_REVIEW && [[ "$UNRESOLVED" -eq 0 ]]; then
   VERDICT="NO_PENDING_EVIDENCE"
 fi
 OBSERVED_TO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -429,10 +456,10 @@ if $JSON; then
   jq -n --arg tip "$TIP" --arg v "$VERDICT" --arg cr "$CR_STATE" \
         --argjson w "$WRAPPER_TIP" --argjson u "$UNRESOLVED" \
         --arg from "$OBSERVED_FROM" --arg to "$OBSERVED_TO" --arg claim "$CLAIM" \
-        --arg cr_skipped "$CR_SKIPPED" --arg round_active "$ROUND_ACTIVE" --arg skiplist "$CR_SKIPLIST" \
+        --arg cr_skipped "$CR_SKIPPED" --arg round_active "$ROUND_ACTIVE" --arg retargeted "$RETARGETED_AFTER_REVIEW" --arg skiplist "$CR_SKIPLIST" \
     '{tip:$tip,verdict:$v,claim:(if $claim=="" then null else $claim end),observed_from:$from,observed_to:$to,
       wrapper_on_tip:$w,unresolved_bot_threads:$u,
-      coderabbit:$cr,coderabbit_skipped:($cr_skipped=="true"),round_active:($round_active=="true"),
+      coderabbit:$cr,coderabbit_skipped:($cr_skipped=="true"),round_active:($round_active=="true"),retargeted_after_review:($retargeted=="true"),
       coderabbit_skipped_files:($skiplist|split("\n")|map(select(length>0)))}'
 else
   printf 'tip              %s\n' "${TIP:0:10}"
@@ -445,6 +472,7 @@ else
   [[ "$WRAPPER_TIP" -eq 0 ]] && printf '  ⚠ no review from the codex bot names this tip, so nothing proves WHICH tree it read.\n    Push or `@codex review` to get one, or accept the round explicitly and say so.\n'
   [[ "$UNRESOLVED" -gt 0 ]] && printf '  ⚠ %s UNRESOLVED bot thread(s). Fix each, or answer it with evidence and resolve the\n    thread — resolving is how you record that it was dispositioned.\n' "$UNRESOLVED"
   [[ "$CR_STATE" == "query-failed" ]] && printf '  · CodeRabbit status could not be queried.\n'
+  $RETARGETED_AFTER_REVIEW && printf '  ⚠ the PR base changed after the review was submitted — the head is the same but the\n    diff is not, so part of it was never read. `@codex review` to re-review the new surface.\n'
   $ROUND_ACTIVE && printf '  ⚠ an `eyes` reaction is newer than the wrapper — a fresh round is running on this\n    same tip. Wait for it to finish.\n'
   # Reported, never gated — see the CR_SKIPLIST block. Every file here is one this PR
   # changes, since that is the only kind CodeRabbit can skip; read the list and decide.

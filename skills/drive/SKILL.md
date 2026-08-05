@@ -225,10 +225,13 @@ A phase closes on evidence or it does not close.
   # iteration and carries the closure forward uncommitted, so by the second bead the file
   # is ALREADY dirty from the first — and a bare dirtiness test then passes without this
   # close having written anything. The question is whether THIS command wrote, so ask it.
-  # All three layouts drive-status recognises. `.beads/*.jsonl` alone reads nothing in a
-  # repo using root `.beads.jsonl` or `<name>.beads.jsonl`, so both fingerprints would be
-  # the checksum of empty input and every closure would be rejected as unpersisted.
-  beads_fingerprint() { cat .beads/*.jsonl ./*.beads.jsonl ./.beads.jsonl 2>/dev/null | cksum; }
+  # Ask git for the files rather than globbing fixed shapes. drive-status recognises
+  # `*.beads.jsonl` at ANY depth (its classifier is `(^|/)[^/]*\.beads\.jsonl$`), and every
+  # hand-written glob so far has missed a layout it accepts — first `.beads/` only, then
+  # the two root forms. In a repo the glob misses, BEFORE and after are both the cksum of
+  # empty input, so the check fails on every closure: a hard block at LAND in a layout the
+  # phase machine otherwise supports. `git ls-files -co` cannot drift from what git sees.
+  beads_fingerprint() { git ls-files -z -co --exclude-standard -- '*.beads.jsonl' '.beads/*.jsonl' | sort -z | xargs -0 -r cat | cksum; }
   BEFORE=$(beads_fingerprint)
   br close <id> || { echo "br close failed"; exit 1; }
   [ "$(beads_fingerprint)" != "$BEFORE" ] \
