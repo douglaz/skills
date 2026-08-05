@@ -136,17 +136,43 @@ a reviewer.
 
      ```bash
      # Probe both, do not force the parent: a fork can host its own PR, and forcing
-     # `.parent` makes it invisible. Take the first candidate with an OPEN PR for this branch.
-     SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner)
-     PARENT=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end')
+     # `.parent` makes it invisible. ENUMERATE both — the same branch can have an open PR
+     # in the parent AND in the fork, two separately reviewed surfaces with two merge
+     # targets, and taking the first found reviews one of them by iteration order. A HEAD
+     # match is the tiebreak when it singles one out; otherwise refuse, the same
+     # double-match rule bot-gate enforces. A failed parent lookup is UNKNOWN, not "not a
+     # fork": guessing "self" there reviews against the fork's base on a real fork.
+     SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "")
+     # SELF empty means gh cannot see this checkout at all (no gh, no auth, non-GitHub
+     # remote): no PR is findable, so fall through to the ladder below. A failed PARENT
+     # lookup on a repo gh CAN see is different — that is unknown, and refuses here.
+     PARENT=""
+     if [ -n "$SELF" ]; then
+       PARENT=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end') \
+         || { echo "cannot resolve the fork parent — do not guess the review base"; exit 1; }
+     fi
      BR=$(git branch --show-current)
-     UP="$SELF"; SEL="$BR"; PRNUM=""
+     HEAD_OID=$(git rev-parse HEAD)
+     UP="$SELF"; SEL="$BR"; PRNUM=""; _M=0; _HM=0
      for _c in ${PARENT:+"$PARENT"} "$SELF"; do
+       [ "$_c" = "$SELF" ] && [ "$PARENT" = "$SELF" ] && continue   # do not probe one repo twice
        _s="$BR"; [ "$_c" != "$SELF" ] && _s="${SELF%%/*}:$BR"    # gh matches the head LABEL
-       _n=$(gh pr view "$_s" -R "$_c" --json number,state \
-              -q 'select(.state=="OPEN") | .number' 2>/dev/null || echo "")
-       [ -n "$_n" ] && { UP="$_c"; SEL="$_s"; PRNUM="$_n"; break; }
+       _j=$(gh pr view "$_s" -R "$_c" --json number,state,headRefOid \
+              -q 'select(.state=="OPEN") | "\(.number) \(.headRefOid)"' 2>/dev/null || echo "")
+       [ -n "$_j" ] || continue
+       _M=$((_M+1))
+       if [ "${_j#* }" = "$HEAD_OID" ]; then
+         _HM=$((_HM+1)); UP="$_c"; SEL="$_s"; PRNUM="${_j%% *}"
+       elif [ -z "$PRNUM" ]; then
+         UP="$_c"; SEL="$_s"; PRNUM="${_j%% *}"
+       fi
      done
+     if [ "$_M" -ge 2 ] && [ "$_HM" -ne 1 ]; then
+       echo "branch $BR has an OPEN PR in BOTH $PARENT and $SELF and HEAD singles neither out"
+       echo "  — two review surfaces, two merge targets. Close one, or pin the intended repo"
+       echo "  in every -R before reviewing; do not let iteration order pick."
+       exit 1
+     fi
      # OPEN only, and an empty PRNUM means "no PR" — fall through to candidate 2, do not
      # abort. The first HARDEN panel runs BEFORE any PR exists (that is the prescribed
      # ordering), so aborting here stops the panel in its most common state. And an
@@ -176,6 +202,23 @@ a reviewer.
        DIFF_BASE="refs/remotes/prbase/$BASE_NAME"
      fi
      # else: no open PR — leave DIFF_BASE unset and try the next candidate.
+     # ...EXCEPT on a fork. The prescribed ordering runs the first HARDEN panel BEFORE any
+     # PR exists, and every candidate the ladder below can reach — @{upstream}, the fork's
+     # origin/HEAD, a bare `gh repo view` default — lives in the FORK. When the parent's
+     # default branch has a different name (or its tip has moved), those candidates review
+     # the wrong diff, and drive's post-panel OID check (phases.md § HARDEN pins the
+     # PARENT's base via `base_repo`) then rejects every rerun with "different base commit"
+     # — a deadlock whose remedy re-reviews the same wrong base. Resolve and fetch the
+     # parent's own default here, exactly as the PR path above fetches the PR's base.
+     if [ -z "${DIFF_BASE:-}" ] && [ -n "$PARENT" ]; then
+       P_DEFAULT=$(gh repo view "$PARENT" --json defaultBranchRef \
+                     -q .defaultBranchRef.name 2>/dev/null) && [ -n "$P_DEFAULT" ] \
+         || { echo "fork with no PR: cannot resolve $PARENT's default branch — do not review against the fork's"; exit 1; }
+       git fetch -q "https://github.com/$PARENT.git" \
+           "+refs/heads/$P_DEFAULT:refs/remotes/prbase/$P_DEFAULT" \
+         || { echo "cannot fetch $PARENT $P_DEFAULT — do not review against a guess"; exit 1; }
+       DIFF_BASE="refs/remotes/prbase/$P_DEFAULT"
+     fi
      ```
 
    **The feature branch's HEAD-equal upstream is INELIGIBLE — skip that ref and keep going

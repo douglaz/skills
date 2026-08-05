@@ -605,6 +605,16 @@ implement → review loop for each bead.
     this reviewed path exists to prevent. The drain is not done until that PR is merged. Do not leave it uncommitted either, or the next
     run starts from a dirty base and silently carries the previous closure into its diff.
 
+    **Give the PR body a machine-readable marker line, one per bead it closes:**
+
+    ```text
+    bead-closure: <bead-id>
+    ```
+
+    Step 8 puts the bead id in every ordinary work PR body too, so the id alone cannot
+    distinguish "the work merged" from "the closure merged" — and step 12's resume
+    discovery depends on telling them apart. The marker is what it filters on.
+
     Verify it landed with a checked *explicit* sync: it propagates a real exit code, which
     the automatic flush after `br update` does not — that one swallows its error. The
     mutation is already in the shared DB, so the sync either writes it out or fails loudly,
@@ -638,18 +648,28 @@ implement → review loop for each bead.
       CLOSURE_PRS+=("$_PRS")
     done
     printf '%s\n' "${CLOSURE_PRS[@]}" \
-      | jq -s --arg id "$BEAD_ID" 'add | .[] | select($id != "" and ([.headRefName, .title, (.body // "")]
-        | join(" ") | ascii_downcase
-        | test("(^|[^a-z0-9.])" + ($id|ascii_downcase|gsub("\\.";"\\.")) + "($|\\.$|\\.[^a-z0-9]|[^a-z0-9.])")))'
+      | jq -s --arg id "$BEAD_ID" 'add | .[] | select($id != "" and ((.body // "") | ascii_downcase
+        | test("(^|\\r|\\n)[[:space:]]*bead-closure:[[:space:]]*" + ($id|ascii_downcase|gsub("\\.";"\\.")) + "[[:space:]]*(\\r|\\n|$)")))'
     ```
 
     `BEAD_ID` is the bead you are about to take — loop this query over each open bead from
     `br ready`/`br list` rather than assuming a variable survived the clone. Empty, the
     filter rejects everything and the closure PR this exists to find is missed.
 
-    Keyed on the **bead id**, not a branch-naming convention, and the raised `--limit` because
-    `gh pr list` returns 30 by default — an older closure PR hides behind newer work PRs,
-    which is the resume case this exists for.
+    Keyed on the **`bead-closure:` marker plus the bead id**, not on the id alone: step 8
+    puts the id in every ordinary work PR body, so an id-only filter returns the merged
+    work PR for any bead whose work landed — which on a fresh clone looks exactly like
+    closure history when no closure was ever opened, and defeats the guard. Not a
+    branch-naming convention either — nothing mandates one. The raised `--limit` matters
+    because `gh pr list` returns 30 by default — an older closure PR hides behind newer
+    work PRs, which is the resume case this exists for.
+
+    An empty result from the marker query is trustworthy only for closure PRs opened
+    since the marker was prescribed. If this drain predates it, fall back to searching
+    the bead id across `--state all` and read the hits yourself: a merged PR mentioning
+    the id may be the WORK PR, which means the closure may still be missing — verify
+    against whether the bead is open in the default branch's JSONL before rebuilding
+    anything.
 
     An OPEN one: land it before taking another bead. A CLOSED-but-unmerged one is worse — the
     work PR already merged, the closure never did, and `--state open` cannot see it: reopen

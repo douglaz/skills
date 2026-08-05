@@ -281,7 +281,10 @@ PANEL_BASE_OID=$(sed -n 's/^panel_base_oid=//p' "$STATE_DIR/panel" 2>/dev/null |
 
 ```bash
 DS=<the drive-status path resolved in Phase 0>
-[ -z "$(git status --porcelain)" ] || { echo "tree dirty — commit first, do NOT clear"; exit 1; }
+# Two checks, because a FAILED `git status` also prints nothing: a corrupt index would
+# read as a clean tree, in the clearing direction.
+_ST=$(git status --porcelain) || { echo "cannot read the worktree — do NOT clear"; exit 1; }
+[ -z "$_ST" ] || { echo "tree dirty — commit first, do NOT clear"; exit 1; }
 # Name the ref: a --single-branch clone's refspec covers only the feature branch, so a
 # bare `git fetch origin` never creates origin/<base> and freshness stays unknowable.
 # On a fork PR `origin` is YOUR fork, while GitHub merges into the upstream base repo —
@@ -545,7 +548,10 @@ and silently carry the previous bead's closure into its diff. Instead:
   and land it through the same gates. Write it as `**Phase:** DONE · **Pending:** metadata
   PR #N` so a resumed session queries `#N` instead of stopping at a DONE that never landed.
   `N` does not exist until the PR is open, so amend it in afterwards — the first pushed
-  head is never the one that merges.
+  head is never the one that merges. Give the PR body a machine-readable marker line, one
+  per bead it closes — `bead-closure: <bead-id>` — because ordinary work PR bodies carry
+  the bead id too, and the discovery query below filters on the marker to tell a merged
+  closure from merged work.
 
   **That record is only on the metadata branch until it merges**, so a fresh clone of the
   default branch cannot see it: it finds the old `DRIVE.md` and an open bead, and would
@@ -565,9 +571,8 @@ and silently carry the previous bead's closure into its diff. Instead:
     CLOSURE_PRS+=("$_PRS")
   done
   printf '%s\n' "${CLOSURE_PRS[@]}" \
-    | jq -s --arg id "$BEAD_ID" 'add | .[] | select($id != "" and ([.headRefName, .title, (.body // "")]
-        | join(" ") | ascii_downcase
-        | test("(^|[^a-z0-9.])" + ($id|ascii_downcase|gsub("\\.";"\\.")) + "($|\\.$|\\.[^a-z0-9]|[^a-z0-9.])")))'
+    | jq -s --arg id "$BEAD_ID" 'add | .[] | select($id != "" and ((.body // "") | ascii_downcase
+        | test("(^|\\r|\\n)[[:space:]]*bead-closure:[[:space:]]*" + ($id|ascii_downcase|gsub("\\.";"\\.")) + "[[:space:]]*(\\r|\\n|$)")))'
   ```
 
 `BEAD_ID` comes from the bead you are resuming — on a fresh clone take it from `br list`'s
@@ -575,11 +580,18 @@ open beads, one query per candidate. There is no durable variable carrying it ac
 clone boundary, so a snippet that assumes one silently rejects every PR (`$id != ""`) and
 misses the closure it exists to find.
 
-Keyed on the **bead id**, not a branch-naming convention — nothing here mandates one, so
-a filter like `test("closure|metadata")` misses a PR called `chore/close-bead-42`. Put the
-bead id in the closure PR's title or body, and note the raised `--limit`: `gh pr list`
-returns 30 by default, which hides an older closure PR behind newer work PRs — precisely
-the resume case this query exists for.
+Keyed on the **`bead-closure:` marker plus the bead id**, not on the id alone: every work
+PR body carries the bead id too (rb-lite's step 8 requires it), so an id-only filter
+returns the merged work PR for any bead whose work landed — on a fresh clone that reads
+as closure history for a closure that was never opened, and the resume guard clears
+itself on the wrong PR. Not a branch-naming convention either — nothing here mandates
+one, so a filter like `test("closure|metadata")` misses a PR called `chore/close-bead-42`.
+And note the raised `--limit`: `gh pr list` returns 30 by default, which hides an older
+closure PR behind newer work PRs — precisely the resume case this query exists for.
+
+An empty result is trustworthy only for closure PRs opened since this marker was
+prescribed; for an older drive, search the id across `--state all` and read the hits —
+a merged PR naming the id may be the work PR, with the closure still missing.
 
 
   **Before re-entering BUILD or HARDEN from a fresh clone with unresolved beads, run that

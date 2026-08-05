@@ -26,7 +26,27 @@ if [ -f "$FIX/no-pr" ] && [[ "$*" == *"pr view"* ]]; then
   printf '%s\n' "$*" >> "$FIX/gh.calls"
   exit 1
 fi
+# Weaker than no-pr: PRs exist but none is OPEN, so only the OPEN-filtered probes come
+# back empty — the way real gh behaves once a PR merges. The filter text is visible in
+# "$*" because the stub sees the raw -q argument.
+if [ -f "$FIX/no-open-pr" ] && [[ "$*" == *"pr view"* && "$*" == *'select(.state=="OPEN")'* ]]; then
+  printf '%s\n' "$*" >> "$FIX/gh.calls"
+  echo ""
+  exit 0
+fi
 case "$*" in
+  *"pr view"*'select(.state=="MERGED")'*)
+      # The merged-head probe. Per-repo like the open-PR heads below, so "the merged PR
+      # lives in the fork, not the parent" is expressible.
+      printf '%s\n' "$*" >> "$FIX/gh.calls"
+      _up=$(cat "$FIX/upstream.txt" 2>/dev/null || echo "")
+      _at_up=false
+      [ -n "$_up" ] && case "$*" in *"-R $_up"*) _at_up=true;; esac
+      if [ -f "$FIX/prmerged-upstream.txt" ] && $_at_up; then
+        cat "$FIX/prmerged-upstream.txt"
+      elif [ -f "$FIX/prmerged.txt" ] && ! $_at_up; then
+        cat "$FIX/prmerged.txt"
+      else echo ""; fi ;;
   *"repo view"*parent*)   cat "$FIX/upstream.txt" 2>/dev/null || echo "owner/repo" ;;
   *"repo view"*nameWithOwner*) cat "$FIX/self.txt" 2>/dev/null || cat "$FIX/upstream.txt" 2>/dev/null || echo "owner/repo" ;;
   *"repo view"*defaultBranchRef*)
@@ -60,7 +80,19 @@ case "$*" in
       else
         cat "$FIX/prhead.txt" 2>/dev/null || echo ""
       fi ;;
-  *"pr view"*number*)     printf '%s\n' "$*" >> "$FIX/gh.calls"; cat "$FIX/prview.json"  2>/dev/null || echo "" ;;
+  *"pr view"*number*)
+      printf '%s\n' "$*" >> "$FIX/gh.calls"
+      # prview-repo.txt pins the PR to ONE repository. Without it the stub answered the
+      # state query for whichever -R was passed, so a query aimed at the wrong repo still
+      # found the PR and a wrong-repo defect could not make any fixture fail.
+      if [ -f "$FIX/prview-repo.txt" ]; then
+        case "$*" in
+          *"-R $(cat "$FIX/prview-repo.txt")"*) cat "$FIX/prview.json" 2>/dev/null || echo "" ;;
+          *) echo "" ;;
+        esac
+      else
+        cat "$FIX/prview.json" 2>/dev/null || echo ""
+      fi ;;
   *"repo view"*)          echo "owner/repo" ;;
   *) echo "" ;;
 esac
@@ -342,6 +374,44 @@ check "an unreadable PR base refuses LAND" HARDEN
 new_repo; add_code
 printf '%s' "$(G rev-parse HEAD)" > "$FIX/prhead.txt"   # probe succeeds; the state read returns nothing
 check_field "a found PR whose state read fails is unknown" pr.state unknown
+
+# A failed `git status` (corrupt index) left both cleanliness counts at 0, so an
+# UNREADABLE tree satisfied the clean-tree gate and a cleared HARDEN promoted to LAND
+# with cleanliness never established.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+printf 'garbage' > "$REPO/.git/index"
+check "an unreadable worktree refuses LAND" HARDEN
+
+# Same fail-open on the DONE path: with the counts unreadable the dirty guard cannot
+# fire, and a DONE record stood over a closure that may never have been committed.
+new_repo; G checkout -q master; record '**Phase:** DONE'; G push -q origin master
+printf 'garbage' > "$REPO/.git/index"
+check "an unreadable worktree invalidates DONE" HARDEN
+
+# The same branch with an OPEN PR in BOTH the parent and the fork: both report the same
+# head (it is the same branch), so a head match cannot break the tie, and first-match
+# silently picked the parent — validating clearance against one of two independently
+# reviewed merge targets. Refuse instead.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/self.txt"
+printf '%s' "$(G rev-parse HEAD)" > "$FIX/prhead-upstream.txt"
+printf '%s' "$(G rev-parse HEAD)" > "$FIX/prhead.txt"
+check "ambiguous parent+fork open PRs refuse LAND" HARDEN
+check_field "ambiguous open PRs are reported as such" pr_ambiguous true
+check_field "ambiguous open PRs leave the base repo unknown" base_repo null
+
+# A PR the FORK hosted and merged, with the checkout still on its head: the OPEN-only
+# probe finds nothing, and the parent fallback then aimed the state query at a repo that
+# never hosted the PR — PR_STATE read "none", the merged-head exemption could not fire,
+# and a valid DONE record was downgraded to HARDEN for a branch that already landed.
+new_repo; add_code; record '**Phase:** DONE'
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/self.txt"
+touch "$FIX/no-open-pr"
+printf '%s' "$(G rev-parse HEAD)" > "$FIX/prmerged.txt"
+printf '%s' "$(G rev-parse HEAD)" > "$FIX/prhead.txt"
+echo "forkowner/repo" > "$FIX/prview-repo.txt"
+printf '{"number":7,"state":"MERGED","reviewDecision":"APPROVED"}' > "$FIX/prview.json"
+check "a merged fork-hosted PR keeps its DONE record" DONE
 
 echo
 echo "passed $PASS, failed $FAIL"

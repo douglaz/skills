@@ -568,7 +568,10 @@ ignoring the actual signal.**
 ### 8. Squash-merge and clean up
 
 ```bash
-[ -z "$(git status --porcelain)" ] || { echo "tree dirty — do NOT merge"; exit 1; }
+# Two checks, because a FAILED `git status` also prints nothing: a corrupt index would
+# read as a clean tree, in the merging direction.
+_ST=$(git status --porcelain) || { echo "cannot read the worktree — do NOT merge"; exit 1; }
+[ -z "$_ST" ] || { echo "tree dirty — do NOT merge"; exit 1; }
 # Resolve by matching HEAD, not by preferring the parent. A fork can host its own PRs, and
 # both repos can carry PR number N — so parent-first targets a missing or unrelated PR and
 # the real one can never be landed. `bot-gate` resolves the same way for the same reason.

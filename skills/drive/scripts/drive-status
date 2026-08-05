@@ -34,6 +34,7 @@ _UP=""
 _RREPO=""
 _BASE_REPO_UNKNOWN=false
 _PR_BASE_UNKNOWN=false
+_PR_AMBIGUOUS=false
 _RFLAG=()
 # A present gh binary says nothing about which forge owns the checkout. On a non-GitHub
 # remote every repo lookup fails, which used to masquerade as an unresolved fork parent
@@ -70,27 +71,68 @@ if $_GITHUB_REMOTE && command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   # one and clearance was unreachable, with "re-run the panel" as a remedy that re-pins the
   # same wrong ref. `pr_repo` now answers "which repo hosts this branch's PR", and null
   # means there is none; the base remote is a separate question, resolved below.
-  _UP=""; _FOUND=""
-  for _c in ${_PARENT:+"$_PARENT"} ${_SELF_R:+"$_SELF_R"}; do
+  # Deduplicated: the stubbed/degraded case where the parent lookup returns the self repo
+  # would otherwise probe one repo twice and count its single PR as two.
+  _CANDS=()
+  [[ -n "$_PARENT" ]] && _CANDS+=("$_PARENT")
+  [[ -n "$_SELF_R" && "$_SELF_R" != "$_PARENT" ]] && _CANDS+=("$_SELF_R")
+  # ENUMERATE, do not first-match. The same fork branch can have an open PR in the parent
+  # AND in the fork — two independently reviewed surfaces with two merge targets — and both
+  # PRs share the branch, so both normally report the SAME head: "exact head wins" cannot
+  # break that tie, and breaking on the parent picked one of two PRs by iteration order.
+  # A head match is still the tiebreak when it singles ONE out (local HEAD ahead of a stale
+  # PR head is routine mid-HARDEN); two open PRs that a head cannot separate are refused,
+  # the same double-match rule bot-gate and § 8 enforce for number-keyed lookups.
+  _UP=""; _FOUND=""; _OPEN_N=0; _HEADMATCH_N=0; _HEADMATCH_REPO=""
+  for _c in ${_CANDS[@]+"${_CANDS[@]}"}; do
     _sel="$BRANCH"
     [[ -n "$_SELF_R" && "$_c" != "$_SELF_R" ]] && _sel="${_SELF_R%%/*}:$BRANCH"
     _oid=$(gh pr view "$_sel" -R "$_c" --json headRefOid,state \
       -q 'select(.state=="OPEN") | .headRefOid' 2>/dev/null) || continue
     [[ -n "$_oid" ]] || continue
-    [[ -z "$_FOUND" ]] && { _FOUND="$_c"; _UP="$_c"; }      # first repo with an OPEN PR
-    [[ "$_oid" == "$_HEAD_NOW" ]] && { _UP="$_c"; break; }  # exact head wins outright
+    _OPEN_N=$((_OPEN_N + 1))
+    [[ -z "$_FOUND" ]] && _FOUND="$_c"
+    [[ "$_oid" == "$_HEAD_NOW" ]] && { _HEADMATCH_N=$((_HEADMATCH_N + 1)); _HEADMATCH_REPO="$_c"; }
   done
+  if (( _OPEN_N >= 2 )); then
+    if (( _HEADMATCH_N == 1 )); then _UP="$_HEADMATCH_REPO"; else _PR_AMBIGUOUS=true; fi
+  elif (( _OPEN_N == 1 )); then
+    _UP="$_FOUND"
+  fi
   # `-R` still needs a repo even with no PR: fall back to the parent when there is one, so
   # the lookup below asks the place a PR would live. A failed parent query is UNKNOWN, not
   # proof this is not a fork: falling back to the fork there validates against the wrong
   # merge target and can derive LAND over a stale base. This is NOT pr_repo.
   if [[ -n "$_UP" ]]; then
     _RREPO="$_UP"
+  elif $_PR_AMBIGUOUS; then
+    # Two open PRs are two merge targets. Falling back to the parent here silently adopts
+    # one PR's base for a surface the driver may mean to land as the other PR — the same
+    # arbitrary pick the probe above just refused. Unknown, and LAND is refused below.
+    _RREPO=""
   elif $_PARENT_RESOLVED; then
     _RREPO="${_PARENT:-$_SELF_R}"
   else
     _RREPO=""
     _BASE_REPO_UNKNOWN=true
+  fi
+  # A merged PR is invisible to the OPEN-only probe above, so with no open PR the parent
+  # fallback aims every PR-identity query at a repo that may never have hosted it: a PR the
+  # FORK hosted and merged, with the checkout still on its head, read as PR_STATE "none",
+  # and the merged-head exemption below could not recognise its own PR — downgrading a
+  # valid DONE record to HARDEN and sending a landed branch back through review. Probe both
+  # repos for a MERGED PR at this exact head; base discovery above keeps its own fallback.
+  # First match is not an arbitrary pick here: only a PR whose head IS this checkout
+  # counts, and two repos having merged the same head prove the same fact.
+  _MERGED_REPO=""
+  if [[ -z "$_UP" && -n "$_HEAD_NOW" ]] && ! $_PR_AMBIGUOUS; then
+    for _c in ${_CANDS[@]+"${_CANDS[@]}"}; do
+      _sel="$BRANCH"
+      [[ -n "$_SELF_R" && "$_c" != "$_SELF_R" ]] && _sel="${_SELF_R%%/*}:$BRANCH"
+      _oid=$(gh pr view "$_sel" -R "$_c" --json headRefOid,state \
+        -q 'select(.state=="MERGED") | .headRefOid' 2>/dev/null) || continue
+      [[ "$_oid" == "$_HEAD_NOW" ]] && { _MERGED_REPO="$_c"; break; }
+    done
   fi
   # An array, so the flag and its value stay two words without relying on how a `${x:+...}`
   # expansion splits. (The often-repeated claim that quotes inside `${_UP:+-R "$_UP"}` are
@@ -112,9 +154,14 @@ if $_GITHUB_REMOTE && command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   # `gh pr view beltagyy:fix-ssh-signing-key-delete -R cli/cli` finds #14069.
   # Prefixed only when this repo really is a fork; on a normal clone owner == upstream
   # owner and the bare branch is what gh expects.
+  # PR-identity queries target the repo that HOSTS the PR when one is known — for a merged
+  # fork-hosted PR that is the fork, while _RREPO (the base fallback) is the parent.
+  # Conflating them is what made the merged PR unqueryable above.
+  _PRREPO="${_RREPO:-}"
+  [[ -z "$_UP" && -n "$_MERGED_REPO" ]] && _PRREPO="$_MERGED_REPO"
   _SEL="$BRANCH"
-  [[ -n "$_SELF_R" && -n "${_RREPO:-}" && "$_RREPO" != "$_SELF_R" ]] && _SEL="${_SELF_R%%/*}:$BRANCH"
-  _RFLAG=(); [[ -n "$_RREPO" && -n "$BRANCH" ]] && _RFLAG=("$_SEL" -R "$_RREPO")
+  [[ -n "$_SELF_R" && -n "${_PRREPO:-}" && "$_PRREPO" != "$_SELF_R" ]] && _SEL="${_SELF_R%%/*}:$BRANCH"
+  _RFLAG=(); [[ -n "$_PRREPO" && -n "$BRANCH" ]] && _RFLAG=("$_SEL" -R "$_PRREPO")
   # baseRefName only. NOT baseRefOid — it is a creation-time SNAPSHOT of the base tip, not
   # the base's current commit, and no fetch refreshes it. Verified against live GitHub:
   # git/git PR #206, open since 2016, still reports baseRefOid 306ee63a while master is
@@ -138,13 +185,13 @@ fi
 # The repository and branch are one identity. Before a fork PR exists, `_RREPO` is the
 # parent, so using the fork's origin/HEAD pairs the parent's fetch URL with the fork's
 # branch name and can fetch the wrong target or no target at all.
-if [[ -z "$DEFAULT_BRANCH" && -n "${_RREPO:-}" ]] && ! $_PR_BASE_UNKNOWN && $_GITHUB_REMOTE \
-   && command -v gh >/dev/null 2>&1; then
+if [[ -z "$DEFAULT_BRANCH" && -n "${_RREPO:-}" ]] && ! $_PR_BASE_UNKNOWN && ! $_PR_AMBIGUOUS \
+   && $_GITHUB_REMOTE && command -v gh >/dev/null 2>&1; then
   DEFAULT_BRANCH=$(gh repo view "$_RREPO" --json defaultBranchRef \
     -q .defaultBranchRef.name 2>/dev/null || echo "")
   [[ -n "$DEFAULT_BRANCH" ]] && BASE_ORIGIN="forge"
 fi
-if [[ -z "$DEFAULT_BRANCH" ]] && ! $_PR_BASE_UNKNOWN; then
+if [[ -z "$DEFAULT_BRANCH" ]] && ! $_PR_BASE_UNKNOWN && ! $_PR_AMBIGUOUS; then
   DEFAULT_BRANCH=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
   [[ -n "$DEFAULT_BRANCH" ]] && BASE_ORIGIN="origin/HEAD"
 fi
@@ -158,7 +205,7 @@ fi
 # develop/trunk but still carries a legacy `main` in the ancestry would otherwise resolve to
 # `main`, and BASE_FRESH would then validate the WRONG base — deriving LAND even after the
 # real default branch advanced, which is the unreviewed-squash case this all exists to stop.
-if [[ -z "$DEFAULT_BRANCH" ]] && ! $_PR_BASE_UNKNOWN && $_GITHUB_REMOTE && command -v gh >/dev/null 2>&1; then
+if [[ -z "$DEFAULT_BRANCH" ]] && ! $_PR_BASE_UNKNOWN && ! $_PR_AMBIGUOUS && $_GITHUB_REMOTE && command -v gh >/dev/null 2>&1; then
   if [[ -n "${_RREPO:-}" ]]; then
     DEFAULT_BRANCH=$(gh repo view "$_RREPO" --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || echo "")
   else
@@ -188,9 +235,20 @@ if [[ -z "$DEFAULT_BRANCH" ]]; then
 fi
 # Tracked modifications only — untracked files are reported separately, so counting
 # `git status --porcelain` wholesale would double-count them.
-DIRTY_COUNT=$(git status --porcelain 2>/dev/null | grep -cv '^??' || true)
+# CAPTURED first, so a failure is visible. Piped straight into the counters, a failed
+# `git status` or `git ls-files` (unreadable or corrupt index) produced no output, both
+# counts read 0, and "the tree could not be read" cleared the same gates a genuinely clean
+# tree does — LAND with cleanliness never established, DONE with a possibly-uncommitted
+# closure. _TREE_KNOWN records whether the two counts below mean anything at all.
+_TREE_KNOWN=true
+_STATUS_PATHS=$(git status --porcelain 2>/dev/null) || _TREE_KNOWN=false
+DIRTY_COUNT=$(printf '%s' "$_STATUS_PATHS" | grep -cv '^??' || true)
 DIRTY_COUNT=${DIRTY_COUNT:-0}
-UNTRACKED=$(git ls-files --others --exclude-standard 2>/dev/null | wc -l | tr -d ' ')
+_UNTRACKED_PATHS=$(git ls-files --others --exclude-standard 2>/dev/null) || _TREE_KNOWN=false
+# `grep -c ''`, not `wc -l`: the capture strips the trailing newline, and wc would then
+# undercount the last path by one.
+UNTRACKED=$(printf '%s' "$_UNTRACKED_PATHS" | grep -c '' || true)
+UNTRACKED=${UNTRACKED:-0}
 AHEAD=$(git rev-list --count "@{upstream}..HEAD" 2>/dev/null || echo "?")
 
 # Commits on this branch not yet in the default branch — the review surface.
@@ -364,6 +422,11 @@ elif ! $_GITHUB_REMOTE; then
   # A non-GitHub forge (codeberg, gitlab, self-hosted). gh cannot answer; saying "none"
   # would be a claim we have not checked, so name the reason instead.
   PR_STATE="n/a-non-github"
+elif $_PR_AMBIGUOUS; then
+  # Two open PRs host this branch. With _RFLAG empty a bare `gh pr view` would resolve
+  # against the fork and report ITS number and state as "the PR" — re-admitting through
+  # this door the arbitrary selection the probe refused. Name the ambiguity instead.
+  PR_STATE="ambiguous"
 else
   # Same -R + selector as the base lookup: a bare `gh pr view` resolves against the fork,
   # so PR_STATE would read `none` on a fork clone — which also makes the merged-head
@@ -481,7 +544,7 @@ if $ON_DEFAULT && [[ "$PR_STATE" == OPEN* ]]; then ON_DEFAULT=false; fi
 
 BASE_FRESH="n/a"
 if [[ -n "$BASE_REF" && -n "$HEAD_SHA" && "$BASE_ORIGIN" != "guessed" ]] \
-   && ! $_BASE_REPO_UNKNOWN && ! $_PR_BASE_UNKNOWN && ! $ON_DEFAULT; then
+   && ! $_BASE_REPO_UNKNOWN && ! $_PR_BASE_UNKNOWN && ! $_PR_AMBIGUOUS && ! $ON_DEFAULT; then
   if git merge-base --is-ancestor "$BASE_REF" HEAD 2>/dev/null; then BASE_FRESH=true; else BASE_FRESH=false; fi
 fi
 
@@ -633,8 +696,11 @@ _DONE_DIRTY=false
 # branch that really did land — it says nothing about an unknown base or a dirty tree, and
 # skipping those let an interrupted post-merge session report DONE with the closure JSONL
 # still uncommitted, which is exactly what the dirty guard exists to catch.
+# An unreadable tree joins the disjunction for the same reason as a dirty one: with
+# `git status` failed both counts read 0, so _DONE_DIRTY cannot fire, and DONE would
+# stand on a tree whose closure state was never established. Unknown is not clean.
 if [[ "$PHASE" == "DONE" ]] \
-   && { { [[ "$BRANCH_COMMITS" -gt 0 ]] && ! $_MERGED_AT_HEAD; } || ! $_BASE_KNOWN || $_DONE_DIRTY; }; then
+   && { { [[ "$BRANCH_COMMITS" -gt 0 ]] && ! $_MERGED_AT_HEAD; } || ! $_BASE_KNOWN || $_DONE_DIRTY || ! $_TREE_KNOWN; }; then
   DONE_ON_BRANCH=true
   PHASE="HARDEN"
   # Name the disjunct that actually fired. One string for three causes asserted commits
@@ -645,6 +711,7 @@ if [[ "$PHASE" == "DONE" ]] \
   # sends the driver to re-review a branch that merged.
   if [[ "$BRANCH_COMMITS" -gt 0 ]] && ! $_MERGED_AT_HEAD; then _DONE_WHY="this branch has unreviewed commits"
   elif ! $_BASE_KNOWN; then _DONE_WHY="the base ref could not be resolved"
+  elif ! $_TREE_KNOWN; then _DONE_WHY="the worktree state could not be read"
   else _DONE_WHY="the tree is dirty, so the closure is not committed"; fi
   PHASE_SOURCE="$([[ "$PHASE_WAS" == "DRIVE.md" ]] && echo "DRIVE.md" || echo "tree") (DONE, but $_DONE_WHY)"
 fi
@@ -666,7 +733,9 @@ fi
 LAND_BLOCKED_DIRTY=false
 if [[ "$PHASE" == "HARDEN" ]] && $CLEARED_MATCHES_TIP && [[ "$BASE_FRESH" == "true" ]] \
    && [[ "$CLEARED_BASE_MATCHES" == "true" ]]; then
-  if [[ "$DIRTY_COUNT" -eq 0 && "$UNTRACKED" -eq 0 ]]; then
+  # $_TREE_KNOWN too: cleanliness must be ESTABLISHED, not merely uncontradicted. With
+  # `git status` failed both counts read 0 and this gate promoted an unreadable tree.
+  if [[ "$DIRTY_COUNT" -eq 0 && "$UNTRACKED" -eq 0 ]] && $_TREE_KNOWN; then
     PHASE="LAND"
     PHASE_SOURCE="derived (cleared == tip, base fresh, tree clean)"
   else
@@ -714,6 +783,7 @@ if $JSON; then
     --arg land_blocked_dirty "$LAND_BLOCKED_DIRTY" --arg done_on_branch "$DONE_ON_BRANCH" \
     --arg state_file "$STATE_FILE" --arg base_fresh "$BASE_FRESH" \
     --arg pr_repo "$_UP" --arg base_repo "${_RREPO:-}" --arg base_origin "$BASE_ORIGIN" --arg cleared_base "$DRIVE_CLEARED_BASE" --arg cleared_base_matches "$CLEARED_BASE_MATCHES" \
+    --arg pr_ambiguous "$_PR_AMBIGUOUS" --arg tree_known "$_TREE_KNOWN" \
     --argjson dirty "${DIRTY_COUNT:-0}" --argjson untracked "${UNTRACKED:-0}" \
     --argjson branch_commits "${BRANCH_COMMITS:-0}" \
     '{root:$root,branch:$branch,default_branch:$default_branch,dirty:$dirty,
@@ -731,6 +801,7 @@ if $JSON; then
       base_origin:$base_origin,cleared_base:$cleared_base,
       cleared_base_matches:(if $cleared_base_matches=="n/a" then null else $cleared_base_matches=="true" end),
       pending_pr:$pending_pr,done_pending:($done_pending=="true"),
+      pr_ambiguous:($pr_ambiguous=="true"),tree_known:($tree_known=="true"),
       land_blocked_dirty:($land_blocked_dirty=="true"),
       done_on_branch:($done_on_branch=="true"),
       phase_disagreement:(($record_valid=="true") and $drive_phase!=$tree_phase
@@ -793,7 +864,12 @@ if [[ "$CLEARED_BASE_MATCHES" == "n/a" ]] && $CLEARED_MATCHES_TIP; then
   fi
 fi
 [[ "$CLEARED_BASE_MATCHES" == "false" ]] && printf '  ⚠ the PR base moved since clearance (marker %s, now %s) — the panel diffed a\n    different surface. Re-run it.\n' "${DRIVE_CLEARED_BASE:0:10}" "$(git rev-parse --short=10 "${BASE_REF:-HEAD}" 2>/dev/null)"
-$LAND_BLOCKED_DIRTY && printf '  ⚠ clearance matches the tip and the base is fresh, but the worktree is dirty\n    (%s modified, %s untracked) — so this is NOT LAND. Those edits are not in the commit\n    a merge would take. Commit and re-clear, or discard them.\n' "$DIRTY_COUNT" "$UNTRACKED"
+# Only when the counts are real: with the tree unreadable both read 0, and "dirty
+# (0 modified, 0 untracked)" names a state the code never observed — the unreadable-tree
+# warning below is the accurate one.
+$LAND_BLOCKED_DIRTY && $_TREE_KNOWN && printf '  ⚠ clearance matches the tip and the base is fresh, but the worktree is dirty\n    (%s modified, %s untracked) — so this is NOT LAND. Those edits are not in the commit\n    a merge would take. Commit and re-clear, or discard them.\n' "$DIRTY_COUNT" "$UNTRACKED"
+$_TREE_KNOWN || printf '  ⚠ `git status` failed, so whether this tree is clean is UNKNOWN — the modified and\n    untracked counts above are not evidence. LAND and DONE are refused until the worktree\n    is readable again (start with `git fsck`).\n'
+$_PR_AMBIGUOUS && printf '  ⚠ this branch has an OPEN PR in BOTH %s and %s, and the head singles neither out —\n    two independently reviewed surfaces with two merge targets. The base is treated as\n    unknown and LAND is refused; close one PR, or run where the intended PR is unambiguous.\n' "${_PARENT:-the parent}" "${_SELF_R:-this repo}"
 # Base drift is invisible in every SHA the driver checks, so it has to be surfaced here.
 [[ "$BASE_FRESH" == "false" ]] && printf '  ⚠ %s has advanced since this branch forked. A squash merge replays onto the CURRENT\n    base, so what lands is a tree no panel and no bot reviewed — while every SHA still\n    matches. Rebase or merge base in, then re-clear before merging.\n' "${BASE_REF:-the base}"
 $_BASE_REPO_UNKNOWN && printf '  ⚠ the parent-repository lookup failed, so the merge target is unknown. The fork itself\n    is not a safe fallback: its base may lag upstream. LAND is refused until base_repo resolves.\n'
