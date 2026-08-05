@@ -86,6 +86,10 @@ done
 # number belongs to upstream, but a bare `gh pr view N` resolves it against the fork —
 # finding nothing, or worse, a different PR that happens to share the number. `.parent`
 # is the upstream when this repo is a fork, and the repo itself otherwise.
+# Read local HEAD first: the repo resolution below selects the PR whose head matches it.
+TIP=$(git rev-parse --verify --quiet HEAD) \
+  || { echo "BLOCKED: no HEAD" >&2; exit 3; }
+
 # Upstream FIRST, but not unconditionally: a fork can host its own PRs, and redirecting
 # those to the parent either finds nothing or — worse, if the parent happens to have a PR
 # with the same number — inspects an unrelated PR's reviews and threads and reports on it.
@@ -93,16 +97,22 @@ done
 SELF_REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null) \
   || { echo "BLOCKED: cannot resolve repo" >&2; exit 3; }
 UP_REPO=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end' 2>/dev/null || echo "")
-REPO="$SELF_REPO"
-if [[ -n "$UP_REPO" ]]; then
-  if gh pr view "$PR" -R "$UP_REPO" --json number >/dev/null 2>&1; then REPO="$UP_REPO"
-  elif ! gh pr view "$PR" -R "$SELF_REPO" --json number >/dev/null 2>&1; then
-    echo "BLOCKED: PR $PR not found in $UP_REPO or $SELF_REPO" >&2; exit 3
-  fi
+# Select by HEAD, not by existence. Both a fork and its parent can carry PR number N —
+# likely, since a fork's own PRs are low-numbered and a mature parent has thousands — so an
+# upstream-first existence probe reliably picks the parent's unrelated PR, and the gate
+# then reports on somebody else's reviews and threads. The tip we are gating IS local HEAD,
+# so ask each candidate whose head matches it; that is the only question with one answer.
+REPO=""
+for _cand in ${UP_REPO:+"$UP_REPO"} "$SELF_REPO"; do
+  _h=$(gh pr view "$PR" -R "$_cand" --json headRefOid -q .headRefOid 2>/dev/null) || continue
+  [[ "$_h" == "$TIP" ]] && { REPO="$_cand"; break; }
+done
+if [[ -z "$REPO" ]]; then
+  echo "BLOCKED: no PR $PR whose head is ${TIP:0:10} in ${UP_REPO:+$UP_REPO or }$SELF_REPO" >&2
+  echo "  (a PR with that number may exist in either, but not for this tree — check the number and the checkout)" >&2
+  exit 3
 fi
 [[ "$REPO" == */* ]] || { echo "BLOCKED: cannot parse repo: $REPO" >&2; exit 3; }
-TIP=$(git rev-parse --verify --quiet HEAD) \
-  || { echo "BLOCKED: no HEAD" >&2; exit 3; }
 
 PR_HEAD=$(gh pr view "$PR" -R "$REPO" --json headRefOid -q .headRefOid 2>/dev/null) \
   || { echo "BLOCKED: PR $PR not found in $REPO" >&2; exit 3; }

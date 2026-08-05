@@ -453,6 +453,15 @@ git fetch -q "$BASE_REMOTE" "+refs/heads/$BASE:refs/remotes/origin/$BASE" \
 DSJ2=$("$DS" --json)
 [ "$(printf %s "$DSJ2" | jq -r '.default_branch')" = "$BASE" ] \
   || { echo "base changed under the check (want $BASE) — do NOT merge"; exit 1; }
+# THE PANEL'S CLEARANCE MUST STILL NAME THE TIP. Every other check here is about the base,
+# and the tip moves too: answering a bot finding by amending after the panel cleared the
+# previous HEAD produces a tree `bot-gate` will pass — it only ever asks about the current
+# tip — while no panel has read it. drive-status already reports this (cleared_matches_tip
+# false, phase HARDEN rather than LAND); nothing here was reading it.
+[ "$(printf %s "$DSJ2" | jq -r '.cleared_matches_tip')" = "true" ] \
+  || { echo "the panel has not cleared this tip (amended since clearance?) — re-run the panel; do NOT merge"; exit 1; }
+[ "$(printf %s "$DSJ2" | jq -r '.phase')" = "LAND" ] \
+  || { echo "drive-status says phase=$(printf %s "$DSJ2" | jq -r '.phase'), not LAND — do NOT merge"; exit 1; }
 # The clearance must still name the base it was written against. Retargeting to an OLDER
 # ancestor after clearance leaves HEAD untouched and the new base still an ancestor of it,
 # so base_fresh stays true and the name check agrees with itself — while the PR's diff has
@@ -546,7 +555,7 @@ and silently carry the previous bead's closure into its diff. Instead:
   UP=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
   gh pr list -R "$UP" --state all --limit 200 --json number,state,headRefName,title,body \
     | jq --arg id "$BEAD_ID" '.[] | select($id != "" and ([.headRefName, .title, (.body // "")]
-        | join(" ") | ascii_downcase | split("[^a-z0-9-]+"; null) | index($id | ascii_downcase)))'
+        | join(" ") | ascii_downcase | split("[^a-z0-9.-]+"; null) | index($id | ascii_downcase)))'
   ```
 
 Keyed on the **bead id**, not a branch-naming convention — nothing here mandates one, so

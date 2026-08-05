@@ -514,6 +514,11 @@ implement → review loop for each bead.
     # test ancestry before merging, the same way pr-with-codex-bot-review § 8 does.
     git fetch "https://github.com/$R.git" "+refs/heads/$BASE:refs/remotes/upstream/$BASE" \
       || { echo "cannot fetch the merge target — base unknown, do NOT merge"; echo "  (on a private repo cloned over SSH this is usually missing git credentials for https, not a missing base)"; exit 1; }
+    # Read back from step 9's file FIRST — everything below uses it. Steps 9 and 10 are
+    # separate tool calls, so the variable is gone by now; validating it before loading it
+    # aborts a correct drain (or trips nounset) and it can never merge.
+    MERGING_SHA=$(cat "$(git rev-parse --git-path rb-lite-merging-sha)" 2>/dev/null || echo "")
+    [ -n "$MERGING_SHA" ] || { echo "no pinned SHA — re-run step 9"; exit 1; }
     # Against $MERGING_SHA, not HEAD: that is the commit --match-head-commit pins and the
     # one GitHub will squash. A local rebase during CI that was never pushed would make
     # HEAD pass this test while the pinned remote SHA is still behind the base.
@@ -521,11 +526,6 @@ implement → review loop for each bead.
       || { echo "local HEAD moved since step 9 — re-run the panel and the checks"; exit 1; }
     git merge-base --is-ancestor "refs/remotes/upstream/$BASE" "$MERGING_SHA" \
       || { echo "REBASE FIRST — $BASE advanced since the review"; exit 1; }
-    # Read back from step 9's file: captured BEFORE CI ran, and surviving the shell
-    # boundary between steps. Re-deriving it here would pin whatever is current, including
-    # a force-push no check ever saw.
-    MERGING_SHA=$(cat "$(git rev-parse --git-path rb-lite-merging-sha)" 2>/dev/null || echo "")
-    [ -n "$MERGING_SHA" ] || { echo "no pinned SHA — re-run step 9"; exit 1; }
     gh pr merge <pr> -R "$R" --squash --delete-branch --match-head-commit "$MERGING_SHA" \
       || { echo "merge did not land — do NOT close the bead"; exit 1; }
 
@@ -600,7 +600,7 @@ implement → review loop for each bead.
     UP=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
     gh pr list -R "$UP" --state all --limit 200 --json number,state,headRefName,title,body \
     | jq --arg id "$BEAD_ID" '.[] | select($id != "" and ([.headRefName, .title, (.body // "")]
-        | join(" ") | ascii_downcase | split("[^a-z0-9-]+"; null) | index($id | ascii_downcase)))'
+        | join(" ") | ascii_downcase | split("[^a-z0-9.-]+"; null) | index($id | ascii_downcase)))'
     ```
 
     Keyed on the **bead id**, not a branch-naming convention, and `--limit 200` because

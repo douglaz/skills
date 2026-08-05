@@ -42,7 +42,15 @@ case "$*" in
   # it. Default: no upstream.txt = not a fork.
   *"repo view"*parent*)         cat "$FIX/upstream.txt" 2>/dev/null || echo "" ;;
   *"repo view"*nameWithOwner*)  f repo.txt "owner/repo" ;;
-  *"pr view"*headRefOid*)       cat "$FIX/prhead.txt" 2>/dev/null || echo "" ;;
+  *"pr view"*headRefOid*)
+      # Per-repo heads, so "PR N exists in both" can be modelled: a lookup carrying
+      # -R <upstream> gets prhead-upstream.txt when it exists. Without this the stub
+      # answers every repo identically and an upstream-first probe passes the suite.
+      if [ -f "$FIX/prhead-upstream.txt" ] && case "$*" in *"-R $(cat "$FIX/upstream.txt" 2>/dev/null)"*) true;; *) false;; esac; then
+        cat "$FIX/prhead-upstream.txt"
+      else
+        cat "$FIX/prhead.txt" 2>/dev/null || echo ""
+      fi ;;
   *"pr view"*number*)           f prnum.txt "16" ;;
   *"pr view"*statusCheckRollup*) [ -f "$FIX/rollupfail" ] && exit 1; f rollup.json '{"statusCheckRollup":[]}' ;;
   *timeline*)                   [ -f "$FIX/timelinefail" ] && exit 1; f timeline.json '[[]]' ;;
@@ -438,6 +446,16 @@ new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"
 echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/self.txt"
 echo "forkowner/repo" > "$FIX/repo.txt"; touch "$FIX/pr-not-upstream"
 check "a fork clone still resolves a PR the fork owns" 0
+
+# Both repos can carry PR number N — likely, since a fork's own PRs are low-numbered and a
+# mature parent has thousands. An upstream-first EXISTENCE probe picks the parent's
+# unrelated PR every time; selecting by matching head is the only question with one answer.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/self.txt"
+echo "forkowner/repo" > "$FIX/repo.txt"
+# The upstream HAS a PR 16 — a different one, whose head is not our tree.
+printf 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' > "$FIX/prhead-upstream.txt"
+check "a colliding PR number in the parent is not used" 0
 
 # GitHub emits automatic_base_change_succeeded as a SEPARATE event from base_ref_changed,
 # and it fires in the stacked-PR case: B targets A, A merges and is deleted after B's
