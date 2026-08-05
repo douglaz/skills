@@ -275,7 +275,8 @@ For each pass `N` from `1` to `MAX_PASSES`:
    - tokens line from stderr, if present
    - log file paths
 
-6. In chat, show only a compact summary:
+6. In chat, show only a compact summary — and if this pass produced findings, see § 3.6
+   on launching the next pass *before* writing it:
 
    ```text
    PASS N/MAX  [DEGRADED if a reviewer failed]
@@ -378,10 +379,38 @@ Otherwise:
    Passing validation supports a fix, but it does not by itself prove that a
    rejected finding was false.
 
-6. Print a brief disposition summary in chat:
+6. **Launch the next pass before you write the summary.** Not after — before. Go back to
+   § 2 with `N+1`, start the reviewers, and only then write up what this pass did.
+
+   This ordering is doing real work, so it is worth saying why rather than just asking
+   for it. Writing a report to the user is the single most turn-ending act available;
+   putting it last in a loop iteration reliably ends the loop instead of advancing it.
+   Measured on a real run of this skill: every boundary whose final act was a summary
+   stalled and needed a human "continue", and every boundary whose final act was a tool
+   call did not. Telling yourself to keep going does not fix this — an explicit
+   don't-stop instruction was in place for both stalls and neither was prevented, because
+   the failure is about *sequence*, not resolve.
+
+   Inverting the order removes the failure state rather than asking you to resist it. You
+   cannot end a turn having forgotten to start the next pass, because it is already
+   running. Two things fall out for free: the reviewers work for 10-15 minutes while you
+   write the summary, and the summary becomes a fact ("pass 3 is running") instead of a
+   promise ("running pass 3 now") that nothing enforces.
+
+   That last difference matters more than it looks. A turn that ends with a pass running
+   and a turn that ends with a pass merely *announced* read identically in the transcript
+   — same words, opposite states. Naming the running task in the summary is what makes
+   them distinguishable, to you on the next turn and to the user right now.
+
+   The exceptions are the § 4 stop conditions and § 4a/§ 4b, which are the loop
+   deliberately not continuing. Everywhere else, a summary marks a transition, not a
+   finish line.
+
+7. Print a brief disposition summary in chat:
 
    ```text
    PASS N ACTIONS
+   Next pass: <launched, task/PID> | <not launched — why>
    Fixed:
    - [P1][BOTH] <what changed>
    Deferred:
