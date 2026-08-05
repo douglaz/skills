@@ -48,12 +48,18 @@ if command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   _SELF_R=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "")
   _PARENT=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end' 2>/dev/null || echo "")
   _HEAD_NOW=$(git rev-parse --verify --quiet HEAD 2>/dev/null || echo "")
-  _UP="$_SELF_R"
+  # PR IDENTITY, then head match as a tiebreak — not head match as the entry condition.
+  # Local HEAD is routinely ahead of the PR head mid-HARDEN (an unpushed commit), and
+  # requiring equality there hid the upstream PR entirely, so the base fell back to the
+  # fork's default instead of the PR's release or stacked target.
+  _UP="$_SELF_R"; _FOUND=""
   for _c in ${_PARENT:+"$_PARENT"} ${_SELF_R:+"$_SELF_R"}; do
     _sel="$BRANCH"
     [[ -n "$_SELF_R" && "$_c" != "$_SELF_R" ]] && _sel="${_SELF_R%%/*}:$BRANCH"
-    [[ "$(gh pr view "$_sel" -R "$_c" --json headRefOid -q .headRefOid 2>/dev/null)" == "$_HEAD_NOW" ]] \
-      && { _UP="$_c"; break; }
+    _oid=$(gh pr view "$_sel" -R "$_c" --json headRefOid -q .headRefOid 2>/dev/null) || continue
+    [[ -n "$_oid" ]] || continue
+    [[ -z "$_FOUND" ]] && { _FOUND="$_c"; _UP="$_c"; }      # first repo that HAS the PR
+    [[ "$_oid" == "$_HEAD_NOW" ]] && { _UP="$_c"; break; }  # exact head wins outright
   done
   # An array, so the flag and its value stay two words without relying on how a `${x:+...}`
   # expansion splits. (The often-repeated claim that quotes inside `${_UP:+-R "$_UP"}` are

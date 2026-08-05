@@ -135,11 +135,16 @@ a reviewer.
      reviews an empty diff and reports "Nothing to review" on a branch full of changes:
 
      ```bash
-     UP=$(gh repo view --json nameWithOwner,parent \
-          -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
+     # Probe both, do not force the parent: a fork can host its own PR, and forcing
+     # `.parent` makes it invisible. Take the first candidate that HAS a PR for this branch.
      SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+     PARENT=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end')
      BR=$(git branch --show-current)
-     SEL="$BR"; [ "$UP" != "$SELF" ] && SEL="${SELF%%/*}:$BR"   # gh matches the head LABEL
+     UP="$SELF"; SEL="$BR"
+     for _c in ${PARENT:+"$PARENT"} "$SELF"; do
+       _s="$BR"; [ "$_c" != "$SELF" ] && _s="${SELF%%/*}:$BR"    # gh matches the head LABEL
+       gh pr view "$_s" -R "$_c" --json number >/dev/null 2>&1 && { UP="$_c"; SEL="$_s"; break; }
+     done
      # OPEN only, and empty means "no PR" — fall through to candidate 2, do not abort.
      # The first HARDEN panel runs BEFORE any PR exists (that is the prescribed ordering),
      # so aborting here stops the panel in its most common state. And an abandoned CLOSED
@@ -164,10 +169,25 @@ a reviewer.
      # else: no open PR — leave DIFF_BASE unset and try the next candidate.
      ```
 
-   **Never let the ladder pick the branch's own upstream.** `origin/<feature>` resolves to
-   HEAD, `git diff` against it is empty, and both reviewers return clean having read
-   nothing. If the candidate you land on is an ancestor-of-nothing or equals HEAD, that is
-   a resolution failure, not a clean tree — say so and stop rather than reviewing air.
+   **A candidate equal to HEAD is INELIGIBLE — skip it and keep going down the ladder.**
+   On a pushed feature branch `@{upstream}` is `origin/<feature>`, which resolves to HEAD;
+   `git diff` against it is empty and both reviewers return clean having read nothing. That
+   is the normal pre-PR HARDEN state, so treat it as "this candidate does not qualify" and
+   fall through to `origin/HEAD` or the forge default — not as a hard failure, which would
+   stop the panel in the very state the drive prescribes.
+
+   Only when the ladder is EXHAUSTED with no eligible candidate is it a resolution
+   failure. Say so and stop then; do not review air.
+
+   ```bash
+   for c in "$PR_BASE" "$UPSTREAM" "$ORIGIN_HEAD" "$FORGE_DEFAULT" main master; do
+     [ -n "$c" ] || continue
+     git rev-parse --verify --quiet "$c" >/dev/null 2>&1 || continue
+     [ "$(git rev-parse "$c")" = "$(git rev-parse HEAD)" ] && continue   # equals HEAD: skip
+     DIFF_BASE="$c"; break
+   done
+   [ -n "${DIFF_BASE:-}" ] || { echo "no base candidate resolves to anything but HEAD"; exit 1; }
+   ```
    - current branch upstream from `git rev-parse --abbrev-ref --symbolic-full-name @{upstream}`
    - remote default branch from `git symbolic-ref refs/remotes/origin/HEAD`
    - repo default branch from `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`
