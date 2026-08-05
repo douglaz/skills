@@ -309,10 +309,10 @@ feedback and merge.
 
 Ships with `scripts/bot-gate`, which reports whether anything says the review bots are
 still working on the *current* tip, or have left findings nobody dispositioned: a submitted
-review naming this tip, no PENDING review and no `@codex review` comment newer than it
-(a rerun in flight, or one merely requested), no `eyes` reaction newer than it, no base
-mutation newer than it (a retarget grows the diff without moving the head), and zero
-unresolved threads from either gated bot. It fails closed on any API error or missing tool **in the signals that feed those five** —
+review naming this tip, no PENDING review, no `@codex review` comment newer than it, no
+`eyes` reaction newer than it, no base mutation lacking a later explicit review request
+(a retarget grows the diff without moving the head), and zero unresolved threads from
+either gated bot. It fails closed on any API error or missing tool **in the signals that feed those six** —
 a CodeRabbit query failure is reported and does not block, deliberately. Exit 0, 1 blocked,
 2 usage, 3 cannot determine, and "cannot determine" is never clearance.
 

@@ -541,9 +541,11 @@ and silently carry the previous bead's closure into its diff. Instead:
   none. So the discovery path is the forge, and it belongs in the resume checklist:
 
   ```bash
-  UP=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
-  gh pr list -R "$UP" --state all --limit 1000 --json number,state,headRefName,title,body \
-    | jq --arg id "$BEAD_ID" '.[] | select($id != "" and ([.headRefName, .title, (.body // "")]
+  SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+  PARENT=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end')
+  for UP in ${PARENT:+"$PARENT"} "$SELF"; do
+    gh pr list -R "$UP" --state all --limit 1000 --json number,state,headRefName,title,body
+  done | jq -s --arg id "$BEAD_ID" 'add | .[] | select($id != "" and ([.headRefName, .title, (.body // "")]
         | join(" ") | ascii_downcase
         | test("(^|[^a-z0-9.])" + ($id|ascii_downcase|gsub("\\.";"\\.")) + "($|\\.$|\\.[^a-z0-9]|[^a-z0-9.])")))'
   ```

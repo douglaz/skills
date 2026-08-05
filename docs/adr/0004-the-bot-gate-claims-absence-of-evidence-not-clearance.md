@@ -142,14 +142,17 @@ the tree, and would deadlock every PR that converges — a clean round leaves no
 Moving the requirement into branch protection does not help either, because the signal
 already *is* a commit status on the head, so a required check reads the same green.
 
-**Decision.** CodeRabbit no longer affects the verdict, which becomes three conditions: a
-*submitted* codex review naming the tip, no `eyes` reaction newer than it, and zero
-unresolved review threads from either gated bot. (Two more were added later, both decidable. No
-`base_ref_changed` newer than the review — a retarget grows the PR's diff without moving
-its head, so `commit_id` proves which tree was read and nothing about which diff; it is a
-timeline event with a timestamp. And no PENDING review from the bot on the tip, which is a
-round in flight that `eyes` cannot report, since a reaction is never refreshed on a rerun.) `--no-coderabbit` is removed and rejected
-with an explanation; the "absence is undecidable" problem it existed for dissolves with it.
+**Decision.** CodeRabbit no longer affects the verdict. The current verdict has six
+conditions: a *submitted* codex review naming the tip; no PENDING review from the bot on
+that tip; no `@codex review` request newer than the wrapper; no `eyes` reaction newer than
+it; no base mutation unless a later explicit review request precedes the wrapper (and no
+`ready_for_review` event newer than it); and zero unresolved review threads from either
+gated bot. The PENDING and rerun-request checks cover in-flight rounds that `eyes` cannot
+report, since a reaction is never refreshed on a rerun. The timeline check is decidable:
+those events carry timestamps, and a wrapper's `commit_id` identifies the tree but not the
+diff the bot read. `--no-coderabbit` is removed and rejected as an unknown option with exit
+2; the "absence is undecidable" problem it existed for dissolves with CodeRabbit's removal
+from the verdict.
 
 CodeRabbit's status, its rate-limit and paused markers, and its skipped-files list are all
 still **printed** — the same call made for the skip list above, for the same reason: a bug

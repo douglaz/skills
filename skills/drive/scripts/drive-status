@@ -31,6 +31,7 @@ BASE_ORIGIN="none"
 # and printed nothing at all — not even the degraded fallback its own header promises.
 # `_RFLAG` was initialized unconditionally for this exact reason; `_UP` was not.
 _UP=""
+_RREPO=""
 _RFLAG=()
 if command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   # OPEN only. `gh pr view` falls back to the most recent CLOSED or MERGED PR on the
@@ -62,9 +63,10 @@ if command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   for _c in ${_PARENT:+"$_PARENT"} ${_SELF_R:+"$_SELF_R"}; do
     _sel="$BRANCH"
     [[ -n "$_SELF_R" && "$_c" != "$_SELF_R" ]] && _sel="${_SELF_R%%/*}:$BRANCH"
-    _oid=$(gh pr view "$_sel" -R "$_c" --json headRefOid -q .headRefOid 2>/dev/null) || continue
+    _oid=$(gh pr view "$_sel" -R "$_c" --json headRefOid,state \
+      -q 'select(.state=="OPEN") | .headRefOid' 2>/dev/null) || continue
     [[ -n "$_oid" ]] || continue
-    [[ -z "$_FOUND" ]] && { _FOUND="$_c"; _UP="$_c"; }      # first repo that HAS the PR
+    [[ -z "$_FOUND" ]] && { _FOUND="$_c"; _UP="$_c"; }      # first repo with an OPEN PR
     [[ "$_oid" == "$_HEAD_NOW" ]] && { _UP="$_c"; break; }  # exact head wins outright
   done
   # `-R` still needs a repo even with no PR: fall back to the parent when there is one, so
@@ -106,6 +108,14 @@ if command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
     -q 'select(.state=="OPEN") | .baseRefName' 2>/dev/null || echo "")
   [[ -n "$DEFAULT_BRANCH" ]] && BASE_ORIGIN="pr"
 fi
+# The repository and branch are one identity. Before a fork PR exists, `_RREPO` is the
+# parent, so using the fork's origin/HEAD pairs the parent's fetch URL with the fork's
+# branch name and can fetch the wrong target or no target at all.
+if [[ -z "$DEFAULT_BRANCH" && -n "${_RREPO:-}" ]] && command -v gh >/dev/null 2>&1; then
+  DEFAULT_BRANCH=$(gh repo view "$_RREPO" --json defaultBranchRef \
+    -q .defaultBranchRef.name 2>/dev/null || echo "")
+  [[ -n "$DEFAULT_BRANCH" ]] && BASE_ORIGIN="forge"
+fi
 if [[ -z "$DEFAULT_BRANCH" ]]; then
   DEFAULT_BRANCH=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
   [[ -n "$DEFAULT_BRANCH" ]] && BASE_ORIGIN="origin/HEAD"
@@ -121,7 +131,11 @@ fi
 # `main`, and BASE_FRESH would then validate the WRONG base — deriving LAND even after the
 # real default branch advanced, which is the unreviewed-squash case this all exists to stop.
 if [[ -z "$DEFAULT_BRANCH" ]] && command -v gh >/dev/null 2>&1; then
-  DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || echo "")
+  if [[ -n "${_RREPO:-}" ]]; then
+    DEFAULT_BRANCH=$(gh repo view "$_RREPO" --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || echo "")
+  else
+    DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || echo "")
+  fi
   [[ -n "$DEFAULT_BRANCH" ]] && BASE_ORIGIN="forge"
 fi
 if [[ -z "$DEFAULT_BRANCH" ]]; then

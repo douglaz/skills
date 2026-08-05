@@ -136,22 +136,25 @@ a reviewer.
 
      ```bash
      # Probe both, do not force the parent: a fork can host its own PR, and forcing
-     # `.parent` makes it invisible. Take the first candidate that HAS a PR for this branch.
+     # `.parent` makes it invisible. Take the first candidate with an OPEN PR for this branch.
      SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner)
      PARENT=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end')
      BR=$(git branch --show-current)
-     UP="$SELF"; SEL="$BR"
+     UP="$SELF"; SEL="$BR"; PRNUM=""
      for _c in ${PARENT:+"$PARENT"} "$SELF"; do
        _s="$BR"; [ "$_c" != "$SELF" ] && _s="${SELF%%/*}:$BR"    # gh matches the head LABEL
-       gh pr view "$_s" -R "$_c" --json number >/dev/null 2>&1 && { UP="$_c"; SEL="$_s"; break; }
+       _n=$(gh pr view "$_s" -R "$_c" --json number,state \
+              -q 'select(.state=="OPEN") | .number' 2>/dev/null || echo "")
+       [ -n "$_n" ] && { UP="$_c"; SEL="$_s"; PRNUM="$_n"; break; }
      done
      # OPEN only, and empty means "no PR" — fall through to candidate 2, do not abort.
      # The first HARDEN panel runs BEFORE any PR exists (that is the prescribed ordering),
      # so aborting here stops the panel in its most common state. And an abandoned CLOSED
      # PR must not win: `gh pr view` falls back to the most recent closed or merged PR on
      # the branch, which may have targeted a different base entirely.
-     BASE_NAME=$(gh pr view "$SEL" -R "$UP" --json baseRefName,state \
-                   -q 'select(.state=="OPEN") | .baseRefName' 2>/dev/null || echo "")
+     BASE_NAME=""
+     [ -n "$PRNUM" ] && BASE_NAME=$(gh pr view "$SEL" -R "$UP" --json baseRefName \
+                                      -q .baseRefName 2>/dev/null || echo "")
      # FETCH IT. The name alone is not a reviewable ref: on a fork clone `origin` is your
      # fork, so `origin/$BASE_NAME` is stale or absent — and when it is absent the ladder
      # falls through to the branch's own upstream, which IS HEAD. The panel then reviews an
@@ -160,7 +163,6 @@ a reviewer.
      if [ -n "$BASE_NAME" ]; then
        # A PR exists, so its base is knowable and a failure to fetch it is fatal — that is
        # different from having no PR at all, which is candidate 2's job.
-       PRNUM=$(gh pr view "$SEL" -R "$UP" --json number -q .number)
        BASE_REMOTE=$(gh api "repos/$UP/pulls/$PRNUM" --jq .base.repo.clone_url)
        git fetch -q "$BASE_REMOTE" "+refs/heads/$BASE_NAME:refs/remotes/prbase/$BASE_NAME" \
          || { echo "PR $PRNUM exists but its base cannot be fetched — do not review against a guess"; exit 1; }
@@ -180,7 +182,16 @@ a reviewer.
    failure. Say so and stop then; do not review air.
 
    ```bash
-   for c in "$PR_BASE" "$UPSTREAM" "$ORIGIN_HEAD" "$FORGE_DEFAULT" main master; do
+   UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || echo "")
+   ORIGIN_HEAD=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || echo "")
+   FORGE_BRANCH=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || echo "")
+   FORGE_DEFAULT=""
+   if [ -n "$FORGE_BRANCH" ]; then
+     git rev-parse --verify --quiet "origin/$FORGE_BRANCH" >/dev/null 2>&1 \
+       && FORGE_DEFAULT="origin/$FORGE_BRANCH" || FORGE_DEFAULT="$FORGE_BRANCH"
+   fi
+   for c in "${DIFF_BASE:-}" "$UPSTREAM" "$ORIGIN_HEAD" "$FORGE_DEFAULT" \
+            origin/main main origin/master master; do
      [ -n "$c" ] || continue
      git rev-parse --verify --quiet "$c" >/dev/null 2>&1 || continue
      [ "$(git rev-parse "$c")" = "$(git rev-parse HEAD)" ] && continue   # equals HEAD: skip

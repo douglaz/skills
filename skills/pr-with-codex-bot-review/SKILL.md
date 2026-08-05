@@ -414,10 +414,11 @@ condition:
      review naming this tip; no PENDING review from the bot on it (a rerun in flight); no
      `@codex review` comment newer than it (a rerun that was *requested* and has not
      reported — nothing else can see that state); no `eyes` reaction post-dating it; no
-     base mutation post-dating it (the whole `base_ref_*` / `automatic_base_change_*`
-     family, plus `ready_for_review` — each changes what the review covered without moving
-     the head); and zero unresolved review threads from either gated bot. It fails closed on any API error, missing tool, or unparseable
-     response in the signals that feed all five — the timeline query behind the retarget
+     base mutation not followed by an explicit review request (the whole `base_ref_*` /
+     `automatic_base_change_*` family; submission time alone cannot prove whether the bot
+     read the diff before or after an in-flight mutation), nor a newer `ready_for_review`
+     event; and zero unresolved review threads from either gated bot. It fails closed on any API error, missing tool, or unparseable
+     response in the signals that feed all six — the timeline query behind the retarget
      check included.
 
      **CodeRabbit's status is not one of them, deliberately.** It is a PR-level signal — it
@@ -503,9 +504,9 @@ condition:
      of those were caught by reading. Exit codes: 0 no pending evidence (NOT clearance — see above), 1 blocked, 2 usage, 3 cannot
      determine — and "cannot determine" is never clearance.
 
-     `--no-coderabbit` is gone, and rejected with an explanation rather than accepted and
-     ignored. It existed to assert a fact no query could establish — whether the app is
-     installed at all, given it can be enabled org-wide with no repo config and "absent"
+     `--no-coderabbit` is gone, and rejected as an unknown option with exit 2 rather than
+     accepted and ignored. It existed to assert a fact no query could establish — whether
+     the app is installed at all, given it can be enabled org-wide with no repo config and "absent"
      looks identical to "not started yet" on a fresh PR. Nothing depends on that fact now.
 
      A `BLOCKED` with `wrapper 0` may just be a clean round the bot signalled with only a

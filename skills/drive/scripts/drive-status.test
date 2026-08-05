@@ -19,9 +19,22 @@ mkdir -p "$WORK/bin"
 cat > "$WORK/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 [ -f "$FIX/ghfail" ] && exit 1
+if [ -f "$FIX/no-pr" ] && [[ "$*" == *"pr view"* ]]; then
+  printf '%s\n' "$*" >> "$FIX/gh.calls"
+  exit 1
+fi
 case "$*" in
   *"repo view"*parent*)   cat "$FIX/upstream.txt" 2>/dev/null || echo "owner/repo" ;;
   *"repo view"*nameWithOwner*) cat "$FIX/self.txt" 2>/dev/null || cat "$FIX/upstream.txt" 2>/dev/null || echo "owner/repo" ;;
+  *"repo view"*defaultBranchRef*)
+      printf '%s\n' "$*" >> "$FIX/gh.calls"
+      _repo=$(cat "$FIX/default-repo.txt" 2>/dev/null || echo "")
+      if [[ -n "$_repo" && "$*" == *"$_repo"* ]]; then
+        if [ -f "$FIX/default-first-fails" ] && [ ! -f "$FIX/default-seen" ]; then
+          touch "$FIX/default-seen"; exit 1
+        fi
+        cat "$FIX/default-branch.txt"
+      else echo master; fi ;;
   *"pr view"*baseRefName*)
       printf '%s\n' "$*" >> "$FIX/gh.calls"
       # Honour the requested fields. Asking for baseRefOid hands back the CREATION-TIME
@@ -37,7 +50,8 @@ case "$*" in
       # Per-repo heads: a lookup carrying -R <upstream> gets prhead-upstream.txt when it
       # exists, so "the PR lives in the fork, not the parent" can actually be modelled.
       if [ -f "$FIX/prhead-upstream.txt" ] && case "$*" in *"-R $(cat "$FIX/upstream.txt" 2>/dev/null)"*) true;; *) false;; esac; then
-        cat "$FIX/prhead-upstream.txt"
+        if [ -f "$FIX/prclosed-upstream" ] && [[ "$*" == *state* ]]; then echo ""
+        else cat "$FIX/prhead-upstream.txt"; fi
       else
         cat "$FIX/prhead.txt" 2>/dev/null || echo ""
       fi ;;
@@ -227,6 +241,34 @@ echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/self.t
 printf '%s' "$(G rev-parse HEAD)" > "$FIX/prhead.txt"
 printf 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' > "$FIX/prhead-upstream.txt"
 check_field "a fork-owned PR resolves to the fork" pr_repo forkowner/repo
+
+# A stale CLOSED parent PR must not become the host merely because it is probed first.
+# Local HEAD is ahead of both remote PR heads, so the exact-head tiebreak cannot mask the
+# first-open selection this case exercises.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/self.txt"
+printf 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' > "$FIX/prhead-upstream.txt"
+printf 'cafebabecafebabecafebabecafebabecafebabe' > "$FIX/prhead.txt"
+touch "$FIX/prclosed-upstream"
+check_field "a closed parent PR cannot hide an open fork PR" pr_repo forkowner/repo
+
+# With no PR yet, base_repo is the parent. Its default branch must come from that same
+# repository rather than the fork's origin/HEAD, whose branch can have another name.
+new_repo
+G branch release master; G push -q origin release; G remote set-head origin master
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/self.txt"
+echo "upstream/repo" > "$FIX/default-repo.txt"; echo release > "$FIX/default-branch.txt"
+touch "$FIX/no-pr"
+check_field "a pre-PR fork uses the parent default branch" default_branch release
+
+# The later forge fallback must keep the selected repository too. A transient failure in
+# the first selected-repo query must not make the fallback silently query the fork.
+new_repo
+G branch release master; G push -q origin release
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/self.txt"
+echo "upstream/repo" > "$FIX/default-repo.txt"; echo release > "$FIX/default-branch.txt"
+touch "$FIX/no-pr" "$FIX/default-first-fails"
+check_field "the forge retry keeps the selected base repo" default_branch release
 
 # On a FORK clone the selector must be the head LABEL `<forkowner>:<branch>`, not the bare
 # branch: gh matches `-R <upstream>` lookups against that label for a cross-repo PR, so a

@@ -303,6 +303,7 @@ fi
 # and PENDING reviews are hidden from everyone but their author — so without this the gate
 # clears during exactly the rerun the skill tells you to trigger.
 RERUN_REQUESTED=false
+LAST_REVIEW_REQUEST_BEFORE_WRAPPER=""
 if [[ -n "$WRAPPER_AT" ]] && [[ -n "${ALL_COMMENTS:-}" ]]; then
   _W=$(iso_to_epoch "$WRAPPER_AT")
   # EVERY trigger, not `last`. Taking only the final one meant an undated trigger followed
@@ -318,60 +319,59 @@ if [[ -n "$WRAPPER_AT" ]] && [[ -n "${ALL_COMMENTS:-}" ]]; then
       _T=$(iso_to_epoch "$_tt")
       if [[ -z "$_T" ]]; then RERUN_REQUESTED=true
       elif [[ -n "$_W" ]] && (( _T >= _W )); then RERUN_REQUESTED=true; fi
+      if [[ -n "$_T" && -n "$_W" ]] && (( _T < _W )) \
+         && { [[ -z "$LAST_REVIEW_REQUEST_BEFORE_WRAPPER" ]] \
+              || (( _T > LAST_REVIEW_REQUEST_BEFORE_WRAPPER )); }; then
+        LAST_REVIEW_REQUEST_BEFORE_WRAPPER="$_T"
+      fi
     done <<< "$_TRIGGERS"
   fi
 fi
 
 CR_SKIPPED=false
-# Fetched for `absent` too — for the REPORT, not to block: nothing here gates any more.
+# Read for `absent` too — for the REPORT, not to block: nothing here gates any more.
 # It is how the output can tell "CodeRabbit is not installed" from "it has commented here
 # before but has no check for this head yet", which are worth distinguishing to a reader
 # even though neither changes the verdict.
 if [[ "$CR_STATE" == "SUCCESS" || "$CR_STATE" == "absent" ]]; then
-  if CRC=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/comments" 2>/dev/null); then
-    # NOT require_json: this payload feeds only the printed CodeRabbit notes now. An
-    # unparseable body costs the report, and refusing to answer a decidable question
-    # because a warning could not be rendered is the wrong trade. The reactions and reviews
-    # payloads still fail closed, because those do feed the verdict.
-    printf '%s' "$CRC" | jq -e 'type' >/dev/null 2>&1 || { CR_STATE="query-failed"; CRC=""; }
-    # CodeRabbit's own markers, verified against its real output: the plan notice reads
-    # "PR reviews subject to [rate limits](...)" — a markdown link, so the phrase is not
-    # contiguous — and the HTML marker is "review paused"/"rate limited by coderabbit.ai".
-    # A bare "rate limit" match
-    # would block forever on a walkthrough that merely discusses rate limiting, and the
-    # "Files skipped from review" header covers skips the skill explicitly permits — that
-    # list is for reading, not for blocking.
-    # The latest STATUS comment, not the latest comment of any kind. CodeRabbit posts
-    # `auto-generated comment:` status/walkthrough bodies and edits them in place, while
-    # `auto-generated reply` bodies interleave and say nothing about review state — taking
-    # the newest comment overall picks a reply and reads as "not skipped". Scanning ALL
-    # history is the opposite error: a stale rate-limit notice would block forever and the
-    # prescribed retrigger could never clear it.
-    # Ordered by `updated_at`, NOT `created_at`. Editing in place is the whole point of
-    # CodeRabbit's status comment, and an edit moves only `updated_at` — so whenever the
-    # live status lives in an OLDER comment that was just rewritten, created_at ordering
-    # picks a staler sibling instead. Both directions are wrong: a current `review paused`
-    # loses to a later-created success and clears, and a stale rate-limit marker outranks a
-    # successful retrigger and blocks forever.
-    # Checked for `absent` too, not just SUCCESS. The comments are already fetched in both
-    # branches, and a paused or rate-limited notice is exactly the evidence a human needs
-    # when there is no check for this head — suppressing it reported a bare "absent" and
-    # withheld the reason.
-    printf '%s' "$CRC" | jq -e '[[.[][] | select(.user.login=="coderabbitai[bot]")
+  # Reuse the validated snapshot that feeds RERUN_REQUESTED. Fetching this endpoint again
+  # let the verdict and its CodeRabbit notes describe two different comment histories.
+  CRC="$ALL_COMMENTS"
+  # CodeRabbit's own markers, verified against its real output: the plan notice reads
+  # "PR reviews subject to [rate limits](...)" — a markdown link, so the phrase is not
+  # contiguous — and the HTML marker is "review paused"/"rate limited by coderabbit.ai".
+  # A bare "rate limit" match
+  # would block forever on a walkthrough that merely discusses rate limiting, and the
+  # "Files skipped from review" header covers skips the skill explicitly permits — that
+  # list is for reading, not for blocking.
+  # The latest STATUS comment, not the latest comment of any kind. CodeRabbit posts
+  # `auto-generated comment:` status/walkthrough bodies and edits them in place, while
+  # `auto-generated reply` bodies interleave and say nothing about review state — taking
+  # the newest comment overall picks a reply and reads as "not skipped". Scanning ALL
+  # history is the opposite error: a stale rate-limit notice would block forever and the
+  # prescribed retrigger could never clear it.
+  # Ordered by `updated_at`, NOT `created_at`. Editing in place is the whole point of
+  # CodeRabbit's status comment, and an edit moves only `updated_at` — so whenever the
+  # live status lives in an OLDER comment that was just rewritten, created_at ordering
+  # picks a staler sibling instead. Both directions are wrong: a current `review paused`
+  # loses to a later-created success and clears, and a stale rate-limit marker outranks a
+  # successful retrigger and blocks forever.
+  # Checked for `absent` too, not just SUCCESS. The comments are already fetched in both
+  # branches, and a paused or rate-limited notice is exactly the evidence a human needs
+  # when there is no check for this head — suppressing it reported a bare "absent" and
+  # withheld the reason.
+  printf '%s' "$CRC" | jq -e '[[.[][] | select(.user.login=="coderabbitai[bot]")
         | select(.body|test("auto-generated comment:";"i"))]
       | sort_by(.updated_at // .created_at) | last // empty
       | select(.body|test("review (paused|skipped)|rate limited by coderabbit|reviews subject to \\[?rate limits";"i"))] | length > 0' \
-      >/dev/null 2>&1 && CR_SKIPPED=true
-  else
-    CR_STATE="query-failed"
-  fi
+    >/dev/null 2>&1 && CR_SKIPPED=true
 fi
 
 # A retarget expands the reviewed surface without moving the head. `commit_id` proves which
 # TREE the bot read; it says nothing about which DIFF, and a PR retargeted to an older
-# ancestor after the review still has the same head while its diff has grown to include
-# commits nobody read. So a wrapper that predates the last base change is stale even though
-# every SHA still matches.
+# ancestor during a review still has the same head while its diff has grown to include
+# commits nobody read. A wrapper submitted afterwards is insufficient: submission records
+# when the round ended, not whether the bot read the diff before or after the base moved.
 #
 # `ready_for_review` rides along in the same sweep. The skill documents that marking a
 # draft ready starts a new bot round, and it changes no SHA — so with `eyes` unable to
@@ -410,22 +410,31 @@ if [[ -n "$WRAPPER_AT" ]]; then
     # timestamp, which makes the whole variable empty when that is the only event — so "no
     # retarget happened" and "one retarget I cannot date" collapse again, one level below
     # where they last did. There is no empty-string value that means only one of them.
-    BASE_CHANGED_ATS=$(printf '%s' "$TL" \
+    REVIEW_SURFACE_EVENTS=$(printf '%s' "$TL" \
       | jq -r '.[][] | select((.event // "") | test("^(base_ref_|automatic_base_change_)|^ready_for_review$"))
-              | if ((.created_at // "") | length) == 0 then "@undated@" else .created_at end' 2>/dev/null) \
+              | [.event, (if ((.created_at // "") | length) == 0 then "@undated@" else .created_at end)]
+              | @tsv' 2>/dev/null) \
       || { echo "BLOCKED: cannot read the PR timeline" >&2; exit 3; }
     W2=$(iso_to_epoch "$WRAPPER_AT")
-    if [[ -n "$BASE_CHANGED_ATS" ]]; then
+    if [[ -n "$REVIEW_SURFACE_EVENTS" ]]; then
       [[ -n "$W2" ]] || RETARGETED_AFTER_REVIEW=true
-      while IFS= read -r _ts; do
+      while IFS=$'\t' read -r _event _ts; do
         B=$(iso_to_epoch "$_ts")
         # Unparseable (or empty) is doubt about a retarget that demonstrably happened.
         if [[ -z "$B" ]]; then RETARGETED_AFTER_REVIEW=true
         # `>=`, not `>`: one-second precision means a retarget in the wrapper's own second
         # is indistinguishable from one just before it, and a tie is doubt.
         elif [[ -n "$W2" ]] && (( B >= W2 )); then RETARGETED_AFTER_REVIEW=true
+        # Submission time is the END of a review, not its start. A base move can happen
+        # after the bot read the diff but before it submits the wrapper, so B < W2 alone
+        # does not show that the changed diff was read. A later explicit request is the
+        # only available timestamp that establishes a new post-change round.
+        elif [[ "$_event" != "ready_for_review" ]] \
+             && { [[ -z "$LAST_REVIEW_REQUEST_BEFORE_WRAPPER" ]] \
+                  || (( LAST_REVIEW_REQUEST_BEFORE_WRAPPER <= B )); }; then
+          RETARGETED_AFTER_REVIEW=true
         fi
-      done <<< "$BASE_CHANGED_ATS"
+      done <<< "$REVIEW_SURFACE_EVENTS"
     fi
   else
     echo "BLOCKED: timeline query failed" >&2; exit 3
@@ -529,13 +538,13 @@ fi
 
 if $JSON; then
   jq -n --arg tip "$TIP" --arg v "$VERDICT" --arg cr "$CR_STATE" \
-        --argjson w "$WRAPPER_TIP" --argjson u "$UNRESOLVED" \
+        --argjson w "$WRAPPER_TIP" --argjson u "$UNRESOLVED" --argjson pending "$PENDING_ON_TIP" \
         --arg from "$OBSERVED_FROM" --arg to "$OBSERVED_TO" --arg claim "$CLAIM" \
         --arg cr_skipped "$CR_SKIPPED" --arg round_active "$ROUND_ACTIVE" --arg retargeted "$RETARGETED_AFTER_REVIEW" --arg rerun "$RERUN_REQUESTED" --arg skiplist "$CR_SKIPLIST" \
     '{tip:$tip,verdict:$v,claim:(if $claim=="" then null else $claim end),observed_from:$from,observed_to:$to,
       wrapper_on_tip:$w,unresolved_bot_threads:$u,
       coderabbit:$cr,coderabbit_skipped:($cr_skipped=="true"),round_active:($round_active=="true"),retargeted_after_review:($retargeted=="true"),
-      rerun_requested:($rerun=="true"),
+      rerun_requested:($rerun=="true"),pending_review_on_tip:($pending > 0),
       coderabbit_skipped_files:($skiplist|split("\n")|map(select(length>0)))}'
 else
   printf 'tip              %s\n' "${TIP:0:10}"
@@ -550,7 +559,7 @@ else
   [[ "$CR_STATE" == "query-failed" ]] && printf '  · CodeRabbit status could not be queried.\n'
   $RERUN_REQUESTED && printf '  ⚠ an `@codex review` comment is newer than the wrapper — a round was requested and\n    has not reported yet. Wait for its wrapper.\n'
   [[ "$PENDING_ON_TIP" -gt 0 ]] && printf '  ⚠ a PENDING review from the bot names this tip — a round is in flight and has not\n    submitted yet. Wait for it.\n'
-  $RETARGETED_AFTER_REVIEW && printf '  ⚠ the PR base changed after the review was submitted — the head is the same but the\n    diff is not, so part of it was never read. `@codex review` to re-review the new surface.\n'
+  $RETARGETED_AFTER_REVIEW && printf '  ⚠ the PR base changed without a later explicit review request — the head is the same\n    but the diff is not, so part of it may never have been read. `@codex review` to re-review it.\n'
   $ROUND_ACTIVE && printf '  ⚠ an `eyes` reaction is newer than the wrapper — a fresh round is running on this\n    same tip. Wait for it to finish.\n'
   # Reported, never gated — see the CR_SKIPLIST block. Every file here is one this PR
   # changes, since that is the only kind CodeRabbit can skip; read the list and decide.

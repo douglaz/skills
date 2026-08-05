@@ -57,7 +57,8 @@ case "$*" in
   *reactions*)                  [ -f "$FIX/reactionsfail" ] && exit 1; f reactions.json '[[]]' ;;
   *graphql*)                    f threads.json '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}' ;;
   *"pulls/"*"/reviews"*)        f reviews.json '[[]]' ;;
-  *"issues/"*"/comments"*)      [ -f "$FIX/commentsfail" ] && exit 1; f issues.json '[[]]' ;;
+  *"issues/"*"/comments"*)      printf '%s\n' "$*" >> "$FIX/gh.calls"
+                                   [ -f "$FIX/commentsfail" ] && exit 1; f issues.json '[[]]' ;;
   *) echo "[]" ;;
 esac
 [ -f "$FIX/FAIL" ] && exit 1
@@ -72,6 +73,8 @@ chmod +x "$WORK/bin/gh"
 # and fail the clearing fixtures — the suite reproducing the very portability bug it exists
 # to catch. Only NOW needs the clock, and `date -u +FORMAT` is portable.
 OLD_UTC="2000-01-01T00:00:00Z"
+MID_UTC="2000-01-01T00:00:01Z"
+NEW_UTC="2000-01-01T00:00:02Z"
 NOW_UTC=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 wrapper() {  # $1 = login, $2 = submitted_at  (shape matches `gh api --paginate --slurp`)
@@ -244,10 +247,19 @@ new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"
 printf '[[{"event":"base_ref_changed","created_at":"%s"}]]' "$NOW_UTC" > "$FIX/timeline.json"
 check "a retarget after the review blocks" 1
 
-# ...but one BEFORE the review is exactly the normal case — retarget, then re-review.
-new_fix; wrapper "chatgpt-codex-connector[bot]" "$NOW_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+# A base change followed by an explicit request and then a wrapper is covered by the new
+# round. Submission time alone cannot establish that ordering; the request timestamp does.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$NEW_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 printf '[[{"event":"base_ref_changed","created_at":"%s"}]]' "$OLD_UTC" > "$FIX/timeline.json"
-check "a retarget before the review does not block" 0
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$MID_UTC" > "$FIX/issues.json"
+check "a retarget followed by an explicit review clears" 0
+
+# The bot can read the old diff, then the base can move, then the bot can submit its
+# wrapper. The wrapper is newer than the move but still describes the old surface.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$NEW_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"base_ref_changed","created_at":"%s"}]]' "$MID_UTC" > "$FIX/timeline.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$OLD_UTC" > "$FIX/issues.json"
+check "a base change during an in-flight review blocks" 1
 
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 printf '[[{"event":"base_ref_changed","created_at":"not-a-date"}]]' > "$FIX/timeline.json"
@@ -324,6 +336,13 @@ printf '[[{"user":{"login":"chatgpt-codex-connector[bot]","type":"Bot"},"submitt
 threads 0 > "$FIX/threads.json"
 check "a pending rerun beside a submitted wrapper blocks" 1
 
+J=$(PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 --json 2>/dev/null)
+if printf '%s' "$J" | jq -e '(.verdict=="BLOCKED") and (.pending_review_on_tip==true)' >/dev/null 2>&1; then
+  PASS=$((PASS+1)); echo "  ok   JSON reports the PENDING-review blocker       (machine-readable)"
+else
+  FAIL=$((FAIL+1)); echo "  FAIL JSON reports the PENDING-review blocker"
+fi
+
 # `@codex review` after the wrapper is a round that was REQUESTED and has not reported.
 # Nothing else can see it: `eyes` cannot be re-added once present, and PENDING reviews are
 # hidden from everyone but their author. Without this the gate clears during exactly the
@@ -373,13 +392,24 @@ new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"
 echo 'x' > "$FIX/commentsfail"
 check "PR-comments query failure is exit 3" 3
 
+# RERUN_REQUESTED and the CodeRabbit report must use one comment snapshot. Fetching the
+# endpoint twice can produce a verdict from one history and notes from another.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success; rm -f "$FIX/gh.calls"; run >/dev/null
+comment_calls=$(grep -c 'issues/.*/comments' "$FIX/gh.calls" 2>/dev/null || true)
+if [[ "$comment_calls" == 1 ]]; then
+  PASS=$((PASS+1)); echo "  ok   PR comments are fetched once per gate run        (one snapshot)"
+else
+  FAIL=$((FAIL+1)); echo "  FAIL PR comments are fetched once per gate run        got $comment_calls"
+fi
+
 new_fix; printf 'not json' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 check "unparseable reviews body is exit 3" 3
 
-# The wrapper timestamp is now used ONLY as the reference point for the eyes comparison.
-# It must still block when unparseable, and with NO reaction present: it is the detector's
-# only reference, so without it the detector cannot run, and a check that cannot run has
-# not passed. (This is the fail-closed half of the macOS `date -d` problem. The BSD
+# The wrapper timestamp is the reference for the rerun, timeline, and eyes comparisons.
+# It must still block when unparseable, and with NO reaction present: the eyes detector
+# cannot run without it, and a check that cannot run has not passed. (This is the
+# fail-closed half of the macOS `date -d` problem. The BSD
 # fallback itself cannot be exercised on Linux — shadowing GNU `-d` leaves no working
 # `date -j` either — so that half is verified by inspection against the BSD syntax.)
 new_fix; wrapper "chatgpt-codex-connector[bot]" "not-a-timestamp" > "$FIX/reviews.json"
@@ -544,7 +574,7 @@ threads 0 > "$FIX/threads.json"
 check "a wrapper with an empty submitted_at blocks" 1
 
 # CodeRabbit's state is REPORTED, so failing to read it cannot make the verdict
-# indeterminate — exit follows the other four conditions. This was exit 3 while CodeRabbit
+# indeterminate — exit follows the gate's six conditions. This was exit 3 while CodeRabbit
 # still gated (correctly: "could not ask" is not "not done"), and ADR 0004 changed what
 # the gate claims, not this fixture's shape. Do not "restore" exit 3 here.
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"

@@ -472,9 +472,17 @@ implement → review loop for each bead.
     # separate tool calls, so a variable set here is gone by the merge — and the guard
     # there would then abort a correct drain with "local HEAD moved". Under the git dir,
     # so it is per-checkout and never committed (ADR 0001).
-    # R is resolved HERE, not in step 10: this is its first use, and an unset $R sends gh
-    # an empty -R (or aborts under nounset), so every drain stopped before CI.
-    R=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
+    # Probe both repositories: a fork can host its own PR, and a colliding number in the
+    # parent can otherwise make the drain watch checks for somebody else's tree.
+    SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+    PARENT=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end')
+    LOCAL_HEAD=$(git rev-parse HEAD)
+    R=""
+    for _r in ${PARENT:+"$PARENT"} "$SELF"; do
+      _h=$(gh pr view <pr> -R "$_r" --json headRefOid -q .headRefOid 2>/dev/null || echo "")
+      [ "$_h" = "$LOCAL_HEAD" ] && { R="$_r"; break; }
+    done
+    [ -n "$R" ] || { echo "cannot find PR <pr> for local HEAD"; exit 1; }
     MERGING_SHA=$(gh pr view <pr> -R "$R" --json headRefOid -q .headRefOid)
     [ -n "$MERGING_SHA" ] || { echo "cannot resolve the PR head"; exit 1; }
     printf '%s\n' "$MERGING_SHA" > "$(git rev-parse --git-path rb-lite-merging-sha)"
@@ -501,7 +509,18 @@ implement → review loop for each bead.
     authoritative build gate before taking the next bead:
 
     ```bash
-    R=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
+    # Read the step-9 pin before resolving the host. Matching the PR against that SHA keeps
+    # a same-number PR in the parent from winning when the real PR is owned by the fork.
+    MERGING_SHA=$(cat "$(git rev-parse --git-path rb-lite-merging-sha)" 2>/dev/null || echo "")
+    [ -n "$MERGING_SHA" ] || { echo "no pinned SHA — re-run step 9"; exit 1; }
+    SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+    PARENT=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end')
+    R=""
+    for _r in ${PARENT:+"$PARENT"} "$SELF"; do
+      _h=$(gh pr view <pr> -R "$_r" --json headRefOid -q .headRefOid 2>/dev/null || echo "")
+      [ "$_h" = "$MERGING_SHA" ] && { R="$_r"; break; }
+    done
+    [ -n "$R" ] || { echo "cannot find PR <pr> for the pinned SHA"; exit 1; }
     BASE=$(gh pr view <pr> -R "$R" --json baseRefName -q .baseRefName)
     [ -n "$BASE" ] || { echo "cannot resolve the base branch"; exit 1; }
     # Check the merge's exit status. `--delete-branch` makes gh switch branches as a side
@@ -514,11 +533,6 @@ implement → review loop for each bead.
     # test ancestry before merging, the same way pr-with-codex-bot-review § 8 does.
     git fetch "https://github.com/$R.git" "+refs/heads/$BASE:refs/remotes/upstream/$BASE" \
       || { echo "cannot fetch the merge target — base unknown, do NOT merge"; echo "  (on a private repo cloned over SSH this is usually missing git credentials for https, not a missing base)"; exit 1; }
-    # Read back from step 9's file FIRST — everything below uses it. Steps 9 and 10 are
-    # separate tool calls, so the variable is gone by now; validating it before loading it
-    # aborts a correct drain (or trips nounset) and it can never merge.
-    MERGING_SHA=$(cat "$(git rev-parse --git-path rb-lite-merging-sha)" 2>/dev/null || echo "")
-    [ -n "$MERGING_SHA" ] || { echo "no pinned SHA — re-run step 9"; exit 1; }
     # Against $MERGING_SHA, not HEAD: that is the commit --match-head-commit pins and the
     # one GitHub will squash. A local rebase during CI that was never pushed would make
     # HEAD pass this test while the pinned remote SHA is still behind the base.
@@ -597,9 +611,11 @@ implement → review loop for each bead.
     queue cannot tell you this; only the forge can:
 
     ```bash
-    UP=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
-    gh pr list -R "$UP" --state all --limit 1000 --json number,state,headRefName,title,body \
-    | jq --arg id "$BEAD_ID" '.[] | select($id != "" and ([.headRefName, .title, (.body // "")]
+    SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+    PARENT=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end')
+    for UP in ${PARENT:+"$PARENT"} "$SELF"; do
+      gh pr list -R "$UP" --state all --limit 1000 --json number,state,headRefName,title,body
+    done | jq -s --arg id "$BEAD_ID" 'add | .[] | select($id != "" and ([.headRefName, .title, (.body // "")]
         | join(" ") | ascii_downcase
         | test("(^|[^a-z0-9.])" + ($id|ascii_downcase|gsub("\\.";"\\.")) + "($|\\.$|\\.[^a-z0-9]|[^a-z0-9.])")))'
     ```
