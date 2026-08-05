@@ -144,11 +144,11 @@ already *is* a commit status on the head, so a required check reads the same gre
 
 **Decision.** CodeRabbit no longer affects the verdict, which becomes three conditions: a
 *submitted* codex review naming the tip, no `eyes` reaction newer than it, and zero
-unresolved review threads from either gated bot. (A fourth was added later: no
-`base_ref_changed` newer than the review either — a retarget grows the PR's diff without
-moving its head, so `commit_id` proves which tree was read and nothing about which diff.
-It is a timeline event with a timestamp, so it is decidable, which is the standard this
-ADR sets.) `--no-coderabbit` is removed and rejected
+unresolved review threads from either gated bot. (Two more were added later, both decidable. No
+`base_ref_changed` newer than the review — a retarget grows the PR's diff without moving
+its head, so `commit_id` proves which tree was read and nothing about which diff; it is a
+timeline event with a timestamp. And no PENDING review from the bot on the tip, which is a
+round in flight that `eyes` cannot report, since a reaction is never refreshed on a rerun.) `--no-coderabbit` is removed and rejected
 with an explanation; the "absence is undecidable" problem it existed for dissolves with it.
 
 CodeRabbit's status, its rate-limit and paused markers, and its skipped-files list are all

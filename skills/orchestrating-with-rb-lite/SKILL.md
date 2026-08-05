@@ -526,7 +526,9 @@ implement → review loop for each bead.
     # required merge queue, means ENQUEUED, not landed. Fetching now would read the still-old
     # base and any caller that closes a tracker item here would close it for a merge that has
     # not happened. Wait for the state to actually reach MERGED.
-    for _ in $(seq 1 60); do
+    _n=0
+    while [ "$_n" -lt 60 ]; do
+      _n=$((_n+1))
       _ST=$(gh pr view <pr> -R "$R" --json state -q .state 2>/dev/null || echo "")
       [ "$_ST" = "MERGED" ] && break
       [ "$_ST" = "CLOSED" ] && { echo "PR was closed without merging"; exit 1; }
@@ -566,11 +568,10 @@ implement → review loop for each bead.
     this reviewed path exists to prevent. The drain is not done until that PR is merged. Do not leave it uncommitted either, or the next
     run starts from a dirty base and silently carries the previous closure into its diff.
 
-    Verify it landed: an *explicit* `br sync --flush-only` propagates a real exit code,
-    but the automatic flush after `br update` swallows its error, so check the JSONL
-    actually changed — before/after, not "is it dirty". A drain carries the previous
-    bead's closure forward uncommitted, so from the second bead on the file is already
-    dirty and a bare dirtiness test passes without this write happening at all:
+    Verify it landed with a checked *explicit* sync: it propagates a real exit code, which
+    the automatic flush after `br update` does not — that one swallows its error. The
+    mutation is already in the shared DB, so the sync either writes it out or fails loudly,
+    and nothing needs to inspect the file:
 
     ```bash
     br update <bead-id> -s closed || { echo "br update failed"; exit 1; }
@@ -590,9 +591,13 @@ implement → review loop for each bead.
 
     ```bash
     UP=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
-    gh pr list -R "$UP" --state all --json number,state,headRefName,title \
-    --jq '.[] | select(.headRefName | test("closure|metadata"))'   # closure PR, ANY state
+    gh pr list -R "$UP" --state all --limit 200 --json number,state,headRefName,title,body \
+    --jq '.[] | select(.headRefName + " " + .title + " " + (.body // "") | test("'"$BEAD_ID"'"; "i"))'
     ```
+
+    Keyed on the **bead id**, not a branch-naming convention, and `--limit 200` because
+    `gh pr list` returns 30 by default — an older closure PR hides behind newer work PRs,
+    which is the resume case this exists for.
 
     An OPEN one: land it before taking another bead. A CLOSED-but-unmerged one is worse — the
     work PR already merged, the closure never did, and `--state open` cannot see it: reopen

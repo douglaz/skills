@@ -218,6 +218,14 @@ _PB=$("$DS" --json | jq -r '.default_branch')
 _UPP=$(gh repo view --json parent -q 'if .parent then "https://github.com/\(.parent.owner.login)/\(.parent.name)" else "" end' 2>/dev/null); [ -n "$_UPP" ] || _UPP=origin
 git fetch -q "$_UPP" "+refs/heads/$_PB:refs/remotes/origin/$_PB" \
   || { echo "cannot fetch $_PB — the panel's base is unknown, do NOT start the panel"; exit 1; }
+# TELL THE PANEL WHICH BASE, and check what it reports back. `multi-reviewer-loop` resolves
+# its own DIFF_BASE through a candidate ladder; before a PR exists that ladder can land on
+# the branch's own upstream (`origin/<feature>`), which IS HEAD — so the panel reviews an
+# empty diff and reports clean. Clearance recorded against a base the panel never diffed is
+# the failure every check below guards, arriving through the one door none of them watch.
+echo "panel must review against: origin/$_PB ($(git rev-parse --short "origin/$_PB"))"
+# The panel prints its chosen base in every pass summary. If it does not name this ref,
+# the run is void — fix the base and re-run rather than recording clearance from it.
 { printf 'panel_base=%s\n' "$_PB"
   printf 'panel_base_oid=%s\n' "$(git rev-parse "origin/$_PB")"
   printf 'panel_tip=%s\n' "$(git rev-parse HEAD)"; } > "$STATE_DIR/panel" \
@@ -536,9 +544,16 @@ and silently carry the previous bead's closure into its diff. Instead:
 
   ```bash
   UP=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
-  gh pr list -R "$UP" --state all --json number,state,headRefName,title \
-    --jq '.[] | select(.headRefName | test("closure|metadata"))'   # closure PR, ANY state
+  gh pr list -R "$UP" --state all --limit 200 --json number,state,headRefName,title,body \
+    --jq '.[] | select(.headRefName + " " + .title + " " + (.body // "") | test("'"$BEAD_ID"'"; "i"))'
   ```
+
+Keyed on the **bead id**, not a branch-naming convention — nothing here mandates one, so
+a filter like `test("closure|metadata")` misses a PR called `chore/close-bead-42`. Put the
+bead id in the closure PR's title or body, and note the raised `--limit`: `gh pr list`
+returns 30 by default, which hides an older closure PR behind newer work PRs — precisely
+the resume case this query exists for.
+
 
   **Before re-entering BUILD or HARDEN from a fresh clone with unresolved beads, run that
   query.** An open closure PR means the drive is `WAITING_FOR_MERGE`, not unfinished —
@@ -552,11 +567,10 @@ br close <id> || { echo "br close failed"; exit 1; }
 br sync --flush-only || { echo "closure not persisted — auto-flush was swallowed"; exit 1; }
 ```
 
-`&&`/`||`, not `;`: a semicolon discards `br close`'s exit status, and `git status` exits
-0 whether or not it printed anything — so the pair would report success on a closure that
-never happened.
+`||`, not `;`: a semicolon discards the exit status of the command before it, so the pair
+would report success on a closure that never happened.
 
-The assertion holds only where a mutation definitely occurred, as it did here. A flush
+A flush
 over a graph that was already committed and unchanged legitimately reports nothing, so a
 blanket "must be non-empty" would fail a healthy preflight.
 

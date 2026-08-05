@@ -410,11 +410,11 @@ condition:
 
   1. A wrapper exists whose `Reviewed commit:` equals the tip. That is the bot stating,
      with a SHA, which tree it read.
-  2. Run **`scripts/bot-gate <PR>`** and require exit 0. Four conditions: a *submitted*
-     codex review naming this tip, no `eyes` reaction post-dating it, no `base_ref_changed`
-     post-dating it either (a retarget grows the diff without moving the head, so the
-     review covered less than it appears to), and zero unresolved review threads from
-     either gated bot. It fails closed on any API error, missing tool, or unparseable
+  2. Run **`scripts/bot-gate <PR>`** and require exit 0. Five conditions: a *submitted*
+     codex review naming this tip, no PENDING review from the bot on it (a rerun in
+     flight), no `eyes` reaction post-dating it, no `base_ref_changed` post-dating it
+     either (a retarget grows the diff without moving the head, so the review covered less
+     than it appears to), and zero unresolved review threads from either gated bot. It fails closed on any API error, missing tool, or unparseable
      response in the signals that feed all four — the timeline query behind the retarget
      check included.
 
@@ -613,7 +613,9 @@ gh pr merge <N> -R "$R" --squash --delete-branch --match-head-commit "$REVIEWED_
 # required merge queue, means ENQUEUED, not landed. Fetching now would read the still-old
 # base and any caller that closes a tracker item here would close it for a merge that has
 # not happened. Wait for the state to actually reach MERGED.
-for _ in $(seq 1 60); do
+_n=0
+while [ "$_n" -lt 60 ]; do
+  _n=$((_n+1))
   _ST=$(gh pr view <N> -R "$R" --json state -q .state 2>/dev/null || echo "")
   [ "$_ST" = "MERGED" ] && break
   [ "$_ST" = "CLOSED" ] && { echo "PR was closed without merging"; exit 1; }

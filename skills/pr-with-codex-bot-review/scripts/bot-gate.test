@@ -235,6 +235,13 @@ new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"
 printf '[[{"event":"base_ref_changed"}]]' > "$FIX/timeline.json"
 check "a retarget with no timestamp field blocks" 1
 
+# The one an emptiness test cannot catch: a NON-EMPTY garbage timestamp sorts below a valid
+# one, so taking the lexical max returns the valid value and the malformed event vanishes.
+# Both events here pre-date the wrapper, so only the unparseable one can cause a block.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$NOW_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"base_ref_changed","created_at":"!"},{"event":"base_ref_changed","created_at":"%s"}]]' "$OLD_UTC" > "$FIX/timeline.json"
+check "a garbage timestamp beside a valid one blocks" 1
+
 # ...while a timeline carrying only OTHER events must still clear: "no retarget" is the
 # common case and must not be confused with "malformed retarget".
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"

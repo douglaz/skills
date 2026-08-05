@@ -173,7 +173,12 @@ _classify_paths() {
 # "commits reachable from HEAD but not from BASE_REF", which is what we want.)
 BRANCH_DIFF_KIND=""
 if [[ "$BRANCH_COMMITS" -gt 0 ]]; then
-  BRANCH_DIFF_KIND=$(_classify_paths "$(git -c core.quotePath=false diff --name-only "$BASE_REF...HEAD" 2>/dev/null)")
+  # DRIVE.md stripped here as well as on the working-tree path below. The classifier's own
+  # comment requires the two call sites to agree, and they did not: a committed diff of
+  # DRIVE.md alone classified as `doc` and drove tree_phase to SHAPE, while the identical
+  # change uncommitted classified as nothing. DRIVE.md is this skill's own bookkeeping,
+  # never the work being reviewed.
+  BRANCH_DIFF_KIND=$(_classify_paths "$(git -c core.quotePath=false diff --name-only "$BASE_REF...HEAD" 2>/dev/null | grep -vx 'DRIVE\.md')")
 fi
 
 # --- gate command detection (first match wins) ---

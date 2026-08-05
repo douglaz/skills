@@ -320,21 +320,29 @@ if [[ -n "$WRAPPER_AT" ]]; then
     # `max // ""` collapsed both to the empty string, and the guard below then SKIPPED the
     # check entirely — so a malformed event cleared instead of blocking, which is the one
     # direction this whole clause exists to prevent.
-    BASE_CHANGED_AT=$(printf '%s' "$TL" | jq -r '
-      [.[][] | select(.event=="base_ref_changed")] as $e
-      | if ($e | length) == 0 then ""
-        elif any($e[]; ((.created_at // "") | length) == 0) then "malformed"
-        else ([$e[].created_at] | max) end' 2>/dev/null) \
+    # EVERY event is parsed, not just the lexical max. Testing only for emptiness let a
+    # non-empty garbage timestamp ("!") sort below a valid one, so `max` returned the valid
+    # value and the malformed retarget vanished. There is no way to know a garbage string
+    # is a timestamp without parsing it, so parse them all.
+    # A SENTINEL, not the empty string. `(.created_at // "")` emits a blank line for a null
+    # timestamp, which makes the whole variable empty when that is the only event — so "no
+    # retarget happened" and "one retarget I cannot date" collapse again, one level below
+    # where they last did. There is no empty-string value that means only one of them.
+    BASE_CHANGED_ATS=$(printf '%s' "$TL" \
+      | jq -r '.[][] | select(.event=="base_ref_changed") | (.created_at // "@undated@")' 2>/dev/null) \
       || { echo "BLOCKED: cannot read the PR timeline" >&2; exit 3; }
-    if [[ "$BASE_CHANGED_AT" == "malformed" ]]; then
-      RETARGETED_AFTER_REVIEW=true
-    elif [[ -n "$BASE_CHANGED_AT" ]]; then
-      B=$(iso_to_epoch "$BASE_CHANGED_AT"); W2=$(iso_to_epoch "$WRAPPER_AT")
-      # `>=`, not `>`. These timestamps have one-second precision, so a retarget in the
-      # SAME second as the review is indistinguishable from one just before it — and the
-      # strict form resolves that tie toward clearing. A tie is doubt, and doubt blocks.
-      if [[ -n "$B" && -n "$W2" ]]; then (( B >= W2 )) && RETARGETED_AFTER_REVIEW=true
-      else RETARGETED_AFTER_REVIEW=true; fi
+    W2=$(iso_to_epoch "$WRAPPER_AT")
+    if [[ -n "$BASE_CHANGED_ATS" ]]; then
+      [[ -n "$W2" ]] || RETARGETED_AFTER_REVIEW=true
+      while IFS= read -r _ts; do
+        B=$(iso_to_epoch "$_ts")
+        # Unparseable (or empty) is doubt about a retarget that demonstrably happened.
+        if [[ -z "$B" ]]; then RETARGETED_AFTER_REVIEW=true
+        # `>=`, not `>`: one-second precision means a retarget in the wrapper's own second
+        # is indistinguishable from one just before it, and a tie is doubt.
+        elif [[ -n "$W2" ]] && (( B >= W2 )); then RETARGETED_AFTER_REVIEW=true
+        fi
+      done <<< "$BASE_CHANGED_ATS"
     fi
   else
     echo "BLOCKED: timeline query failed" >&2; exit 3
