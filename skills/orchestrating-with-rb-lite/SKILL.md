@@ -560,13 +560,8 @@ implement → review loop for each bead.
     dirty and a bare dirtiness test passes without this write happening at all:
 
     ```bash
-    beads_fingerprint() {   # portable: macOS sort has no -z and BSD xargs has no -r
-      git ls-files -co --exclude-standard -- '*.beads.jsonl' '.beads/*.jsonl' \
-        | LC_ALL=C sort | while IFS= read -r f; do printf '%s ' "$f"; cksum < "$f"; done | cksum
-    }
-    BEFORE=$(beads_fingerprint)
     br update <bead-id> -s closed || { echo "br update failed"; exit 1; }
-    [ "$(beads_fingerprint)" != "$BEFORE" ] || { echo "not persisted"; exit 1; }
+    br sync --flush-only || { echo "not persisted"; exit 1; }
     ```
 
     Closing on the feature branch before the merge is **not** a safe shortcut, however

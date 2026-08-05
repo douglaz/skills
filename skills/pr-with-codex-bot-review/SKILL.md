@@ -469,7 +469,8 @@ condition:
      shorter version of it here.
 
      `scripts/bot-gate.test` runs it against a stubbed `gh` with canned API responses —
-     fifty-one cases, each one a defect a reviewer actually found: a forged wrapper
+     one case per defect a reviewer actually found — the suite prints its own count, so
+     it is not repeated here to go stale: a forged wrapper
      login, a `[bot]`-suffix filter that matched nothing, an unrelated app's unresolved
      thread holding the merge, a CodeRabbit rate-limit skip, an API failure. Run it after
      touching the gate; every case has been shown to go red against the real bug.

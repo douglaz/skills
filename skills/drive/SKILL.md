@@ -114,7 +114,7 @@ infer the phase by hand.
 
 It prints repo, branch, cleanliness, gate command, bead counts, PR state, spec files, the
 cleared SHA, and an inferred phase. `scripts/drive-status.test` covers the derivation —
-twenty-seven cases against scratch repos and a stubbed `gh`, each shown to go red against a
+one case per real defect, against scratch repos and a stubbed `gh`, each shown to go red against a
 real defect. Run it after touching the phase logic. Read it, then confirm the inference against `DRIVE.md`
 if present. **Never guess the phase.**
 
@@ -224,35 +224,19 @@ A phase closes on evidence or it does not close.
   `br sync --flush-only` propagates a real exit code, so just require it to succeed. The
   *automatic* flush that follows a mutating command like `br close` does not: its error is
   caught and logged at debug level, so `br close` exits 0 with the JSONL unwritten. A
-  closed bead is not a closed bead until you have seen the JSONL change:
+  closed bead is not a closed bead until an explicit sync has confirmed the write:
 
   ```bash
-  # Compare before and after, not "is the JSONL dirty". A drain closes one bead per
-  # iteration and carries the closure forward uncommitted, so by the second bead the file
-  # is ALREADY dirty from the first — and a bare dirtiness test then passes without this
-  # close having written anything. The question is whether THIS command wrote, so ask it.
-  # `sort`/`while read`, not `sort -z | xargs -0 -r`: macOS `sort` has no -z and BSD
-  # `xargs` has no -r, so the GNU form yields an empty stream there and both fingerprints
-  # come back as the checksum of nothing — rejecting every closure on a platform this repo
-  # explicitly supports. Beads paths do not contain newlines.
-  # Ask git for the files rather than globbing fixed shapes. drive-status recognises
-  # `*.beads.jsonl` at ANY depth (its classifier is `(^|/)[^/]*\.beads\.jsonl$`), and every
-  # hand-written glob so far has missed a layout it accepts — first `.beads/` only, then
-  # the two root forms. In a repo the glob misses, BEFORE and after are both the cksum of
-  # empty input, so the check fails on every closure: a hard block at LAND in a layout the
-  # phase machine otherwise supports. `git ls-files -co` cannot drift from what git sees.
-  beads_fingerprint() {   # portable: macOS sort has no -z and BSD xargs has no -r
-    git ls-files -co --exclude-standard -- '*.beads.jsonl' '.beads/*.jsonl' \
-      | LC_ALL=C sort | while IFS= read -r f; do printf '%s ' "$f"; cksum < "$f"; done | cksum
-  }
-  BEFORE=$(beads_fingerprint)
   br close <id> || { echo "br close failed"; exit 1; }
-  [ "$(beads_fingerprint)" != "$BEFORE" ] \
-    || { echo "br close changed nothing on disk — not persisted"; exit 1; }
+  br sync --flush-only || { echo "closure not persisted to the JSONL"; exit 1; }
   ```
 
-  A bead that was *already* closed also trips this, correctly: nothing was written, so
-  nothing is proven. Check the bead's state before deciding you have a bug.
+  The explicit sync is the whole guard, and it needs to know nothing about the repo: the
+  mutation is already in the shared DB, so the sync either writes it out or fails with a
+  real exit code. This replaced a before/after fingerprint of the JSONL files, which had to
+  know every beads layout, stay portable across GNU and BSD userland, and be captured
+  before the first mutation — and got each of those wrong once, in review, across six
+  copies of itself.
 
 
 The rules above are what closes a *phase*. The fuller set on not lying about *edits* —

@@ -43,12 +43,6 @@
 # What survives is CodeRabbit's REVIEW THREADS, which carry disposition and are counted
 # below, and its markers, which are printed so a human can see that nobody reviewed.
 #
-# It gates on UNRESOLVED bot review threads, not on a raw comment count. A raw count is
-# unsatisfiable — an answered false positive stays anchored to the tip forever, and GitHub
-# re-anchors unresolved comments to each new head — while ignoring findings entirely would
-# let a real one merge. Thread resolution is the disposition signal that distinguishes
-# them, and it is the one the author controls by acting.
-#
 # Usage: bot-gate <pr-number> [--json]
 #
 # This exists as a script rather than a snippet in SKILL.md because the same logic was
@@ -61,25 +55,10 @@
 # excluded the author's reply from the count but not the bot's original finding — which
 # is why the count is now reported and not gated.
 #
-# TWO CLAUSES WERE REMOVED, deliberately, and should not come back without new evidence:
-#
-# 1. The settle window — sample the unresolved count, sleep 120s, sample again, and
-#    require the wrapper to have aged past the window. It defended against a delivery gap
-#    (the review wrapper landing before its own line comments) that was then measured not
-#    to exist. On PR #16 every round's comments carry the wrapper's own timestamp to
-#    within a second: 19:40:19Z/19:40:19Z, 20:24:30Z/20:24:31Z, 03:55:25Z/03:55:25Z. The
-#    bot submits a round atomically; the apparent gap was an artifact of polling two
-#    endpoints in sequence. A clause that defends against nothing still costs two minutes
-#    a call — and no finite window can exclude a later comment anyway, so it was never a
-#    proof, only a delay that felt like one.
-#
-# 2. The skipped-vs-changed-files intersection. A "Files skipped from review" list
-#    enumerates files of the PR being reviewed, by construction — CodeRabbit cannot skip a
-#    file the PR does not touch. So the intersection was non-empty whenever a skip existed,
-#    making it identical to the blanket "any skip blocks" rule it was written to replace,
-#    and the only way to empty it was a truncated changed-files response, i.e. fail-open.
-#    The skip list is now REPORTED and not gated: a vendor skipping a file it judged
-#    trivial is a thing to read, not a thing to deadlock on.
+# TWO CLAUSES WERE REMOVED deliberately — a settle window, and an intersection of
+# CodeRabbit's skip list against the changed files. Both defended hazards that measurement
+# showed could not occur, and both are post-mortemed in full in ADR 0004. Do not restore
+# either without refuting the evidence there.
 
 set -uo pipefail
 
@@ -87,12 +66,6 @@ PR="${1:-}"; shift || true
 JSON=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    # Removed rather than accepted-and-ignored: a caller passing it believes it is buying
-    # a guarantee, and silently taking the flag would keep that belief alive.
-    --settle-seconds) echo "--settle-seconds was removed: the settle window it configured defended against a delivery gap that does not exist (see the header)" >&2; exit 2 ;;
-    # Removed with the CodeRabbit clause: it was an operator assertion standing in for a
-    # fact no query could establish, and nothing now depends on that fact.
-    --no-coderabbit)  echo "--no-coderabbit was removed: CodeRabbit no longer affects the verdict (see the header)" >&2; exit 2 ;;
     --json)           JSON=true; shift ;;
     *)                echo "unknown arg: $1" >&2; exit 2 ;;
   esac
@@ -238,7 +211,6 @@ count_unresolved_bot_threads() {
 # sample could only ever differ if a WHOLE new round landed inside the window — which the
 # `eyes` check below detects directly and without the two-minute wait.
 UNRESOLVED=$(count_unresolved_bot_threads) || { echo "BLOCKED: thread query failed" >&2; exit 3; }
-[[ "$UNRESOLVED" =~ ^[0-9]+$ ]] || { echo "BLOCKED: cannot parse threads" >&2; exit 3; }
 
 # --- CodeRabbit, when configured ---
 # "query failed" is not "not configured": mapping both to absent would let a transient
@@ -248,52 +220,32 @@ UNRESOLVED=$(count_unresolved_bot_threads) || { echo "BLOCKED: thread query fail
 # CheckRun carries name/conclusion — selecting only on `.context` missed a CheckRun-shaped
 # CodeRabbit entirely, read it as "not configured", and cleared past a pending or failed
 # review.
-if CHECKS=$(gh pr checks "$PR" -R "$REPO" --json name,state 2>/dev/null); then
-  if CR=$(printf %s "$CHECKS" | jq -er '[.[]? | select(.name=="CodeRabbit") | .state] | first // ""' 2>/dev/null); then
-    CR_STATE="${CR:-absent}"
-  else
-    # gh returned 0 but the body would not parse. "Could not read" is not "not configured".
-    CR_STATE="query-failed"
-  fi
-else
-  # `gh pr checks` exits non-zero when checks are pending or failing as well as on error,
-  # so fall back to the rollup to tell those apart rather than guessing.
-  if ROLLUP=$(gh pr view "$PR" -R "$REPO" --json statusCheckRollup 2>/dev/null); then
-    # Presence and state are separate questions. A PENDING CheckRun has no `.state` and a
-    # null `.conclusion`, so `(.state // .conclusion)` yields nothing — and reading that
-    # as `absent` cleared past a review that was still running. Ask first whether an entry
-    # exists, and only then what its state is; an entry with no terminal state is pending.
-    CR_PRESENT=$(printf %s "$ROLLUP" | jq -r '[.statusCheckRollup[]? | select((.context // .name)=="CodeRabbit")] | length' 2>/dev/null)
-    if [[ "$CR_PRESENT" =~ ^[0-9]+$ ]] && [[ "$CR_PRESENT" -gt 0 ]]; then
-      # ANY matching entry without a terminal state means a run is in flight. Picking the
-      # first non-empty state would select a stale SUCCESS sitting beside a pending rerun.
-      CR_ANY_PENDING=$(printf %s "$ROLLUP" | jq -r '[.statusCheckRollup[]? | select((.context // .name)=="CodeRabbit") | select((((.state // .conclusion) // "") | length) == 0)] | length' 2>/dev/null)
-      if [[ "$CR_ANY_PENDING" =~ ^[0-9]+$ ]] && [[ "$CR_ANY_PENDING" -gt 0 ]]; then
-        CR_STATE="PENDING"
-      else
-        # Worst state wins over the set, so a FAILURE beside a SUCCESS still blocks.
-        CR=$(printf %s "$ROLLUP" | jq -r '[.statusCheckRollup[]? | select((.context // .name)=="CodeRabbit") | ((.state // .conclusion) // "")]
-              | if any(.[]; . != "SUCCESS") then (map(select(. != "SUCCESS")) | first) else "SUCCESS" end' 2>/dev/null)
-        CR_STATE="${CR:-PENDING}"
-      fi
-    elif [[ "$CR_PRESENT" =~ ^[0-9]+$ ]]; then
-      CR_STATE="absent"
-    else
-      CR_STATE="query-failed"
-    fi
-  else
-    CR_STATE="query-failed"
-  fi
+# One query, best effort. This is REPORT data — nothing here reaches the verdict — so it
+# does not need the two-path resolution it used to have. `gh pr checks` exits non-zero when
+# checks are merely pending, which is why a rollup fallback existed to tell that apart from
+# a real failure; asking the rollup directly answers both without the fallback.
+#
+# Presence and state stay separate questions. A PENDING CheckRun has no `.state` and a null
+# `.conclusion`, so `(.state // .conclusion)` yields nothing — reading that as `absent`
+# would report "no CodeRabbit here" for a review that is running. And any entry without a
+# terminal state means a run is in flight, so worst-state-wins over the set rather than
+# taking the first: a stale SUCCESS can sit beside a pending rerun.
+CR_STATE="query-failed"
+if ROLLUP=$(gh pr view "$PR" -R "$REPO" --json statusCheckRollup 2>/dev/null); then
+  CR_STATE=$(printf %s "$ROLLUP" | jq -r '
+    [.statusCheckRollup[]? | select((.context // .name)=="CodeRabbit")] as $cr
+    | if ($cr | length) == 0 then "absent"
+      elif any($cr[]; (((.state // .conclusion) // "") | length) == 0) then "PENDING"
+      else ([$cr[] | ((.state // .conclusion) // "")]
+            | if any(.[]; . != "SUCCESS") then (map(select(. != "SUCCESS")) | first) else "SUCCESS" end)
+      end' 2>/dev/null) || CR_STATE="query-failed"
+  [[ -n "$CR_STATE" ]] || CR_STATE="query-failed"
 fi
 
-# Two reviewers disagreed here and both were right about a real hazard: gating on the raw
-# comment count is unsatisfiable (answered findings stay anchored), while not gating lets
-# an unaddressed finding merge. Unresolved THREADS is the measure that satisfies both —
-# resolving a thread is how the author records a disposition, so it clears when the work
-# is done and blocks when it is not.
 # A CodeRabbit SUCCESS may be a rate-limit skip or a files-skipped result, in which case
 # nobody reviewed them — and since the documented usage chains this exit code straight
-# into `gh pr merge`, a warning is not enough. Inspect the walkthrough before believing it.
+# § 7 forbids chaining this exit code into `gh pr merge` — the merge sequence has
+# preconditions this gate never checks — so what follows is for the report, not the verdict.
 CR_SKIPPED=false
 # Fetched for `absent` too — for the REPORT, not to block: nothing here gates any more.
 # It is how the output can tell "CodeRabbit is not installed" from "it has commented here

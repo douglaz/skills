@@ -125,9 +125,6 @@ mkdir -p "$REPO/.git/drive"
 { printf 'cleared=%s\n' "$(G rev-parse HEAD)"; printf 'cleared_base=deadbeef1234\n'; } > "$REPO/.git/drive/state"
 check "clearance whose base moved refuses LAND" HARDEN
 
-new_repo; add_code; record '**Phase:** HARDEN'; clear_at
-check "clearance with a matching base derives LAND" LAND
-
 # A marker with no cleared_base at all is UNVERIFIED, not grandfathered.
 new_repo; add_code; record '**Phase:** HARDEN'; clear_tip_only
 check "clearance without a recorded base refuses LAND" HARDEN

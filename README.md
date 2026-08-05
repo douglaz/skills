@@ -324,7 +324,7 @@ Exit 0 says `NO_PENDING_EVIDENCE`, not "cleared", and the distinction is the poi
 neither bot emits a round-terminal signal, so every conclusion is drawn from absence over a
 bounded observation window, which the JSON reports both ends of. It is a stop sign, not a
 green light — where the forge can enforce a rule server-side, put it there instead.
-`scripts/bot-gate.test` exercises it against a stubbed `gh` — fifty-one cases, each one
+`scripts/bot-gate.test` exercises it against a stubbed `gh` — each case
 a defect found in review, each shown to go red against the real bug.
 
 ### galtland-architecture

@@ -547,19 +547,8 @@ And verify the closure actually happened. `br close` exits 0 even when the flush
 writes the JSONL failed, because the error is caught and logged at debug level:
 
 ```bash
-# Before/after, not "is the JSONL dirty". A drain carries the previous bead's closure
-# forward uncommitted, so from the second bead on the file is already dirty and a bare
-# dirtiness test passes without this close having written anything — the exact swallowed
-# auto-flush it is here to catch. Guard 1 in SKILL.md states the same rule; this is the
-# third site of it.
-beads_fingerprint() {   # portable: macOS sort has no -z and BSD xargs has no -r
-  git ls-files -co --exclude-standard -- '*.beads.jsonl' '.beads/*.jsonl' \
-    | LC_ALL=C sort | while IFS= read -r f; do printf '%s ' "$f"; cksum < "$f"; done | cksum
-}
-BEFORE=$(beads_fingerprint)
 br close <id> || { echo "br close failed"; exit 1; }
-[ "$(beads_fingerprint)" != "$BEFORE" ] \
-  || { echo "closure not persisted — auto-flush was swallowed"; exit 1; }
+br sync --flush-only || { echo "closure not persisted — auto-flush was swallowed"; exit 1; }
 ```
 
 `&&`/`||`, not `;`: a semicolon discards `br close`'s exit status, and `git status` exits

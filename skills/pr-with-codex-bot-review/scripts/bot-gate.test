@@ -31,7 +31,6 @@ case "$*" in
   *"repo view"*nameWithOwner*)  f repo.txt "owner/repo" ;;
   *"pr view"*headRefOid*)       cat "$FIX/prhead.txt" 2>/dev/null || echo "" ;;
   *"pr view"*number*)           f prnum.txt "16" ;;
-  *"pr checks"*)                [ -f "$FIX/checksfail" ] && exit 1; f checks.json '[]' ;;
   *"pr view"*statusCheckRollup*) [ -f "$FIX/rollupfail" ] && exit 1; f rollup.json '{"statusCheckRollup":[]}' ;;
   *timeline*)                   [ -f "$FIX/timelinefail" ] && exit 1; f timeline.json '[[]]' ;;
   *reactions*)                  [ -f "$FIX/reactionsfail" ] && exit 1; f reactions.json '[[]]' ;;
@@ -96,7 +95,10 @@ new_fix() { FIX="$WORK/fix"; rm -rf "$FIX"; mkdir -p "$FIX"
             printf '%s' "$TIP" > "$FIX/prhead.txt"; }
 # A CodeRabbit walkthrough body with $1 spliced in after the skip header.
 cr_skip() { printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes:\\n%s\\n"}]]' "$1"; }
-cr_success() { echo '[{"name":"CodeRabbit","state":"SUCCESS"}]' > "$FIX/checks.json"; }
+# The rollup is the single source of CodeRabbit's state now — `gh pr checks` is no longer
+# consulted, because it exits non-zero on merely-pending checks and the rollup answers both
+# questions in one query.
+cr_success() { echo '{"statusCheckRollup":[{"name":"CodeRabbit","state":"SUCCESS"}]}' > "$FIX/rollup.json"; }
 
 echo "bot-gate fixtures"
 
@@ -328,7 +330,6 @@ check "newer status comment clears a stale skip" 0
 # cleared past a review that was still running — the fail-open half that survived the
 # name/state fix.
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-echo 'CHECKSFAIL' > "$FIX/checksfail"
 echo '{"statusCheckRollup":[{"__typename":"CheckRun","name":"CodeRabbit","conclusion":null}]}' > "$FIX/rollup.json"
 check_reports "a pending CheckRun is reported as PENDING" "coderabbit       PENDING" 
 
@@ -392,7 +393,7 @@ check "a wrapper with an empty submitted_at blocks" 1
 # still gated (correctly: "could not ask" is not "not done"), and ADR 0004 changed what
 # the gate claims, not this fixture's shape. Do not "restore" exit 3 here.
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-echo 'x' > "$FIX/checksfail"; echo 'x' > "$FIX/rollupfail"
+echo 'x' > "$FIX/rollupfail"
 check_reports "unreadable CodeRabbit status is reported, not fatal" "coderabbit       query-failed"
 
 # --- what exit 0 says it means ---

@@ -391,29 +391,21 @@ Otherwise:
 6. **Launch the next pass before you write the summary.** Not after — before. Go back to
    § 2 with `N+1`, start the reviewers, and only then write up what this pass did.
 
-   This ordering is doing real work, so it is worth saying why rather than just asking
-   for it. Writing a report to the user is the single most turn-ending act available;
-   putting it last in a loop iteration reliably ends the loop instead of advancing it.
-   Measured on a real run of this skill: every boundary whose final act was a summary
-   stalled and needed a human "continue", and every boundary whose final act was a tool
-   call did not. Telling yourself to keep going does not fix this — an explicit
-   don't-stop instruction was in place for both stalls and neither was prevented, because
-   the failure is about *sequence*, not resolve.
+   Writing a report to the user is the most turn-ending act available, so putting it last
+   in a loop iteration reliably ends the loop instead of advancing it. Measured on a real
+   run of this skill: every boundary whose final act was a summary stalled and needed a
+   human "continue"; every boundary whose final act was a tool call did not. An explicit
+   don't-stop instruction was already in place for both stalls and prevented neither — the
+   failure is sequencing, not resolve, so inverting the order removes the failure state
+   rather than asking you to resist it.
 
-   Inverting the order removes the failure state rather than asking you to resist it. You
-   cannot end a turn having forgotten to start the next pass, because it is already
-   running. Two things fall out for free: the reviewers work for 10-15 minutes while you
-   write the summary, and the summary becomes a fact ("pass 3 is running") instead of a
-   promise ("running pass 3 now") that nothing enforces.
+   Two things fall out: the reviewers work for 10-15 minutes while you write, and the
+   summary becomes a fact ("pass 3 is running, task X") rather than a promise. Name the
+   running task in it — a turn that ends with a pass running and one that ends with a pass
+   merely announced read identically otherwise.
 
-   That last difference matters more than it looks. A turn that ends with a pass running
-   and a turn that ends with a pass merely *announced* read identically in the transcript
-   — same words, opposite states. Naming the running task in the summary is what makes
-   them distinguishable, to you on the next turn and to the user right now.
-
-   The exceptions are the § 4 stop conditions and § 4a/§ 4b, which are the loop
-   deliberately not continuing. Everywhere else, a summary marks a transition, not a
-   finish line.
+   The exceptions are § 4's stop conditions and § 4a/§ 4b, where the loop is deliberately
+   not continuing.
 
 7. Print a brief disposition summary in chat:
 

@@ -119,48 +119,19 @@ run `second-model-bead-audit` by default after the graph meets these gates.
 - Merge tiny beads only when the merge sharpens execution instead of blurring it.
 - Reconcile priority with graph reality so critical blockers are obvious.
 
-4. Apply only justified changes with `br`. **Capture the baseline first** — step 5's
-   persistence check compares against it, and taking it after the writes leaves that check
-   unable to fail:
+4. Apply only justified changes with `br`.
+
+5. Flush with an **explicit** `br sync --flush-only` and require it to succeed:
 
    ```bash
-   beads_fingerprint() {   # portable: macOS sort has no -z and BSD xargs has no -r
-     git ls-files -co --exclude-standard -- '*.beads.jsonl' '.beads/*.jsonl' \
-       | LC_ALL=C sort | while IFS= read -r f; do printf '%s ' "$f"; cksum < "$f"; done | cksum
-   }
-   BEFORE=$(beads_fingerprint)
-   MUTATED=0   # set to 1 at each `br` mutation this round actually applies
-   ```
-5. Flush mutations with `br sync --flush-only` and require it to SUCCEED (`&&`, or check
-   `$?`) — an explicit sync propagates a real exit code. The sync's own exit code covers
-   its write; a JSONL check is what catches an *auto*-flush silently swallowed by the `br`
-   mutations earlier in the round.
-
-   Take that check against a **pre-round baseline**, not against `HEAD`. `git status
-   --porcelain` compares the worktree with the last commit, so once the JSONL is dirty from
-   an earlier round it stays dirty — and every later round then "confirms" a write it never
-   made, which is exactly the swallowed auto-flush this is here to catch:
-
-   ```bash
-   beads_fingerprint() {   # portable: macOS sort has no -z and BSD xargs has no -r
-     git ls-files -co --exclude-standard -- '*.beads.jsonl' '.beads/*.jsonl' \
-       | LC_ALL=C sort | while IFS= read -r f; do printf '%s ' "$f"; cksum < "$f"; done | cksum
-   }
-   # $BEFORE and $MUTATED come from step 4, before the mutations.
-   [ -n "${BEFORE:-}" ] || { echo "BEFORE unset — capture it in step 4"; exit 1; }
-   br sync --flush-only || { echo "flush failed"; exit 1; }
-   # Only assert drift when this run actually issued a mutating `br` command. A refresh
-   # whose graph already matches, or a convergence round with zero justified changes, is a
-   # legitimate no-op — the prose below says so, and an unconditional check calls it a
-   # failure.
-   if [ "${MUTATED:-0}" = 1 ]; then
-     [ "$(beads_fingerprint)" != "$BEFORE" ] || { echo "round changed nothing on disk"; exit 1; }
-   fi
+   br sync --flush-only || { echo "flush failed — mutations not persisted"; exit 1; }
    ```
 
-   Only require the change when the round actually applied mutations. A late round that
-   applies zero justified changes leaves the fingerprint equal, and that is a healthy
-   convergence signal, not a failed flush.
+   The explicit sync is the whole guard: the hazard is the *automatic* flush after a
+   mutating `br` command swallowing its error, and the mutation is still in the shared DB,
+   so this either writes it or fails loudly. A round that applied no changes syncs cleanly
+   and reports nothing — a healthy convergence signal, not a failed flush.
+
 6. Write a round summary:
    - beads added, rewritten, merged, closed, or reprioritized
    - findings ledger entries closed this round

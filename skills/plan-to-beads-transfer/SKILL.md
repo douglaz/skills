@@ -41,19 +41,6 @@ Stop and report plan gaps when any of these are still fuzzy:
 
 ## Workflow
 
-**Before step 1**, capture the baseline the persistence check at step 10 compares
-against. It must be taken before any `br` mutation, and `MUTATED` must be set as you go —
-the fingerprint alone cannot tell "wrote nothing" from "had nothing to write":
-
-```bash
-beads_fingerprint() {   # portable: macOS sort has no -z and BSD xargs has no -r
-  git ls-files -co --exclude-standard -- '*.beads.jsonl' '.beads/*.jsonl' \
-    | LC_ALL=C sort | while IFS= read -r f; do printf '%s ' "$f"; cksum < "$f"; done | cksum
-}
-BEFORE=$(beads_fingerprint)
-MUTATED=0   # set to 1 at each `br create`/`update`/`close` you actually issue
-```
-
 1. Establish the current graph baseline before creating anything:
 
    ```bash
@@ -90,32 +77,17 @@ MUTATED=0   # set to 1 at each `br create`/`update`/`close` you actually issue
    - beads -> plan: every bead has clear backing in the plan or an explicitly approved delta
    - if the audit feels suspiciously short or self-satisfied, assume coverage is incomplete and rerun more exhaustively
 9. Split, merge, rewrite, or close beads until the graph can stand on its own as executable memory.
-10. Flush with `br sync --flush-only` and require it to succeed — an explicit sync
-    propagates a real exit code. Then confirm the JSONL actually changed, against a
-    fingerprint taken **before** the transfer's mutations rather than against `HEAD`:
-    a JSONL already dirty when you started stays dirty whether or not this transfer
-    wrote anything, so the bare check cannot support the guarantee it claims.
+10. Flush with an **explicit** `br sync --flush-only` and require it to succeed:
 
     ```bash
-    # $BEFORE and $MUTATED come from the setup block above step 1 — they have to, because
-    # every `br` mutation happens in steps 1-9. Capturing them here would take the
-    # fingerprint AFTER the writes and reset the flag, leaving the assertion below unable
-    # to fail: a check that runs but cannot detect anything.
-    [ -n "${BEFORE:-}" ] || { echo "BEFORE unset — run the setup block before step 1"; exit 1; }
-    br sync --flush-only || { echo "flush failed"; exit 1; }
-    # Only assert drift when this run actually issued a mutating `br` command. A refresh
-    # whose graph already matches, or a convergence round with zero justified changes, is a
-    # legitimate no-op — the prose below says so, and an unconditional check calls it a
-    # failure.
-    if [ "${MUTATED:-0}" = 1 ]; then
-      [ "$(beads_fingerprint)" != "$BEFORE" ] || { echo "transfer wrote nothing"; exit 1; }
-    fi
+    br sync --flush-only || { echo "flush failed — mutations not persisted"; exit 1; }
     ```
 
-    A transfer that created beads must report a change. A re-run whose graph already
-    matches the plan legitimately reports none; that is a no-op, not a failed flush.
-    The sync's exit code covers its own write; this check catches an auto-flush
-    swallowed by an earlier `br` mutation.
+    The explicit sync propagates a real exit code, which the *automatic* flush after each
+    `br` mutation does not — it swallows its error and leaves the JSONL unwritten. The
+    mutation is still in the shared DB, so this sync either writes it or fails loudly. A
+    re-run whose graph already matches the plan syncs cleanly and writes nothing; that is
+    a no-op, not a failure.
 11. If the repo workflow supports it, run `br lint` after major rewrites to catch missing sections.
 
 ## Quality bar
