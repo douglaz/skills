@@ -373,6 +373,12 @@ fi
 # commits nobody read. So a wrapper that predates the last base change is stale even though
 # every SHA still matches.
 #
+# `ready_for_review` rides along in the same sweep. The skill documents that marking a
+# draft ready starts a new bot round, and it changes no SHA — so with `eyes` unable to
+# refresh and PENDING reviews invisible, the old same-tip wrapper satisfied every condition
+# while a fresh round was running. Different cause from a base move, same question: did
+# something happen after the review that the review could not have accounted for?
+#
 # The whole FAMILY of base mutations, matched by prefix rather than enumerated. GitHub has
 # at least `base_ref_changed`, `base_ref_force_pushed`, `base_ref_deleted`,
 # `automatic_base_change_succeeded` and `_failed`, and this clause was wrong five times
@@ -405,7 +411,7 @@ if [[ -n "$WRAPPER_AT" ]]; then
     # retarget happened" and "one retarget I cannot date" collapse again, one level below
     # where they last did. There is no empty-string value that means only one of them.
     BASE_CHANGED_ATS=$(printf '%s' "$TL" \
-      | jq -r '.[][] | select((.event // "") | test("^(base_ref_|automatic_base_change_)"))
+      | jq -r '.[][] | select((.event // "") | test("^(base_ref_|automatic_base_change_)|^ready_for_review$"))
               | if ((.created_at // "") | length) == 0 then "@undated@" else .created_at end' 2>/dev/null) \
       || { echo "BLOCKED: cannot read the PR timeline" >&2; exit 3; }
     W2=$(iso_to_epoch "$WRAPPER_AT")

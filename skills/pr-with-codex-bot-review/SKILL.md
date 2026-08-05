@@ -410,11 +410,13 @@ condition:
 
   1. A wrapper exists whose `Reviewed commit:` equals the tip. That is the bot stating,
      with a SHA, which tree it read.
-  2. Run **`scripts/bot-gate <PR>`** and require exit 0. Five conditions: a *submitted*
-     codex review naming this tip, no PENDING review from the bot on it (a rerun in
-     flight), no `eyes` reaction post-dating it, no `base_ref_changed` post-dating it
-     either (a retarget grows the diff without moving the head, so the review covered less
-     than it appears to), and zero unresolved review threads from either gated bot. It fails closed on any API error, missing tool, or unparseable
+  2. Run **`scripts/bot-gate <PR>`** and require exit 0. Six conditions: a *submitted* codex
+     review naming this tip; no PENDING review from the bot on it (a rerun in flight); no
+     `@codex review` comment newer than it (a rerun that was *requested* and has not
+     reported — nothing else can see that state); no `eyes` reaction post-dating it; no
+     base mutation post-dating it (the whole `base_ref_*` / `automatic_base_change_*`
+     family, plus `ready_for_review` — each changes what the review covered without moving
+     the head); and zero unresolved review threads from either gated bot. It fails closed on any API error, missing tool, or unparseable
      response in the signals that feed all five — the timeline query behind the retarget
      check included.
 

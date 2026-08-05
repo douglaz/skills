@@ -52,7 +52,13 @@ if command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   # Local HEAD is routinely ahead of the PR head mid-HARDEN (an unpushed commit), and
   # requiring equality there hid the upstream PR entirely, so the base fell back to the
   # fork's default instead of the PR's release or stacked target.
-  _UP="$_SELF_R"; _FOUND=""
+  # Empty until a PR is actually found. Reporting the self repo as `pr_repo` with no PR
+  # made consumers fetch the FORK's base while the clearance path fetched the PARENT's —
+  # both writing refs/remotes/origin/$BASE — so the pinned OID never matched the fetched
+  # one and clearance was unreachable, with "re-run the panel" as a remedy that re-pins the
+  # same wrong ref. `pr_repo` now answers "which repo hosts this branch's PR", and null
+  # means there is none; the base remote is a separate question, resolved below.
+  _UP=""; _FOUND=""
   for _c in ${_PARENT:+"$_PARENT"} ${_SELF_R:+"$_SELF_R"}; do
     _sel="$BRANCH"
     [[ -n "$_SELF_R" && "$_c" != "$_SELF_R" ]] && _sel="${_SELF_R%%/*}:$BRANCH"
@@ -61,6 +67,9 @@ if command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
     [[ -z "$_FOUND" ]] && { _FOUND="$_c"; _UP="$_c"; }      # first repo that HAS the PR
     [[ "$_oid" == "$_HEAD_NOW" ]] && { _UP="$_c"; break; }  # exact head wins outright
   done
+  # `-R` still needs a repo even with no PR: fall back to the parent when there is one, so
+  # the lookup below asks the place a PR would live. This is NOT pr_repo.
+  _RREPO="${_UP:-${_PARENT:-$_SELF_R}}"
   # An array, so the flag and its value stay two words without relying on how a `${x:+...}`
   # expansion splits. (The often-repeated claim that quotes inside `${_UP:+-R "$_UP"}` are
   # literal is FALSE — verified: `x="a b"; printf '[%s]' ${x:+-R "$x"}` prints `[-R][a b]`.
@@ -81,10 +90,9 @@ if command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   # `gh pr view beltagyy:fix-ssh-signing-key-delete -R cli/cli` finds #14069.
   # Prefixed only when this repo really is a fork; on a normal clone owner == upstream
   # owner and the bare branch is what gh expects.
-  _SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "")
   _SEL="$BRANCH"
-  [[ -n "$_UP" && -n "$_SELF" && "$_UP" != "$_SELF" ]] && _SEL="${_SELF%%/*}:$BRANCH"
-  _RFLAG=(); [[ -n "$_UP" && -n "$BRANCH" ]] && _RFLAG=("$_SEL" -R "$_UP")
+  [[ -n "$_SELF_R" && -n "${_RREPO:-}" && "$_RREPO" != "$_SELF_R" ]] && _SEL="${_SELF_R%%/*}:$BRANCH"
+  _RFLAG=(); [[ -n "$_RREPO" && -n "$BRANCH" ]] && _RFLAG=("$_SEL" -R "$_RREPO")
   # baseRefName only. NOT baseRefOid — it is a creation-time SNAPSHOT of the base tip, not
   # the base's current commit, and no fetch refreshes it. Verified against live GitHub:
   # git/git PR #206, open since 2016, still reports baseRefOid 306ee63a while master is
@@ -657,7 +665,7 @@ if $JSON; then
     --arg done_pending "$DONE_PENDING" --arg head_sha "$HEAD_SHA" \
     --arg land_blocked_dirty "$LAND_BLOCKED_DIRTY" --arg done_on_branch "$DONE_ON_BRANCH" \
     --arg state_file "$STATE_FILE" --arg base_fresh "$BASE_FRESH" \
-    --arg pr_repo "$_UP" --arg base_origin "$BASE_ORIGIN" --arg cleared_base "$DRIVE_CLEARED_BASE" --arg cleared_base_matches "$CLEARED_BASE_MATCHES" \
+    --arg pr_repo "$_UP" --arg base_repo "${_RREPO:-}" --arg base_origin "$BASE_ORIGIN" --arg cleared_base "$DRIVE_CLEARED_BASE" --arg cleared_base_matches "$CLEARED_BASE_MATCHES" \
     --argjson dirty "${DIRTY_COUNT:-0}" --argjson untracked "${UNTRACKED:-0}" \
     --argjson branch_commits "${BRANCH_COMMITS:-0}" \
     '{root:$root,branch:$branch,default_branch:$default_branch,dirty:$dirty,
@@ -671,6 +679,7 @@ if $JSON; then
       state_file:$state_file,recorded_land:($recorded_land=="true"),
       base_fresh:(if $base_fresh=="n/a" then null else $base_fresh=="true" end),
       pr_repo:(if $pr_repo=="" then null else $pr_repo end),
+      base_repo:(if $base_repo=="" then null else $base_repo end),
       base_origin:$base_origin,cleared_base:$cleared_base,
       cleared_base_matches:(if $cleared_base_matches=="n/a" then null else $cleared_base_matches=="true" end),
       pending_pr:$pending_pr,done_pending:($done_pending=="true"),

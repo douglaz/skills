@@ -398,8 +398,16 @@ changed_z() {
 
 # Split into files that still exist and files this change deleted. `|| true` on the
 # loop keeps a trailing deleted path from leaving status 1 and aborting under `set -e`.
-EXISTING=$(changed_z | { while IFS= read -r -d "" f; do [ -e "$f" ] && printf '%s\n' "$f"; done; true; } | sort -u)
-DELETED=$( changed_z | { while IFS= read -r -d "" f; do [ -e "$f" ] || printf '%s\n' "$f"; done; true; } | sort -u)
+# Ask GIT which paths were deleted, not the filesystem. `[ -e "$f" ]` is false for a path
+# missing from a sparse checkout and for a present-but-dangling symlink — neither of which
+# was deleted — and the prompt below tells the reviewer not to open anything in DELETED.
+# That is a clean verdict over part of the artifact nobody read.
+DELETED=$( { git diff -z --no-renames --diff-filter=D --name-only "$DIFF_BASE...HEAD"
+             git diff -z --no-renames --diff-filter=D --name-only
+             git diff -z --no-renames --diff-filter=D --name-only --cached
+           } | { while IFS= read -r -d "" f; do printf '%s\n' "$f"; done; true; } | sort -u)
+EXISTING=$(changed_z | { while IFS= read -r -d "" f; do printf '%s\n' "$f"; done; true; } | sort -u \
+           | { [ -n "$DELETED" ] && grep -vxF -f <(printf '%s\n' "$DELETED") || cat; })
 
 cat >"$REVIEW_DIR/fable-consistency-prompt.txt" <<EOF
 Do not hunt for bugs — another pass owns those. You own INTERNAL AGREEMENT.

@@ -220,7 +220,13 @@ _PB=$("$DS" --json | jq -r '.default_branch')
 # (panel_base_oid, cleared_base, base_fresh) then validates against a branch GitHub will
 # never merge into — with "REBASE FIRST" as the symptom and re-clearing as a remedy that
 # re-pins the same wrong ref forever.
-_UPP=$("$DS" --json | jq -r '.pr_repo // ""')
+# `base_repo`, not `pr_repo`. They answer different questions and conflating them
+# deadlocked the fork path: with no PR yet — the prescribed state for a FIRST clearance —
+# pr_repo named the fork, so this pinned the fork's base tip while the clearance snippet
+# below fetched the PARENT's into the same ref. The OID check then failed on every attempt
+# and told you to re-run the panel, which re-pinned the same ref. Both snippets read
+# base_repo now, so they cannot disagree.
+_UPP=$("$DS" --json | jq -r '.base_repo // ""')
 [ -n "$_UPP" ] && _UPP="https://github.com/$_UPP" || _UPP=origin
 git fetch -q "$_UPP" "+refs/heads/$_PB:refs/remotes/origin/$_PB" \
   || { echo "cannot fetch $_PB — the panel's base is unknown, do NOT start the panel"; exit 1; }
@@ -288,35 +294,18 @@ PANEL_BASE_OID=$(sed -n 's/^panel_base_oid=//p' "$STATE_DIR/panel" 2>/dev/null |
   || { echo "the panel's base OID was never pinned — re-run the panel; NOT cleared"; exit 1; }
 # Compared AFTER the fetch below, not here: both sides would otherwise read the same stale
 # local ref and agree with themselves. See the assertion following the fetch.
-# REST, not `gh pr view --json baseRepository` — that field does not exist, and without
-# `set -e` the failure is silent and falls back to origin, i.e. the fork.
-# The first clearance runs BEFORE any PR exists — that is the prescribed ordering — so a
-# hard PR requirement here would deadlock every drive at its first HARDEN. Ask the PR when
-# there is one; otherwise ask whether this repo is a fork; otherwise origin is the target.
-UP=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end' 2>/dev/null)
-BR=$(git branch --show-current)
-# `-R` needs an explicit selector — gh cannot infer the PR from the branch once --repo is
-# given — and without `-R` a fork clone looks for the PR in the fork, where it is not.
-# The head LABEL, not the branch name: gh matches `-R <upstream>` lookups against
-# `<forkowner>:<branch>` for a cross-repo PR, so a bare branch finds nothing on exactly the
-# fork clones `-R` is here for. drive-status builds the same selector and its suite pins
-# the form; this snippet needs it too or LAND is unreachable on a fork.
-_SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "")
-_SEL="$BR"; [ -n "$UP" ] && [ -n "$_SELF" ] && [ "$UP" != "$_SELF" ] && _SEL="${_SELF%%/*}:$BR"
-if PRNUM=$(gh pr view "$_SEL" ${UP:+-R} ${UP:+"$UP"} --json number -q .number 2>/dev/null) && [ -n "$PRNUM" ]; then
-  # -R the upstream: `{owner}/{repo}` expands to the CURRENT repo, which on a fork is
-  # yours, not where the PR lives.
-  UP=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
-  BASE_REMOTE=$(gh api "repos/$UP/pulls/$PRNUM" --jq .base.repo.clone_url 2>/dev/null) \
-    || { echo "cannot resolve base repository"; exit 1; }
-else
-  BASE_REMOTE=$(gh repo view --json parent -q 'if .parent then "https://github.com/\(.parent.owner.login)/\(.parent.name)" else "" end' 2>/dev/null)
-  [ -n "$BASE_REMOTE" ] || BASE_REMOTE=origin
-fi
-# Explicit DESTINATION refspec. `git fetch origin "$BASE"` updates only FETCH_HEAD — in a
-# --single-branch clone the configured refspec covers just the feature branch, so
-# refs/remotes/origin/$BASE is never created and base_fresh stays null forever, failing
-# with "REBASE FIRST" that no rebase can fix. Verified.
+# ONE resolution, from drive-status. This block used to re-derive the base repository by
+# hand — probing the PR, falling back to `.parent`, falling back to origin — and it
+# disagreed with the pre-panel pin above, which resolved the same thing differently. Both
+# write refs/remotes/origin/$BASE, so on a fork clone with no PR yet (the prescribed state
+# for a FIRST clearance) the pin recorded the fork's tip, this fetch overwrote it with the
+# parent's, and the OID assertion failed on every attempt — telling you to re-run a
+# 15-minute panel that re-pinned the same ref. Eleven sites in this repo have now gone
+# wrong re-deriving the upstream; the detector computes it once and both snippets read it.
+# Its own call: $DSJ below is deliberately taken AFTER the fetch, to read a freshness that
+# only exists once the ref is updated. This one has to run before it.
+BASE_REMOTE=$("$DS" --json | jq -r '.base_repo // ""')
+[ -n "$BASE_REMOTE" ] && BASE_REMOTE="https://github.com/$BASE_REMOTE" || BASE_REMOTE=origin
 git fetch -q "$BASE_REMOTE" "+refs/heads/$BASE:refs/remotes/origin/$BASE" \
   || { echo "fetch failed — base unknown, do NOT clear"; exit 1; }
 # NOW the pinned OID means something: this ref was just refreshed from the remote, so a
@@ -439,18 +428,12 @@ BASE=$("$DS" --json | jq -r '.default_branch')
 # upstream base repo while `origin` is your fork.
 # REST, not `gh pr view --json baseRepository` — that field does not exist, and without
 # `set -e` the failure is silent and falls back to origin, i.e. the fork.
-UP2=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end' 2>/dev/null)
-BR2=$(git branch --show-current)
-# The head LABEL, not the branch name: gh matches `-R <upstream>` lookups against
-# `<forkowner>:<branch>` for a cross-repo PR, so a bare branch finds nothing on exactly the
-# fork clones `-R` is here for. drive-status builds the same selector and its suite pins
-# the form; this snippet needs it too or LAND is unreachable on a fork.
-_SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "")
-_SEL2="$BR2"; [ -n "$UP2" ] && [ -n "$_SELF" ] && [ "$UP2" != "$_SELF" ] && _SEL2="${_SELF%%/*}:$BR2"
-PRNUM=$(gh pr view "$_SEL2" ${UP2:+-R} ${UP2:+"$UP2"} --json number -q .number 2>/dev/null) || { echo "no PR — cannot resolve base repo"; exit 1; }
-UP=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
-BASE_REMOTE=$(gh api "repos/$UP/pulls/$PRNUM" --jq .base.repo.clone_url 2>/dev/null) \
-  || { echo "cannot resolve base repository"; exit 1; }
+DSJ2_PRE=$("$DS" --json)   # before the fetch; $DSJ2 below is taken after it, deliberately
+# Same single resolution as clearance uses. Hand-rolling it here forced the parent, so a
+# fork-hosted PR was invisible and LAND could never merge it — and it could disagree with
+# the ref the panel was pinned against, which is the deadlock the pre-panel pin hit.
+BASE_REMOTE=$(printf %s "$DSJ2_PRE" | jq -r '.base_repo // ""')
+[ -n "$BASE_REMOTE" ] && BASE_REMOTE="https://github.com/$BASE_REMOTE" || BASE_REMOTE=origin
 git fetch -q "$BASE_REMOTE" "+refs/heads/$BASE:refs/remotes/origin/$BASE" \
   || { echo "fetch failed — base unknown, do NOT merge"; exit 1; }
 # One call, asserted to still name the same base: a second `drive-status` can resolve a

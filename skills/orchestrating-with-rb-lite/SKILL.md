@@ -608,7 +608,7 @@ implement → review loop for each bead.
     `br ready`/`br list` rather than assuming a variable survived the clone. Empty, the
     filter rejects everything and the closure PR this exists to find is missed.
 
-    Keyed on the **bead id**, not a branch-naming convention, and `--limit 200` because
+    Keyed on the **bead id**, not a branch-naming convention, and the raised `--limit` because
     `gh pr list` returns 30 by default — an older closure PR hides behind newer work PRs,
     which is the resume case this exists for.
 

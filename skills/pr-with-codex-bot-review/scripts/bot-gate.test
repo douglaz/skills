@@ -518,6 +518,16 @@ new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"
 printf '[[{"event":"base_ref_deleted","created_at":"%s"}]]' "$NOW_UTC" > "$FIX/timeline.json"
 check "a base deletion after the review blocks" 1
 
+# Marking a draft ready starts a new round and moves no SHA — so with `eyes` unable to
+# refresh and PENDING reviews invisible, the old same-tip wrapper satisfied everything.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"ready_for_review","created_at":"%s"}]]' "$NOW_UTC" > "$FIX/timeline.json"
+check "mark-ready after the review blocks" 1
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$NOW_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"ready_for_review","created_at":"%s"}]]' "$OLD_UTC" > "$FIX/timeline.json"
+check "mark-ready before the review clears" 0
+
 # A PENDING review is a draft nobody submitted, and GitHub omits `submitted_at` on it. It
 # named the tip, so it satisfied the wrapper count — while leaving WRAPPER_AT empty, which
 # is what the active-round check is guarded on. So the check never ran and the verdict saw
