@@ -223,6 +223,17 @@ new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"
 printf '[[{"event":"base_ref_changed","created_at":"not-a-date"}]]' > "$FIX/timeline.json"
 check "an unparseable retarget timestamp blocks" 1
 
+# These timestamps carry one-second precision, so a retarget in the SAME second as the
+# review is indistinguishable from one just before it. A strict `>` resolved that tie
+# toward clearing; a tie is doubt.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"base_ref_changed","created_at":"%s"}]]' "$OLD_UTC" > "$FIX/timeline.json"
+check "a retarget in the wrapper's own second blocks" 1
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":"%s"}]]' "$OLD_UTC" > "$FIX/reactions.json"
+check "an eyes in the wrapper's own second blocks" 1
+
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 echo 'x' > "$FIX/timelinefail"
 check "timeline query failure is exit 3" 3

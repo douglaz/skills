@@ -36,7 +36,7 @@ if command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   # -R the upstream: on a fork clone `gh pr view` resolves against the fork, where the PR
   # does not exist — so this path silently never fires in exactly the case it was added
   # for (a PR targeting a release or stacked branch).
-  _UP=$(gh repo view --json nameWithOwner,parent -q '.parent.nameWithOwner // .nameWithOwner' 2>/dev/null || echo "")
+  _UP=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end' 2>/dev/null || echo "")
   # An array, so the flag and its value stay two words without relying on how a `${x:+...}`
   # expansion splits. (The often-repeated claim that quotes inside `${_UP:+-R "$_UP"}` are
   # literal is FALSE — verified: `x="a b"; printf '[%s]' ${x:+-R "$x"}` prints `[-R][a b]`.
@@ -50,7 +50,17 @@ if command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   # array is an unbound-variable fatal under `set -u` in bash <= 4.3, and macOS ships
   # /bin/bash 3.2 — which would abort the detector in exactly the degraded-gh case its
   # header promises to tolerate ("Exits 0 even when signals are missing").
-  _RFLAG=(); [[ -n "$_UP" && -n "$BRANCH" ]] && _RFLAG=("$BRANCH" -R "$_UP")
+  # The selector must be the head LABEL, not the branch name. gh matches `-R <upstream>`
+  # lookups against `<owner>:<branch>` for a cross-repo PR, so a bare branch name finds
+  # nothing on exactly the fork clones this -R exists for. Verified live: `gh pr view
+  # fix-ssh-signing-key-delete -R cli/cli` says "no pull requests found", while
+  # `gh pr view beltagyy:fix-ssh-signing-key-delete -R cli/cli` finds #14069.
+  # Prefixed only when this repo really is a fork; on a normal clone owner == upstream
+  # owner and the bare branch is what gh expects.
+  _SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "")
+  _SEL="$BRANCH"
+  [[ -n "$_UP" && -n "$_SELF" && "$_UP" != "$_SELF" ]] && _SEL="${_SELF%%/*}:$BRANCH"
+  _RFLAG=(); [[ -n "$_UP" && -n "$BRANCH" ]] && _RFLAG=("$_SEL" -R "$_UP")
   # baseRefName only. NOT baseRefOid — it is a creation-time SNAPSHOT of the base tip, not
   # the base's current commit, and no fetch refreshes it. Verified against live GitHub:
   # git/git PR #206, open since 2016, still reports baseRefOid 306ee63a while master is
@@ -647,7 +657,18 @@ $DONE_ON_BRANCH && ! $_DONE_DIRTY && $ON_DEFAULT && [[ "$PHASE" != "LAND" ]] && 
 $DONE_ON_BRANCH && ! $ON_DEFAULT && [[ "$PHASE" != "LAND" && "$BRANCH_COMMITS" -gt 0 ]] && printf '  ⚠ %s says DONE but this branch has %s unmerged commit(s) — that record\n    describes the state AFTER this PR lands. Treating it as HARDEN: these commits are\n    unreviewed and go through the panel like any others.\n' "$PHASE_WAS" "$BRANCH_COMMITS"
 $DONE_PENDING && printf '  ⚠ DONE is pending metadata PR #%s, so this is WAITING_FOR_MERGE, not DONE. Query that\n    PR: merged means the drive really is done; open means go finish landing it.\n' "$DRIVE_PENDING"
 # Silent otherwise: clearance matches but the tree moved, and every SHA check still passes.
-[[ "$CLEARED_BASE_MATCHES" == "n/a" ]] && $CLEARED_MATCHES_TIP && printf '  ⚠ the clearance marker has no `cleared_base` — it predates that field, so the base the\n    panel diffed against is unknown. Re-clear (one panel run); LAND is refused until then.\n'
+# Two different states reach n/a and they need different remedies. A marker with no
+# cleared_base line is fixed by re-clearing. A marker that HAS one while BASE_REF is empty
+# is not: re-clearing re-records a base that still cannot be resolved, so the panel run is
+# burned and the warning returns. This file already says so three hundred lines up; saying
+# the opposite here sent drivers to the useless remedy.
+if [[ "$CLEARED_BASE_MATCHES" == "n/a" ]] && $CLEARED_MATCHES_TIP; then
+  if [[ -z "$DRIVE_CLEARED_BASE" ]]; then
+    printf '  ⚠ the clearance marker has no `cleared_base` — it predates that field, so the base the\n    panel diffed against is unknown. Re-clear (one panel run); LAND is refused until then.\n'
+  else
+    printf '  ⚠ no base ref resolves, so the recorded `cleared_base` cannot be checked. Re-clearing\n    will NOT help — establish a base first (`git remote set-head origin -a`, or open the\n    PR). LAND is refused until then.\n'
+  fi
+fi
 [[ "$CLEARED_BASE_MATCHES" == "false" ]] && printf '  ⚠ the PR base moved since clearance (marker %s, now %s) — the panel diffed a\n    different surface. Re-run it.\n' "${DRIVE_CLEARED_BASE:0:10}" "$(git rev-parse --short=10 "${BASE_REF:-HEAD}" 2>/dev/null)"
 $LAND_BLOCKED_DIRTY && printf '  ⚠ clearance matches the tip and the base is fresh, but the worktree is dirty\n    (%s modified, %s untracked) — so this is NOT LAND. Those edits are not in the commit\n    a merge would take. Commit and re-clear, or discard them.\n' "$DIRTY_COUNT" "$UNTRACKED"
 # Base drift is invisible in every SHA the driver checks, so it has to be surfaced here.

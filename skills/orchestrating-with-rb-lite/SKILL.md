@@ -470,7 +470,7 @@ implement → review loop for each bead.
     ```bash
     # R is resolved HERE, not in step 10: this is its first use, and an unset $R sends gh
     # an empty -R (or aborts under nounset), so every drain stopped before CI.
-    R=$(gh repo view --json nameWithOwner,parent -q '.parent.nameWithOwner // .nameWithOwner')
+    R=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
     MERGING_SHA=$(gh pr view <pr> -R "$R" --json headRefOid -q .headRefOid)
     [ -n "$MERGING_SHA" ] || { echo "cannot resolve the PR head"; exit 1; }
     # Bind it to the commit that was actually reviewed. The remote head is only the right
@@ -496,7 +496,7 @@ implement → review loop for each bead.
     authoritative build gate before taking the next bead:
 
     ```bash
-    R=$(gh repo view --json nameWithOwner,parent -q '.parent.nameWithOwner // .nameWithOwner')
+    R=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
     BASE=$(gh pr view <pr> -R "$R" --json baseRefName -q .baseRefName)
     [ -n "$BASE" ] || { echo "cannot resolve the base branch"; exit 1; }
     # Check the merge's exit status. `--delete-branch` makes gh switch branches as a side

@@ -21,6 +21,7 @@ cat > "$WORK/bin/gh" <<'STUB'
 [ -f "$FIX/ghfail" ] && exit 1
 case "$*" in
   *"repo view"*parent*)   cat "$FIX/upstream.txt" 2>/dev/null || echo "owner/repo" ;;
+  *"repo view"*nameWithOwner*) cat "$FIX/self.txt" 2>/dev/null || cat "$FIX/upstream.txt" 2>/dev/null || echo "owner/repo" ;;
   *"pr view"*baseRefName*)
       printf '%s\n' "$*" >> "$FIX/gh.calls"
       # Honour the requested fields. Asking for baseRefOid hands back the CREATION-TIME
@@ -202,6 +203,30 @@ elif grep 'pr view' "$FIX/gh.calls" | grep -qv 'feat'; then
   FAIL=$((FAIL+1)); echo "  FAIL every gh pr view passes the branch selector"
 else
   PASS=$((PASS+1)); echo "  ok   every gh pr view is fork-aware (-R + selector)"
+fi
+
+# On a FORK clone the selector must be the head LABEL `<forkowner>:<branch>`, not the bare
+# branch: gh matches `-R <upstream>` lookups against that label for a cross-repo PR, so a
+# bare name finds nothing on exactly the clones -R exists for. The earlier fixture asserts
+# the flags are PASSED; this one asserts their form, which is what actually breaks.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/self.txt"
+rm -f "$FIX/gh.calls"; phase >/dev/null
+if grep 'pr view' "$FIX/gh.calls" | grep -q 'forkowner:feat'; then
+  PASS=$((PASS+1)); echo "  ok   a fork clone selects <owner>:<branch>       (label form)"
+else
+  FAIL=$((FAIL+1)); echo "  FAIL a fork clone selects <owner>:<branch>"
+  grep 'pr view' "$FIX/gh.calls" | sed 's/^/       /' | head -2
+fi
+
+# ...and a NON-fork must stay on the bare branch, or gh cannot match it either.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+echo "owner/repo" > "$FIX/upstream.txt"; echo "owner/repo" > "$FIX/self.txt"
+rm -f "$FIX/gh.calls"; phase >/dev/null
+if grep 'pr view' "$FIX/gh.calls" | grep -q ':feat'; then
+  FAIL=$((FAIL+1)); echo "  FAIL a non-fork keeps the bare branch selector"
+else
+  PASS=$((PASS+1)); echo "  ok   a non-fork keeps the bare branch selector   (no owner: prefix)"
 fi
 
 # DONE + unmerged commits + a Pending: PR overlap. Unreviewed commits dominate: the record

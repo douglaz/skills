@@ -316,8 +316,8 @@ gh api repos/<owner>/<repo>/issues/<N>/reactions \
 
 | Reaction | Meaning | Action |
 |---|---|---|
-| (empty) | Bot hasn't picked up the PR yet | Wait or `@codex review` |
-| `eyes` | Bot is reviewing | Wait |
+| (empty) | **Unknown.** The bot may not have started, or may have finished a round and simply not reacted — measured, `+1` fired zero times in 19 rounds | Go to § 7. Do not wait and do not retrigger: the signal you would be waiting for may never arrive, and a retrigger just starts a duplicate round |
+| `eyes` | Bot is reviewing | Wait — this is the one row that means hold |
 | `+1` | Bot approves with no concerns — **of the tree it read**, which is not always the tip | Go to § 7; do not merge from here |
 
 Typical bot timing: 5-30 minutes from open. On docs-only or tiny PRs the bot still
@@ -461,7 +461,7 @@ Merge when the reaction-based check passes:
      shorter version of it here.
 
      `scripts/bot-gate.test` runs it against a stubbed `gh` with canned API responses —
-     forty-nine cases, each one a defect a reviewer actually found: a forged wrapper
+     fifty-one cases, each one a defect a reviewer actually found: a forged wrapper
      login, a `[bot]`-suffix filter that matched nothing, an unrelated app's unresolved
      thread holding the merge, a CodeRabbit rate-limit skip, an API failure. Run it after
      touching the gate; every case has been shown to go red against the real bug.
@@ -552,7 +552,7 @@ ignoring the actual signal.**
 
 ```bash
 [ -z "$(git status --porcelain)" ] || { echo "tree dirty — do NOT merge"; exit 1; }
-R=$(gh repo view --json nameWithOwner,parent -q '.parent.nameWithOwner // .nameWithOwner')
+R=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
 BASE=$(gh pr view <N> -R "$R" --json baseRefName -q .baseRefName)
 [ -n "$BASE" ] || { echo "cannot resolve the base branch"; exit 1; }
 
@@ -574,7 +574,16 @@ git merge-base --is-ancestor "refs/remotes/upstream/$BASE" HEAD \
 # automation that pushed after the gate returned — and pins the merge to that, so GitHub
 # ACCEPTS the unreviewed head instead of refusing it. The pin is only a guard if it names
 # the tree that was actually reviewed.
-REVIEWED_TIP=$("$BOT_GATE" <N> --json | jq -r .tip)   # from the § 7 run
+# Run the gate and REQUIRE its exit status. A command substitution swallows it: bot-gate
+# prints its JSON — `tip` included — before exiting 1 on BLOCKED, so `$(... | jq -r .tip)`
+# yields a perfectly good SHA from a run that said do not merge, and jq's own exit 0 hides
+# it. An amend landing between § 7 and here then produces a BLOCKED gate whose tip is the
+# new head, the equality check compares the new head to itself and passes, and the merge
+# takes the unreviewed tree — the exact outcome this pin exists to refuse.
+GATE_JSON=$("$BOT_GATE" <N> --json) || { echo "bot-gate says do NOT merge"; exit 1; }
+[ "$(printf %s "$GATE_JSON" | jq -r .verdict)" = "NO_PENDING_EVIDENCE" ] \
+  || { echo "gate verdict is not NO_PENDING_EVIDENCE"; exit 1; }
+REVIEWED_TIP=$(printf %s "$GATE_JSON" | jq -r .tip)
 [ "$REVIEWED_TIP" = "$(git rev-parse HEAD)" ] \
   || { echo "local HEAD moved since the gate ran — re-run § 7"; exit 1; }
 gh pr merge <N> -R "$R" --squash --delete-branch --match-head-commit "$REVIEWED_TIP" \

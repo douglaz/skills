@@ -113,7 +113,7 @@ done
 # number belongs to upstream, but a bare `gh pr view N` resolves it against the fork —
 # finding nothing, or worse, a different PR that happens to share the number. `.parent`
 # is the upstream when this repo is a fork, and the repo itself otherwise.
-REPO=$(gh repo view --json nameWithOwner,parent -q '.parent.nameWithOwner // .nameWithOwner' 2>/dev/null) \
+REPO=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end' 2>/dev/null) \
   || { echo "BLOCKED: cannot resolve repo" >&2; exit 3; }
 [[ "$REPO" == */* ]] || { echo "BLOCKED: cannot parse repo: $REPO" >&2; exit 3; }
 TIP=$(git rev-parse --verify --quiet HEAD) \
@@ -357,7 +357,10 @@ if [[ -n "$WRAPPER_AT" ]]; then
       || { echo "BLOCKED: cannot read the PR timeline" >&2; exit 3; }
     if [[ -n "$BASE_CHANGED_AT" ]]; then
       B=$(iso_to_epoch "$BASE_CHANGED_AT"); W2=$(iso_to_epoch "$WRAPPER_AT")
-      if [[ -n "$B" && -n "$W2" ]]; then (( B > W2 )) && RETARGETED_AFTER_REVIEW=true
+      # `>=`, not `>`. These timestamps have one-second precision, so a retarget in the
+      # SAME second as the review is indistinguishable from one just before it — and the
+      # strict form resolves that tie toward clearing. A tie is doubt, and doubt blocks.
+      if [[ -n "$B" && -n "$W2" ]]; then (( B >= W2 )) && RETARGETED_AFTER_REVIEW=true
       else RETARGETED_AFTER_REVIEW=true; fi
     fi
   else
@@ -394,7 +397,8 @@ if [[ -n "$WRAPPER_AT" ]]; then
       ROUND_ACTIVE=true
     elif [[ -n "$EYES_AT" ]]; then
       E=$(iso_to_epoch "$EYES_AT")
-      if [[ -n "$E" ]]; then (( E > W )) && ROUND_ACTIVE=true
+      # `>=` for the same one-second-precision reason as the retarget check above.
+      if [[ -n "$E" ]]; then (( E >= W )) && ROUND_ACTIVE=true
       else ROUND_ACTIVE=true; fi   # cannot compare -> assume a round is running
     fi
   else

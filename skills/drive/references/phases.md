@@ -215,7 +215,7 @@ _PB=$("$DS" --json | jq -r '.default_branch')
 # pin records `unknown`, the clearance guard hard-exits on it, and its remedy ("re-run the
 # panel") re-pins `unknown` forever: clearance becomes unreachable in a clone type this
 # file elsewhere documents as supported. One fetch, here, closes both.
-_UPP=$(gh repo view --json parent -q '.parent.url // ""' 2>/dev/null); [ -n "$_UPP" ] || _UPP=origin
+_UPP=$(gh repo view --json parent -q 'if .parent then "https://github.com/\(.parent.owner.login)/\(.parent.name)" else "" end' 2>/dev/null); [ -n "$_UPP" ] || _UPP=origin
 git fetch -q "$_UPP" "+refs/heads/$_PB:refs/remotes/origin/$_PB" \
   || { echo "cannot fetch $_PB — the panel's base is unknown, do NOT start the panel"; exit 1; }
 { printf 'panel_base=%s\n' "$_PB"
@@ -279,18 +279,18 @@ PANEL_BASE_OID=$(sed -n 's/^panel_base_oid=//p' "$STATE_DIR/panel" 2>/dev/null |
 # The first clearance runs BEFORE any PR exists — that is the prescribed ordering — so a
 # hard PR requirement here would deadlock every drive at its first HARDEN. Ask the PR when
 # there is one; otherwise ask whether this repo is a fork; otherwise origin is the target.
-UP=$(gh repo view --json nameWithOwner,parent -q '.parent.nameWithOwner // .nameWithOwner' 2>/dev/null)
+UP=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end' 2>/dev/null)
 BR=$(git branch --show-current)
 # `-R` needs an explicit selector — gh cannot infer the PR from the branch once --repo is
 # given — and without `-R` a fork clone looks for the PR in the fork, where it is not.
 if PRNUM=$(gh pr view "$BR" ${UP:+-R} ${UP:+"$UP"} --json number -q .number 2>/dev/null) && [ -n "$PRNUM" ]; then
   # -R the upstream: `{owner}/{repo}` expands to the CURRENT repo, which on a fork is
   # yours, not where the PR lives.
-  UP=$(gh repo view --json nameWithOwner,parent -q '.parent.nameWithOwner // .nameWithOwner')
+  UP=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
   BASE_REMOTE=$(gh api "repos/$UP/pulls/$PRNUM" --jq .base.repo.clone_url 2>/dev/null) \
     || { echo "cannot resolve base repository"; exit 1; }
 else
-  BASE_REMOTE=$(gh repo view --json parent -q '.parent.url // ""' 2>/dev/null)
+  BASE_REMOTE=$(gh repo view --json parent -q 'if .parent then "https://github.com/\(.parent.owner.login)/\(.parent.name)" else "" end' 2>/dev/null)
   [ -n "$BASE_REMOTE" ] || BASE_REMOTE=origin
 fi
 # Explicit DESTINATION refspec. `git fetch origin "$BASE"` updates only FETCH_HEAD — in a
@@ -410,10 +410,10 @@ BASE=$("$DS" --json | jq -r '.default_branch')
 # upstream base repo while `origin` is your fork.
 # REST, not `gh pr view --json baseRepository` — that field does not exist, and without
 # `set -e` the failure is silent and falls back to origin, i.e. the fork.
-UP2=$(gh repo view --json nameWithOwner,parent -q '.parent.nameWithOwner // .nameWithOwner' 2>/dev/null)
+UP2=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end' 2>/dev/null)
 BR2=$(git branch --show-current)
 PRNUM=$(gh pr view "$BR2" ${UP2:+-R} ${UP2:+"$UP2"} --json number -q .number 2>/dev/null) || { echo "no PR — cannot resolve base repo"; exit 1; }
-UP=$(gh repo view --json nameWithOwner,parent -q '.parent.nameWithOwner // .nameWithOwner')
+UP=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
 BASE_REMOTE=$(gh api "repos/$UP/pulls/$PRNUM" --jq .base.repo.clone_url 2>/dev/null) \
   || { echo "cannot resolve base repository"; exit 1; }
 git fetch -q "$BASE_REMOTE" "+refs/heads/$BASE:refs/remotes/origin/$BASE" \
@@ -508,7 +508,7 @@ and silently carry the previous bead's closure into its diff. Instead:
   none. So the discovery path is the forge, and it belongs in the resume checklist:
 
   ```bash
-  UP=$(gh repo view --json nameWithOwner,parent -q '.parent.nameWithOwner // .nameWithOwner')
+  UP=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
   gh pr list -R "$UP" --state open --json number,headRefName,title   # closure PR in flight?
   ```
 
