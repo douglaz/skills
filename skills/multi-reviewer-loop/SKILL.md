@@ -140,17 +140,28 @@ a reviewer.
      SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner)
      BR=$(git branch --show-current)
      SEL="$BR"; [ "$UP" != "$SELF" ] && SEL="${SELF%%/*}:$BR"   # gh matches the head LABEL
-     BASE_NAME=$(gh pr view "$SEL" -R "$UP" --json baseRefName -q .baseRefName)
+     # OPEN only, and empty means "no PR" — fall through to candidate 2, do not abort.
+     # The first HARDEN panel runs BEFORE any PR exists (that is the prescribed ordering),
+     # so aborting here stops the panel in its most common state. And an abandoned CLOSED
+     # PR must not win: `gh pr view` falls back to the most recent closed or merged PR on
+     # the branch, which may have targeted a different base entirely.
+     BASE_NAME=$(gh pr view "$SEL" -R "$UP" --json baseRefName,state \
+                   -q 'select(.state=="OPEN") | .baseRefName' 2>/dev/null || echo "")
      # FETCH IT. The name alone is not a reviewable ref: on a fork clone `origin` is your
      # fork, so `origin/$BASE_NAME` is stale or absent — and when it is absent the ladder
      # falls through to the branch's own upstream, which IS HEAD. The panel then reviews an
      # empty diff and reports clean on a branch full of changes. Fetch the PR's real base
      # repository into a ref of its own and review against that.
-     BASE_REMOTE=$(gh api "repos/$UP/pulls/$(gh pr view "$SEL" -R "$UP" --json number -q .number)" \
-                     --jq .base.repo.clone_url)
-     git fetch -q "$BASE_REMOTE" "+refs/heads/$BASE_NAME:refs/remotes/prbase/$BASE_NAME" \
-       || { echo "cannot fetch the PR's base — do not review against a guess"; exit 1; }
-     DIFF_BASE="refs/remotes/prbase/$BASE_NAME"
+     if [ -n "$BASE_NAME" ]; then
+       # A PR exists, so its base is knowable and a failure to fetch it is fatal — that is
+       # different from having no PR at all, which is candidate 2's job.
+       PRNUM=$(gh pr view "$SEL" -R "$UP" --json number -q .number)
+       BASE_REMOTE=$(gh api "repos/$UP/pulls/$PRNUM" --jq .base.repo.clone_url)
+       git fetch -q "$BASE_REMOTE" "+refs/heads/$BASE_NAME:refs/remotes/prbase/$BASE_NAME" \
+         || { echo "PR $PRNUM exists but its base cannot be fetched — do not review against a guess"; exit 1; }
+       DIFF_BASE="refs/remotes/prbase/$BASE_NAME"
+     fi
+     # else: no open PR — leave DIFF_BASE unset and try the next candidate.
      ```
 
    **Never let the ladder pick the branch's own upstream.** `origin/<feature>` resolves to

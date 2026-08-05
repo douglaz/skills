@@ -132,6 +132,13 @@ check "no wrapper for tip blocks" 1
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 3 > "$FIX/threads.json"
 check "unresolved codex threads block" 1
 
+# GraphQL returns HTTP 200 with a PARTIAL data payload plus an errors array. Counting the
+# nodes that survived under-reports unresolved threads — the clearing direction — so the
+# page is a query failure however successful the HTTP call was.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"
+printf '{"errors":[{"message":"timeout"}],"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}' > "$FIX/threads.json"
+check "a partial GraphQL page with errors is exit 3" 3
+
 # Both gated bots count, not just codex: § 7 says "either bot".
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 2 coderabbitai > "$FIX/threads.json"
 check "unresolved CodeRabbit threads block" 1
@@ -316,6 +323,19 @@ printf '[[{"user":{"login":"chatgpt-codex-connector[bot]","type":"Bot"},"submitt
   "$OLD_UTC" "$TIP" "$TIP" > "$FIX/reviews.json"
 threads 0 > "$FIX/threads.json"
 check "a pending rerun beside a submitted wrapper blocks" 1
+
+# `@codex review` after the wrapper is a round that was REQUESTED and has not reported.
+# Nothing else can see it: `eyes` cannot be re-added once present, and PENDING reviews are
+# hidden from everyone but their author. Without this the gate clears during exactly the
+# rerun this skill tells you to trigger.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$NOW_UTC" > "$FIX/issues.json"
+check "a rerun requested after the wrapper blocks" 1
+
+# ...and one from BEFORE the wrapper is the normal case: it is the round that produced it.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$NOW_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$OLD_UTC" > "$FIX/issues.json"
+check "a rerun requested before the wrapper clears" 0
 
 # A fresh `eyes` newer than the wrapper means a round is running on the same tip.
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"

@@ -36,7 +36,20 @@ if command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   # -R the upstream: on a fork clone `gh pr view` resolves against the fork, where the PR
   # does not exist — so this path silently never fires in exactly the case it was added
   # for (a PR targeting a release or stacked branch).
-  _UP=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end' 2>/dev/null || echo "")
+  # Probe, do not prefer. A fork can host its own PRs, so forcing `.parent` misses them —
+  # or finds an unrelated parent PR with the same number and validates clearance against
+  # its base. Pick the candidate whose PR head is this checkout's HEAD; that is the only
+  # question with one answer. bot-gate and § 8 resolve the same way.
+  _SELF_R=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "")
+  _PARENT=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end' 2>/dev/null || echo "")
+  _HEAD_NOW=$(git rev-parse --verify --quiet HEAD 2>/dev/null || echo "")
+  _UP="$_SELF_R"
+  for _c in ${_PARENT:+"$_PARENT"} ${_SELF_R:+"$_SELF_R"}; do
+    _sel="$BRANCH"
+    [[ -n "$_SELF_R" && "$_c" != "$_SELF_R" ]] && _sel="${_SELF_R%%/*}:$BRANCH"
+    [[ "$(gh pr view "$_sel" -R "$_c" --json headRefOid -q .headRefOid 2>/dev/null)" == "$_HEAD_NOW" ]] \
+      && { _UP="$_c"; break; }
+  done
   # An array, so the flag and its value stay two words without relying on how a `${x:+...}`
   # expansion splits. (The often-repeated claim that quotes inside `${_UP:+-R "$_UP"}` are
   # literal is FALSE — verified: `x="a b"; printf '[%s]' ${x:+-R "$x"}` prints `[-R][a b]`.
@@ -630,7 +643,7 @@ if $JSON; then
     --arg done_pending "$DONE_PENDING" --arg head_sha "$HEAD_SHA" \
     --arg land_blocked_dirty "$LAND_BLOCKED_DIRTY" --arg done_on_branch "$DONE_ON_BRANCH" \
     --arg state_file "$STATE_FILE" --arg base_fresh "$BASE_FRESH" \
-    --arg base_origin "$BASE_ORIGIN" --arg cleared_base "$DRIVE_CLEARED_BASE" --arg cleared_base_matches "$CLEARED_BASE_MATCHES" \
+    --arg pr_repo "$_UP" --arg base_origin "$BASE_ORIGIN" --arg cleared_base "$DRIVE_CLEARED_BASE" --arg cleared_base_matches "$CLEARED_BASE_MATCHES" \
     --argjson dirty "${DIRTY_COUNT:-0}" --argjson untracked "${UNTRACKED:-0}" \
     --argjson branch_commits "${BRANCH_COMMITS:-0}" \
     '{root:$root,branch:$branch,default_branch:$default_branch,dirty:$dirty,
@@ -643,6 +656,7 @@ if $JSON; then
       head:$head_sha,cleared:$cleared,cleared_matches_tip:($cleared_matches=="true"),
       state_file:$state_file,recorded_land:($recorded_land=="true"),
       base_fresh:(if $base_fresh=="n/a" then null else $base_fresh=="true" end),
+      pr_repo:(if $pr_repo=="" then null else $pr_repo end),
       base_origin:$base_origin,cleared_base:$cleared_base,
       cleared_base_matches:(if $cleared_base_matches=="n/a" then null else $cleared_base_matches=="true" end),
       pending_pr:$pending_pr,done_pending:($done_pending=="true"),

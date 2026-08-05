@@ -598,9 +598,9 @@ implement → review loop for each bead.
 
     ```bash
     UP=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
-    gh pr list -R "$UP" --state all --limit 200 --json number,state,headRefName,title,body \
+    gh pr list -R "$UP" --state all --limit 1000 --json number,state,headRefName,title,body \
     | jq --arg id "$BEAD_ID" '.[] | select($id != "" and ([.headRefName, .title, (.body // "")]
-        | join(" ") | ascii_downcase | split("[^a-z0-9.-]+"; null) | index($id | ascii_downcase)))'
+        | join(" ") | ascii_downcase | [scan("[a-z0-9.-]+")] | index($id | ascii_downcase)))'
     ```
 
     `BEAD_ID` is the bead you are about to take — loop this query over each open bead from

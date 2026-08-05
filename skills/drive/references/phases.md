@@ -215,7 +215,13 @@ _PB=$("$DS" --json | jq -r '.default_branch')
 # pin records `unknown`, the clearance guard hard-exits on it, and its remedy ("re-run the
 # panel") re-pins `unknown` forever: clearance becomes unreachable in a clone type this
 # file elsewhere documents as supported. One fetch, here, closes both.
-_UPP=$(gh repo view --json parent -q 'if .parent then "https://github.com/\(.parent.owner.login)/\(.parent.name)" else "" end' 2>/dev/null); [ -n "$_UPP" ] || _UPP=origin
+# The repo that OWNS this PR, not the parent by default. Fetching the parent's branch into
+# refs/remotes/origin/$_PB clobbers the fork's own tracking ref, and every downstream check
+# (panel_base_oid, cleared_base, base_fresh) then validates against a branch GitHub will
+# never merge into — with "REBASE FIRST" as the symptom and re-clearing as a remedy that
+# re-pins the same wrong ref forever.
+_UPP=$("$DS" --json | jq -r '.pr_repo // ""')
+[ -n "$_UPP" ] && _UPP="https://github.com/$_UPP" || _UPP=origin
 git fetch -q "$_UPP" "+refs/heads/$_PB:refs/remotes/origin/$_PB" \
   || { echo "cannot fetch $_PB — the panel's base is unknown, do NOT start the panel"; exit 1; }
 # TELL THE PANEL WHICH BASE, and check what it reports back. `multi-reviewer-loop` resolves
@@ -553,9 +559,9 @@ and silently carry the previous bead's closure into its diff. Instead:
 
   ```bash
   UP=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
-  gh pr list -R "$UP" --state all --limit 200 --json number,state,headRefName,title,body \
+  gh pr list -R "$UP" --state all --limit 1000 --json number,state,headRefName,title,body \
     | jq --arg id "$BEAD_ID" '.[] | select($id != "" and ([.headRefName, .title, (.body // "")]
-        | join(" ") | ascii_downcase | split("[^a-z0-9.-]+"; null) | index($id | ascii_downcase)))'
+        | join(" ") | ascii_downcase | [scan("[a-z0-9.-]+")] | index($id | ascii_downcase)))'
   ```
 
 `BEAD_ID` comes from the bead you are resuming — on a fresh clone take it from `br list`'s

@@ -32,7 +32,15 @@ case "$*" in
       else
         cat "$FIX/prbase.txt" 2>/dev/null || echo ""
       fi ;;
-  *"pr view"*headRefOid*) printf '%s\n' "$*" >> "$FIX/gh.calls"; cat "$FIX/prhead.txt"   2>/dev/null || echo "" ;;
+  *"pr view"*headRefOid*)
+      printf '%s\n' "$*" >> "$FIX/gh.calls"
+      # Per-repo heads: a lookup carrying -R <upstream> gets prhead-upstream.txt when it
+      # exists, so "the PR lives in the fork, not the parent" can actually be modelled.
+      if [ -f "$FIX/prhead-upstream.txt" ] && case "$*" in *"-R $(cat "$FIX/upstream.txt" 2>/dev/null)"*) true;; *) false;; esac; then
+        cat "$FIX/prhead-upstream.txt"
+      else
+        cat "$FIX/prhead.txt" 2>/dev/null || echo ""
+      fi ;;
   *"pr view"*number*)     printf '%s\n' "$*" >> "$FIX/gh.calls"; cat "$FIX/prview.json"  2>/dev/null || echo "" ;;
   *"repo view"*)          echo "owner/repo" ;;
   *) echo "" ;;
@@ -210,6 +218,15 @@ elif grep 'pr view' "$FIX/gh.calls" | grep -qv 'feat'; then
 else
   PASS=$((PASS+1)); echo "  ok   every gh pr view is fork-aware (-R + selector)"
 fi
+
+# A fork can host its OWN PRs. Forcing `.parent` misses them, or finds an unrelated parent
+# PR with the same number and validates clearance against its base. The resolver probes by
+# matching HEAD; here only the fork has a PR whose head is this tree.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/self.txt"
+printf '%s' "$(G rev-parse HEAD)" > "$FIX/prhead.txt"
+printf 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' > "$FIX/prhead-upstream.txt"
+check_field "a fork-owned PR resolves to the fork" pr_repo forkowner/repo
 
 # On a FORK clone the selector must be the head LABEL `<forkowner>:<branch>`, not the bare
 # branch: gh matches `-R <upstream>` lookups against that label for a cross-repo PR, so a

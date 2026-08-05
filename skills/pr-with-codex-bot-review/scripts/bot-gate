@@ -230,6 +230,10 @@ count_unresolved_bot_threads() {
         reviewThreads(first:100, after:$c){ pageInfo{ hasNextPage endCursor }
           nodes { isResolved comments(first:1){ nodes { author{ __typename login } } } } } } } }' \
       -F o="${REPO%%/*}" -F r="${REPO##*/}" -F n="$PR" -F c="$cursor" 2>/dev/null) || return 1
+    # A 200 with a partial `data` plus an `errors` array is a successful HTTP call and a
+    # failed query. Counting whatever nodes survived under-reports unresolved threads —
+    # the clearing direction — so treat any errors as a query failure.
+    printf '%s' "$page" | jq -e '(.errors // []) | length == 0' >/dev/null 2>&1 || return 1
     local n
     n=$(printf '%s' "$page" | jq -r --argjson bots "$GRAPHQL_BOT_LOGINS" '
           [.data.repository.pullRequest.reviewThreads.nodes[]
@@ -268,6 +272,14 @@ UNRESOLVED=$(count_unresolved_bot_threads) || { echo "BLOCKED: thread query fail
 # would report "no CodeRabbit here" for a review that is running. And any entry without a
 # terminal state means a run is in flight, so worst-state-wins over the set rather than
 # taking the first: a stale SUCCESS can sit beside a pending rerun.
+# Fetched unconditionally: the `@codex review` trigger check below needs it regardless of
+# CodeRabbit's state, and it is one paginated call either way.
+if ALL_COMMENTS=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/comments" 2>/dev/null); then
+  printf '%s' "$ALL_COMMENTS" | jq -e 'type' >/dev/null 2>&1 || ALL_COMMENTS=""
+else
+  ALL_COMMENTS=""
+fi
+
 CR_STATE="query-failed"
 if ROLLUP=$(gh pr view "$PR" -R "$REPO" --json statusCheckRollup 2>/dev/null); then
   CR_STATE=$(printf %s "$ROLLUP" | jq -r '
@@ -284,6 +296,24 @@ fi
 # nobody reviewed them — and since the documented usage chains this exit code straight
 # § 7 forbids chaining this exit code into `gh pr merge` — the merge sequence has
 # preconditions this gate never checks — so what follows is for the report, not the verdict.
+# A `@codex review` comment newer than the wrapper means a round was REQUESTED and has not
+# reported yet. Nothing else sees it: the `eyes` reaction cannot be re-added once present,
+# and PENDING reviews are hidden from everyone but their author — so without this the gate
+# clears during exactly the rerun the skill tells you to trigger.
+RERUN_REQUESTED=false
+if [[ -n "$WRAPPER_AT" ]] && [[ -n "${ALL_COMMENTS:-}" ]]; then
+  _W=$(iso_to_epoch "$WRAPPER_AT")
+  _LAST_TRIGGER=$(printf '%s' "$ALL_COMMENTS" \
+    | jq -r '[.[][] | select((.body // "") | test("@codex[[:space:]]+review"; "i"))
+             | if ((.created_at // "") | length) == 0 then "@undated@" else .created_at end] | last // ""' 2>/dev/null) \
+    || { echo "BLOCKED: cannot read PR comments" >&2; exit 3; }
+  if [[ -n "$_LAST_TRIGGER" ]]; then
+    _T=$(iso_to_epoch "$_LAST_TRIGGER")
+    if [[ -z "$_T" || -z "$_W" ]]; then RERUN_REQUESTED=true
+    elif (( _T >= _W )); then RERUN_REQUESTED=true; fi
+  fi
+fi
+
 CR_SKIPPED=false
 # Fetched for `absent` too — for the REPORT, not to block: nothing here gates any more.
 # It is how the output can tell "CodeRabbit is not installed" from "it has commented here
@@ -465,7 +495,8 @@ fi
 # check needs, so a wrapper without one means that check never ran, and a check that did
 # not run has not passed.
 VERDICT="BLOCKED"
-if [[ "$WRAPPER_TIP" -gt 0 ]] && [[ -n "$WRAPPER_AT" ]] && [[ "$PENDING_ON_TIP" -eq 0 ]] && ! $ROUND_ACTIVE \
+if [[ "$WRAPPER_TIP" -gt 0 ]] && [[ -n "$WRAPPER_AT" ]] && [[ "$PENDING_ON_TIP" -eq 0 ]] \
+   && ! $RERUN_REQUESTED && ! $ROUND_ACTIVE \
    && ! $RETARGETED_AFTER_REVIEW && [[ "$UNRESOLVED" -eq 0 ]]; then
   VERDICT="NO_PENDING_EVIDENCE"
 fi
@@ -502,6 +533,7 @@ else
   [[ "$WRAPPER_TIP" -eq 0 ]] && printf '  ⚠ no review from the codex bot names this tip, so nothing proves WHICH tree it read.\n    Push or `@codex review` to get one, or accept the round explicitly and say so.\n'
   [[ "$UNRESOLVED" -gt 0 ]] && printf '  ⚠ %s UNRESOLVED bot thread(s). Fix each, or answer it with evidence and resolve the\n    thread — resolving is how you record that it was dispositioned.\n' "$UNRESOLVED"
   [[ "$CR_STATE" == "query-failed" ]] && printf '  · CodeRabbit status could not be queried.\n'
+  $RERUN_REQUESTED && printf '  ⚠ an `@codex review` comment is newer than the wrapper — a round was requested and\n    has not reported yet. Wait for its wrapper.\n'
   [[ "$PENDING_ON_TIP" -gt 0 ]] && printf '  ⚠ a PENDING review from the bot names this tip — a round is in flight and has not\n    submitted yet. Wait for it.\n'
   $RETARGETED_AFTER_REVIEW && printf '  ⚠ the PR base changed after the review was submitted — the head is the same but the\n    diff is not, so part of it was never read. `@codex review` to re-review the new surface.\n'
   $ROUND_ACTIVE && printf '  ⚠ an `eyes` reaction is newer than the wrapper — a fresh round is running on this\n    same tip. Wait for it to finish.\n'
