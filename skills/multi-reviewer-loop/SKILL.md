@@ -513,6 +513,10 @@ the end of the loop.
 
 Otherwise:
 
+0. **Consider delegating the EDIT to a fresh implementer — see § 3a.** You still
+   decide what is real; you do not have to be the one who types the fix. On a long
+   loop this is usually the higher-leverage split.
+
 1. Work the merged list, not two separate lists. Group related findings before
    editing and prefer fixing the root cause once over patching each comment
    independently — including when the two reviewers describe the same root cause
@@ -674,6 +678,39 @@ Otherwise:
    - <claim> — codex right / fable right, per <file:line>
    Validation: <command/result or "no targeted verifier found">
    ```
+
+### 3a. Delegating the edit
+
+**The agent that wrote the text is the worst available editor of it.** After a few
+passes you stop reading what is on the page and start reading what you meant. Measured
+on one long documentation loop: the orchestrator fixing its own artifact introduced
+roughly one to two *new* defects per fixing pass across eleven passes — the same claim
+corrected in one file and left standing in its twin (ten times), replacements spliced
+into the middle of a sentence without re-reading (breaking a list and duplicating a
+clause), and absolutes that outran the code. Handed the same kind of findings, a fresh
+implementer applied five of them with zero self-inflicted defects and proactively swept
+eight sibling occurrences the orchestrator had not been asked about.
+
+Treat that as one trial, not a law — by then the artifact was already much cleaner and
+the findings were unusually well specified. The mechanism is probably **freshness plus a
+written finding list**, not the particular model: delegating forces you to state each
+finding precisely enough for someone else to act on, which by itself kills the vague ones.
+
+**The split that works:**
+
+- **You adjudicate.** Verify each finding against source first. Never hand over a finding
+  you have not checked — you would be outsourcing the judgment, not the typing.
+- **The implementer edits**, in a fresh context, with a prompt that carries: verify before
+  fixing (findings are hypotheses, and one may be wrong); after each fix sweep the whole
+  artifact for the same claim **by concept, not by phrase**; read back every passage you
+  splice into; add no new mechanism; plus your environment and scope guards.
+- **You keep anything the implementer cannot safely touch** — a tool-managed database, a
+  ticket tracker, anything where hand-editing the file corrupts it. Say so explicitly in
+  the prompt and expect those findings back.
+- **Snapshot first.** The implementer has write access; `git` is the undo.
+
+This is not `rb-lite`. That loop hands over the whole task and reviews the result; this
+hands over *only the edit* for findings you have already verified.
 
 ### 4. Stop conditions
 
@@ -929,7 +966,9 @@ deferred, or disproven with evidence?"
 
 ## Guardrails
 
-- Fix issues yourself; do not turn this into a report-only workflow.
+- Never turn this into a report-only workflow: every finding ends as fixed, deferred, or
+  disproven. You may delegate the EDITING (§ 3a) — that is not report-only — but the
+  adjudication stays yours.
 - Run the reviewers independently and in parallel. Never show one reviewer the
   other's findings — correlated reviewers are one reviewer.
 - Keep chat concise; the logs hold the full reviewer output.
