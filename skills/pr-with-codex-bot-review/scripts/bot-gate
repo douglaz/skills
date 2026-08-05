@@ -335,13 +335,18 @@ fi
 # commits nobody read. So a wrapper that predates the last base change is stale even though
 # every SHA still matches.
 #
-# Three event types, not one. GitHub documents `automatic_base_change_succeeded` (and
-# `_failed`) separately from `base_ref_changed`, and the automatic variant fires in exactly
-# the stacked-PR case this guards: B targets A, A merges and is deleted after B's review
-# was submitted, GitHub retargets B to the default branch, and B's diff grows to include
-# A's squash — with B's head untouched, so every SHA still matches. Matching only the
-# manual event left that open. The `_failed` variant is included because an attempted
-# retarget is still doubt about which surface the review covered.
+# The whole FAMILY of base mutations, matched by prefix rather than enumerated. GitHub has
+# at least `base_ref_changed`, `base_ref_force_pushed`, `base_ref_deleted`,
+# `automatic_base_change_succeeded` and `_failed`, and this clause was wrong five times
+# running because each fix listed the types known at the time and the next input was one
+# more. Every one of them changes what the PR's diff contains without touching its head, so
+# the question is never "which event" — it is "did the base move at all", and a prefix test
+# answers that including for types nobody has added yet.
+# The stacked-PR case is why the automatic variants matter: B targets A, A merges and is
+# deleted after B's review, GitHub retargets B, and B's diff grows to include A's squash
+# with B's head untouched — so every SHA still matches. A backward force-push is the same
+# hazard by a different route: the new base is still an ancestor of the head, so the
+# ancestry check downstream also passes.
 # These are real timeline events with timestamps, so this is decidable — the kind of clause
 # ADR 0004 asks for, not another inference from absence. Fails closed: an
 # unreadable timeline or an unparseable timestamp is doubt.
@@ -362,9 +367,7 @@ if [[ -n "$WRAPPER_AT" ]]; then
     # retarget happened" and "one retarget I cannot date" collapse again, one level below
     # where they last did. There is no empty-string value that means only one of them.
     BASE_CHANGED_ATS=$(printf '%s' "$TL" \
-      | jq -r '.[][] | select(.event=="base_ref_changed"
-                             or .event=="automatic_base_change_succeeded"
-                             or .event=="automatic_base_change_failed")
+      | jq -r '.[][] | select((.event // "") | test("^(base_ref_|automatic_base_change_)"))
               | if ((.created_at // "") | length) == 0 then "@undated@" else .created_at end' 2>/dev/null) \
       || { echo "BLOCKED: cannot read the PR timeline" >&2; exit 3; }
     W2=$(iso_to_epoch "$WRAPPER_AT")

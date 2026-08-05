@@ -558,6 +558,11 @@ and silently carry the previous bead's closure into its diff. Instead:
         | join(" ") | ascii_downcase | split("[^a-z0-9.-]+"; null) | index($id | ascii_downcase)))'
   ```
 
+`BEAD_ID` comes from the bead you are resuming — on a fresh clone take it from `br list`'s
+open beads, one query per candidate. There is no durable variable carrying it across a
+clone boundary, so a snippet that assumes one silently rejects every PR (`$id != ""`) and
+misses the closure it exists to find.
+
 Keyed on the **bead id**, not a branch-naming convention — nothing here mandates one, so
 a filter like `test("closure|metadata")` misses a PR called `chore/close-bead-42`. Put the
 bead id in the closure PR's title or body, and note the raised `--limit`: `gh pr list`

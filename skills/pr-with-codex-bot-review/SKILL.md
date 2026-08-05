@@ -563,7 +563,17 @@ ignoring the actual signal.**
 
 ```bash
 [ -z "$(git status --porcelain)" ] || { echo "tree dirty — do NOT merge"; exit 1; }
-R=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
+# Resolve by matching HEAD, not by preferring the parent. A fork can host its own PRs, and
+# both repos can carry PR number N — so parent-first targets a missing or unrelated PR and
+# the real one can never be landed. `bot-gate` resolves the same way for the same reason.
+SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+UP=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end')
+R=""
+for _c in ${UP:+"$UP"} "$SELF"; do
+  [ "$(gh pr view <N> -R "$_c" --json headRefOid -q .headRefOid 2>/dev/null)" = "$(git rev-parse HEAD)" ] \
+    && { R="$_c"; break; }
+done
+[ -n "$R" ] || { echo "no PR <N> whose head is this tree in ${UP:+$UP or }$SELF"; exit 1; }
 BASE=$(gh pr view <N> -R "$R" --json baseRefName -q .baseRefName)
 [ -n "$BASE" ] || { echo "cannot resolve the base branch"; exit 1; }
 

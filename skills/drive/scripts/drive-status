@@ -335,14 +335,14 @@ if [[ -n "$STATE_FILE" && -f "$STATE_FILE" ]]; then
   # letter-leading SHA to its tail — passing whenever the SHA happens to start with a digit.
   # Both greps -i: with it on the first only, `cleared=ABC123...` prints the tail after
   # the last uppercase letter — a SHA that exists nowhere.
-  DRIVE_CLEARED=$(grep -m1 -oiE '^cleared[=:][^0-9a-f]*[0-9a-f]{7,40}' "$STATE_FILE" 2>/dev/null \
-    | grep -oiE '[0-9a-f]{7,40}$' || echo "")
+  DRIVE_CLEARED=$(grep -m1 -oiE '^cleared[=:][^0-9a-f]*[0-9a-f]{7,64}' "$STATE_FILE" 2>/dev/null \
+    | grep -oiE '[0-9a-f]{7,64}$' || echo "")
   # The base the panel reviewed against. `codex review --base` is diff-scoped, so
   # retargeting a PR to an older ancestor after HARDEN EXPANDS the reviewed surface
   # without changing HEAD — cleared == tip and base_fresh both still hold, and LAND would
   # be derived over a diff no panel read.
-  DRIVE_CLEARED_BASE=$(grep -m1 -oiE '^cleared_base[=:][^0-9a-f]*[0-9a-f]{7,40}' "$STATE_FILE" 2>/dev/null \
-    | grep -oiE '[0-9a-f]{7,40}$' || echo "")
+  DRIVE_CLEARED_BASE=$(grep -m1 -oiE '^cleared_base[=:][^0-9a-f]*[0-9a-f]{7,64}' "$STATE_FILE" 2>/dev/null \
+    | grep -oiE '[0-9a-f]{7,64}$' || echo "")
 fi
 # Compare against the tip by prefix, so an abbreviated `cleared` still matches. Empty
 # never matches: an absent value is unproven, not cleared.
@@ -682,7 +682,12 @@ if $DONE_ON_BRANCH && [[ "$PHASE" != "LAND" && "$BRANCH_COMMITS" -eq 0 ]]; then
   if [[ -z "$BASE_REF" ]]; then
     printf '  ⚠ %s says DONE but the base ref could not be resolved, so whether this branch has\n    unreviewed commits is unknown — unknown is not safe. Treating it as HARDEN.\n' "$PHASE_WAS"
   else
-    printf '  ⚠ %s says DONE and this branch has no commits beyond %s, but a record is not\n    evidence — DONE is derived here, never read. Treating it as HARDEN.\n' "$PHASE_WAS" "$BASE_REF"
+    # Reachable only via the dirty-tree disjunct: the other two (commits > 0, unknown
+    # base) are excluded by this branch's own guard. So it printed a second, wrong
+    # explanation beside the accurate dirty-tree warning below — and claimed DONE is
+    # derived, which contradicts this file's precedence invariant. DONE *is* read from the
+    # record; only LAND never is.
+    :
   fi
 fi
 $DONE_ON_BRANCH && $_DONE_DIRTY && [[ "$PHASE" != "LAND" ]] && printf '  ⚠ %s says DONE but the tree is dirty (%s modified, %s untracked) — closure metadata\n    that is not committed has not landed anywhere. Finish it before reporting DONE.\n' "$PHASE_WAS" "$DIRTY_COUNT" "$UNTRACKED"

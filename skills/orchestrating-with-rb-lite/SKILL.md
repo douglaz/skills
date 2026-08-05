@@ -603,6 +603,10 @@ implement → review loop for each bead.
         | join(" ") | ascii_downcase | split("[^a-z0-9.-]+"; null) | index($id | ascii_downcase)))'
     ```
 
+    `BEAD_ID` is the bead you are about to take — loop this query over each open bead from
+    `br ready`/`br list` rather than assuming a variable survived the clone. Empty, the
+    filter rejects everything and the closure PR this exists to find is missed.
+
     Keyed on the **bead id**, not a branch-naming convention, and `--limit 200` because
     `gh pr list` returns 30 by default — an older closure PR hides behind newer work PRs,
     which is the resume case this exists for.

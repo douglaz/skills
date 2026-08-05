@@ -481,6 +481,17 @@ new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"
 printf '[[{"event":"automatic_base_change_failed","created_at":"%s"}]]' "$NOW_UTC" > "$FIX/timeline.json"
 check "a failed automatic retarget also blocks" 1
 
+# A force-push of the base is a fourth event type, and a backward one leaves the new base
+# an ancestor of the head so the downstream ancestry check passes too. The filter matches
+# the family by prefix now — enumerating types lost to the next one five times running.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"base_ref_force_pushed","created_at":"%s"}]]' "$NOW_UTC" > "$FIX/timeline.json"
+check "a base force-push after the review blocks" 1
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"base_ref_deleted","created_at":"%s"}]]' "$NOW_UTC" > "$FIX/timeline.json"
+check "a base deletion after the review blocks" 1
+
 # A PENDING review is a draft nobody submitted, and GitHub omits `submitted_at` on it. It
 # named the tip, so it satisfied the wrapper count — while leaving WRAPPER_AT empty, which
 # is what the active-round check is guarded on. So the check never ran and the verdict saw

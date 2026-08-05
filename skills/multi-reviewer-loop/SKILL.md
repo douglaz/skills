@@ -140,8 +140,23 @@ a reviewer.
      SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner)
      BR=$(git branch --show-current)
      SEL="$BR"; [ "$UP" != "$SELF" ] && SEL="${SELF%%/*}:$BR"   # gh matches the head LABEL
-     gh pr view "$SEL" -R "$UP" --json baseRefName -q .baseRefName
+     BASE_NAME=$(gh pr view "$SEL" -R "$UP" --json baseRefName -q .baseRefName)
+     # FETCH IT. The name alone is not a reviewable ref: on a fork clone `origin` is your
+     # fork, so `origin/$BASE_NAME` is stale or absent — and when it is absent the ladder
+     # falls through to the branch's own upstream, which IS HEAD. The panel then reviews an
+     # empty diff and reports clean on a branch full of changes. Fetch the PR's real base
+     # repository into a ref of its own and review against that.
+     BASE_REMOTE=$(gh api "repos/$UP/pulls/$(gh pr view "$SEL" -R "$UP" --json number -q .number)" \
+                     --jq .base.repo.clone_url)
+     git fetch -q "$BASE_REMOTE" "+refs/heads/$BASE_NAME:refs/remotes/prbase/$BASE_NAME" \
+       || { echo "cannot fetch the PR's base — do not review against a guess"; exit 1; }
+     DIFF_BASE="refs/remotes/prbase/$BASE_NAME"
      ```
+
+   **Never let the ladder pick the branch's own upstream.** `origin/<feature>` resolves to
+   HEAD, `git diff` against it is empty, and both reviewers return clean having read
+   nothing. If the candidate you land on is an ancestor-of-nothing or equals HEAD, that is
+   a resolution failure, not a clean tree — say so and stop rather than reviewing air.
    - current branch upstream from `git rev-parse --abbrev-ref --symbolic-full-name @{upstream}`
    - remote default branch from `git symbolic-ref refs/remotes/origin/HEAD`
    - repo default branch from `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`
