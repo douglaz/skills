@@ -513,7 +513,7 @@ implement → review loop for each bead.
     # the next bead from a tree missing the one just merged — its PR then replays or
     # conflicts with it.
     git fetch "https://github.com/$R.git" "+refs/heads/$BASE:refs/remotes/upstream/$BASE" \
-      || { echo "cannot fetch the merge target"; exit 1; }
+      || { echo "cannot fetch the merge target"; echo "  (on a private repo cloned over SSH this is usually missing git credentials for https, not a missing base)"; exit 1; }
     # `checkout -B` moves the branch ref unconditionally, and a clean worktree does not
     # protect committed work: any local commit on $BASE that upstream lacks becomes
     # unreachable. Fast-forward only, and stop rather than guess on divergence.
@@ -547,7 +547,10 @@ implement → review loop for each bead.
     dirty and a bare dirtiness test passes without this write happening at all:
 
     ```bash
-    beads_fingerprint() { git ls-files -z -co --exclude-standard -- '*.beads.jsonl' '.beads/*.jsonl' | sort -z | xargs -0 -r cat | cksum; }
+    beads_fingerprint() {   # portable: macOS sort has no -z and BSD xargs has no -r
+      git ls-files -co --exclude-standard -- '*.beads.jsonl' '.beads/*.jsonl' \
+        | LC_ALL=C sort | while IFS= read -r f; do printf '%s ' "$f"; cksum < "$f"; done | cksum
+    }
     BEFORE=$(beads_fingerprint)
     br update <bead-id> -s closed || { echo "br update failed"; exit 1; }
     [ "$(beads_fingerprint)" != "$BEFORE" ] || { echo "not persisted"; exit 1; }

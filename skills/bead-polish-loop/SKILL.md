@@ -131,7 +131,10 @@ run `second-model-bead-audit` by default after the graph meets these gates.
    made, which is exactly the swallowed auto-flush this is here to catch:
 
    ```bash
-   beads_fingerprint() { git ls-files -z -co --exclude-standard -- '*.beads.jsonl' '.beads/*.jsonl' | sort -z | xargs -0 -r cat | cksum; }
+   beads_fingerprint() {   # portable: macOS sort has no -z and BSD xargs has no -r
+     git ls-files -co --exclude-standard -- '*.beads.jsonl' '.beads/*.jsonl' \
+       | LC_ALL=C sort | while IFS= read -r f; do printf '%s ' "$f"; cksum < "$f"; done | cksum
+   }
    BEFORE=$(beads_fingerprint)
    # ... apply this round's `br` mutations, then:
    br sync --flush-only || { echo "flush failed"; exit 1; }

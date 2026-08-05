@@ -208,8 +208,18 @@ mkdir -p "$STATE_DIR"
 # panel runs leaves panel_base equal and the rewound base still an ancestor of HEAD, so a
 # name-only pin agrees and clearance records a base the panel never diffed against.
 _PB=$("$DS" --json | jq -r '.default_branch')
+# FETCH BEFORE PINNING. Two failures share this cause. Pinning `origin/$_PB` unfetched
+# records whatever the last fetch left there, so the clearance-time comparison reads the
+# same stale ref on both sides and passes vacuously — the check cannot see the rewind it
+# exists to catch. And in a `--single-branch` clone that ref does not exist at all, so the
+# pin records `unknown`, the clearance guard hard-exits on it, and its remedy ("re-run the
+# panel") re-pins `unknown` forever: clearance becomes unreachable in a clone type this
+# file elsewhere documents as supported. One fetch, here, closes both.
+_UPP=$(gh repo view --json parent -q '.parent.url // ""' 2>/dev/null); [ -n "$_UPP" ] || _UPP=origin
+git fetch -q "$_UPP" "+refs/heads/$_PB:refs/remotes/origin/$_PB" \
+  || { echo "cannot fetch $_PB — the panel's base is unknown, do NOT start the panel"; exit 1; }
 { printf 'panel_base=%s\n' "$_PB"
-  printf 'panel_base_oid=%s\n' "$(git rev-parse "origin/$_PB" 2>/dev/null || echo unknown)"
+  printf 'panel_base_oid=%s\n' "$(git rev-parse "origin/$_PB")"
   printf 'panel_tip=%s\n' "$(git rev-parse HEAD)"; } > "$STATE_DIR/panel" \
   || { echo "could not pin the panel's inputs"; exit 1; }
 ```
@@ -262,8 +272,8 @@ PANEL_TIP=$(sed -n 's/^panel_tip=//p' "$STATE_DIR/panel" 2>/dev/null | head -1)
 PANEL_BASE_OID=$(sed -n 's/^panel_base_oid=//p' "$STATE_DIR/panel" 2>/dev/null | head -1)
 [ -n "$PANEL_BASE_OID" ] && [ "$PANEL_BASE_OID" != "unknown" ] \
   || { echo "the panel's base OID was never pinned — re-run the panel; NOT cleared"; exit 1; }
-[ "$PANEL_BASE_OID" = "$(git rev-parse "origin/$BASE")" ] \
-  || { echo "base $BASE moved under the panel ($PANEL_BASE_OID -> $(git rev-parse --short "origin/$BASE")) — re-run it; NOT cleared"; exit 1; }
+# Compared AFTER the fetch below, not here: both sides would otherwise read the same stale
+# local ref and agree with themselves. See the assertion following the fetch.
 # REST, not `gh pr view --json baseRepository` — that field does not exist, and without
 # `set -e` the failure is silent and falls back to origin, i.e. the fork.
 # The first clearance runs BEFORE any PR exists — that is the prescribed ordering — so a
@@ -289,6 +299,11 @@ fi
 # with "REBASE FIRST" that no rebase can fix. Verified.
 git fetch -q "$BASE_REMOTE" "+refs/heads/$BASE:refs/remotes/origin/$BASE" \
   || { echo "fetch failed — base unknown, do NOT clear"; exit 1; }
+# NOW the pinned OID means something: this ref was just refreshed from the remote, so a
+# mismatch is a real move (including a force-push backward, which leaves the rewound base
+# an ancestor of HEAD and therefore invisible to every other check here).
+[ "$PANEL_BASE_OID" = "$(git rev-parse "origin/$BASE")" ] \
+  || { echo "base $BASE moved under the panel ($PANEL_BASE_OID -> $(git rev-parse --short "origin/$BASE")) — re-run it; NOT cleared"; exit 1; }
 # One call, and assert it is still talking about the SAME base. A second `drive-status`
 # can resolve a different default_branch if its PR lookup transiently fails, so a
 # base_fresh=true for `main` could be accepted while the ref actually fetched was
@@ -311,7 +326,9 @@ STATE=$(git rev-parse --git-path drive/state)
 # alone would still match and LAND would be derived over a diff no panel read.
 mkdir -p "$(dirname "$STATE")" \
   && { printf 'cleared=%s\n' "$(git rev-parse HEAD)"
-       printf 'cleared_base=%s\n' "$(git rev-parse "origin/$BASE")"; } > "$STATE" \
+       # The PINNED oid, not the current ref: they are equal here only because the
+       # assertion above just proved it, and recording the pin keeps that provenance.
+       printf 'cleared_base=%s\n' "$PANEL_BASE_OID"; } > "$STATE" \
   || { echo "could not persist clearance"; exit 1; }
 echo "cleared $(git rev-parse --short HEAD)"
 ```
@@ -508,7 +525,10 @@ writes the JSONL failed, because the error is caught and logged at debug level:
 # dirtiness test passes without this close having written anything — the exact swallowed
 # auto-flush it is here to catch. Guard 1 in SKILL.md states the same rule; this is the
 # third site of it.
-beads_fingerprint() { git ls-files -z -co --exclude-standard -- '*.beads.jsonl' '.beads/*.jsonl' | sort -z | xargs -0 -r cat | cksum; }
+beads_fingerprint() {   # portable: macOS sort has no -z and BSD xargs has no -r
+  git ls-files -co --exclude-standard -- '*.beads.jsonl' '.beads/*.jsonl' \
+    | LC_ALL=C sort | while IFS= read -r f; do printf '%s ' "$f"; cksum < "$f"; done | cksum
+}
 BEFORE=$(beads_fingerprint)
 br close <id> || { echo "br close failed"; exit 1; }
 [ "$(beads_fingerprint)" != "$BEFORE" ] \

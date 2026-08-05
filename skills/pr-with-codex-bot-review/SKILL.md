@@ -299,9 +299,15 @@ current PR.
 
 ### 5. Wait for the bot to finish a round
 
-The bot's reaction on the PR body tells you whether it has *finished a round*. Don't fall
-back to "wait some minutes and assume" when this is one API call away — but read § 7
-before treating it as approval of the current head:
+Read the reaction as a **one-way** signal, and only in one direction: a fresh `eyes` means
+a round is running, so wait. Its **absence means nothing** — the bot may never react at
+all, and on this repo's PR #16 `+1` fired zero times across 19 rounds. Treating "no
+reaction" as "not picked up" and waiting or retriggering is how landing stalls forever,
+because the state you are waiting for may never arrive.
+
+What actually advances the decision is the review wrapper naming the tip and `bot-gate`'s
+verdict (§ 7). Don't fall back to "wait some minutes and assume" either — but check the
+reaction to see whether to *hold*, not whether to *go*:
 
 ```bash
 gh api repos/<owner>/<repo>/issues/<N>/reactions \
@@ -400,9 +406,11 @@ Merge when the reaction-based check passes:
 
   1. A wrapper exists whose `Reviewed commit:` equals the tip. That is the bot stating,
      with a SHA, which tree it read.
-  2. Run **`scripts/bot-gate <PR>`** and require exit 0. Three conditions: a *submitted*
-     codex review naming this tip, no `eyes` reaction post-dating it, and zero unresolved
-     review threads from either gated bot. It fails closed on any API error, missing tool,
+  2. Run **`scripts/bot-gate <PR>`** and require exit 0. Four conditions: a *submitted*
+     codex review naming this tip, no `eyes` reaction post-dating it, no `base_ref_changed`
+     post-dating it either (a retarget grows the diff without moving the head, so the
+     review covered less than it appears to), and zero unresolved review threads from
+     either gated bot. It fails closed on any API error, missing tool,
      or unparseable response in the signals that feed those three.
 
      **CodeRabbit's status is not one of them, deliberately.** It is a PR-level signal — it
@@ -525,10 +533,13 @@ Don't merge when:
 - Codex bot has unaddressed line comments (`P0`/`P1`/`P2`/`P3`) referencing the current head.
 - No wrapper for the current tip yet — `@codex review` to wake it up. (A missing *reaction*
   is not itself a blocker; see the merge conditions above.)
-- CodeRabbit status is `PENDING` — wait, even if codex already approved.
-- CodeRabbit status is `FAILURE` or it left unaddressed line comments on the current head — address.
-- CodeRabbit returned `SUCCESS` because it was rate-limited or its review is paused — that
-  is a `SUCCESS` nobody earned. `@coderabbitai review` and wait.
+- CodeRabbit left unresolved review threads on the current head — those DO gate, because
+  a thread is head-anchored and carries your disposition.
+- (CodeRabbit's *status* — `PENDING`, `FAILURE`, or a `SUCCESS` nobody earned because it
+  was rate-limited or paused — does **not** gate, and is not on this list. It is a
+  PR-level signal that lands on whatever head exists when the bot posts it, so waiting on
+  it can deadlock a PR that is otherwise ready: on a repo where CodeRabbit stays paused,
+  that wait never ends. `bot-gate` prints the state; you decide. ADR 0004.)
 - CI failed and you haven't determined whether it's flaky or real.
 - You force-pushed and no wrapper names the new tip yet — wait, or `@codex review` (and
   `@coderabbitai review`) to re-trigger. Reactions carry no SHA, so the wrapper is the
@@ -550,7 +561,7 @@ BASE=$(gh pr view <N> -R "$R" --json baseRefName -q .baseRefName)
 # HEAD and never looks at the base, so a branch that fell behind during review would
 # otherwise squash into a composition no reviewer ever saw.
 git fetch "https://github.com/$R.git" "+refs/heads/$BASE:refs/remotes/upstream/$BASE" \
-  || { echo "cannot fetch the merge target — base unknown, do NOT merge"; exit 1; }
+  || { echo "cannot fetch the merge target — base unknown, do NOT merge"; echo "  (on a private repo cloned over SSH this is usually missing git credentials for https, not a missing base)"; exit 1; }
 git merge-base --is-ancestor "refs/remotes/upstream/$BASE" HEAD \
   || { echo "REBASE FIRST — $BASE advanced since the review"; exit 1; }
 
@@ -558,7 +569,15 @@ git merge-base --is-ancestor "refs/remotes/upstream/$BASE" HEAD \
 # FAILED merge still leaves you somewhere plausible-looking; without this the steps below
 # "confirm $BASE is healthy" on a tree where nothing landed, and any caller that closes a
 # tracker item after this block closes it for a merge that never happened.
-gh pr merge <N> -R "$R" --squash --delete-branch --match-head-commit "$(git rev-parse HEAD)" \
+# $REVIEWED_TIP is the SHA bot-gate checked in § 7, not a fresh `git rev-parse HEAD`.
+# Re-reading HEAD here re-adopts whatever is current — a late amend or concurrent
+# automation that pushed after the gate returned — and pins the merge to that, so GitHub
+# ACCEPTS the unreviewed head instead of refusing it. The pin is only a guard if it names
+# the tree that was actually reviewed.
+REVIEWED_TIP=$("$BOT_GATE" <N> --json | jq -r .tip)   # from the § 7 run
+[ "$REVIEWED_TIP" = "$(git rev-parse HEAD)" ] \
+  || { echo "local HEAD moved since the gate ran — re-run § 7"; exit 1; }
+gh pr merge <N> -R "$R" --squash --delete-branch --match-head-commit "$REVIEWED_TIP" \
   || { echo "merge did not land — do NOT proceed"; exit 1; }
 
 # Re-fetch after the merge: the ref above predates the squash commit. Reset from where the

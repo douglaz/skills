@@ -37,8 +37,11 @@ if command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   # does not exist — so this path silently never fires in exactly the case it was added
   # for (a PR targeting a release or stacked branch).
   _UP=$(gh repo view --json nameWithOwner,parent -q '.parent.nameWithOwner // .nameWithOwner' 2>/dev/null || echo "")
-  # Array, not `${_UP:+-R "$_UP"}` — the quotes inside that expansion are literal, so the
-  # flag arrives malformed and the lookup silently returns nothing.
+  # An array, so the flag and its value stay two words without relying on how a `${x:+...}`
+  # expansion splits. (The often-repeated claim that quotes inside `${_UP:+-R "$_UP"}` are
+  # literal is FALSE — verified: `x="a b"; printf '[%s]' ${x:+-R "$x"}` prints `[-R][a b]`.
+  # That form works; it is just less obvious. Do not "fix" the split form used in
+  # phases.md on the strength of the myth.)
   # `-R` requires an explicit PR selector — gh cannot infer one from the current branch
   # once --repo is given ("argument required when using the --repo flag"), so pass the
   # branch name. Without -R at all, a fork clone resolves against the fork, where the PR

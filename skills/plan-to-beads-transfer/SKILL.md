@@ -84,7 +84,10 @@ Stop and report plan gaps when any of these are still fuzzy:
     wrote anything, so the bare check cannot support the guarantee it claims.
 
     ```bash
-    beads_fingerprint() { git ls-files -z -co --exclude-standard -- '*.beads.jsonl' '.beads/*.jsonl' | sort -z | xargs -0 -r cat | cksum; }
+    beads_fingerprint() {   # portable: macOS sort has no -z and BSD xargs has no -r
+      git ls-files -co --exclude-standard -- '*.beads.jsonl' '.beads/*.jsonl' \
+        | LC_ALL=C sort | while IFS= read -r f; do printf '%s ' "$f"; cksum < "$f"; done | cksum
+    }
     BEFORE=$(beads_fingerprint)     # before step 1's br mutations
     br sync --flush-only || { echo "flush failed"; exit 1; }
     [ "$(beads_fingerprint)" != "$BEFORE" ] || { echo "transfer wrote nothing"; exit 1; }

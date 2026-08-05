@@ -225,13 +225,20 @@ A phase closes on evidence or it does not close.
   # iteration and carries the closure forward uncommitted, so by the second bead the file
   # is ALREADY dirty from the first — and a bare dirtiness test then passes without this
   # close having written anything. The question is whether THIS command wrote, so ask it.
+  # `sort`/`while read`, not `sort -z | xargs -0 -r`: macOS `sort` has no -z and BSD
+  # `xargs` has no -r, so the GNU form yields an empty stream there and both fingerprints
+  # come back as the checksum of nothing — rejecting every closure on a platform this repo
+  # explicitly supports. Beads paths do not contain newlines.
   # Ask git for the files rather than globbing fixed shapes. drive-status recognises
   # `*.beads.jsonl` at ANY depth (its classifier is `(^|/)[^/]*\.beads\.jsonl$`), and every
   # hand-written glob so far has missed a layout it accepts — first `.beads/` only, then
   # the two root forms. In a repo the glob misses, BEFORE and after are both the cksum of
   # empty input, so the check fails on every closure: a hard block at LAND in a layout the
   # phase machine otherwise supports. `git ls-files -co` cannot drift from what git sees.
-  beads_fingerprint() { git ls-files -z -co --exclude-standard -- '*.beads.jsonl' '.beads/*.jsonl' | sort -z | xargs -0 -r cat | cksum; }
+  beads_fingerprint() {   # portable: macOS sort has no -z and BSD xargs has no -r
+    git ls-files -co --exclude-standard -- '*.beads.jsonl' '.beads/*.jsonl' \
+      | LC_ALL=C sort | while IFS= read -r f; do printf '%s ' "$f"; cksum < "$f"; done | cksum
+  }
   BEFORE=$(beads_fingerprint)
   br close <id> || { echo "br close failed"; exit 1; }
   [ "$(beads_fingerprint)" != "$BEFORE" ] \
