@@ -498,7 +498,7 @@ condition:
      reaches zero — § 6 tells you to *answer* a misread finding, and both it and your
      reply stay anchored), then it broke past 100 comments (`--paginate` with `--jq`
      emits one result per page). Shell embedded in documentation cannot be run, so none
-     of those were caught by reading. Exit codes: 0 clear, 1 blocked, 2 usage, 3 cannot
+     of those were caught by reading. Exit codes: 0 no pending evidence (NOT clearance — see above), 1 blocked, 2 usage, 3 cannot
      determine — and "cannot determine" is never clearance.
 
      `--no-coderabbit` is gone, and rejected with an explanation rather than accepted and
@@ -637,7 +637,8 @@ if git show-ref --verify --quiet "refs/heads/$BASE" \
   echo "local $BASE has commits upstream does not — refusing to reset; push or rebase them first"
   exit 1
 fi
-git checkout -B "$BASE" "refs/remotes/upstream/$BASE"
+git checkout -B "$BASE" "refs/remotes/upstream/$BASE" \
+  || { echo "cannot reset to the merge target — do NOT treat what follows as a check of it"; exit 1; }
 nix build                                    # confirm the base is healthy
 ```
 

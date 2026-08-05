@@ -509,7 +509,12 @@ implement → review loop for each bead.
     # test ancestry before merging, the same way pr-with-codex-bot-review § 8 does.
     git fetch "https://github.com/$R.git" "+refs/heads/$BASE:refs/remotes/upstream/$BASE" \
       || { echo "cannot fetch the merge target — base unknown, do NOT merge"; echo "  (on a private repo cloned over SSH this is usually missing git credentials for https, not a missing base)"; exit 1; }
-    git merge-base --is-ancestor "refs/remotes/upstream/$BASE" HEAD \
+    # Against $MERGING_SHA, not HEAD: that is the commit --match-head-commit pins and the
+    # one GitHub will squash. A local rebase during CI that was never pushed would make
+    # HEAD pass this test while the pinned remote SHA is still behind the base.
+    [ "$MERGING_SHA" = "$(git rev-parse HEAD)" ] \
+      || { echo "local HEAD moved since step 9 — re-run the panel and the checks"; exit 1; }
+    git merge-base --is-ancestor "refs/remotes/upstream/$BASE" "$MERGING_SHA" \
       || { echo "REBASE FIRST — $BASE advanced since the review"; exit 1; }
     # $MERGING_SHA comes from step 9, captured BEFORE CI ran. Re-reading it here would
     # pin whatever is current — including a force-push that no check ever saw.
@@ -585,10 +590,13 @@ implement → review loop for each bead.
 
     ```bash
     UP=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
-    gh pr list -R "$UP" --state open --json number,headRefName,title   # closure PR in flight?
+    gh pr list -R "$UP" --state all --json number,state,headRefName,title \
+    --jq '.[] | select(.headRefName | test("closure|metadata"))'   # closure PR, ANY state
     ```
 
-    If one is open, land it before taking another bead. `drive`'s resume checklist does
+    An OPEN one: land it before taking another bead. A CLOSED-but-unmerged one is worse — the
+    work PR already merged, the closure never did, and `--state open` cannot see it: reopen
+    or replace it rather than rebuilding the bead. `drive`'s resume checklist does
     the same discovery for the same reason (`skills/drive/references/phases.md` § LAND).
 
     Stop when the queue is empty **and** any

@@ -526,8 +526,13 @@ fi
 # opening or landing the closure PR, and a fresh clone would still see the bead open.
 _DONE_DIRTY=false
 [[ "$DIRTY_COUNT" -gt 0 || "$UNTRACKED" -gt 0 ]] && _DONE_DIRTY=true
-if [[ "$PHASE" == "DONE" ]] && ! $_MERGED_AT_HEAD \
-   && { [[ "$BRANCH_COMMITS" -gt 0 ]] || ! $_BASE_KNOWN || $_DONE_DIRTY; }; then
+# The merged-head exemption covers ONLY the commit count. Its rationale is that a squash
+# makes this branch's commits non-ancestors of the base, so the count reads high on a
+# branch that really did land — it says nothing about an unknown base or a dirty tree, and
+# skipping those let an interrupted post-merge session report DONE with the closure JSONL
+# still uncommitted, which is exactly what the dirty guard exists to catch.
+if [[ "$PHASE" == "DONE" ]] \
+   && { { [[ "$BRANCH_COMMITS" -gt 0 ]] && ! $_MERGED_AT_HEAD; } || ! $_BASE_KNOWN || $_DONE_DIRTY; }; then
   DONE_ON_BRANCH=true
   PHASE="HARDEN"
   PHASE_SOURCE="$([[ "$PHASE_WAS" == "DRIVE.md" ]] && echo "DRIVE.md" || echo "tree") (DONE, but this branch has unreviewed commits)"

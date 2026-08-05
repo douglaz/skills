@@ -256,6 +256,27 @@ new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"
 echo 'x' > "$FIX/timelinefail"
 check "timeline query failure is exit 3" 3
 
+# An `eyes` that exists but cannot be dated is not the same as no `eyes` — it is the signal
+# that a round is RUNNING. `max // ""` merged the two, so a malformed one cleared. Same
+# collapse as the timeline check; swept together.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":null}]]' > "$FIX/reactions.json"
+check "an eyes with a null timestamp blocks" 1
+
+# ...and a reaction that is not `eyes` must still clear, so "no eyes" is not swept up.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"+1","created_at":null}]]' > "$FIX/reactions.json"
+check "a non-eyes reaction with no timestamp clears" 0
+
+# A PENDING review on the tip is a round in flight. It is excluded from the wrapper count
+# (nothing was submitted) but must block: on a rerun against an unchanged tip, `eyes` is
+# never refreshed, so nothing else would notice.
+new_fix
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]","type":"Bot"},"submitted_at":"%s","commit_id":"%s","body":"x"},{"user":{"login":"chatgpt-codex-connector[bot]","type":"Bot"},"state":"PENDING","commit_id":"%s","body":"draft"}]]' \
+  "$OLD_UTC" "$TIP" "$TIP" > "$FIX/reviews.json"
+threads 0 > "$FIX/threads.json"
+check "a pending rerun beside a submitted wrapper blocks" 1
+
 # A fresh `eyes` newer than the wrapper means a round is running on the same tip.
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":"%s"}]]' "$NOW_UTC" > "$FIX/reactions.json"
@@ -301,8 +322,9 @@ check "unparseable wrapper timestamp blocks" 1
 
 # --- CodeRabbit presence ---
 
-# Configured (it has commented) but no check for THIS head yet must block — `absent` is
-# not the same as "not installed".
+# Configured (it has commented) but no check for THIS head yet. This used to block; since
+# CodeRabbit left the verdict (ADR 0004) it is REPORTED, and `absent` is still worth
+# distinguishing from "not installed" for the human reading the output.
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nwalkthrough"}]]' > "$FIX/issues.json"
 check_reports "no check for this head is reported as absent" "coderabbit       absent"

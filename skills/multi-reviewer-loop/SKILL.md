@@ -129,7 +129,19 @@ a reviewer.
 
 2. Resolve `DIFF_BASE` in this order. Use the first candidate that resolves to a
    commit:
-   - PR base branch from `gh pr view --json baseRefName -q .baseRefName`
+   - PR base branch from `gh pr view`. **On a fork clone this needs the upstream and the
+     head-label selector**, or it silently finds nothing and falls through to the next
+     candidate — which on a fork is `origin/<feature>`, i.e. HEAD itself, so the pass
+     reviews an empty diff and reports "Nothing to review" on a branch full of changes:
+
+     ```bash
+     UP=$(gh repo view --json nameWithOwner,parent \
+          -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
+     SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+     BR=$(git branch --show-current)
+     SEL="$BR"; [ "$UP" != "$SELF" ] && SEL="${SELF%%/*}:$BR"   # gh matches the head LABEL
+     gh pr view "$SEL" -R "$UP" --json baseRefName -q .baseRefName
+     ```
    - current branch upstream from `git rev-parse --abbrev-ref --symbolic-full-name @{upstream}`
    - remote default branch from `git symbolic-ref refs/remotes/origin/HEAD`
    - repo default branch from `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`

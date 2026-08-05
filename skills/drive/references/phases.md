@@ -536,7 +536,8 @@ and silently carry the previous bead's closure into its diff. Instead:
 
   ```bash
   UP=$(gh repo view --json nameWithOwner,parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
-  gh pr list -R "$UP" --state open --json number,headRefName,title   # closure PR in flight?
+  gh pr list -R "$UP" --state all --json number,state,headRefName,title \
+    --jq '.[] | select(.headRefName | test("closure|metadata"))'   # closure PR, ANY state
   ```
 
   **Before re-entering BUILD or HARDEN from a fresh clone with unresolved beads, run that
