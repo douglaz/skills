@@ -256,6 +256,18 @@ new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"
 printf '[[{"event":"base_ref_changed"}]]' > "$FIX/timeline.json"
 check "a retarget with no timestamp field blocks" 1
 
+# The EMPTY STRING, which is neither null nor garbage and slipped through both guards:
+# jq's `//` fires on null but not on "", so the sentinel was never substituted; and GNU
+# `date -u -d "" +%s` SUCCEEDS, returning today at 00:00 UTC, so the "did it parse?"
+# fail-closed branch never fired either. Two independent guards, same blind spot.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"base_ref_changed","created_at":""}]]' > "$FIX/timeline.json"
+check "a retarget with an EMPTY timestamp blocks" 1
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":""}]]' > "$FIX/reactions.json"
+check "an eyes with an EMPTY timestamp blocks" 1
+
 # The one an emptiness test cannot catch: a NON-EMPTY garbage timestamp sorts below a valid
 # one, so taking the lexical max returns the valid value and the malformed event vanishes.
 # Both events here pre-date the wrapper, so only the unparseable one can cause a block.

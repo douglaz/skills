@@ -467,6 +467,11 @@ infer() {
   # means HARDEN.
   if [[ "$BRANCH_COMMITS" =~ ^[0-9]+$ && "$BRANCH_COMMITS" -gt 0 ]]; then
     case "$BRANCH_DIFF_KIND" in
+      # `none` = the committed diff was DRIVE.md and nothing else, which the classifier
+      # strips. That is bookkeeping, not work: fall through to the bead-derived states the
+      # way the working-tree path does for the identical change, rather than reporting
+      # HARDEN for a branch carrying no reviewable code at all.
+      none) : ;;
       doc)  $ON_DEFAULT || { echo "SHAPE"; return; } ;;
       bead) $ON_DEFAULT || { echo "GRAPH"; return; } ;;
       *)    echo "HARDEN"; return ;;

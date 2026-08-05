@@ -415,7 +415,7 @@ condition:
      flight), no `eyes` reaction post-dating it, no `base_ref_changed` post-dating it
      either (a retarget grows the diff without moving the head, so the review covered less
      than it appears to), and zero unresolved review threads from either gated bot. It fails closed on any API error, missing tool, or unparseable
-     response in the signals that feed all four — the timeline query behind the retarget
+     response in the signals that feed all five — the timeline query behind the retarget
      check included.
 
      **CodeRabbit's status is not one of them, deliberately.** It is a PR-level signal — it

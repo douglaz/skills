@@ -161,6 +161,15 @@ echo x > "$FIX/ghfail"; G remote remove origin 2>/dev/null || true
 G branch -D master >/dev/null 2>&1 || true
 check_field "no base ref leaves cleared_base unverified" cleared_base_matches null
 
+# A branch whose only committed change is DRIVE.md carries no reviewable code. The
+# classifier strips DRIVE.md, so the diff classifies as `none` — which fell into the
+# catch-all arm and reported HARDEN, "unreviewed substantive code", for a diff containing
+# nothing but this skill's own bookkeeping. The working-tree path already falls through to
+# the bead states for the identical change; the two call sites must agree.
+new_repo
+printf '**Phase:** BUILD\n' > "$REPO/DRIVE.md"; G add -A; G commit -q -m rec
+check_field "a DRIVE.md-only branch is not HARDEN by tree" tree_phase SHAPE
+
 # The header promises exit 0 even when signals are missing.
 new_repo
 ( cd "$REPO" && PATH="$WORK/bin:$PATH" FIX="$FIX" "$DS" >/dev/null 2>&1 )

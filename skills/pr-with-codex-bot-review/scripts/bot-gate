@@ -128,6 +128,10 @@ PR_HEAD=$(gh pr view "$PR" -R "$REPO" --json headRefOid -q .headRefOid 2>/dev/nu
 # flag and errors, which would leave the wrapper age unknowable and the gate permanently
 # BLOCKED on a platform this repo explicitly supports (see the gtimeout fallback).
 iso_to_epoch() {
+  # Reject empty FIRST. `date -u -d "" +%s` SUCCEEDS on GNU and returns today at 00:00 UTC,
+  # so an empty timestamp parses into a plausible epoch and every caller's fail-closed
+  # "did it parse?" branch is skipped — clearing on exactly the undatable input it guards.
+  [[ -n "$1" ]] || return 1
   date -u -d "$1" +%s 2>/dev/null && return 0
   date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$1" +%s 2>/dev/null && return 0
   return 1
@@ -360,7 +364,8 @@ if [[ -n "$WRAPPER_AT" ]]; then
     BASE_CHANGED_ATS=$(printf '%s' "$TL" \
       | jq -r '.[][] | select(.event=="base_ref_changed"
                              or .event=="automatic_base_change_succeeded"
-                             or .event=="automatic_base_change_failed") | (.created_at // "@undated@")' 2>/dev/null) \
+                             or .event=="automatic_base_change_failed")
+              | if ((.created_at // "") | length) == 0 then "@undated@" else .created_at end' 2>/dev/null) \
       || { echo "BLOCKED: cannot read the PR timeline" >&2; exit 3; }
     W2=$(iso_to_epoch "$WRAPPER_AT")
     if [[ -n "$BASE_CHANGED_ATS" ]]; then
