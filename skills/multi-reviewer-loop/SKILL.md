@@ -262,7 +262,9 @@ For each pass `N` from `1` to `MAX_PASSES`:
 
 4. Merge the two finding lists into `pass-NN.merged.md`. Dedupe on *claim*, not
    wording: same file, same code path, same defect = one merged finding. Tag each
-   merged finding with its source — `BOTH`, `CODEX`, or `FABLE` — and keep both
+   merged finding with its source — `BOTH`, `CODEX`, `FABLE`, or `CONFLICT` when the two
+   reviewers explicitly disagree about the same code (§ 3.4 — those rows are the
+   highest-value ones in the pass) — and keep both
    reviewers' phrasings when they differ in what they'd have you do about it.
    Cross-reviewer agreement rules are in
    [references/disposition-rules.md](references/disposition-rules.md).

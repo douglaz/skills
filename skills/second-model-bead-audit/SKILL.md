@@ -169,8 +169,9 @@ recorded acceptance of the reduced review coverage.
 ### 2. Run the panel
 
 Start Codex and Fable in parallel with the same prompt. Close stdin on both batch
-commands, persist stdout/stderr separately, and bound hangs when `timeout` is
-available.
+commands, persist stdout/stderr separately, and bound hangs with GNU `timeout`, which is
+**required** — the prerequisites say to stop if it is missing, and the reference's snippet
+`exit 1`s rather than run an unbounded panel.
 
 The panel audits:
 

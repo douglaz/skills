@@ -458,8 +458,9 @@ directories created by `--migrate-existing`.
 - GNU `timeout` with `--kill-after` support (named `timeout`, or `gtimeout` from
   Homebrew coreutils) to bound each reviewer in `multi-reviewer-loop` — both CLIs can
   hang with no output and no exit, and a backgrounded one has nothing to reap it —
-  and for `second-model-bead-audit` and normal `orchestrating-with-rb-lite` runs when
-  using a source/path rb-lite install; Nix-wrapped rb-lite supplies GNU coreutils
+  and for `second-model-bead-audit` unconditionally — it never uses rb-lite, so nothing
+  can supply `timeout` on its behalf — and for normal `orchestrating-with-rb-lite` runs
+  when using a source/path rb-lite install; Nix-wrapped rb-lite supplies GNU coreutils
 - `npx` plus Gemini credentials to enable the optional third default
   `orchestrating-with-rb-lite` reviewer
 - `rb-lite` on `PATH`, or `nix run --refresh github:douglaz/rb-lite -- ...`

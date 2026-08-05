@@ -320,9 +320,12 @@ gh api repos/<owner>/<repo>/issues/<N>/reactions \
 | `eyes` | Bot is reviewing | Wait — this is the one row that means hold |
 | `+1` | Bot approves with no concerns — **of the tree it read**, which is not always the tip | Go to § 7; do not merge from here |
 
-Typical bot timing: 5-30 minutes from open. On docs-only or tiny PRs the bot still
-reacts (saw `+1` on PR #191's pure-docs change about 20 min after open) — there's
-no class of PR the bot reliably skips, only PRs you didn't wait long enough on.
+Typical bot timing: 5-30 minutes from open. It does sometimes react on docs-only or tiny
+PRs — `+1` landed on PR #191's pure-docs change about 20 minutes after open. Do not read
+that as "wait longer and one will come": later measurement found `+1` firing **zero** times
+across 19 rounds on PR #16, so no waiting period reliably produces one. The #191
+observation is real; the rule once drawn from it — that silence only means impatience — is
+not, and it is why § 7 decides on the wrapper instead.
 
 To explicitly trigger or re-trigger (after a force-push, or if the bot appears
 stuck):

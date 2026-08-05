@@ -390,11 +390,15 @@ Collect across pages and take `last`: the endpoint returns reviews oldest-first,
 several rounds a bare stream prints one SHA per round with no indication which is current.
 (`--slurp` cannot combine with `--jq`, hence the pipe.)
 
-If the codex bot reacted `+1` with no wrapper, you have no SHA anchor: `@codex review` and
+If the codex bot reacted `+1` with no wrapper, you have no SHA anchor — it leaves no
+wrapper on a clean round, so nothing proves which tree it read. `@codex review` to get one,
+or accept that round explicitly and record why.
+
 CodeRabbit's status is a **PR-level signal**, not per-commit: it lands on whatever head
 exists when the bot posts it, so a green on the tip is not evidence about the tip. ADR 0004
 records the measurement. `bot-gate` prints it and does not gate on it; neither should you.
-"Files skipped from review" list and re-trigger unless the skip was expected.
+
+Read its "Files skipped from review" list and re-trigger unless the skip was expected.
 
 **2. Do not demand `merged SHA == reviewed SHA`.** The merge is a squash, so it always
 creates a new commit; that equality is unsatisfiable by construction.
@@ -446,8 +450,14 @@ DSJ2=$("$DS" --json)
 # so base_fresh stays true and the name check agrees with itself — while the PR's diff has
 # silently grown to include commits no panel read. cleared_base is the only field that
 # notices, so assert it here and not only at clearance time.
-[ "$(printf %s "$DSJ2" | jq -r '.cleared_base_matches')" = "true" ] \
-  || { echo "clearance was recorded against a different base — re-run the panel; do NOT merge"; exit 1; }
+# false and null are different problems with opposite remedies, the same way base_fresh's
+# are below. false = the base really moved, so re-run the panel. null = nothing to compare
+# against (no cleared_base line, or no base ref resolves), and re-clearing cannot fix the
+# second of those — drive-status prints which it is.
+CBM=$(printf %s "$DSJ2" | jq -r '.cleared_base_matches')
+[ "$CBM" = "true" ] || { [ "$CBM" = "null" ] \
+  && { echo "clearance base unverifiable — run drive-status and read the reason (no cleared_base recorded, or no base ref resolves); do NOT merge"; exit 1; } \
+  || { echo "clearance was recorded against a different base — re-run the panel; do NOT merge"; exit 1; }; }
 BF=$(printf %s "$DSJ2" | jq -r '.base_fresh')
 # null != false. false = genuinely behind base, and a rebase fixes it. null = the base was
 # GUESSED (no authoritative source), so freshness was never computed and no rebase can
