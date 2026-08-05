@@ -57,7 +57,7 @@ case "$*" in
   *reactions*)                  [ -f "$FIX/reactionsfail" ] && exit 1; f reactions.json '[[]]' ;;
   *graphql*)                    f threads.json '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}' ;;
   *"pulls/"*"/reviews"*)        f reviews.json '[[]]' ;;
-  *"issues/"*"/comments"*)      f issues.json '[[]]' ;;
+  *"issues/"*"/comments"*)      [ -f "$FIX/commentsfail" ] && exit 1; f issues.json '[[]]' ;;
   *) echo "[]" ;;
 esac
 [ -f "$FIX/FAIL" ] && exit 1
@@ -361,11 +361,17 @@ new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"
 printf 'not json at all' > "$FIX/reactions.json"
 check "unparseable reactions body is exit 3" 3
 
-# The comments payload feeds only the report now, so a bad body costs the note, not the
-# answer. Reactions and reviews still fail closed below — those feed the verdict.
+# The comments payload STOPPED being report-only when the verdict began reading it for
+# RERUN_REQUESTED: an `@codex review` newer than the wrapper is a round nothing else can
+# see. This fixture asserted exit 0 and was therefore PINNING the fail-open — a reviewer
+# had to point out that it agreed with the bug instead of contradicting it.
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 cr_success; printf '<html>502 Bad Gateway</html>' > "$FIX/issues.json"
-check "unparseable PR-comments body does not block" 0
+check "unparseable PR-comments body is exit 3" 3
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo 'x' > "$FIX/commentsfail"
+check "PR-comments query failure is exit 3" 3
 
 new_fix; printf 'not json' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 check "unparseable reviews body is exit 3" 3

@@ -26,6 +26,11 @@ DEFAULT_BRANCH=""
 # construction — a vacuous check that would report base_fresh=true forever while the real
 # target advances.
 BASE_ORIGIN="none"
+# Initialized here, not inside the gh block below: the JSON emitter expands it under
+# `set -u`, so with gh absent or on a detached HEAD the script died with "unbound variable"
+# and printed nothing at all — not even the degraded fallback its own header promises.
+# `_RFLAG` was initialized unconditionally for this exact reason; `_UP` was not.
+_UP=""
 _RFLAG=()
 if command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   # OPEN only. `gh pr view` falls back to the most recent CLOSED or MERGED PR on the
@@ -573,7 +578,10 @@ if [[ "$PHASE" == "DONE" ]] \
   # Name the disjunct that actually fired. One string for three causes asserted commits
   # that may not exist — and a --json consumer sees only this field, not the human warnings
   # below, which were fixed for exactly this reason one pass earlier.
-  if [[ "$BRANCH_COMMITS" -gt 0 ]]; then _DONE_WHY="this branch has unreviewed commits"
+  # `_MERGED_AT_HEAD` excuses the commit count, so it cannot be the reason when that is
+  # set — reporting it there names commits the code just decided were already landed, and
+  # sends the driver to re-review a branch that merged.
+  if [[ "$BRANCH_COMMITS" -gt 0 ]] && ! $_MERGED_AT_HEAD; then _DONE_WHY="this branch has unreviewed commits"
   elif ! $_BASE_KNOWN; then _DONE_WHY="the base ref could not be resolved"
   else _DONE_WHY="the tree is dirty, so the closure is not committed"; fi
   PHASE_SOURCE="$([[ "$PHASE_WAS" == "DRIVE.md" ]] && echo "DRIVE.md" || echo "tree") (DONE, but $_DONE_WHY)"

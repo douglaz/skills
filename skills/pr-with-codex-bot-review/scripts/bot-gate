@@ -274,11 +274,13 @@ UNRESOLVED=$(count_unresolved_bot_threads) || { echo "BLOCKED: thread query fail
 # taking the first: a stale SUCCESS can sit beside a pending rerun.
 # Fetched unconditionally: the `@codex review` trigger check below needs it regardless of
 # CodeRabbit's state, and it is one paginated call either way.
-if ALL_COMMENTS=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/comments" 2>/dev/null); then
-  printf '%s' "$ALL_COMMENTS" | jq -e 'type' >/dev/null 2>&1 || ALL_COMMENTS=""
-else
-  ALL_COMMENTS=""
-fi
+# FAIL CLOSED. This payload stopped being report-only the moment the verdict began reading
+# it for RERUN_REQUESTED: an `@codex review` newer than the wrapper is a round nothing else
+# can see, so losing this endpoint means losing the only evidence of it. Every other
+# verdict-feeding read here exits 3 on failure; this one silently emptied and cleared.
+ALL_COMMENTS=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/comments" 2>/dev/null) \
+  || { echo "BLOCKED: PR comments query failed" >&2; exit 3; }
+require_json "PR comments" "$ALL_COMMENTS"
 
 CR_STATE="query-failed"
 if ROLLUP=$(gh pr view "$PR" -R "$REPO" --json statusCheckRollup 2>/dev/null); then
@@ -303,14 +305,20 @@ fi
 RERUN_REQUESTED=false
 if [[ -n "$WRAPPER_AT" ]] && [[ -n "${ALL_COMMENTS:-}" ]]; then
   _W=$(iso_to_epoch "$WRAPPER_AT")
-  _LAST_TRIGGER=$(printf '%s' "$ALL_COMMENTS" \
-    | jq -r '[.[][] | select((.body // "") | test("@codex[[:space:]]+review"; "i"))
-             | if ((.created_at // "") | length) == 0 then "@undated@" else .created_at end] | last // ""' 2>/dev/null) \
+  # EVERY trigger, not `last`. Taking only the final one meant an undated trigger followed
+  # by an older dated one was invisible — the same collapse passes 8-11 swept out of the
+  # retarget and eyes checks, left in the one site added after them.
+  _TRIGGERS=$(printf '%s' "$ALL_COMMENTS" \
+    | jq -r '.[][] | select((.body // "") | test("@codex[[:space:]]+review"; "i"))
+             | if ((.created_at // "") | length) == 0 then "@undated@" else .created_at end' 2>/dev/null) \
     || { echo "BLOCKED: cannot read PR comments" >&2; exit 3; }
-  if [[ -n "$_LAST_TRIGGER" ]]; then
-    _T=$(iso_to_epoch "$_LAST_TRIGGER")
-    if [[ -z "$_T" || -z "$_W" ]]; then RERUN_REQUESTED=true
-    elif (( _T >= _W )); then RERUN_REQUESTED=true; fi
+  if [[ -n "$_TRIGGERS" ]]; then
+    [[ -n "$_W" ]] || RERUN_REQUESTED=true
+    while IFS= read -r _tt; do
+      _T=$(iso_to_epoch "$_tt")
+      if [[ -z "$_T" ]]; then RERUN_REQUESTED=true
+      elif [[ -n "$_W" ]] && (( _T >= _W )); then RERUN_REQUESTED=true; fi
+    done <<< "$_TRIGGERS"
   fi
 fi
 
@@ -517,10 +525,11 @@ if $JSON; then
   jq -n --arg tip "$TIP" --arg v "$VERDICT" --arg cr "$CR_STATE" \
         --argjson w "$WRAPPER_TIP" --argjson u "$UNRESOLVED" \
         --arg from "$OBSERVED_FROM" --arg to "$OBSERVED_TO" --arg claim "$CLAIM" \
-        --arg cr_skipped "$CR_SKIPPED" --arg round_active "$ROUND_ACTIVE" --arg retargeted "$RETARGETED_AFTER_REVIEW" --arg skiplist "$CR_SKIPLIST" \
+        --arg cr_skipped "$CR_SKIPPED" --arg round_active "$ROUND_ACTIVE" --arg retargeted "$RETARGETED_AFTER_REVIEW" --arg rerun "$RERUN_REQUESTED" --arg skiplist "$CR_SKIPLIST" \
     '{tip:$tip,verdict:$v,claim:(if $claim=="" then null else $claim end),observed_from:$from,observed_to:$to,
       wrapper_on_tip:$w,unresolved_bot_threads:$u,
       coderabbit:$cr,coderabbit_skipped:($cr_skipped=="true"),round_active:($round_active=="true"),retargeted_after_review:($retargeted=="true"),
+      rerun_requested:($rerun=="true"),
       coderabbit_skipped_files:($skiplist|split("\n")|map(select(length>0)))}'
 else
   printf 'tip              %s\n' "${TIP:0:10}"
