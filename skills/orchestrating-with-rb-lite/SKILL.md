@@ -503,6 +503,14 @@ implement → review loop for each bead.
     # effect, so a FAILED merge still leaves you somewhere plausible-looking — and step 11
     # then closes the bead for a merge that never happened, which is the exact state this
     # skill's reviewed-closure path exists to prevent.
+    # The base moves while a bead is built and reviewed, and --match-head-commit pins only
+    # the HEAD — a squash replays onto the CURRENT base, so a behind branch lands a
+    # composition nobody reviewed while every SHA still matches. Fetch the live base and
+    # test ancestry before merging, the same way pr-with-codex-bot-review § 8 does.
+    git fetch "https://github.com/$R.git" "+refs/heads/$BASE:refs/remotes/upstream/$BASE" \
+      || { echo "cannot fetch the merge target — base unknown, do NOT merge"; echo "  (on a private repo cloned over SSH this is usually missing git credentials for https, not a missing base)"; exit 1; }
+    git merge-base --is-ancestor "refs/remotes/upstream/$BASE" HEAD \
+      || { echo "REBASE FIRST — $BASE advanced since the review"; exit 1; }
     # $MERGING_SHA comes from step 9, captured BEFORE CI ran. Re-reading it here would
     # pin whatever is current — including a force-push that no check ever saw.
     [ -n "${MERGING_SHA:-}" ] || { echo "MERGING_SHA unset — capture it in step 9"; exit 1; }

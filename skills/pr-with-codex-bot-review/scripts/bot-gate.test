@@ -225,6 +225,22 @@ new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"
 printf '[[{"event":"base_ref_changed","created_at":"not-a-date"}]]' > "$FIX/timeline.json"
 check "an unparseable retarget timestamp blocks" 1
 
+# A retarget that happened but cannot be dated is not the same as no retarget, and
+# `max // ""` collapsed both to empty — which SKIPPED the check rather than blocking.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"base_ref_changed","created_at":null}]]' > "$FIX/timeline.json"
+check "a retarget with a null timestamp blocks" 1
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"base_ref_changed"}]]' > "$FIX/timeline.json"
+check "a retarget with no timestamp field blocks" 1
+
+# ...while a timeline carrying only OTHER events must still clear: "no retarget" is the
+# common case and must not be confused with "malformed retarget".
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"commented","created_at":null},{"event":"labeled"}]]' > "$FIX/timeline.json"
+check "unrelated timeline events do not block" 0
+
 # These timestamps carry one-second precision, so a retarget in the SAME second as the
 # review is indistinguishable from one just before it. A strict `>` resolved that tie
 # toward clearing; a tie is doubt.

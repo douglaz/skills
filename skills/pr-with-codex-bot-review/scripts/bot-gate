@@ -304,10 +304,19 @@ RETARGETED_AFTER_REVIEW=false
 if [[ -n "$WRAPPER_AT" ]]; then
   if TL=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/timeline" 2>/dev/null); then
     require_json "timeline" "$TL"
-    BASE_CHANGED_AT=$(printf '%s' "$TL" \
-      | jq -r '[.[][] | select(.event=="base_ref_changed") | .created_at] | max // ""' 2>/dev/null) \
+    # Distinguish "no retarget happened" from "a retarget happened and I cannot date it".
+    # `max // ""` collapsed both to the empty string, and the guard below then SKIPPED the
+    # check entirely — so a malformed event cleared instead of blocking, which is the one
+    # direction this whole clause exists to prevent.
+    BASE_CHANGED_AT=$(printf '%s' "$TL" | jq -r '
+      [.[][] | select(.event=="base_ref_changed")] as $e
+      | if ($e | length) == 0 then ""
+        elif any($e[]; ((.created_at // "") | length) == 0) then "malformed"
+        else ([$e[].created_at] | max) end' 2>/dev/null) \
       || { echo "BLOCKED: cannot read the PR timeline" >&2; exit 3; }
-    if [[ -n "$BASE_CHANGED_AT" ]]; then
+    if [[ "$BASE_CHANGED_AT" == "malformed" ]]; then
+      RETARGETED_AFTER_REVIEW=true
+    elif [[ -n "$BASE_CHANGED_AT" ]]; then
       B=$(iso_to_epoch "$BASE_CHANGED_AT"); W2=$(iso_to_epoch "$WRAPPER_AT")
       # `>=`, not `>`. These timestamps have one-second precision, so a retarget in the
       # SAME second as the review is indistinguishable from one just before it — and the

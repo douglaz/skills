@@ -119,7 +119,7 @@ Running the reworked gate against this PR disproved it.
 CodeRabbit's status is a **PR-level signal**: it lands on whatever head exists when the bot
 posts it, and carries nothing that binds it to a tree. Observed on PR #16:
 
-```
+```text
 18:55:40Z  f69bf01 pushed
 18:55:55Z  CodeRabbit's status comment updated, still carrying "Reviews paused"
 18:56:55Z  CodeRabbit posts  success / "Review completed"  on f69bf01
