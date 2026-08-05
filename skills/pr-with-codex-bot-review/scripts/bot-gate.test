@@ -81,12 +81,17 @@ chmod +x "$WORK/bin/gh"
 OLD_UTC="2000-01-01T00:00:00Z"
 MID_UTC="2000-01-01T00:00:01Z"
 NEW_UTC="2000-01-01T00:00:02Z"
+NEW2_UTC="2000-01-01T00:00:03Z"
 NOW_UTC=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 wrapper() {  # $1 = login, $2 = submitted_at  (shape matches `gh api --paginate --slurp`)
   # commit_id is what the gate matches on now — the API's own full SHA, not a body prefix.
   printf '[[{"user":{"login":"%s","type":"Bot"},"submitted_at":"%s","commit_id":"%s","body":"Reviewed commit: `%s`"}]]' \
     "$1" "$2" "$TIP" "$TIP"
+}
+wrapper2() {  # $1 = login, $2/$3 = two submitted_at values — a tip with two completed rounds
+  printf '[[{"user":{"login":"%s","type":"Bot"},"submitted_at":"%s","commit_id":"%s","body":"x"},{"user":{"login":"%s","type":"Bot"},"submitted_at":"%s","commit_id":"%s","body":"x"}]]' \
+    "$1" "$2" "$TIP" "$1" "$3" "$TIP"
 }
 threads() {  # $1 = count of unresolved threads, $2 = GraphQL author login (default codex)
   local n=$1 login=${2:-chatgpt-codex-connector} nodes=""
@@ -254,19 +259,31 @@ printf '[[{"event":"base_ref_changed","created_at":"%s"}]]' "$NOW_UTC" > "$FIX/t
 check "a retarget after the review blocks" 1
 
 # A base change followed by an explicit request and then a wrapper is covered by the new
-# round. Submission time alone cannot establish that ordering; the request timestamp does.
-new_fix; wrapper "chatgpt-codex-connector[bot]" "$NEW_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-printf '[[{"event":"base_ref_changed","created_at":"%s"}]]' "$OLD_UTC" > "$FIX/timeline.json"
-printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$MID_UTC" > "$FIX/issues.json"
+# round — when a completed round SEPARATES the change from the request. Here one does: a
+# wrapper landed before the request, so nothing was in flight when it posted, and the
+# wrapper that follows it is the requested round's.
+new_fix; wrapper2 "chatgpt-codex-connector[bot]" "$OLD_UTC" "$NEW2_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"base_ref_changed","created_at":"%s"}]]' "$MID_UTC" > "$FIX/timeline.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$NEW_UTC" > "$FIX/issues.json"
 check "a retarget followed by an explicit review clears" 0
 
 # The clearing match accepts a real command with trailing text. The loose blocking match
 # already sees it; once the newer wrapper arrives, the same request must establish that a
 # post-retarget round covered the changed diff.
+new_fix; wrapper2 "chatgpt-codex-connector[bot]" "$OLD_UTC" "$NEW2_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"base_ref_changed","created_at":"%s"}]]' "$MID_UTC" > "$FIX/timeline.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review please"}]]' "$NEW_UTC" > "$FIX/issues.json"
+check "a decorated post-retarget review clears" 0
+
+# THE OVERLAP CASE: the base is retargeted while a round is running, `@codex review` is
+# posted, and the OLD round submits after it. The only wrapper post-dates the request, so
+# every timestamp comparison passes — but no wrapper separates the retarget from the
+# request, so that wrapper may describe the pre-retarget diff while the requested round is
+# still pending. Rounds carry no identity; this state must block.
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$NEW_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 printf '[[{"event":"base_ref_changed","created_at":"%s"}]]' "$OLD_UTC" > "$FIX/timeline.json"
-printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review please"}]]' "$MID_UTC" > "$FIX/issues.json"
-check "a decorated post-retarget review clears" 0
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$MID_UTC" > "$FIX/issues.json"
+check "a request inside a still-running round cannot clear" 1
 
 # Mentioning the command in prose does not request a round. Treating any substring match
 # as explicit lets quoted instructions post-date a retarget and clear a diff no bot read.
@@ -384,10 +401,25 @@ new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"
 printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review - retargeted to main"}]]' "$NOW_UTC" > "$FIX/issues.json"
 check "a trigger with a trailing note still blocks" 1
 
-# ...and one from BEFORE the wrapper is the normal case: it is the round that produced it.
+# ...and one from BEFORE the wrapper is the normal case — when an earlier wrapper shows
+# the tip's previous round had already ended, so the request started a fresh one and the
+# wrapper that followed is that round's.
+new_fix; wrapper2 "chatgpt-codex-connector[bot]" "$OLD_UTC" "$NOW_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$MID_UTC" > "$FIX/issues.json"
+check "a rerun requested before the wrapper clears" 0
+
+# A request with NO wrapper before it is ambiguous even with no retarget anywhere: the
+# tip's first round may still have been in flight when the request posted, and the single
+# wrapper after it may be THAT round's submission, with the requested round still pending.
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$NOW_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$OLD_UTC" > "$FIX/issues.json"
-check "a rerun requested before the wrapper clears" 0
+check "a request no completed round separates blocks" 1
+
+# A round-start in the gap between the last pre-request wrapper and the request is the
+# same ambiguity one level in: that round may still be running when the request posts.
+new_fix; wrapper2 "chatgpt-codex-connector[bot]" "$OLD_UTC" "$NEW2_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"},{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$MID_UTC" "$NEW_UTC" > "$FIX/issues.json"
+check "a round-start inside the gap still blocks" 1
 
 # A fresh `eyes` newer than the wrapper means a round is running on the same tip.
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
@@ -564,6 +596,14 @@ echo "forkowner/repo" > "$FIX/repo.txt"
 # The upstream HAS a PR 16 — a different one, whose head is not our tree.
 printf 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' > "$FIX/prhead-upstream.txt"
 check "a colliding PR number in the parent is not used" 0
+
+# Both repos can carry PR 16 at the SAME head — the same branch opened against the parent
+# and against the fork. The two PRs have separate reviews and threads, so silently picking
+# the parent can gate one PR while the caller merges the other. Ambiguity is exit 3.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/repo.txt"
+printf '%s' "$TIP" > "$FIX/prhead-upstream.txt"
+check "PR matching BOTH repos at this head is exit 3" 3
 
 # GitHub emits automatic_base_change_succeeded as a SEPARATE event from base_ref_changed,
 # and it fires in the stacked-PR case: B targets A, A merges and is deleted after B's

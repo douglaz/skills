@@ -412,12 +412,15 @@ condition:
      with a SHA, which tree it read.
   2. Run **`scripts/bot-gate <PR>`** and require exit 0. Six conditions: a *submitted* codex
      review naming this tip; no PENDING review from the bot on it (a rerun in flight); no
-     `@codex review` comment newer than it (a rerun that was *requested* and has not
-     reported — nothing else can see that state); no `eyes` reaction post-dating it; no
-     base mutation not followed by an explicit review request (the whole `base_ref_*` /
-     `automatic_base_change_*` family; submission time alone cannot prove whether the bot
-     read the diff before or after an in-flight mutation), nor a newer `ready_for_review`
-     event; and zero unresolved review threads from either gated bot. It fails closed on any API error, missing tool, or unparseable
+     `@codex review` request left unanswered — one newer than the wrapper has not reported,
+     and one older than it only counts as answered when a completed round separates it from
+     any earlier round-start, because rounds carry no identity and the wrapper after a
+     request can otherwise be an already-running round's submission; no `eyes` reaction
+     post-dating the wrapper; no base mutation not followed by such a provably-fresh
+     review request (the whole `base_ref_*` / `automatic_base_change_*` family; submission
+     time alone cannot prove whether the bot read the diff before or after an in-flight
+     mutation), nor a newer `ready_for_review` event; and zero unresolved review threads
+     from either gated bot. It fails closed on any API error, missing tool, or unparseable
      response in the signals that feed all six — the timeline query behind the retarget
      check included.
 
@@ -569,13 +572,19 @@ ignoring the actual signal.**
 # Resolve by matching HEAD, not by preferring the parent. A fork can host its own PRs, and
 # both repos can carry PR number N — so parent-first targets a missing or unrelated PR and
 # the real one can never be landed. `bot-gate` resolves the same way for the same reason.
+# BOTH matching is ambiguous, not a tiebreak: the same branch can be opened as a PR against
+# the parent AND the fork, and the two PRs were gated separately — silently merging the
+# parent's can land a PR whose reviews nobody checked. Refuse and make the caller say
+# which repo.
 SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner)
 UP=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end')
-R=""
+R=""; _M=0
 for _c in ${UP:+"$UP"} "$SELF"; do
-  [ "$(gh pr view <N> -R "$_c" --json headRefOid -q .headRefOid 2>/dev/null)" = "$(git rev-parse HEAD)" ] \
-    && { R="$_c"; break; }
+  if [ "$(gh pr view <N> -R "$_c" --json headRefOid -q .headRefOid 2>/dev/null)" = "$(git rev-parse HEAD)" ]; then
+    _M=$((_M+1)); [ -n "$R" ] || R="$_c"
+  fi
 done
+[ "$_M" -le 1 ] || { echo "PR <N> matches this head in BOTH $UP and $SELF — ambiguous; re-run with the intended repo pinned in every -R"; exit 1; }
 [ -n "$R" ] || { echo "no PR <N> whose head is this tree in ${UP:+$UP or }$SELF"; exit 1; }
 PR_REFS=$(gh pr view <N> -R "$R" --json baseRefName,headRefName) \
   || { echo "cannot resolve the PR branches"; exit 1; }

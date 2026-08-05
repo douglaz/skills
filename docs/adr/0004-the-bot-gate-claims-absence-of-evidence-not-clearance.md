@@ -166,3 +166,22 @@ could not be rendered is the wrong trade.
 
 This does not weaken the convergence test above; it applies it. A condition was found to be
 measuring nothing, so it was removed rather than repaired.
+
+---
+
+## Amendment, 2026-08-05: a request must be provably fresh
+
+The rerun and base-mutation conditions above compared timestamps only: a wrapper newer
+than the request read as the request answered. Rounds carry no identity, so that wrapper
+can end a round that was already in flight when the request posted — retarget mid-round,
+post `@codex review`, and the old round submits — leaving the requested round pending
+while every comparison passes.
+
+Both conditions therefore now also require that the request was posted into a quiet PR:
+some wrapper landed before it, with no round-start (any `@codex review` mention, or a
+`ready_for_review` event) in the gap. That is decidable from data already fetched, on the
+working assumption that rounds run one at a time. Where it cannot be established, the gate
+blocks, and one more `@codex review` round is the escape.
+
+The decision this ADR records is unchanged — the verdict claims absence of evidence over a
+window, never clearance. The set of things accepted as evidence of a pending round grew.

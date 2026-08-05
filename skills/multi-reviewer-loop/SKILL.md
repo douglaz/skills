@@ -147,14 +147,21 @@ a reviewer.
               -q 'select(.state=="OPEN") | .number' 2>/dev/null || echo "")
        [ -n "$_n" ] && { UP="$_c"; SEL="$_s"; PRNUM="$_n"; break; }
      done
-     # OPEN only, and empty means "no PR" — fall through to candidate 2, do not abort.
-     # The first HARDEN panel runs BEFORE any PR exists (that is the prescribed ordering),
-     # so aborting here stops the panel in its most common state. And an abandoned CLOSED
-     # PR must not win: `gh pr view` falls back to the most recent closed or merged PR on
-     # the branch, which may have targeted a different base entirely.
+     # OPEN only, and an empty PRNUM means "no PR" — fall through to candidate 2, do not
+     # abort. The first HARDEN panel runs BEFORE any PR exists (that is the prescribed
+     # ordering), so aborting here stops the panel in its most common state. And an
+     # abandoned CLOSED PR must not win: `gh pr view` falls back to the most recent closed
+     # or merged PR on the branch, which may have targeted a different base entirely.
+     # But once a PR IS found, a failed base read is FATAL, not a fall-through: the PR's
+     # base is knowable, and the ladder below substitutes the repo default — so a release
+     # or stacked PR would silently get reviewed against the wrong diff. Same rule as the
+     # fetch below.
      BASE_NAME=""
-     [ -n "$PRNUM" ] && BASE_NAME=$(gh pr view "$SEL" -R "$UP" --json baseRefName \
-                                      -q .baseRefName 2>/dev/null || echo "")
+     if [ -n "$PRNUM" ]; then
+       BASE_NAME=$(gh pr view "$SEL" -R "$UP" --json baseRefName \
+                     -q .baseRefName 2>/dev/null) && [ -n "$BASE_NAME" ] \
+         || { echo "PR $PRNUM exists but its base cannot be read — do not review against a guess"; exit 1; }
+     fi
      # FETCH IT. The name alone is not a reviewable ref: on a fork clone `origin` is your
      # fork, so `origin/$BASE_NAME` is stale or absent — and when it is absent the ladder
      # falls through to the branch's own upstream, which IS HEAD. The panel then reviews an

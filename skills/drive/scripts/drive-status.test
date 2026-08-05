@@ -40,6 +40,8 @@ case "$*" in
       else echo master; fi ;;
   *"pr view"*baseRefName*)
       printf '%s\n' "$*" >> "$FIX/gh.calls"
+      # An open PR whose base read fails — the probe by head succeeds, this one does not.
+      [ -f "$FIX/basefail" ] && exit 1
       # Honour the requested fields. Asking for baseRefOid hands back the CREATION-TIME
       # snapshot, which is what GitHub really returns — so a fixture can prove what
       # happens when someone tests freshness against it.
@@ -324,6 +326,22 @@ fi
 # describes the world after this PR lands, so it is HARDEN, not WAITING_FOR_MERGE.
 new_repo; add_code; record '**Phase:** DONE · **Pending:** metadata PR #7'
 check "DONE with BOTH unmerged commits and Pending is HARDEN" HARDEN
+
+# An open PR whose base cannot be read is not a license to substitute the repository
+# default: the PR may target a release or stacked branch, and validating freshness against
+# the default branch can derive LAND over a diff no panel reviewed. Unknown stays unknown.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+printf '%s' "$(G rev-parse HEAD)" > "$FIX/prhead.txt"   # the probe finds an open PR...
+touch "$FIX/basefail"                                    # ...whose base read then fails
+check_field "an unreadable PR base is not the repo default" base_fresh null
+check "an unreadable PR base refuses LAND" HARDEN
+
+# The probe found an open PR; a failed state read afterwards is "unknown", not "none" —
+# "none" would claim an absence the same run just disproved, and route an already-reviewed
+# branch into another full HARDEN cycle.
+new_repo; add_code
+printf '%s' "$(G rev-parse HEAD)" > "$FIX/prhead.txt"   # probe succeeds; the state read returns nothing
+check_field "a found PR whose state read fails is unknown" pr.state unknown
 
 echo
 echo "passed $PASS, failed $FAIL"

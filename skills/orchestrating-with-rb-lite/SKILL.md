@@ -477,11 +477,15 @@ implement → review loop for each bead.
     SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner)
     PARENT=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end')
     LOCAL_HEAD=$(git rev-parse HEAD)
-    R=""
+    # Both repos matching is ambiguous, not a tiebreak: the same branch can be opened as a
+    # PR against the parent AND the fork, and picking the parent silently can watch and
+    # merge a PR the drain never gated. Refuse; pin the intended repo in every -R instead.
+    R=""; _M=0
     for _r in ${PARENT:+"$PARENT"} "$SELF"; do
       _h=$(gh pr view <pr> -R "$_r" --json headRefOid -q .headRefOid 2>/dev/null || echo "")
-      [ "$_h" = "$LOCAL_HEAD" ] && { R="$_r"; break; }
+      if [ "$_h" = "$LOCAL_HEAD" ]; then _M=$((_M+1)); [ -n "$R" ] || R="$_r"; fi
     done
+    [ "$_M" -le 1 ] || { echo "PR <pr> matches this head in BOTH $PARENT and $SELF — ambiguous"; exit 1; }
     [ -n "$R" ] || { echo "cannot find PR <pr> for local HEAD"; exit 1; }
     MERGING_SHA=$(gh pr view <pr> -R "$R" --json headRefOid -q .headRefOid)
     [ -n "$MERGING_SHA" ] || { echo "cannot resolve the PR head"; exit 1; }
@@ -515,11 +519,14 @@ implement → review loop for each bead.
     [ -n "$MERGING_SHA" ] || { echo "no pinned SHA — re-run step 9"; exit 1; }
     SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner)
     PARENT=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end')
-    R=""
+    # Same ambiguity rule as step 9: both repos carrying PR <pr> at the pinned SHA means
+    # two distinct PRs, and merging the parent's silently can land the one nobody gated.
+    R=""; _M=0
     for _r in ${PARENT:+"$PARENT"} "$SELF"; do
       _h=$(gh pr view <pr> -R "$_r" --json headRefOid -q .headRefOid 2>/dev/null || echo "")
-      [ "$_h" = "$MERGING_SHA" ] && { R="$_r"; break; }
+      if [ "$_h" = "$MERGING_SHA" ]; then _M=$((_M+1)); [ -n "$R" ] || R="$_r"; fi
     done
+    [ "$_M" -le 1 ] || { echo "PR <pr> matches the pinned SHA in BOTH $PARENT and $SELF — ambiguous"; exit 1; }
     [ -n "$R" ] || { echo "cannot find PR <pr> for the pinned SHA"; exit 1; }
     PR_REFS=$(gh pr view <pr> -R "$R" --json baseRefName,headRefName) \
       || { echo "cannot resolve the PR branches"; exit 1; }
