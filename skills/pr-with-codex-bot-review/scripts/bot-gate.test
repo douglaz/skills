@@ -46,7 +46,13 @@ case "$*" in
       # Per-repo heads, so "PR N exists in both" can be modelled: a lookup carrying
       # -R <upstream> gets prhead-upstream.txt when it exists. Without this the stub
       # answers every repo identically and an upstream-first probe passes the suite.
-      if [ -f "$FIX/prhead-upstream.txt" ] && case "$*" in *"-R $(cat "$FIX/upstream.txt" 2>/dev/null)"*) true;; *) false;; esac; then
+      if [ -f "$FIX/prhead-after-signals.txt" ]; then
+        _head_calls=$(cat "$FIX/head.calls" 2>/dev/null || echo 0)
+        _head_calls=$((_head_calls + 1)); printf '%s' "$_head_calls" > "$FIX/head.calls"
+      fi
+      if [ -f "$FIX/prhead-after-signals.txt" ] && [ "${_head_calls:-0}" -ge 3 ]; then
+        cat "$FIX/prhead-after-signals.txt"
+      elif [ -f "$FIX/prhead-upstream.txt" ] && case "$*" in *"-R $(cat "$FIX/upstream.txt" 2>/dev/null)"*) true;; *) false;; esac; then
         cat "$FIX/prhead-upstream.txt"
       else
         cat "$FIX/prhead.txt" 2>/dev/null || echo ""
@@ -253,6 +259,14 @@ new_fix; wrapper "chatgpt-codex-connector[bot]" "$NEW_UTC" > "$FIX/reviews.json"
 printf '[[{"event":"base_ref_changed","created_at":"%s"}]]' "$OLD_UTC" > "$FIX/timeline.json"
 printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$MID_UTC" > "$FIX/issues.json"
 check "a retarget followed by an explicit review clears" 0
+
+# The clearing match accepts a real command with trailing text. The loose blocking match
+# already sees it; once the newer wrapper arrives, the same request must establish that a
+# post-retarget round covered the changed diff.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$NEW_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"base_ref_changed","created_at":"%s"}]]' "$OLD_UTC" > "$FIX/timeline.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review please"}]]' "$MID_UTC" > "$FIX/issues.json"
+check "a decorated post-retarget review clears" 0
 
 # Mentioning the command in prose does not request a round. Treating any substring match
 # as explicit lets quoted instructions post-date a retarget and clear a diff no bot read.
@@ -522,6 +536,13 @@ check "wrapper whose commit_id differs from the body blocks" 1
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 printf 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' > "$FIX/prhead.txt"
 check "local HEAD behind the PR head is exit 3" 3
+
+# The first two head reads select the PR and validate the local checkout. A push while the
+# slower API signals are being collected changes the third read only; without the final
+# revalidation the old tip's wrapper produces a clearing verdict for a stale tree.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' > "$FIX/prhead-after-signals.txt"
+check "PR head moving during signal collection is exit 3" 3
 
 new_fix; touch "$FIX/FAIL"
 check "API failure is exit 3, never clearance" 3

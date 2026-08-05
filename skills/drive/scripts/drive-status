@@ -34,7 +34,12 @@ _UP=""
 _RREPO=""
 _BASE_REPO_UNKNOWN=false
 _RFLAG=()
-if command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
+# A present gh binary says nothing about which forge owns the checkout. On a non-GitHub
+# remote every repo lookup fails, which used to masquerade as an unresolved fork parent
+# and suppress an otherwise authoritative origin/HEAD freshness check forever.
+_GITHUB_REMOTE=false
+if git remote -v 2>/dev/null | grep -qi 'github\.com'; then _GITHUB_REMOTE=true; fi
+if $_GITHUB_REMOTE && command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   # OPEN only. `gh pr view` falls back to the most recent CLOSED or MERGED PR on the
   # branch (this script guards PR_STATE on OPEN/* for the same reason), and HARDEN
   # clearance runs BEFORE the PR is opened — so an abandoned PR that targeted a release
@@ -125,7 +130,8 @@ fi
 # The repository and branch are one identity. Before a fork PR exists, `_RREPO` is the
 # parent, so using the fork's origin/HEAD pairs the parent's fetch URL with the fork's
 # branch name and can fetch the wrong target or no target at all.
-if [[ -z "$DEFAULT_BRANCH" && -n "${_RREPO:-}" ]] && command -v gh >/dev/null 2>&1; then
+if [[ -z "$DEFAULT_BRANCH" && -n "${_RREPO:-}" ]] && $_GITHUB_REMOTE \
+   && command -v gh >/dev/null 2>&1; then
   DEFAULT_BRANCH=$(gh repo view "$_RREPO" --json defaultBranchRef \
     -q .defaultBranchRef.name 2>/dev/null || echo "")
   [[ -n "$DEFAULT_BRANCH" ]] && BASE_ORIGIN="forge"
@@ -144,7 +150,7 @@ fi
 # develop/trunk but still carries a legacy `main` in the ancestry would otherwise resolve to
 # `main`, and BASE_FRESH would then validate the WRONG base — deriving LAND even after the
 # real default branch advanced, which is the unreviewed-squash case this all exists to stop.
-if [[ -z "$DEFAULT_BRANCH" ]] && command -v gh >/dev/null 2>&1; then
+if [[ -z "$DEFAULT_BRANCH" ]] && $_GITHUB_REMOTE && command -v gh >/dev/null 2>&1; then
   if [[ -n "${_RREPO:-}" ]]; then
     DEFAULT_BRANCH=$(gh repo view "$_RREPO" --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || echo "")
   else
@@ -346,7 +352,7 @@ if [[ -z "$(git remote 2>/dev/null)" ]]; then
   PR_STATE="none"
 elif ! command -v gh >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1 || [[ -z "$BRANCH" ]]; then
   PR_STATE="unknown"
-elif ! git remote -v 2>/dev/null | grep -qi 'github\.com'; then
+elif ! $_GITHUB_REMOTE; then
   # A non-GitHub forge (codeberg, gitlab, self-hosted). gh cannot answer; saying "none"
   # would be a claim we have not checked, so name the reason instead.
   PR_STATE="n/a-non-github"

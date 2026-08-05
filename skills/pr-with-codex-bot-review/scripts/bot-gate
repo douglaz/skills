@@ -315,9 +315,10 @@ if [[ -n "$WRAPPER_AT" ]] && [[ -n "${ALL_COMMENTS:-}" ]]; then
   # and missing one clears the gate while a requested round is in flight. A false positive
   # here only makes you wait.
   #
-  # CLEARING (LAST_REVIEW_REQUEST_BEFORE_WRAPPER) takes the STRICT, command-only match: it
-  # is the evidence that a post-retarget round actually ran, so a prose sentence or a code
-  # fence quoting `@codex review` must not count — that admits a diff no bot read.
+  # CLEARING (LAST_REVIEW_REQUEST_BEFORE_WRAPPER) takes the PREFIX match: the comment must
+  # begin with the command, which excludes prose and fenced examples, but trailing text is
+  # valid trigger decoration. Requiring a command-only body leaves a completed decorated
+  # post-retarget round unable to clear the retarget blocker.
   #
   # One list for both is wrong in whichever direction it is tuned. Anchoring both (as the
   # first fix for the clearing hole did) means `@codex review please` — a real trigger —
@@ -329,7 +330,7 @@ if [[ -n "$WRAPPER_AT" ]] && [[ -n "${ALL_COMMENTS:-}" ]]; then
   }
   _TRIGGERS=$(_mk_triggers "@codex[[:space:]]+review") \
     || { echo "BLOCKED: cannot read PR comments" >&2; exit 3; }
-  _TRIGGERS_STRICT=$(_mk_triggers "^[[:space:]]*@codex[[:space:]]+review[[:space:]]*$") \
+  _TRIGGERS_STRICT=$(_mk_triggers "^[[:space:]]*@codex[[:space:]]+review([[:space:]]|$)") \
     || { echo "BLOCKED: cannot read PR comments" >&2; exit 3; }
   if [[ -n "$_TRIGGERS" ]]; then
     [[ -n "$_W" ]] || RERUN_REQUESTED=true
@@ -537,6 +538,15 @@ if [[ "$CR_STATE" == "SUCCESS" ]] && ! $CR_SKIPPED && [[ -n "${CRC:-}" ]]; then
     | sed -E 's/`//g; s/\*\*//g' \
     | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | grep -v '^$' | sort -u | head -20)
 fi
+
+# The endpoint reads above span time. If the PR head moved during them, every signal was
+# collected for a tree that is no longer mergeable; returning a verdict for it lets a JSON
+# consumer act on stale evidence even though the early head check passed.
+PR_HEAD_FINAL=$(gh pr view "$PR" -R "$REPO" --json headRefOid -q .headRefOid 2>/dev/null) \
+  || { echo "BLOCKED: cannot revalidate the PR head" >&2; exit 3; }
+[[ -n "$PR_HEAD_FINAL" ]] || { echo "BLOCKED: cannot revalidate the PR head" >&2; exit 3; }
+[[ "$PR_HEAD_FINAL" == "$TIP" ]] \
+  || { echo "BLOCKED: PR head moved from ${TIP:0:10} to ${PR_HEAD_FINAL:0:10} while signals were collected" >&2; exit 3; }
 
 # WRAPPER_AT is required alongside the count: it is the reference point the active-round
 # check needs, so a wrapper without one means that check never ran, and a check that did

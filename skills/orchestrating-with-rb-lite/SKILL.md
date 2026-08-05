@@ -620,11 +620,18 @@ implement → review loop for each bead.
     queue cannot tell you this; only the forge can:
 
     ```bash
-    SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner)
-    PARENT=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end')
+    SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner) \
+      || { echo "cannot resolve this repository — closure-PR discovery is incomplete"; exit 1; }
+    PARENT=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end') \
+      || { echo "cannot resolve the parent repository — closure-PR discovery is incomplete"; exit 1; }
+    CLOSURE_PRS=()
     for UP in ${PARENT:+"$PARENT"} "$SELF"; do
-      gh pr list -R "$UP" --state all --limit 1000 --json number,state,headRefName,title,body
-    done | jq -s --arg id "$BEAD_ID" 'add | .[] | select($id != "" and ([.headRefName, .title, (.body // "")]
+      _PRS=$(gh pr list -R "$UP" --state all --limit 1000 --json number,state,headRefName,title,body) \
+        || { echo "cannot query closure PRs in $UP — do not resume work from partial results"; exit 1; }
+      CLOSURE_PRS+=("$_PRS")
+    done
+    printf '%s\n' "${CLOSURE_PRS[@]}" \
+      | jq -s --arg id "$BEAD_ID" 'add | .[] | select($id != "" and ([.headRefName, .title, (.body // "")]
         | join(" ") | ascii_downcase
         | test("(^|[^a-z0-9.])" + ($id|ascii_downcase|gsub("\\.";"\\.")) + "($|\\.$|\\.[^a-z0-9]|[^a-z0-9.])")))'
     ```

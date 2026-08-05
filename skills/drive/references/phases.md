@@ -232,18 +232,28 @@ _UPP=$(printf %s "$_DSP" | jq -r '.base_repo // ""')
 [ -n "$_UPP" ] && _UPP="https://github.com/$_UPP" || _UPP=origin
 git fetch -q "$_UPP" "+refs/heads/$_PB:refs/remotes/origin/$_PB" \
   || { echo "cannot fetch $_PB — the panel's base is unknown, do NOT start the panel"; exit 1; }
-# TELL THE PANEL WHICH BASE, and check what it reports back. `multi-reviewer-loop` resolves
-# its own DIFF_BASE through a candidate ladder; before a PR exists that ladder can land on
-# the branch's own upstream (`origin/<feature>`), which IS HEAD — so the panel reviews an
-# empty diff and reports clean. Clearance recorded against a base the panel never diffed is
-# the failure every check below guards, arriving through the one door none of them watch.
-echo "panel must review against: origin/$_PB ($(git rev-parse --short "origin/$_PB"))"
-# The panel prints its chosen base in every pass summary. If it does not name this ref,
-# the run is void — fix the base and re-run rather than recording clearance from it.
+# TELL THE PANEL WHICH COMMIT, and check what it reports back. `multi-reviewer-loop`
+# deliberately uses a private `refs/remotes/prbase/<branch>` ref when a PR exists, while
+# its no-PR path may use `origin/<branch>`. Requiring one spelling rejects a correct
+# post-PR panel; the commit identity is the invariant that prevents an empty or wrong diff.
+echo "panel base must resolve to: $(git rev-parse "origin/$_PB") (branch $_PB)"
 { printf 'panel_base=%s\n' "$_PB"
   printf 'panel_base_oid=%s\n' "$(git rev-parse "origin/$_PB")"
   printf 'panel_tip=%s\n' "$(git rev-parse HEAD)"; } > "$STATE_DIR/panel" \
   || { echo "could not pin the panel's inputs"; exit 1; }
+```
+
+When the panel returns, copy the exact ref from its final `Base:` line and verify its
+identity. `origin/<base>` before a PR and `refs/remotes/prbase/<base>` after one are both
+valid when they resolve to the pinned commit:
+
+```bash
+PANEL_REPORTED_BASE='<exact ref from the final panel summary>'
+STATE_DIR=$(dirname "$(git rev-parse --git-path drive/state)")
+PANEL_BASE_OID=$(sed -n 's/^panel_base_oid=//p' "$STATE_DIR/panel" 2>/dev/null | head -1)
+[ -n "$PANEL_BASE_OID" ] \
+  && [ "$(git rev-parse "$PANEL_REPORTED_BASE" 2>/dev/null)" = "$PANEL_BASE_OID" ] \
+  || { echo "the panel reviewed a different base commit — re-run it; NOT cleared"; exit 1; }
 ```
 
 
@@ -544,11 +554,18 @@ and silently carry the previous bead's closure into its diff. Instead:
   none. So the discovery path is the forge, and it belongs in the resume checklist:
 
   ```bash
-  SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner)
-  PARENT=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end')
+  SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner) \
+    || { echo "cannot resolve this repository — closure-PR discovery is incomplete"; exit 1; }
+  PARENT=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end') \
+    || { echo "cannot resolve the parent repository — closure-PR discovery is incomplete"; exit 1; }
+  CLOSURE_PRS=()
   for UP in ${PARENT:+"$PARENT"} "$SELF"; do
-    gh pr list -R "$UP" --state all --limit 1000 --json number,state,headRefName,title,body
-  done | jq -s --arg id "$BEAD_ID" 'add | .[] | select($id != "" and ([.headRefName, .title, (.body // "")]
+    _PRS=$(gh pr list -R "$UP" --state all --limit 1000 --json number,state,headRefName,title,body) \
+      || { echo "cannot query closure PRs in $UP — do not resume work from partial results"; exit 1; }
+    CLOSURE_PRS+=("$_PRS")
+  done
+  printf '%s\n' "${CLOSURE_PRS[@]}" \
+    | jq -s --arg id "$BEAD_ID" 'add | .[] | select($id != "" and ([.headRefName, .title, (.body // "")]
         | join(" ") | ascii_downcase
         | test("(^|[^a-z0-9.])" + ($id|ascii_downcase|gsub("\\.";"\\.")) + "($|\\.$|\\.[^a-z0-9]|[^a-z0-9.])")))'
   ```
