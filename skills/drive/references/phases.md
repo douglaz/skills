@@ -92,9 +92,11 @@ wrapper. Do not hardcode a local checkout path; most installs will not have one.
 Write `.rb-lite-reviewers` before the run — the panel is codex + claude, both models
 pinned, and the file is the only way to set it: rb-lite's built-in default lives inside
 the binary and additionally runs Gemini through `npx -y`, which this stack does not use.
-Take the two-line file from `orchestrating-with-rb-lite` § Tool dependencies — NOT the
-block under § Customizing the panel, which shows the same two lines beside optional
-extras and a `my-linter` placeholder that would run as a command-not-found reviewer.
+Take the two-reviewer file from `orchestrating-with-rb-lite` § Tool dependencies — write
+it to a temp path and pass `--reviewers-file`, never `cat >` into the repo root (that
+clobbers an existing panel, or leaves an untracked file the clean-tree LAND gate then
+trips on). NOT the block under § Customizing the panel: it shows the same two commands
+beside optional extras and a `my-linter` placeholder that runs as command-not-found.
 
 ```bash
 if command -v rb-lite >/dev/null 2>&1; then RB=(rb-lite)
@@ -249,7 +251,8 @@ _PB=$(printf %s "$_DSP" | jq -r '.default_branch')
 _UPP=$(printf %s "$_DSP" | jq -r '.base_repo // ""')
 # gh's own clone URL: `owner/repo` alone points at public github.com, which on GitHub
 # Enterprise either fails or resolves an unrelated public repo of the same name.
-[ -n "$_UPP" ] && _UPP=$(gh repo view "$_UPP" --json url -q .url 2>/dev/null || echo "https://github.com/$_UPP") || _UPP=origin
+[ -n "$_UPP" ] && { _UPP=$(gh repo view "$_UPP" --json url -q .url 2>/dev/null) \
+  || { echo "cannot resolve the clone URL for $_UPP — do NOT proceed"; exit 1; }; } || _UPP=origin
 git fetch -q "$_UPP" "+refs/heads/$_PB:refs/remotes/origin/$_PB" \
   || { echo "cannot fetch $_PB — the panel's base is unknown, do NOT start the panel"; exit 1; }
 # TELL THE PANEL WHICH COMMIT, and check what it reports back. `multi-reviewer-loop`
@@ -343,7 +346,8 @@ PANEL_BASE_OID=$(sed -n 's/^panel_base_oid=//p' "$STATE_DIR/panel" 2>/dev/null |
 BASE_REMOTE=$(printf %s "$DS_PRE" | jq -r '.base_repo // ""')
 # gh's own clone URL: `owner/repo` alone points at public github.com, which on GitHub
 # Enterprise either fails or resolves an unrelated public repo of the same name.
-[ -n "$BASE_REMOTE" ] && BASE_REMOTE=$(gh repo view "$BASE_REMOTE" --json url -q .url 2>/dev/null || echo "https://github.com/$BASE_REMOTE") || BASE_REMOTE=origin
+[ -n "$BASE_REMOTE" ] && { BASE_REMOTE=$(gh repo view "$BASE_REMOTE" --json url -q .url 2>/dev/null) \
+  || { echo "cannot resolve the clone URL for $BASE_REMOTE — do NOT proceed"; exit 1; }; } || BASE_REMOTE=origin
 git fetch -q "$BASE_REMOTE" "+refs/heads/$BASE:refs/remotes/origin/$BASE" \
   || { echo "fetch failed — base unknown, do NOT clear"; exit 1; }
 # NOW the pinned OID means something: this ref was just refreshed from the remote, so a
@@ -473,7 +477,8 @@ BASE=$(printf %s "$DSJ2_PRE" | jq -r '.default_branch')
 BASE_REMOTE=$(printf %s "$DSJ2_PRE" | jq -r '.base_repo // ""')
 # gh's own clone URL: `owner/repo` alone points at public github.com, which on GitHub
 # Enterprise either fails or resolves an unrelated public repo of the same name.
-[ -n "$BASE_REMOTE" ] && BASE_REMOTE=$(gh repo view "$BASE_REMOTE" --json url -q .url 2>/dev/null || echo "https://github.com/$BASE_REMOTE") || BASE_REMOTE=origin
+[ -n "$BASE_REMOTE" ] && { BASE_REMOTE=$(gh repo view "$BASE_REMOTE" --json url -q .url 2>/dev/null) \
+  || { echo "cannot resolve the clone URL for $BASE_REMOTE — do NOT proceed"; exit 1; }; } || BASE_REMOTE=origin
 git fetch -q "$BASE_REMOTE" "+refs/heads/$BASE:refs/remotes/origin/$BASE" \
   || { echo "fetch failed — base unknown, do NOT merge"; exit 1; }
 # One call, asserted to still name the same base: a second `drive-status` can resolve a

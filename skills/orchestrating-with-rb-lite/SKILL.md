@@ -98,20 +98,31 @@ If neither path works, stop and tell the user to install `rb-lite` (e.g.
 **This skill's panel is two reviewers: `codex` and `claude`.** rb-lite's own built-in
 default is three — it adds a Gemini reviewer invoked through `npx -y @google/gemini-cli`
 — and that command lives inside the rb-lite binary, so the only way to change it is to
-write `.rb-lite-reviewers` in the repo root before running. This is the whole file — two
-lines, both models pinned, nothing else:
+point rb-lite at a two-reviewer file. Write it to a TEMP path and pass
+`--reviewers-file`, rather than `cat >.rb-lite-reviewers` in the repo root: that
+redirection destroys an existing custom panel if the repo has one, and creates an
+untracked file if it does not — which then trips the clean-tree gate LAND derives from, or
+gets committed outside the task's scope.
 
 ```bash
-cat >.rb-lite-reviewers <<'RBEOF'
+RB_REVIEWERS=$(mktemp)
+cat >"$RB_REVIEWERS" <<'RBEOF'
 codex review --base "$BASE" -c 'model="gpt-5.6-sol"'
-set -o pipefail; claude -p "Review the diff vs $BASE. Before asserting the diff violates or overstates an invariant, or any claim about behavior in code the diff does not show, verify it by reading that code and cite file:line, else mark it a QUESTION not a finding. Tag findings P0/P1/P2/P3. Output 'No findings.' if clean." --model opus --permission-mode acceptEdits --output-format json --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch,Task,TaskOutput,TaskStop,Monitor" | jq -er 'if .is_error then error(.result // "claude reviewer returned is_error") else (.result // empty) end'
+set -o pipefail; claude -p "Read AGENTS.md if present, then review the diff vs $BASE. Before asserting the diff violates or overstates an invariant, or any claim about behavior in code the diff does not show, verify it by reading that code and cite file:line, else mark it a QUESTION not a finding. Tag findings P0/P1/P2/P3. Output 'No findings.' if clean. Do not modify, create, or delete any file." --model claude-opus-5 --permission-mode plan --output-format json --allowedTools "Bash,Read,Glob,Grep" --disallowedTools "Edit,Write,NotebookEdit" | jq -er 'if .is_error then error(.result // "claude reviewer returned is_error") else (.result // empty) end'
 RBEOF
+# ...then add --reviewers-file "$RB_REVIEWERS" to the rb-lite run, and rm it afterwards.
 ```
 
-Copy that as-is. "Customizing the panel" below shows the same two lines alongside OPTIONAL
-extras — a skeptical third reviewer and a `my-linter --json | wrap-as-p-tags` placeholder —
-which are illustrative, not prerequisites. Pasting that block wholesale puts a
-command-not-found reviewer in the panel and every round carries its failure.
+The Claude reviewer is READ-ONLY on purpose: `Edit`/`Write` plus `acceptEdits` would let it
+mutate the worktree while the codex reviewer is reading it, so the two would review
+different trees — and any edit it made would bypass the implementer loop entirely. It is
+also told to read `AGENTS.md`, which is how a repo's own invariants reach the panel when
+this runs under `drive`; without it half the panel reviews without them.
+
+"Customizing the panel" below shows the same two commands alongside OPTIONAL extras — a
+skeptical third reviewer and a `my-linter --json | wrap-as-p-tags` placeholder — which are
+illustrative, not prerequisites. Pasting that block wholesale puts a command-not-found
+reviewer in the panel and every round carries its failure.
 
 Dropping Gemini is the point, not a side effect. `npx -y` installs and executes whatever
 the registry serves at that moment, in a checkout with credentials present and (in
@@ -488,7 +499,7 @@ implement → review loop for each bead.
     # the refusal — leaving the drain watching whichever PR the outage left visible.
     # PullRequest-level not-found only: both candidates are repos the API just named, so
     # a Repository-level "could not resolve" or an HTTP 404 is lost access, not absence.
-    _GH_ERR=$(mktemp) || { echo "mktemp failed"; exit 1; }
+    _GH_ERR=$(mktemp); trap 'rm -f "$_GH_ERR"' EXIT   # both scripts do this; the snippets leaked it || { echo "mktemp failed"; exit 1; }
     R=""; _M=0
     for _r in ${PARENT:+"$PARENT"} "$SELF"; do
       if ! _h=$(gh pr view <pr> -R "$_r" --json headRefOid -q .headRefOid 2>"$_GH_ERR"); then
@@ -540,7 +551,7 @@ implement → review loop for each bead.
     # failure treated as one hides the second match and merges the survivor. And only the
     # PullRequest-level text: a Repository-level "could not resolve" or an HTTP 404 on a
     # repo the API just named is lost access, not absence.
-    _GH_ERR=$(mktemp) || { echo "mktemp failed"; exit 1; }
+    _GH_ERR=$(mktemp); trap 'rm -f "$_GH_ERR"' EXIT   # both scripts do this; the snippets leaked it || { echo "mktemp failed"; exit 1; }
     R=""; _M=0
     for _r in ${PARENT:+"$PARENT"} "$SELF"; do
       if ! _h=$(gh pr view <pr> -R "$_r" --json headRefOid -q .headRefOid 2>"$_GH_ERR"); then
@@ -568,7 +579,8 @@ implement → review loop for each bead.
     # test ancestry before merging, the same way pr-with-codex-bot-review § 8 does.
     # gh's own clone URL: `owner/repo` alone points at public github.com, which on GitHub
     # Enterprise either fails or resolves an unrelated public repo of the same name.
-    R_URL=$(gh repo view "$R" --json url -q .url 2>/dev/null || echo "https://github.com/$R")
+    R_URL=$(gh repo view "$R" --json url -q .url 2>/dev/null) \
+  || { echo "cannot resolve the clone URL for $R — do NOT merge"; exit 1; }
     git fetch "$R_URL.git" "+refs/heads/$BASE:refs/remotes/upstream/$BASE" \
       || { echo "cannot fetch the merge target — base unknown, do NOT merge"; echo "  (on a private repo cloned over SSH this is usually missing git credentials for https, not a missing base)"; exit 1; }
     # Against $MERGING_SHA, not HEAD: that is the commit --match-head-commit pins and the
@@ -612,7 +624,8 @@ implement → review loop for each bead.
     # conflicts with it.
     # gh's own clone URL: `owner/repo` alone points at public github.com, which on GitHub
     # Enterprise either fails or resolves an unrelated public repo of the same name.
-    R_URL=$(gh repo view "$R" --json url -q .url 2>/dev/null || echo "https://github.com/$R")
+    R_URL=$(gh repo view "$R" --json url -q .url 2>/dev/null) \
+  || { echo "cannot resolve the clone URL for $R — do NOT merge"; exit 1; }
     git fetch "$R_URL.git" "+refs/heads/$BASE:refs/remotes/upstream/$BASE" \
       || { echo "cannot fetch the merge target"; echo "  (on a private repo cloned over SSH this is usually missing git credentials for https, not a missing base)"; exit 1; }
     # `checkout -B` moves the branch ref unconditionally, and a clean worktree does not

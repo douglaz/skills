@@ -72,6 +72,13 @@ if ! $_GITHUB_REMOTE && [[ -n "$_ORIGIN_URL" ]] && command -v gh >/dev/null 2>&1
     _GITHUB_REMOTE=true
   fi
 fi
+# KNOWN LIMITATION, recorded rather than closed. A reviewer asked that a FAILED `gh auth
+# status` (expired token, SSH host alias) also mark the forge unknown and refuse LAND. It
+# cannot: from outside, "GHE whose auth is broken" and "GitLab, where gh was never meant to
+# answer" are the same observation, and the second is pinned by two fixtures that encode a
+# deliberate earlier decision to let non-GitHub checkouts clear. Implementing it turned both
+# red. So a GHE checkout with broken gh auth still falls back to origin/HEAD — the behaviour
+# that predates this detection, which only ever improved the working-auth case.
 # NOT ATTEMPTED is a third state, distinct from both "probed and found none" and "probed
 # and failed". On a GitHub checkout with no gh, or on a detached HEAD, the probe never
 # runs — so _PR_PROBE_FAILED stays false and origin/HEAD went on to be treated as the

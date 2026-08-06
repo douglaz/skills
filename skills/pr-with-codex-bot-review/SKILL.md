@@ -604,7 +604,7 @@ UP=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.p
 # same split, but this loop picks the repo the MERGE targets, so it cannot lean on that.
 # PullRequest-level not-found only: both candidates are repos the API just named, so a
 # Repository-level "could not resolve" or an HTTP 404 is lost access, not absence.
-_GH_ERR=$(mktemp) || { echo "mktemp failed"; exit 1; }
+_GH_ERR=$(mktemp); trap 'rm -f "$_GH_ERR"' EXIT   # both scripts do this; the snippets leaked it || { echo "mktemp failed"; exit 1; }
 R=""; _M=0
 for _c in ${UP:+"$UP"} "$SELF"; do
   if ! _h=$(gh pr view <N> -R "$_c" --json headRefOid -q .headRefOid 2>"$_GH_ERR"); then
@@ -656,7 +656,8 @@ REVIEWED_TIP=$(printf %s "$GATE_JSON" | jq -r .tip)
 # The forge's own clone URL, not a hardcoded github.com one. `$R` is only `owner/repo`,
 # so on GitHub Enterprise the literal host either fails or — worse — resolves an unrelated
 # PUBLIC repo of the same name and validates ancestry against a stranger's branch.
-R_URL=$(gh repo view "$R" --json url -q .url 2>/dev/null || echo "https://github.com/$R")
+R_URL=$(gh repo view "$R" --json url -q .url 2>/dev/null) \
+  || { echo "cannot resolve the clone URL for $R — do NOT merge"; exit 1; }
 R_URL="$R_URL.git"
 # Fetch the base AFTER the potentially slow bot gate. Fetching it before the API sweep lets
 # the merge target advance during the gate, making the ancestry result stale at merge time.

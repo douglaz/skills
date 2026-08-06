@@ -153,7 +153,7 @@ a reviewer.
      fi
      BR=$(git branch --show-current)
      HEAD_OID=$(git rev-parse HEAD)
-     _GH_ERR=$(mktemp) || { echo "mktemp failed"; exit 1; }
+     _GH_ERR=$(mktemp); trap 'rm -f "$_GH_ERR"' EXIT   # both scripts do this; the snippets leaked it || { echo "mktemp failed"; exit 1; }
      UP="$SELF"; SEL="$BR"; PRNUM=""; _M=0; _HM=0
      for _c in ${PARENT:+"$PARENT"} "$SELF"; do
        # Skips a degenerate candidate: a PARENT that duplicates SELF, and — load-bearing —
@@ -228,7 +228,8 @@ a reviewer.
        P_DEFAULT=$(gh repo view "$PARENT" --json defaultBranchRef \
                      -q .defaultBranchRef.name 2>/dev/null) && [ -n "$P_DEFAULT" ] \
          || { echo "fork with no PR: cannot resolve $PARENT's default branch — do not review against the fork's"; exit 1; }
-       PARENT_URL=$(gh repo view "$PARENT" --json url -q .url 2>/dev/null || echo "https://github.com/$PARENT")
+       PARENT_URL=$(gh repo view "$PARENT" --json url -q .url 2>/dev/null) \
+         || { echo "cannot resolve the parent clone URL — base unknown"; exit 1; }
        git fetch -q "$PARENT_URL.git" \
            "+refs/heads/$P_DEFAULT:refs/remotes/prbase/$P_DEFAULT" \
          || { echo "cannot fetch $PARENT $P_DEFAULT — do not review against a guess"; exit 1; }
