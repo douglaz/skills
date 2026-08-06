@@ -337,6 +337,17 @@ fi
 # is called.
 ON_DEFAULT=false
 [[ -n "$BRANCH" && "$BRANCH" == "$DEFAULT_BRANCH" ]] && ON_DEFAULT=true
+# Repository identity settles the same question BEFORE any PR exists — which is the state a
+# FIRST clearance is prescribed to run in, so waiting for an open PR (below) left the whole
+# fork workflow unable to reach LAND on its first pass. DEFAULT_BRANCH is resolved from the
+# PARENT when one exists, so on a fork `forkowner:master` matches `upstream:master` by name
+# while living in a different repository. A parent that resolved and differs from this repo
+# proves this branch is not the base's trunk, whatever it is called.
+# Deliberately silent when the parent lookup FAILED or found nothing: an unresolved parent
+# is not evidence of a fork, and this must never clear on a guess.
+# `:-` on both: neither is assigned at all unless the gh probe block ran, and under `set -u`
+# a bare reference would abort the whole script on any non-GitHub checkout.
+if $ON_DEFAULT && [[ -n "${_PARENT:-}" && "${_PARENT:-}" != "${_SELF_R:-}" ]]; then ON_DEFAULT=false; fi
 # Classify a newline-separated path list as bead / doc / code. Used for BOTH the working
 # tree and the committed branch diff — the two must agree, or the same change reads as
 # planning while uncommitted and as code once committed.

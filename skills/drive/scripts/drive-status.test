@@ -314,6 +314,28 @@ echo "upstream/repo" > "$FIX/default-repo.txt"; echo release > "$FIX/default-bra
 touch "$FIX/no-pr"
 check_field "a pre-PR fork uses the parent default branch" default_branch release
 
+# ...and that fork's branch can legitimately BE named like the parent's default branch
+# (`forkowner:master -> upstream:master`). Waiting for an open PR to tell those apart left
+# BASE_FRESH at n/a for the FIRST clearance, which phases.md prescribes running with no PR
+# yet — so the fork workflow could never reach LAND on its first pass. Identity, not name.
+new_repo; G checkout -q master; add_code; record '**Phase:** HARDEN'
+mkdir -p "$REPO/.git/drive"
+{ printf 'cleared=%s\n' "$(G rev-parse HEAD)"
+  printf 'cleared_base=%s\n' "$(G rev-parse origin/master)"; } > "$REPO/.git/drive/state"
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/self.txt"
+touch "$FIX/no-pr"
+check_field "a pre-PR fork branch named like the base is not the trunk" base_fresh true
+check "a pre-PR fork branch named like the base can LAND" LAND
+
+# The same name on a NON-fork really is the trunk. Identity has to clear only the fork.
+new_repo; G checkout -q master; add_code; record '**Phase:** HARDEN'
+mkdir -p "$REPO/.git/drive"
+{ printf 'cleared=%s\n' "$(G rev-parse HEAD)"
+  printf 'cleared_base=%s\n' "$(G rev-parse origin/master)"; } > "$REPO/.git/drive/state"
+echo "owner/repo" > "$FIX/self.txt"; : > "$FIX/upstream.txt"
+touch "$FIX/no-pr"
+check_field "the default branch of a non-fork stays the trunk" base_fresh null
+
 # A failed parent query is not evidence that this is a non-fork. Falling back to the
 # fork itself makes its stale base look authoritative and can promote a cleared tree to
 # LAND even though the real upstream base was never resolved.

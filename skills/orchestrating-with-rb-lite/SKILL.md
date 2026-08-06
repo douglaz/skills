@@ -684,12 +684,15 @@ implement → review loop for each bead.
     printf '%s\n' "${CLOSURE_PRS[@]}" \
       | jq -s --arg id "$BEAD_ID" 'add | .[] | select($id != "" and ((.body // "") | ascii_downcase
         | test("(^|\\r|\\n)[[:space:]]*bead-closure:[[:space:]]*" + ($id|ascii_downcase|gsub("\\.";"\\.")) + "[[:space:]]*(\\r|\\n|$)")))'
-    # SAME shell, same snapshot: the bead's MERGED work PRs. Consulted whenever the marker
-    # query above is empty — see below. Run separately this would re-fetch, and a fetch
-    # that failed here while the marker query succeeded would silently read as "nothing
-    # merged", the exact collapse this query exists to close.
+    # SAME shell, same snapshot: the bead's work PRs, MERGED **or still OPEN**. Consulted
+    # whenever the marker query above is empty — see below. MERGED-only hid the third
+    # resume state: a work PR opened but not yet landed carries the bead id and no
+    # `bead-closure:` marker, so neither query saw it and the drain re-entered step 6 to
+    # rebuild work that was already open for review. Run separately this would re-fetch,
+    # and a fetch that failed here while the marker query succeeded would silently read as
+    # "nothing merged", the exact collapse this query exists to close.
     printf '%s\n' "${CLOSURE_PRS[@]}" \
-      | jq -s --arg id "$BEAD_ID" 'add | .[] | select(.state=="MERGED")
+      | jq -s --arg id "$BEAD_ID" 'add | .[] | select(.state=="MERGED" or .state=="OPEN")
           | select($id != "" and ((.body // "") | ascii_downcase
             | test("(^|[^a-z0-9._-])" + ($id|ascii_downcase|gsub("\\.";"\\.")) + "([^a-z0-9._-]|$)")))'
     ```
@@ -714,13 +717,19 @@ implement → review loop for each bead.
     in the block is what tells those apart: it asks the same snapshot whether the bead's
     WORK already merged.
 
-    Read any hit before acting on it — a merged PR carrying the id is almost certainly
-    the work PR, and the bead open in the default branch's JSONL beside it is precisely
-    the interrupted state. Then do **not** rebuild the bead: its code is on the base.
-    Resume at step 11 — close the bead and land the closure PR. Only when *both* queries
-    are empty does "not started or not merged" stand — and on a drain older than these
-    markers and id-carrying bodies, even that needs the hits read by hand, because
-    neither convention was in force when its PRs were written.
+    Read any hit before acting on it, and **read its `state` first — it names where to
+    resume**. `MERGED`: a merged PR carrying the id is almost certainly the work PR, and
+    the bead open in the default branch's JSONL beside it is precisely the interrupted
+    state; do **not** rebuild the bead, its code is on the base — resume at step 11, close
+    the bead and land the closure PR. `OPEN`: the work PR is up and has not landed, so
+    resume *that* PR's review-and-merge flow at step 9 rather than rebuilding — a rebuild
+    here races an open review and lands the bead twice.
+
+    Only when *both* queries are empty does "not started" stand, which is a narrower claim
+    than the "not started *or* not merged" this once read as — that phrasing quietly
+    folded the OPEN work PR into the same answer. On a drain older than these markers and
+    id-carrying bodies, even that needs the hits read by hand, because neither convention
+    was in force when its PRs were written.
 
     An OPEN one: land it before taking another bead. A CLOSED-but-unmerged one is worse — the
     work PR already merged, the closure never did, and `--state open` cannot see it: reopen
