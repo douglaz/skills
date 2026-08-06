@@ -58,6 +58,20 @@ _gh_said_absent() {  # 0 iff the last captured stderr shows gh itself establishe
 _GITHUB_REMOTE=false
 _ORIGIN_URL=$(git remote get-url origin 2>/dev/null || echo "")
 if printf '%s' "$_ORIGIN_URL" | grep -qi 'github\.com'; then _GITHUB_REMOTE=true; fi
+# GitHub Enterprise serves the same API from an arbitrary hostname, so a literal
+# `github.com` test calls a GHE checkout non-GitHub: the PR probe never runs, origin/HEAD
+# becomes authoritative unopposed, and a PR targeting a release or stacked branch derives
+# LAND against the default branch. Ask gh which hosts it is authenticated to rather than
+# hardcoding one. Still ORIGIN's host only — matching any configured host would undo the
+# GitLab-origin-with-a-GitHub-mirror case, which is why this compares the extracted host
+# rather than grepping the whole url.
+if ! $_GITHUB_REMOTE && [[ -n "$_ORIGIN_URL" ]] && command -v gh >/dev/null 2>&1; then
+  _ORIGIN_HOST=$(printf '%s' "$_ORIGIN_URL" | sed -E 's#^[a-zA-Z+]+://##; s#^[^@/]*@##; s#[:/].*$##')
+  if [[ -n "$_ORIGIN_HOST" ]] \
+     && gh auth status 2>/dev/null | grep -qiE "(^|[^a-zA-Z0-9.-])${_ORIGIN_HOST//./\\.}([^a-zA-Z0-9.-]|$)"; then
+    _GITHUB_REMOTE=true
+  fi
+fi
 # NOT ATTEMPTED is a third state, distinct from both "probed and found none" and "probed
 # and failed". On a GitHub checkout with no gh, or on a detached HEAD, the probe never
 # runs — so _PR_PROBE_FAILED stays false and origin/HEAD went on to be treated as the
@@ -816,11 +830,22 @@ PHASE_WAS="$PHASE_SOURCE"
 # is still the head that merged.
 _BASE_KNOWN=false; [[ -n "$BASE_REF" ]] && _BASE_KNOWN=true
 _MERGED_AT_HEAD=false
+_MERGED_HEAD_UNKNOWN=false
 if [[ "$PR_STATE" == MERGED/* ]] && command -v gh >/dev/null 2>&1; then
   # Same -R + selector as the base lookup above: a bare `gh pr view` on a fork clone
   # queries the fork, so the merged-head exemption would never recognise its own PR.
-  [[ "$(gh pr view ${_RFLAG[@]+"${_RFLAG[@]}"} --json headRefOid -q .headRefOid 2>/dev/null)" == "$HEAD_SHA" ]] \
-    && _MERGED_AT_HEAD=true
+  # Capture the STATUS, not just the output. A transient failure yields the empty string,
+  # which compares unequal to every SHA — so "could not read the merged head" and "the head
+  # moved past the merge" became the same answer. The downgrade below is right either way
+  # (treating an unread head as merged would excuse genuinely new post-merge commits), but
+  # the REASON it reports was not: it asserted "this branch has unreviewed commits" about
+  # commits it had just failed to check, which is the same defect the disjunct-naming rule
+  # below was added to fix one pass earlier.
+  if _mh=$(gh pr view ${_RFLAG[@]+"${_RFLAG[@]}"} --json headRefOid -q .headRefOid 2>/dev/null); then
+    [[ "$_mh" == "$HEAD_SHA" ]] && _MERGED_AT_HEAD=true
+  else
+    _MERGED_HEAD_UNKNOWN=true
+  fi
 fi
 # Not on the default branch: committed-but-unpushed closure commits there are the legacy
 # stranded state, and "go through the panel like any others" is unfollowable — they are not
@@ -855,7 +880,8 @@ if [[ "$PHASE" == "DONE" ]] \
   # `_MERGED_AT_HEAD` excuses the commit count, so it cannot be the reason when that is
   # set — reporting it there names commits the code just decided were already landed, and
   # sends the driver to re-review a branch that merged.
-  if [[ "$BRANCH_COMMITS" -gt 0 ]] && ! $_MERGED_AT_HEAD; then _DONE_WHY="this branch has unreviewed commits"
+  if [[ "$BRANCH_COMMITS" -gt 0 ]] && $_MERGED_HEAD_UNKNOWN; then _DONE_WHY="the merged head could not be read, so these commits cannot be shown to be the ones that landed"
+  elif [[ "$BRANCH_COMMITS" -gt 0 ]] && ! $_MERGED_AT_HEAD; then _DONE_WHY="this branch has unreviewed commits"
   elif ! $_BASE_KNOWN; then _DONE_WHY="the base ref could not be resolved"
   elif ! $_TREE_KNOWN; then _DONE_WHY="the worktree state could not be read"
   else _DONE_WHY="the tree is dirty, so the closure is not committed"; fi

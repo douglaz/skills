@@ -228,7 +228,8 @@ a reviewer.
        P_DEFAULT=$(gh repo view "$PARENT" --json defaultBranchRef \
                      -q .defaultBranchRef.name 2>/dev/null) && [ -n "$P_DEFAULT" ] \
          || { echo "fork with no PR: cannot resolve $PARENT's default branch — do not review against the fork's"; exit 1; }
-       git fetch -q "https://github.com/$PARENT.git" \
+       PARENT_URL=$(gh repo view "$PARENT" --json url -q .url 2>/dev/null || echo "https://github.com/$PARENT")
+       git fetch -q "$PARENT_URL.git" \
            "+refs/heads/$P_DEFAULT:refs/remotes/prbase/$P_DEFAULT" \
          || { echo "cannot fetch $PARENT $P_DEFAULT — do not review against a guess"; exit 1; }
        DIFF_BASE="refs/remotes/prbase/$P_DEFAULT"
@@ -262,14 +263,18 @@ a reviewer.
             origin/main main origin/master master; do
      [ -n "$c" ] || continue
      git rev-parse --verify --quiet "$c" >/dev/null 2>&1 || continue
-     # Only the branch's OWN remote counterpart (`origin/<this-branch>`), and only when it
-     # equals HEAD. A HEAD-equal upstream by another name (origin/release, tracked as the
-     # target, with the surface still uncommitted) is a legitimate base — discarding it
-     # falls through to the repository default and reviews the wrong diff.
+     # Only the branch's OWN remote counterpart (`origin/<this-branch>`), by NAME — not by
+     # OID. A HEAD-equal upstream under another name (origin/release, tracked as the target,
+     # with the surface still uncommitted) is a legitimate base, and the name test already
+     # tells the two apart; adding an OID test on top broke the case it was meant to cover.
+     # When the branch is AHEAD of its own push ref, the OID differs, the guard stopped
+     # firing, and `origin/<this-branch>` became the base — so the panel reviewed only the
+     # unpushed commits while clearance still covered the whole tip. Every earlier commit on
+     # the branch went unread, which is the partial-diff-full-clearance failure this file
+     # exists to prevent.
      if [ -n "$UPSTREAM" ] && [ "$c" = "$UPSTREAM" ] \
-        && [ "${UPSTREAM#*/}" = "$(git branch --show-current)" ] \
-        && [ "$(git rev-parse "$c")" = "$(git rev-parse HEAD)" ]; then
-       continue   # the branch's own push ref IS HEAD; diffing against it reviews nothing
+        && [ "${UPSTREAM#*/}" = "$(git branch --show-current)" ]; then
+       continue   # the branch's own push ref is never the base, however far HEAD has moved
      fi
      DIFF_BASE="$c"; break
    done

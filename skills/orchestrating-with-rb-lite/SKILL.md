@@ -98,8 +98,20 @@ If neither path works, stop and tell the user to install `rb-lite` (e.g.
 **This skill's panel is two reviewers: `codex` and `claude`.** rb-lite's own built-in
 default is three — it adds a Gemini reviewer invoked through `npx -y @google/gemini-cli`
 — and that command lives inside the rb-lite binary, so the only way to change it is to
-write `.rb-lite-reviewers` in the repo root before running. Take the file from
-"Customizing the panel"; it pins both models explicitly.
+write `.rb-lite-reviewers` in the repo root before running. This is the whole file — two
+lines, both models pinned, nothing else:
+
+```bash
+cat >.rb-lite-reviewers <<'RBEOF'
+codex review --base "$BASE" -c 'model="gpt-5.6-sol"'
+set -o pipefail; claude -p "Review the diff vs $BASE. Before asserting the diff violates or overstates an invariant, or any claim about behavior in code the diff does not show, verify it by reading that code and cite file:line, else mark it a QUESTION not a finding. Tag findings P0/P1/P2/P3. Output 'No findings.' if clean." --model opus --permission-mode acceptEdits --output-format json --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch,Task,TaskOutput,TaskStop,Monitor" | jq -er 'if .is_error then error(.result // "claude reviewer returned is_error") else (.result // empty) end'
+RBEOF
+```
+
+Copy that as-is. "Customizing the panel" below shows the same two lines alongside OPTIONAL
+extras — a skeptical third reviewer and a `my-linter --json | wrap-as-p-tags` placeholder —
+which are illustrative, not prerequisites. Pasting that block wholesale puts a
+command-not-found reviewer in the panel and every round carries its failure.
 
 Dropping Gemini is the point, not a side effect. `npx -y` installs and executes whatever
 the registry serves at that moment, in a checkout with credentials present and (in
@@ -554,7 +566,10 @@ implement → review loop for each bead.
     # the HEAD — a squash replays onto the CURRENT base, so a behind branch lands a
     # composition nobody reviewed while every SHA still matches. Fetch the live base and
     # test ancestry before merging, the same way pr-with-codex-bot-review § 8 does.
-    git fetch "https://github.com/$R.git" "+refs/heads/$BASE:refs/remotes/upstream/$BASE" \
+    # gh's own clone URL: `owner/repo` alone points at public github.com, which on GitHub
+    # Enterprise either fails or resolves an unrelated public repo of the same name.
+    R_URL=$(gh repo view "$R" --json url -q .url 2>/dev/null || echo "https://github.com/$R")
+    git fetch "$R_URL.git" "+refs/heads/$BASE:refs/remotes/upstream/$BASE" \
       || { echo "cannot fetch the merge target — base unknown, do NOT merge"; echo "  (on a private repo cloned over SSH this is usually missing git credentials for https, not a missing base)"; exit 1; }
     # Against $MERGING_SHA, not HEAD: that is the commit --match-head-commit pins and the
     # one GitHub will squash. A local rebase during CI that was never pushed would make
@@ -595,7 +610,10 @@ implement → review loop for each bead.
     # not contain the upstream squash commit, so resetting to origin/$BASE silently starts
     # the next bead from a tree missing the one just merged — its PR then replays or
     # conflicts with it.
-    git fetch "https://github.com/$R.git" "+refs/heads/$BASE:refs/remotes/upstream/$BASE" \
+    # gh's own clone URL: `owner/repo` alone points at public github.com, which on GitHub
+    # Enterprise either fails or resolves an unrelated public repo of the same name.
+    R_URL=$(gh repo view "$R" --json url -q .url 2>/dev/null || echo "https://github.com/$R")
+    git fetch "$R_URL.git" "+refs/heads/$BASE:refs/remotes/upstream/$BASE" \
       || { echo "cannot fetch the merge target"; echo "  (on a private repo cloned over SSH this is usually missing git credentials for https, not a missing base)"; exit 1; }
     # `checkout -B` moves the branch ref unconditionally, and a clean worktree does not
     # protect committed work: any local commit on $BASE that upstream lacks becomes

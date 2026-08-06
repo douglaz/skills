@@ -32,6 +32,12 @@ fi
 if [ -f "$FIX/prfail" ] && [[ "$*" == *"pr view"* ]]; then
   exit 1
 fi
+# PARTIAL failure: the merged-head read alone. It is the only pr-view carrying headRefOid
+# WITHOUT state, so this cannot disturb the OPEN/MERGED resolution probes, which is the
+# whole point — the suite already covered all-calls-fail via prfail and not this.
+if [ -f "$FIX/mergedheadfail" ] && [[ "$*" == *"pr view"*headRefOid* && "$*" != *state* ]]; then
+  exit 1
+fi
 # REPOSITORY-level not-found: the repo exists (the parent lookup just named it) but the
 # token cannot read it. gh's wording differs from no-pr's PullRequest-level text, and only
 # the latter establishes absence.
@@ -564,6 +570,21 @@ printf '%s' "$(G rev-parse HEAD)" > "$FIX/prhead.txt"
 echo "forkowner/repo" > "$FIX/prview-repo.txt"
 printf '{"number":7,"state":"MERGED","reviewDecision":"APPROVED"}' > "$FIX/prview.json"
 check "a merged fork-hosted PR keeps its DONE record" DONE
+
+# ...and when the merged-head read itself fails, the downgrade is still right (an unread
+# head must not excuse genuinely new post-merge commits) but the REASON must not assert
+# unreviewed commits it never managed to check. Partial failure: the state read succeeds,
+# the head read does not — which prfail could not model, because it fails everything.
+new_repo; add_code; record '**Phase:** DONE'
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/self.txt"
+touch "$FIX/no-open-pr"
+printf '%s' "$(G rev-parse HEAD)" > "$FIX/prmerged.txt"
+printf '%s' "$(G rev-parse HEAD)" > "$FIX/prhead.txt"
+echo "forkowner/repo" > "$FIX/prview-repo.txt"
+printf '{"number":7,"state":"MERGED","reviewDecision":"APPROVED"}' > "$FIX/prview.json"
+touch "$FIX/mergedheadfail"
+check "an unreadable merged head still refuses DONE" HARDEN
+check_field "and does not assert unreviewed commits it never checked" phase_source "DRIVE.md (DONE, but the merged head could not be read, so these commits cannot be shown to be the ones that landed)"
 
 echo
 echo "passed $PASS, failed $FAIL"

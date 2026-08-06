@@ -827,7 +827,7 @@ OBSERVED_TO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 # unfinished round" beside `"verdict": "BLOCKED"` in the same object — a machine reader
 # taking the sentence at face value would have it exactly backwards.
 if [[ "$VERDICT" == "NO_PENDING_EVIDENCE" ]]; then
-  CLAIM="across API reads from $OBSERVED_FROM to $OBSERVED_TO, nothing indicated an unfinished CODEX round on ${TIP:0:10} or an undispositioned codex finding on it; CodeRabbit is reported, never gated, so a PENDING rollup is consistent with this claim; this is not proof the bots are finished"
+  CLAIM="across API reads from $OBSERVED_FROM to $OBSERVED_TO, nothing indicated an unfinished CODEX round on ${TIP:0:10} or an undispositioned codex finding on it; CodeRabbit's status and rollup are report-only, so a PENDING rollup is consistent with this claim, but its unresolved review threads DO count toward the unresolved-thread conjunct; this is not proof the bots are finished"
 else
   CLAIM=""
 fi

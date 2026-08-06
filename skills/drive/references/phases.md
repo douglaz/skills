@@ -245,7 +245,9 @@ _PB=$(printf %s "$_DSP" | jq -r '.default_branch')
 # base_repo now, so they cannot disagree. Read both fields from one snapshot: two detector
 # calls can transiently resolve different PRs and pair repo B with repo A's branch.
 _UPP=$(printf %s "$_DSP" | jq -r '.base_repo // ""')
-[ -n "$_UPP" ] && _UPP="https://github.com/$_UPP" || _UPP=origin
+# gh's own clone URL: `owner/repo` alone points at public github.com, which on GitHub
+# Enterprise either fails or resolves an unrelated public repo of the same name.
+[ -n "$_UPP" ] && _UPP=$(gh repo view "$_UPP" --json url -q .url 2>/dev/null || echo "https://github.com/$_UPP") || _UPP=origin
 git fetch -q "$_UPP" "+refs/heads/$_PB:refs/remotes/origin/$_PB" \
   || { echo "cannot fetch $_PB — the panel's base is unknown, do NOT start the panel"; exit 1; }
 # TELL THE PANEL WHICH COMMIT, and check what it reports back. `multi-reviewer-loop`
@@ -337,7 +339,9 @@ PANEL_BASE_OID=$(sed -n 's/^panel_base_oid=//p' "$STATE_DIR/panel" 2>/dev/null |
 # DS_PRE pairs the branch and repository in one resolution. $DSJ below is deliberately
 # taken AFTER the fetch, to read a freshness that only exists once the ref is updated.
 BASE_REMOTE=$(printf %s "$DS_PRE" | jq -r '.base_repo // ""')
-[ -n "$BASE_REMOTE" ] && BASE_REMOTE="https://github.com/$BASE_REMOTE" || BASE_REMOTE=origin
+# gh's own clone URL: `owner/repo` alone points at public github.com, which on GitHub
+# Enterprise either fails or resolves an unrelated public repo of the same name.
+[ -n "$BASE_REMOTE" ] && BASE_REMOTE=$(gh repo view "$BASE_REMOTE" --json url -q .url 2>/dev/null || echo "https://github.com/$BASE_REMOTE") || BASE_REMOTE=origin
 git fetch -q "$BASE_REMOTE" "+refs/heads/$BASE:refs/remotes/origin/$BASE" \
   || { echo "fetch failed — base unknown, do NOT clear"; exit 1; }
 # NOW the pinned OID means something: this ref was just refreshed from the remote, so a
@@ -465,7 +469,9 @@ BASE=$(printf %s "$DSJ2_PRE" | jq -r '.default_branch')
 # fork-hosted PR was invisible and LAND could never merge it — and it could disagree with
 # the ref the panel was pinned against, which is the deadlock the pre-panel pin hit.
 BASE_REMOTE=$(printf %s "$DSJ2_PRE" | jq -r '.base_repo // ""')
-[ -n "$BASE_REMOTE" ] && BASE_REMOTE="https://github.com/$BASE_REMOTE" || BASE_REMOTE=origin
+# gh's own clone URL: `owner/repo` alone points at public github.com, which on GitHub
+# Enterprise either fails or resolves an unrelated public repo of the same name.
+[ -n "$BASE_REMOTE" ] && BASE_REMOTE=$(gh repo view "$BASE_REMOTE" --json url -q .url 2>/dev/null || echo "https://github.com/$BASE_REMOTE") || BASE_REMOTE=origin
 git fetch -q "$BASE_REMOTE" "+refs/heads/$BASE:refs/remotes/origin/$BASE" \
   || { echo "fetch failed — base unknown, do NOT merge"; exit 1; }
 # One call, asserted to still name the same base: a second `drive-status` can resolve a

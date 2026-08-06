@@ -648,9 +648,14 @@ GATE_JSON=$("$BOT_GATE" <N> --json) || { echo "bot-gate says do NOT merge"; exit
 [ "$(printf %s "$GATE_JSON" | jq -r .verdict)" = "NO_PENDING_EVIDENCE" ] \
   || { echo "gate verdict is not NO_PENDING_EVIDENCE"; exit 1; }
 REVIEWED_TIP=$(printf %s "$GATE_JSON" | jq -r .tip)
+# The forge's own clone URL, not a hardcoded github.com one. `$R` is only `owner/repo`,
+# so on GitHub Enterprise the literal host either fails or — worse — resolves an unrelated
+# PUBLIC repo of the same name and validates ancestry against a stranger's branch.
+R_URL=$(gh repo view "$R" --json url -q .url 2>/dev/null || echo "https://github.com/$R")
+R_URL="$R_URL.git"
 # Fetch the base AFTER the potentially slow bot gate. Fetching it before the API sweep lets
 # the merge target advance during the gate, making the ancestry result stale at merge time.
-git fetch "https://github.com/$R.git" "+refs/heads/$BASE:refs/remotes/upstream/$BASE" \
+git fetch "$R_URL" "+refs/heads/$BASE:refs/remotes/upstream/$BASE" \
   || { echo "cannot fetch the merge target — base unknown, do NOT merge"; echo "  (on a private repo cloned over SSH this is usually missing git credentials for https, not a missing base)"; exit 1; }
 git merge-base --is-ancestor "refs/remotes/upstream/$BASE" HEAD \
   || { echo "REBASE FIRST — $BASE advanced since the review"; exit 1; }
@@ -690,7 +695,7 @@ done
 # checkout, because in a single-branch fork clone neither a local `$BASE` nor `origin/$BASE`
 # exists, so `git checkout "$BASE"` fails and an unguarded reset then runs against whatever
 # branch is still checked out.
-git fetch "https://github.com/$R.git" "+refs/heads/$BASE:refs/remotes/upstream/$BASE" \
+git fetch "$R_URL" "+refs/heads/$BASE:refs/remotes/upstream/$BASE" \
   || { echo "cannot fetch the merge target"; exit 1; }
 # `checkout -B` repoints the branch ref unconditionally, and a clean worktree does not
 # protect COMMITTED work: a local bead closure or DRIVE.md update on $BASE awaiting its
