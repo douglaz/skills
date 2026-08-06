@@ -414,15 +414,23 @@ condition:
      review naming this tip; no PENDING review from the bot on it (a rerun in flight); no
      `@codex review` request left unanswered — one newer than the wrapper has not reported,
      and one older than it only counts as answered when a completed round separates it from
-     any earlier round-start, because rounds carry no identity and the wrapper after a
-     request can otherwise be an already-running round's submission; no `eyes` reaction
+     any earlier round-start (a trigger comment, a mark-ready, or a head force-push, since
+     the bot often re-reviews a push), because rounds carry no identity and the wrapper
+     after a request can otherwise be an already-running round's submission — round *ends*
+     are the bot's submitted wrappers on any commit, not just the tip's; no `eyes` reaction
      post-dating the wrapper; no base mutation not followed by such a provably-fresh
      review request (the whole `base_ref_*` / `automatic_base_change_*` family; submission
      time alone cannot prove whether the bot read the diff before or after an in-flight
-     mutation), nor a newer `ready_for_review` event; and zero unresolved review threads
-     from either gated bot. It fails closed on any API error, missing tool, or unparseable
-     response in the signals that feed all six — the timeline query behind the retarget
-     check included.
+     mutation), and no `ready_for_review` event newer than the wrapper or unattributable to
+     the wrapper that followed it — marking ready starts a round, so an older ready clears
+     only when the PR was provably quiet at that moment (a first-ever mark-ready on a
+     born-draft PR qualifies) or a later provably-fresh request completed; and zero
+     unresolved review threads from either gated bot. It fails closed on any API error,
+     missing tool, or unparseable response in the signals that feed all six — the timeline
+     query behind the retarget check included. What the round-start list cannot see — a
+     non-force push, and the round a non-draft PR starts at creation — is a documented
+     residual: a push-started round reads the pushed tree itself, so the leak it permits is
+     a duplicate round on an already-read diff.
 
      **CodeRabbit's status is not one of them, deliberately.** It is a PR-level signal — it
      lands on whatever head exists when the bot posts it and carries nothing binding it to
@@ -589,11 +597,13 @@ UP=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.p
 # "No such PR" and "the query failed" share an exit code, so absence is read out of gh's
 # own error text; any other failure may be hiding the second match. bot-gate makes the
 # same split, but this loop picks the repo the MERGE targets, so it cannot lean on that.
+# PullRequest-level not-found only: both candidates are repos the API just named, so a
+# Repository-level "could not resolve" or an HTTP 404 is lost access, not absence.
 _GH_ERR=$(mktemp) || { echo "mktemp failed"; exit 1; }
 R=""; _M=0
 for _c in ${UP:+"$UP"} "$SELF"; do
   if ! _h=$(gh pr view <N> -R "$_c" --json headRefOid -q .headRefOid 2>"$_GH_ERR"); then
-    grep -qiE 'could not resolve|no pull requests found|HTTP 404' "$_GH_ERR" \
+    grep -qiE 'could not resolve to a pullrequest|no pull requests found' "$_GH_ERR" \
       || { echo "cannot query PR <N> in $_c — absence not established; do NOT merge"; exit 1; }
     _h=""
   fi

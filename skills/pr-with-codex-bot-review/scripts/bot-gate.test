@@ -46,6 +46,16 @@ if [ -f "$FIX/pr-upstream-transient" ]; then
     *"-R $(cat "$FIX/upstream.txt" 2>/dev/null)"*) exit 1 ;;
   esac
 fi
+# A REPOSITORY-level not-found: the repo exists (the .parent lookup just named it) but the
+# token cannot see it. gh's wording differs from the PullRequest case, and only the latter
+# establishes that no PR is there.
+if [ -f "$FIX/pr-upstream-repo-404" ]; then
+  case "$*" in
+    *"-R $(cat "$FIX/upstream.txt" 2>/dev/null)"*)
+      echo "GraphQL: Could not resolve to a Repository with the name '$(cat "$FIX/upstream.txt" 2>/dev/null)'. (repository)" >&2
+      exit 1 ;;
+  esac
+fi
 if [ -f "$FIX/parentfail" ]; then
   case "$*" in
     *"repo view"*parent*) exit 1 ;;
@@ -97,7 +107,12 @@ OLD_UTC="2000-01-01T00:00:00Z"
 MID_UTC="2000-01-01T00:00:01Z"
 NEW_UTC="2000-01-01T00:00:02Z"
 NEW2_UTC="2000-01-01T00:00:03Z"
+NEW3_UTC="2000-01-01T00:00:04Z"
+NEW4_UTC="2000-01-01T00:00:05Z"
 NOW_UTC=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+# A prior tip's SHA, for wrappers submitted before a force-push. Any 40-hex value that is
+# not $TIP models it; the gate never resolves it against the repo.
+OLDTIP="1111111111111111111111111111111111111111"
 
 wrapper() {  # $1 = login, $2 = submitted_at  (shape matches `gh api --paginate --slurp`)
   # commit_id is what the gate matches on now — the API's own full SHA, not a body prefix.
@@ -107,6 +122,13 @@ wrapper() {  # $1 = login, $2 = submitted_at  (shape matches `gh api --paginate 
 wrapper2() {  # $1 = login, $2/$3 = two submitted_at values — a tip with two completed rounds
   printf '[[{"user":{"login":"%s","type":"Bot"},"submitted_at":"%s","commit_id":"%s","body":"x"},{"user":{"login":"%s","type":"Bot"},"submitted_at":"%s","commit_id":"%s","body":"x"}]]' \
     "$1" "$2" "$TIP" "$1" "$3" "$TIP"
+}
+wrappers_at() {  # each arg = "<commit_id>:<submitted_at>" — codex wrappers across tips
+  local out="" p
+  for p in "$@"; do
+    out="$out${out:+,}{\"user\":{\"login\":\"chatgpt-codex-connector[bot]\",\"type\":\"Bot\"},\"submitted_at\":\"${p#*:}\",\"commit_id\":\"${p%%:*}\",\"body\":\"x\"}"
+  done
+  printf '[[%s]]' "$out"
 }
 threads() {  # $1 = count of unresolved threads, $2 = GraphQL author login (default codex)
   local n=$1 login=${2:-chatgpt-codex-connector} nodes=""
@@ -436,6 +458,42 @@ new_fix; wrapper2 "chatgpt-codex-connector[bot]" "$OLD_UTC" "$NEW2_UTC" > "$FIX/
 printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"},{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$MID_UTC" "$NEW_UTC" > "$FIX/issues.json"
 check "a round-start inside the gap still blocks" 1
 
+# Round ENDS are wrappers on ANY commit, not just this tip. Here a request on a prior tip
+# was bracketed by that tip's wrappers, then a force-push and a fresh round produced the
+# tip wrapper. Scoping the epochs to the tip discarded the bracketing history, so the old
+# request read as never covered and every later tip deadlocked into a redundant round —
+# the same scoping made the FIRST request on any fresh tip unclearable.
+new_fix
+wrappers_at "$OLDTIP:$OLD_UTC" "$OLDTIP:$NEW_UTC" "$TIP:$NEW3_UTC" > "$FIX/reviews.json"
+threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$MID_UTC" > "$FIX/issues.json"
+printf '[[{"event":"head_ref_force_pushed","created_at":"%s"}]]' "$NEW2_UTC" > "$FIX/timeline.json"
+check "prior-tip wrappers cover an answered old request" 0
+
+# ...but a HEAD FORCE-PUSH in the gap is a round-start (the bot often re-reviews a push),
+# so a request posted after one is not provably fresh: the wrapper that follows may be the
+# push-started round's, with the requested round still pending. Without counting pushes as
+# starts, the cross-tip epochs above would clear this.
+new_fix
+wrappers_at "$OLDTIP:$OLD_UTC" "$TIP:$NEW2_UTC" > "$FIX/reviews.json"
+threads 0 > "$FIX/threads.json"
+printf '[[{"event":"head_ref_force_pushed","created_at":"%s"}]]' "$MID_UTC" > "$FIX/timeline.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$NEW_UTC" > "$FIX/issues.json"
+check "a force-push inside the gap still blocks" 1
+
+# A force-push that happened but cannot be dated cannot be placed relative to anything —
+# the same doubt rule as an undatable retarget or ready event.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"head_ref_force_pushed","created_at":null}]]' > "$FIX/timeline.json"
+check "an undatable head force-push blocks" 1
+
+# ...while the documented iterate loop — force-push, round, wrapper — must clear: a dated
+# pre-wrapper push is a round-start for coverage, NOT a base mutation demanding a later
+# explicit request. Routing it into the mutation branch would block every normal push.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$NOW_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"head_ref_force_pushed","created_at":"%s"}]]' "$OLD_UTC" > "$FIX/timeline.json"
+check "a push answered by the tip wrapper clears" 0
+
 # A fresh `eyes` newer than the wrapper means a round is running on the same tip.
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":"%s"}]]' "$NOW_UTC" > "$FIX/reactions.json"
@@ -629,6 +687,15 @@ echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/repo.t
 touch "$FIX/pr-upstream-transient"
 check "a transient candidate-query failure is exit 3" 3
 
+# A REPOSITORY-level not-found is not PR absence. The parent repo exists — the .parent
+# lookup just named it — so gh failing to resolve the Repository means lost access, and
+# the PR inside it (possibly the second match the ambiguity refusal exists for) was never
+# ruled out. Only the PullRequest-level text establishes absence.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/repo.txt"
+touch "$FIX/pr-upstream-repo-404"
+check "a repository-level 404 on a candidate is exit 3" 3
+
 # A failed parent lookup is not "not a fork". `|| echo ""` silently dropped the upstream
 # candidate, which is the same collapse one query earlier: the ambiguity refusal can then
 # never fire against a parent PR nobody could see.
@@ -668,6 +735,32 @@ check "mark-ready after the review blocks" 1
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$NOW_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 printf '[[{"event":"ready_for_review","created_at":"%s"}]]' "$OLD_UTC" > "$FIX/timeline.json"
 check "mark-ready before the review clears" 0
+
+# THE READY OVERLAP: a request starts a round, the PR is marked ready while it runs, and
+# the old round submits after the ready. The pre-wrapper ready used to be exempt from
+# coverage wholesale, so the request's wrapper cleared the gate while the ready-started
+# round was still queued. A ready with a prior wrapper is held to the same freshness rule
+# as a request.
+new_fix; wrapper2 "chatgpt-codex-connector[bot]" "$OLD_UTC" "$NEW2_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$MID_UTC" > "$FIX/issues.json"
+printf '[[{"event":"ready_for_review","created_at":"%s"}]]' "$NEW_UTC" > "$FIX/timeline.json"
+check "mark-ready during a requested round blocks" 1
+
+# The first-ever mark-ready fallback covers a PR born as a draft — nothing observable
+# before it could have been in flight. A SECOND ready with no wrapper before either is a
+# different state: the first ready's round may still be running when the second fires.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$NOW_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"ready_for_review","created_at":"%s"},{"event":"ready_for_review","created_at":"%s"}]]' "$OLD_UTC" "$MID_UTC" > "$FIX/timeline.json"
+check "a second mark-ready with no wrapper between blocks" 1
+
+# A blocked ready must not deadlock: a later provably fresh request that completed shows
+# every earlier round — the ready's included — had submitted. Same escape as a retarget.
+new_fix
+wrappers_at "$TIP:$OLD_UTC" "$TIP:$NEW2_UTC" "$TIP:$NEW4_UTC" > "$FIX/reviews.json"
+threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"},{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$MID_UTC" "$NEW3_UTC" > "$FIX/issues.json"
+printf '[[{"event":"ready_for_review","created_at":"%s"}]]' "$NEW_UTC" > "$FIX/timeline.json"
+check "a fresh completed request clears a blocked ready" 0
 
 # A PENDING review is a draft nobody submitted, and GitHub omits `submitted_at` on it. It
 # named the tip, so it satisfied the wrapper count — while leaving WRAPPER_AT empty, which

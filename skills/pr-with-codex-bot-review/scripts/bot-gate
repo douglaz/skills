@@ -91,7 +91,13 @@ done
 _GH_ERR=$(mktemp) || { echo "BLOCKED: cannot create a scratch file" >&2; exit 3; }
 trap 'rm -f "$_GH_ERR"' EXIT
 _gh_said_absent() {  # 0 iff the last captured stderr shows gh itself established absence
-  grep -qiE 'could not resolve to a (pullrequest|repository)|no pull requests found|HTTP 404' "$_GH_ERR"
+  # PullRequest-level not-found ONLY. Both candidates below are repos the API just named
+  # (SELF is this checkout's repo, UP is its own `.parent` field), so a Repository-level
+  # "could not resolve" or a bare HTTP 404 means the token lost access to a repo that
+  # exists — which proves nothing about the PR inside it, including the second match the
+  # ambiguity refusal needs. Matching those as absence let an unreadable parent erase its
+  # candidate and clear the one PR the gate happened to be able to see.
+  grep -qiE 'could not resolve to a pullrequest|no pull requests found' "$_GH_ERR"
 }
 
 # Resolve the UPSTREAM repo once, then pass `-R` to every call. On a fork clone the PR
@@ -236,29 +242,35 @@ WRAPPER_TIP=$(printf '%s' "$WRAPPER_JSON" | jq -r '.n' 2>/dev/null)
 WRAPPER_AT=$(printf '%s' "$WRAPPER_JSON" | jq -r '.latest' 2>/dev/null)
 [[ "$WRAPPER_TIP" =~ ^[0-9]+$ ]] || { echo "BLOCKED: cannot parse reviews" >&2; exit 3; }
 
-# EVERY submitted wrapper's epoch, not just the latest. The coverage check below needs to
-# know whether a round ENDED before a given request, and the newest timestamp alone cannot
-# say that. Unparseable timestamps are simply skipped: a wrapper that cannot be dated can
-# prove nothing, and absence from this list only ever points toward blocking.
+# EVERY submitted wrapper's epoch, not just the latest — and on ANY commit, not just this
+# tip. The coverage check below needs to know whether a round ENDED before a given
+# request; a round's end is evidence about round traffic whichever tree it read, and the
+# verdict separately requires a wrapper naming THIS tip. Scoping this list to the tip
+# discarded all history older than the last push, so the first request on every fresh tip
+# — and every already-answered request from a previous tip — read as never covered, and
+# the gate demanded a redundant round per push. Unparseable timestamps are simply skipped:
+# a wrapper that cannot be dated can prove nothing, and absence from this list only ever
+# points toward blocking.
 WRAPPER_EPOCHS=""
 while IFS= read -r _wt; do
   [[ -n "$_wt" ]] || continue
   _we=$(iso_to_epoch "$_wt") || continue
   WRAPPER_EPOCHS="${WRAPPER_EPOCHS}${WRAPPER_EPOCHS:+$'\n'}${_we}"
-done < <(printf '%s' "$REVIEWS" | jq -r --arg tip "$TIP" --arg bot "$BOT_LOGIN" '
+done < <(printf '%s' "$REVIEWS" | jq -r --arg bot "$BOT_LOGIN" '
   .[][] | select(.user.login==$bot) | select(.user.type=="Bot")
-  | select(.commit_id==$tip) | (.submitted_at // "") | select(length > 0)' 2>/dev/null)
+  | (.submitted_at // "") | select(length > 0)' 2>/dev/null)
 
 # A wrapper AFTER a request does not show the REQUESTED round ended: rounds carry no
 # identity, so that wrapper can end a round that was already in flight when the request
 # was posted — retarget mid-round, post `@codex review`, and the OLD round submits; every
 # timestamp comparison then passes while the requested round is still running. What CAN be
 # established, on the working assumption that rounds run one at a time: if some wrapper
-# landed BEFORE the request, and no round-start (any `@codex review` mention, or a
-# ready_for_review event) sits in the gap between that wrapper and the request, then
-# nothing was in flight when the request posted — so the wrapper that follows it really is
-# the requested round's. No wrapper before the request, or a start in the gap, is doubt,
-# and doubt blocks; one more `@codex review` round is the escape.
+# landed BEFORE the request, and no round-start (any `@codex review` mention, a
+# ready_for_review event, or a head force-push — the bot often re-reviews a push) sits in
+# the gap between that wrapper and the request, then nothing was in flight when the
+# request posted — so the wrapper that follows it really is the requested round's. No
+# wrapper before the request, or a start in the gap, is doubt, and doubt blocks; one more
+# `@codex review` round is the escape.
 _round_covered() {  # $1 = request epoch. 0 iff a wrapper after it can be trusted as its round's.
   local t=$1 wp="" e
   while IFS= read -r e; do
@@ -273,6 +285,36 @@ _round_covered() {  # $1 = request epoch. 0 iff a wrapper after it can be truste
     (( e >= wp && e < t )) && return 1
   done <<< "$START_EPOCHS"
   return 0
+}
+
+# Marking a draft ready STARTS a round, so a pre-wrapper ready event poses the same
+# attribution question as a request: is the wrapper that follows it that round's? Exempting
+# every pre-wrapper ready assumed yes — but a round already in flight when ready fired
+# (started by a request or an earlier ready) can be the one that submitted, with the
+# ready round still pending. Same rule as a request, plus one fallback the request check
+# cannot have: a PR born as a draft has NO wrapper and NO observable start before its
+# first mark-ready, and that flow must clear — nothing observable could have been in
+# flight. The fallback deliberately ignores force-pushes (a draft is not auto-reviewed, so
+# pre-ready pushes start nothing, and counting them would deadlock every draft that
+# iterated before marking ready) and cannot see the round a PR born NON-draft starts at
+# creation; that residual round reads the same tree this ready round would, so the leak it
+# permits is a duplicate round on an already-read diff, not an unread one.
+_ready_covered() {  # $1 = ready epoch. 0 iff the wrapper after it can be trusted as its round's.
+  local b=$1 e n=0
+  _round_covered "$b" && return 0
+  # <=: a wrapper or start in the ready's own second is order-unknown, and a tie is doubt.
+  while IFS= read -r e; do
+    [[ -n "$e" ]] && (( e <= b )) && return 1
+  done <<< "$WRAPPER_EPOCHS"
+  while IFS= read -r e; do
+    [[ -n "$e" ]] && (( e <= b )) && return 1
+  done <<< "$TRIGGER_EPOCHS"
+  while IFS= read -r e; do
+    [[ -n "$e" ]] && (( e <= b )) && n=$((n + 1))
+  done <<< "$READY_EPOCHS"
+  # One entry at or before b is this event itself; a second is an earlier (or same-second)
+  # mark-ready whose round may still have been in flight.
+  (( n <= 1 ))
 }
 
 # --- unaddressed bot findings on this tip ---
@@ -386,6 +428,7 @@ LAST_REVIEW_REQUEST_BEFORE_WRAPPER=""
 TRIGGER_EPOCHS=""
 T_LAST_LOOSE=""
 START_EPOCHS=""
+READY_EPOCHS=""
 if [[ -n "$WRAPPER_AT" ]] && [[ -n "${ALL_COMMENTS:-}" ]]; then
   _W=$(iso_to_epoch "$WRAPPER_AT")
   # EVERY trigger, not `last`. Taking only the final one meant an undated trigger followed
@@ -522,22 +565,28 @@ if [[ -n "$WRAPPER_AT" ]]; then
     # retarget happened" and "one retarget I cannot date" collapse again, one level below
     # where they last did. There is no empty-string value that means only one of them.
     REVIEW_SURFACE_EVENTS=$(printf '%s' "$TL" \
-      | jq -r '.[][] | select((.event // "") | test("^(base_ref_|automatic_base_change_)|^ready_for_review$"))
+      | jq -r '.[][] | select((.event // "") | test("^(base_ref_|automatic_base_change_)|^ready_for_review$|^head_ref_force_pushed$"))
               | [.event, (if ((.created_at // "") | length) == 0 then "@undated@" else .created_at end)]
               | @tsv' 2>/dev/null) \
       || { echo "BLOCKED: cannot read the PR timeline" >&2; exit 3; }
     W2=$(iso_to_epoch "$WRAPPER_AT")
     # Dated ready_for_review events are round starts too, and the coverage check needs
     # them: a ready in the gap between the last wrapper and a request means a round may
-    # still be in flight when the request posts. Undated ones already block in the loop
-    # below, so skipping them here loses nothing.
+    # still be in flight when the request posts. So are dated head force-pushes — the bot
+    # often re-reviews a push, and with prior-tip wrappers now anchoring gaps, a push in a
+    # gap is the invisible round-start that would let an auto round's wrapper masquerade
+    # as the requested one. Undated events already block in the loop below, so skipping
+    # them here loses nothing.
     START_EPOCHS="$TRIGGER_EPOCHS"
+    READY_EPOCHS=""
     if [[ -n "$REVIEW_SURFACE_EVENTS" ]]; then
       while IFS=$'\t' read -r _event _ts; do
-        [[ "$_event" == "ready_for_review" ]] || continue
+        case "$_event" in ready_for_review|head_ref_force_pushed) ;; *) continue ;; esac
         _se=$(iso_to_epoch "$_ts") || continue
         [[ -n "$_se" ]] || continue
         START_EPOCHS="${START_EPOCHS}${START_EPOCHS:+$'\n'}${_se}"
+        [[ "$_event" == "ready_for_review" ]] \
+          && READY_EPOCHS="${READY_EPOCHS}${READY_EPOCHS:+$'\n'}${_se}"
       done <<< "$REVIEW_SURFACE_EVENTS"
     fi
     # The other half of the fulfilled-request check. The trigger loop above only cleared
@@ -553,21 +602,38 @@ if [[ -n "$WRAPPER_AT" ]]; then
       [[ -n "$W2" ]] || RETARGETED_AFTER_REVIEW=true
       while IFS=$'\t' read -r _event _ts; do
         B=$(iso_to_epoch "$_ts")
-        # Unparseable (or empty) is doubt about a retarget that demonstrably happened.
+        # Unparseable (or empty) is doubt about an event that demonstrably happened.
         if [[ -z "$B" ]]; then RETARGETED_AFTER_REVIEW=true
-        # `>=`, not `>`: one-second precision means a retarget in the wrapper's own second
+        # `>=`, not `>`: one-second precision means an event in the wrapper's own second
         # is indistinguishable from one just before it, and a tie is doubt.
         elif [[ -n "$W2" ]] && (( B >= W2 )); then RETARGETED_AFTER_REVIEW=true
+        # A dated pre-wrapper head force-push is a round-START for the coverage rule and
+        # nothing more: it moved the head, so the tip-naming checks already own "was the
+        # new tree read", and routing it through the mutation branch below would demand an
+        # explicit request after every push of the documented amend-and-force-push loop.
+        elif [[ "$_event" == "head_ref_force_pushed" ]]; then
+          :
+        # A pre-wrapper mark-ready started a round; the wrapper after it is only trustable
+        # as that round's under the same freshness rule a request gets (or the draft-flow
+        # fallback inside _ready_covered). Otherwise a later provably-fresh request is the
+        # escape, exactly as for a base mutation: nothing was in flight when that request
+        # posted, so every earlier round — the ready's included — had already submitted.
+        elif [[ "$_event" == "ready_for_review" ]]; then
+          if ! _ready_covered "$B" \
+             && { [[ -z "$LAST_REVIEW_REQUEST_BEFORE_WRAPPER" ]] \
+                  || (( LAST_REVIEW_REQUEST_BEFORE_WRAPPER <= B )) \
+                  || ! _round_covered "$LAST_REVIEW_REQUEST_BEFORE_WRAPPER"; }; then
+            RETARGETED_AFTER_REVIEW=true
+          fi
         # Submission time is the END of a review, not its start. A base move can happen
         # after the bot read the diff but before it submits the wrapper, so B < W2 alone
         # does not show that the changed diff was read. A later explicit request is the
         # only available timestamp that establishes a new post-change round — and only
         # when _round_covered shows the request was not posted into a round already in
         # flight, whose wrapper would then masquerade as the post-change round's.
-        elif [[ "$_event" != "ready_for_review" ]] \
-             && { [[ -z "$LAST_REVIEW_REQUEST_BEFORE_WRAPPER" ]] \
-                  || (( LAST_REVIEW_REQUEST_BEFORE_WRAPPER <= B )) \
-                  || ! _round_covered "$LAST_REVIEW_REQUEST_BEFORE_WRAPPER"; }; then
+        elif [[ -z "$LAST_REVIEW_REQUEST_BEFORE_WRAPPER" ]] \
+             || (( LAST_REVIEW_REQUEST_BEFORE_WRAPPER <= B )) \
+             || ! _round_covered "$LAST_REVIEW_REQUEST_BEFORE_WRAPPER"; then
           RETARGETED_AFTER_REVIEW=true
         fi
       done <<< "$REVIEW_SURFACE_EVENTS"
@@ -704,7 +770,7 @@ else
   [[ "$CR_STATE" == "query-failed" ]] && printf '  · CodeRabbit status could not be queried.\n'
   $RERUN_REQUESTED && printf '  ⚠ an `@codex review` request is not provably answered — either it is newer than the\n    wrapper, or no completed round separates it from an earlier round-start, so the\n    wrapper after it may belong to a round that was already running. Wait, or\n    `@codex review` once more and wait for that wrapper.\n'
   [[ "$PENDING_ON_TIP" -gt 0 ]] && printf '  ⚠ a PENDING review from the bot names this tip — a round is in flight and has not\n    submitted yet. Wait for it.\n'
-  $RETARGETED_AFTER_REVIEW && printf '  ⚠ the PR base changed without a later explicit review request from a provably fresh\n    round — the head is the same but the diff is not, so part of it may never have been\n    read. `@codex review` (again, if needed) and wait for its wrapper.\n'
+  $RETARGETED_AFTER_REVIEW && printf '  ⚠ the base changed, a mark-ready started a round, or the head moved — with no later\n    provably fresh round to cover it, so part of the diff may never have been read or a\n    started round may not have reported. `@codex review` (again, if needed) and wait for\n    its wrapper.\n'
   $ROUND_ACTIVE && printf '  ⚠ an `eyes` reaction is newer than the wrapper — a fresh round is running on this\n    same tip. Wait for it to finish.\n'
   # Reported, never gated — see the CR_SKIPLIST block. Every file here is one this PR
   # changes, since that is the only kind CodeRabbit can skip; read the list and decide.

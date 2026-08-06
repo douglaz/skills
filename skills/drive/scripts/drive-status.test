@@ -32,6 +32,13 @@ fi
 if [ -f "$FIX/prfail" ] && [[ "$*" == *"pr view"* ]]; then
   exit 1
 fi
+# REPOSITORY-level not-found: the repo exists (the parent lookup just named it) but the
+# token cannot read it. gh's wording differs from no-pr's PullRequest-level text, and only
+# the latter establishes absence.
+if [ -f "$FIX/pr-repo-404" ] && [[ "$*" == *"pr view"* ]]; then
+  echo "GraphQL: Could not resolve to a Repository with the name 'owner/repo'. (repository)" >&2
+  exit 1
+fi
 # Weaker than no-pr: PRs exist but none is OPEN, so only the OPEN-filtered probes come
 # back empty — the way real gh behaves once a PR merges. The filter text is visible in
 # "$*" because the stub sees the raw -q argument.
@@ -404,6 +411,15 @@ touch "$FIX/prfail"
 check_field "a failed PR probe leaves pr state unknown" pr.state unknown
 check_field "a failed PR probe leaves freshness unknown" base_fresh null
 check "a failed PR probe refuses LAND" HARDEN
+
+# A REPOSITORY-level not-found is lost access to a repo the API just named, not "no PR
+# there". Reading it as absence let the probe continue, PR_STATE claim "none", and the
+# base fall through to the repo default — deriving LAND behind an unreadable candidate
+# that may host the PR, or the second PR the double-open refusal exists for.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+touch "$FIX/pr-repo-404"
+check_field "a repo-level 404 leaves pr state unknown" pr.state unknown
+check "a repo-level 404 refuses LAND" HARDEN
 
 # A failed `git status` (corrupt index) left both cleanliness counts at 0, so an
 # UNREADABLE tree satisfied the clean-tree gate and a cleared HARDEN promoted to LAND

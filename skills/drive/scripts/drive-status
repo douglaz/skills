@@ -45,7 +45,12 @@ _RFLAG=()
 _GH_ERR=$(mktemp 2>/dev/null) || _GH_ERR=""
 [[ -n "$_GH_ERR" ]] && trap 'rm -f "$_GH_ERR"' EXIT
 _gh_said_absent() {  # 0 iff the last captured stderr shows gh itself established absence
-  [[ -n "$_GH_ERR" ]] && grep -qiE 'could not resolve to a (pullrequest|repository)|no pull requests found|HTTP 404' "$_GH_ERR"
+  # PullRequest-level not-found ONLY. Every candidate probed below is a repo the API just
+  # named (self, or its own `.parent` field), so a Repository-level "could not resolve"
+  # or a bare HTTP 404 means access to an existing repo was lost — which says nothing
+  # about the PR inside it, including the second PR the double-open refusal exists for.
+  # Matching those as absence collapsed an unreadable candidate into "no PR there".
+  [[ -n "$_GH_ERR" ]] && grep -qiE 'could not resolve to a pullrequest|no pull requests found' "$_GH_ERR"
 }
 # A present gh binary says nothing about which forge owns the checkout. On a non-GitHub
 # remote every repo lookup fails, which used to masquerade as an unresolved fork parent

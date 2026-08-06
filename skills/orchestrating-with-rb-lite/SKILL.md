@@ -487,11 +487,13 @@ implement → review loop for each bead.
     # And a FAILED query is not a miss: "no such PR" is read out of gh's own error text,
     # because a transient failure treated as absence erases one candidate — and with it
     # the refusal — leaving the drain watching whichever PR the outage left visible.
+    # PullRequest-level not-found only: both candidates are repos the API just named, so
+    # a Repository-level "could not resolve" or an HTTP 404 is lost access, not absence.
     _GH_ERR=$(mktemp) || { echo "mktemp failed"; exit 1; }
     R=""; _M=0
     for _r in ${PARENT:+"$PARENT"} "$SELF"; do
       if ! _h=$(gh pr view <pr> -R "$_r" --json headRefOid -q .headRefOid 2>"$_GH_ERR"); then
-        grep -qiE 'could not resolve|no pull requests found|HTTP 404' "$_GH_ERR" \
+        grep -qiE 'could not resolve to a pullrequest|no pull requests found' "$_GH_ERR" \
           || { echo "cannot query PR <pr> in $_r — absence not established"; exit 1; }
         _h=""
       fi
@@ -536,12 +538,14 @@ implement → review loop for each bead.
     # Same ambiguity rule as step 9: both repos carrying PR <pr> at the pinned SHA means
     # two distinct PRs, and merging the parent's silently can land the one nobody gated.
     # Same absence rule too: only gh's own "no such PR" counts as a miss — a transient
-    # failure treated as one hides the second match and merges the survivor.
+    # failure treated as one hides the second match and merges the survivor. And only the
+    # PullRequest-level text: a Repository-level "could not resolve" or an HTTP 404 on a
+    # repo the API just named is lost access, not absence.
     _GH_ERR=$(mktemp) || { echo "mktemp failed"; exit 1; }
     R=""; _M=0
     for _r in ${PARENT:+"$PARENT"} "$SELF"; do
       if ! _h=$(gh pr view <pr> -R "$_r" --json headRefOid -q .headRefOid 2>"$_GH_ERR"); then
-        grep -qiE 'could not resolve|no pull requests found|HTTP 404' "$_GH_ERR" \
+        grep -qiE 'could not resolve to a pullrequest|no pull requests found' "$_GH_ERR" \
           || { echo "cannot query PR <pr> in $_r — absence not established; do NOT merge"; exit 1; }
         _h=""
       fi

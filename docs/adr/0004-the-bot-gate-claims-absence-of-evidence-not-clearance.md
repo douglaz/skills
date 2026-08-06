@@ -183,5 +183,23 @@ some wrapper landed before it, with no round-start (any `@codex review` mention,
 working assumption that rounds run one at a time. Where it cannot be established, the gate
 blocks, and one more `@codex review` round is the escape.
 
+Review of this rule found not counterexamples to it but two mis-scoped inputs, fixed
+2026-08-06. Round *ends* are the bot's submitted wrappers on **any** commit, not only the
+current tip's: tip-scoping threw away all history older than the last push, so the first
+request on every fresh tip — and every already-answered request from a prior tip — read as
+never covered, and the gate demanded a redundant round per push. And `ready_for_review`
+is itself a round-start, so a pre-wrapper ready poses the same attribution question as a
+request and is now held to the same quiet-PR rule (with a fallback for the first-ever
+mark-ready of a born-draft PR, where nothing observable could have been in flight, and the
+same later-fresh-request escape a base mutation has). With prior-tip wrappers anchoring
+gaps, dated head force-pushes count as round-starts too — the bot often re-reviews a push.
+
+The round-start list is knowingly incomplete: a non-force push leaves no dated timeline
+event, and a PR created non-draft starts a round its timeline never shows. That is a
+residual on the ADR's own terms, not grounds for a further clause — a push-started round
+reads the pushed tree itself, so what the gap permits is a duplicate round on an
+already-read diff, not an unread one — and the verdict still has six conditions: the
+coverage rule defines "provably answered" inside two of them, it is not a seventh.
+
 The decision this ADR records is unchanged — the verdict claims absence of evidence over a
 window, never clearance. The set of things accepted as evidence of a pending round grew.

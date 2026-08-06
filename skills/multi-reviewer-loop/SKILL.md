@@ -161,10 +161,12 @@ a reviewer.
        # "No such PR" and "the query failed" share an exit code, so absence is read out of
        # gh's own error text. A transient failure read as absence erases one candidate —
        # and with it the double-match refusal below — so the pass reviews against
-       # whichever PR the outage left visible.
+       # whichever PR the outage left visible. PullRequest-level not-found only: both
+       # candidates are repos the API just named, so a Repository-level "could not
+       # resolve" or an HTTP 404 is lost access, not absence.
        if ! _j=$(gh pr view "$_s" -R "$_c" --json number,state,headRefOid \
               -q 'select(.state=="OPEN") | "\(.number) \(.headRefOid)"' 2>"$_GH_ERR"); then
-         grep -qiE 'could not resolve|no pull requests found|HTTP 404' "$_GH_ERR" \
+         grep -qiE 'could not resolve to a pullrequest|no pull requests found' "$_GH_ERR" \
            || { echo "cannot query $_c for $BR's PR — absence not established; do not guess the review base"; exit 1; }
          _j=""
        fi
