@@ -394,10 +394,15 @@ changed_z() {
 # No `sort -zu` here: -z is a GNU extension and BSD/macOS sort rejects it, which
 # would empty EXISTING and DELETED and let the reviewer return clean having been
 # handed no files at all. Read NUL-delimited (the part that must be exact), then
-# dedupe with plain `sort -u` once the paths are already newline-delimited.
+# ESCAPE each path onto one line with `printf '%q'` before the newline-delimited
+# tools touch it. A bare `printf '%s\n'` here re-splits a path containing a newline
+# into fragments — `sort -u`, the DELETED filter, and the prompt then all carry
+# nonexistent names, and the reviewer skips the real file and reports it clean.
+# `%q` leaves an ordinary path byte-identical and renders the pathological ones as
+# shell quoting ($'a\nb'), which stays one line per path end to end.
+_q() { while IFS= read -r -d "" f; do printf '%q\n' "$f"; done; true; }
 
-# Split into files that still exist and files this change deleted. `|| true` on the
-# loop keeps a trailing deleted path from leaving status 1 and aborting under `set -e`.
+# Split into files that still exist and files this change deleted.
 # Ask GIT which paths were deleted, not the filesystem. `[ -e "$f" ]` is false for a path
 # missing from a sparse checkout and for a present-but-dangling symlink — neither of which
 # was deleted — and the prompt below tells the reviewer not to open anything in DELETED.
@@ -405,14 +410,15 @@ changed_z() {
 DELETED=$( { git diff -z --no-renames --diff-filter=D --name-only "$DIFF_BASE...HEAD"
              git diff -z --no-renames --diff-filter=D --name-only
              git diff -z --no-renames --diff-filter=D --name-only --cached
-           } | { while IFS= read -r -d "" f; do printf '%s\n' "$f"; done; true; } | sort -u)
-EXISTING=$(changed_z | { while IFS= read -r -d "" f; do printf '%s\n' "$f"; done; true; } | sort -u \
+           } | _q | sort -u)
+EXISTING=$(changed_z | _q | sort -u \
            | { [ -n "$DELETED" ] && grep -vxF -f <(printf '%s\n' "$DELETED") || cat; })
 
 cat >"$REVIEW_DIR/fable-consistency-prompt.txt" <<EOF
 Do not hunt for bugs — another pass owns those. You own INTERNAL AGREEMENT.
 
-Read these files as one artifact:
+Read these files as one artifact — one path per line, shell-quoted where a name
+contains unusual characters (a line like $'a\nb' names ONE file):
 ${EXISTING}
 
 These paths were DELETED by this change. Do not try to open them; instead check

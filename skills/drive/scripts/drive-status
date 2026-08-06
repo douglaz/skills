@@ -32,7 +32,7 @@ BASE_ORIGIN="none"
 # `_RFLAG` was initialized unconditionally for this exact reason; `_UP` was not.
 _UP=""
 _RREPO=""
-_BASE_REPO_UNKNOWN=false
+_PARENT_RESOLVED=true
 _PR_BASE_UNKNOWN=false
 _PR_AMBIGUOUS=false
 _PR_PROBE_FAILED=false
@@ -72,10 +72,15 @@ if $_GITHUB_REMOTE && command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
     _SELF_R=""
     _PR_PROBE_FAILED=true
   fi
-  _PARENT_RESOLVED=true
+  # A failed parent lookup is an UNENUMERABLE candidate, not "not a fork": the PR — or the
+  # second PR the double-open refusal below exists for — may live in a repo this probe
+  # cannot even name. That is the same poisoning as a failed candidate query, so it sets
+  # the same flag; a self-hosted open PR found beside it must not be adopted as THE PR,
+  # and "none" must not be claimed on the strength of the fork's absence alone.
   if ! _PARENT=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end' 2>/dev/null); then
     _PARENT=""
     _PARENT_RESOLVED=false
+    _PR_PROBE_FAILED=true
   fi
   _HEAD_NOW=$(git rev-parse --verify --quiet HEAD 2>/dev/null || echo "")
   # PR IDENTITY, then head match as a tiebreak — not head match as the entry condition.
@@ -140,13 +145,12 @@ if $_GITHUB_REMOTE && command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   elif $_PR_PROBE_FAILED; then
     # An unqueryable candidate may host an open PR with its own merge target. Falling back
     # to the parent default would validate freshness against a base that PR may not use —
-    # the same substitution _PR_BASE_UNKNOWN forbids one step later.
+    # the same substitution _PR_BASE_UNKNOWN forbids one step later. A failed parent
+    # lookup lands here too: it set _PR_PROBE_FAILED above, so the fork's own base can
+    # never masquerade as the merge target of a repo that would not resolve.
     _RREPO=""
-  elif $_PARENT_RESOLVED; then
-    _RREPO="${_PARENT:-$_SELF_R}"
   else
-    _RREPO=""
-    _BASE_REPO_UNKNOWN=true
+    _RREPO="${_PARENT:-$_SELF_R}"
   fi
   # A merged PR is invisible to the OPEN-only probe above, so with no open PR the parent
   # fallback aims every PR-identity query at a repo that may never have hosted it: a PR the
@@ -601,7 +605,7 @@ if $ON_DEFAULT && [[ "$PR_STATE" == OPEN* ]]; then ON_DEFAULT=false; fi
 
 BASE_FRESH="n/a"
 if [[ -n "$BASE_REF" && -n "$HEAD_SHA" && "$BASE_ORIGIN" != "guessed" ]] \
-   && ! $_BASE_REPO_UNKNOWN && ! $_PR_BASE_UNKNOWN && ! $_PR_AMBIGUOUS && ! $_PR_PROBE_FAILED \
+   && ! $_PR_BASE_UNKNOWN && ! $_PR_AMBIGUOUS && ! $_PR_PROBE_FAILED \
    && ! $ON_DEFAULT; then
   if git merge-base --is-ancestor "$BASE_REF" HEAD 2>/dev/null; then BASE_FRESH=true; else BASE_FRESH=false; fi
 fi
@@ -930,7 +934,7 @@ $_TREE_KNOWN || printf '  ⚠ `git status` failed, so whether this tree is clean
 $_PR_AMBIGUOUS && printf '  ⚠ this branch has an OPEN PR in BOTH %s and %s, and the head singles neither out —\n    two independently reviewed surfaces with two merge targets. The base is treated as\n    unknown and LAND is refused; close one PR, or run where the intended PR is unambiguous.\n' "${_PARENT:-the parent}" "${_SELF_R:-this repo}"
 # Base drift is invisible in every SHA the driver checks, so it has to be surfaced here.
 [[ "$BASE_FRESH" == "false" ]] && printf '  ⚠ %s has advanced since this branch forked. A squash merge replays onto the CURRENT\n    base, so what lands is a tree no panel and no bot reviewed — while every SHA still\n    matches. Rebase or merge base in, then re-clear before merging.\n' "${BASE_REF:-the base}"
-$_BASE_REPO_UNKNOWN && printf '  ⚠ the parent-repository lookup failed, so the merge target is unknown. The fork itself\n    is not a safe fallback: its base may lag upstream. LAND is refused until base_repo resolves.\n'
+$_PARENT_RESOLVED || printf '  ⚠ the parent-repository lookup failed, so the merge target is unknown. The fork itself\n    is not a safe fallback: its base may lag upstream. LAND is refused until base_repo resolves.\n'
 $_PR_PROBE_FAILED && printf '  ⚠ a PR lookup failed without establishing absence, so whether this branch has an open\n    PR — and what its merge target is — is unknown. Unknown is not "none": the base is\n    treated as unresolved and LAND is refused until the query succeeds.\n'
 $_PR_BASE_UNKNOWN && printf '  ⚠ an open PR exists but its base could not be read, so the merge target is unknown.\n    The repository default is NOT a safe substitute — the PR may target a release or\n    stacked branch. LAND is refused until the PR base resolves; re-clearing will not help.\n'
 # A present DRIVE.md whose phase cannot be used is the silently-resolved fallback

@@ -317,6 +317,20 @@ check_field "a failed parent lookup leaves base repo unknown" base_repo null
 check_field "a failed parent lookup leaves freshness unknown" base_fresh null
 check "a failed parent lookup refuses LAND" HARDEN
 
+# ...and it poisons a FOUND fork PR too, not only the no-PR case above. With the parent
+# unenumerable the double-open refusal cannot fire, so adopting the fork's open PR — and
+# validating freshness against its base — picks one of possibly two merge targets by
+# outage. This promoted to LAND with the other candidate not even nameable.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+echo "forkowner/repo" > "$FIX/self.txt"
+touch "$FIX/parentfail"
+printf '%s' "$(G rev-parse HEAD)" > "$FIX/prhead.txt"
+echo "forkowner/repo" > "$FIX/prview-repo.txt"
+printf '{"number":7,"state":"OPEN","reviewDecision":""}' > "$FIX/prview.json"
+check_field "parent failure poisons a found fork PR" pr.state unknown
+check_field "parent failure + fork PR: freshness unknown" base_fresh null
+check "parent failure + fork PR refuses LAND" HARDEN
+
 # A non-GitHub forge is distinguishable from an unauthenticated GitHub checkout. gh
 # cannot resolve it, but origin/HEAD still authoritatively identifies the base and must
 # not be discarded behind a fictional failed-fork-parent diagnosis.

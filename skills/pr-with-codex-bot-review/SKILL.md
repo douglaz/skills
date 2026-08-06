@@ -690,9 +690,11 @@ fi
 # Re-check the worktree HERE, not only at the top of this block: the merge-queue wait
 # above can run ten minutes, and `checkout -B` silently CARRIES any nonconflicting tracked
 # modification made meanwhile onto the fresh base — the build below then "confirms" a tree
-# that is not the branch tip. Tracked files only (`-uno`): checkout does not move
-# untracked files, and the top-of-block check already refused them before merging.
-_ST=$(git status --porcelain -uno) || { echo "cannot re-read the worktree — not resetting"; exit 1; }
+# that is not the branch tip. FULL status, untracked included: the top-of-block check ran
+# BEFORE the wait, so it cannot vouch for a file created during it — and checkout does not
+# remove an untracked file, so it sits in the "fresh" base worktree where the build and
+# whatever branches from here inherit it, unreviewed and invisible to `-uno`.
+_ST=$(git status --porcelain) || { echo "cannot re-read the worktree — not resetting"; exit 1; }
 [ -z "$_ST" ] || { echo "worktree changed while waiting for the merge — resolve that, then reset to $BASE by hand"; exit 1; }
 git checkout -B "$BASE" "refs/remotes/upstream/$BASE" \
   || { echo "cannot reset to the merge target — do NOT treat what follows as a check of it"; exit 1; }

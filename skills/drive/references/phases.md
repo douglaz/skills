@@ -573,6 +573,14 @@ and silently carry the previous bead's closure into its diff. Instead:
   printf '%s\n' "${CLOSURE_PRS[@]}" \
     | jq -s --arg id "$BEAD_ID" 'add | .[] | select($id != "" and ((.body // "") | ascii_downcase
         | test("(^|\\r|\\n)[[:space:]]*bead-closure:[[:space:]]*" + ($id|ascii_downcase|gsub("\\.";"\\.")) + "[[:space:]]*(\\r|\\n|$)")))'
+  # SAME shell, same snapshot: the bead's MERGED work PRs. Consulted whenever the marker
+  # query above is empty — see below. Re-fetched in a separate block, a fetch that failed
+  # here while the marker query succeeded would silently read as "nothing merged", the
+  # exact collapse this query exists to close.
+  printf '%s\n' "${CLOSURE_PRS[@]}" \
+    | jq -s --arg id "$BEAD_ID" 'add | .[] | select(.state=="MERGED")
+        | select($id != "" and ((.body // "") | ascii_downcase
+          | test("(^|[^a-z0-9._-])" + ($id|ascii_downcase|gsub("\\.";"\\.")) + "([^a-z0-9._-]|$)")))'
   ```
 
 `BEAD_ID` comes from the bead you are resuming — on a fresh clone take it from `br list`'s
@@ -589,10 +597,21 @@ one, so a filter like `test("closure|metadata")` misses a PR called `chore/close
 And note the raised `--limit`: `gh pr list` returns 30 by default, which hides an older
 closure PR behind newer work PRs — precisely the resume case this query exists for.
 
-An empty result is trustworthy only for closure PRs opened since this marker was
-prescribed; for an older drive, search the id across `--state all` and read the hits —
-a merged PR naming the id may be the work PR, with the closure still missing.
+**An empty result from the marker query answers only "no closure PR was opened" — it is
+NOT evidence that nothing merged.** A session that stops between the work PR merging and
+the metadata PR being opened leaves exactly that state: work on the base, bead still open
+in the JSONL, no marker anywhere for the first query to find. Reading empty as
+"unfinished" there re-enters BUILD and duplicates merged work. The second query in the
+block is what tells those apart: it asks the same snapshot whether the bead's WORK
+already merged (every work PR body carries the bead id — rb-lite's step 8 requires it).
 
+Read any hit before acting on it — a merged PR carrying the id is almost certainly the
+work PR, and the bead open in the default branch's JSONL beside it is precisely the
+interrupted state. Then the resume point is the closure path above (close the bead, open
+and land the metadata PR), **not** BUILD: the code is already on the base. Only when both
+queries are empty does "not started or not merged" stand — and on a drive older than
+these markers and id-carrying bodies, even that needs the hits read by hand, because
+neither convention was in force when its PRs were written.
 
   **Before re-entering BUILD or HARDEN from a fresh clone with unresolved beads, run that
   query.** An open closure PR means the drive is `WAITING_FOR_MERGE`, not unfinished —

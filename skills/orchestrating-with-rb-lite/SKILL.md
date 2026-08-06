@@ -611,9 +611,11 @@ implement → review loop for each bead.
     # Refuse a dirty worktree HERE, immediately before the reset: the merge-queue wait
     # above can run ten minutes, and `checkout -B` silently CARRIES any nonconflicting
     # tracked modification onto the fresh base — the build below then passes and the next
-    # bead inherits work that was never on this branch. Tracked files only (`-uno`):
-    # checkout does not move untracked files.
-    _WT=$(git status --porcelain -uno) || { echo "cannot read the worktree — not resetting"; exit 1; }
+    # bead inherits work that was never on this branch. FULL status, untracked included:
+    # checkout does not move an untracked file, but it does not remove it either, so a
+    # file created during the wait sits in the "fresh" base worktree where the build and
+    # the next bead's branch inherit it — unreviewed, and invisible to `-uno`.
+    _WT=$(git status --porcelain) || { echo "cannot read the worktree — not resetting"; exit 1; }
     [ -z "$_WT" ] || { echo "worktree changed while waiting for the merge — resolve that before resetting to $BASE"; exit 1; }
     git checkout -B "$BASE" "refs/remotes/upstream/$BASE" \
       || { echo "cannot reset to the merge target"; exit 1; }
@@ -678,6 +680,14 @@ implement → review loop for each bead.
     printf '%s\n' "${CLOSURE_PRS[@]}" \
       | jq -s --arg id "$BEAD_ID" 'add | .[] | select($id != "" and ((.body // "") | ascii_downcase
         | test("(^|\\r|\\n)[[:space:]]*bead-closure:[[:space:]]*" + ($id|ascii_downcase|gsub("\\.";"\\.")) + "[[:space:]]*(\\r|\\n|$)")))'
+    # SAME shell, same snapshot: the bead's MERGED work PRs. Consulted whenever the marker
+    # query above is empty — see below. Run separately this would re-fetch, and a fetch
+    # that failed here while the marker query succeeded would silently read as "nothing
+    # merged", the exact collapse this query exists to close.
+    printf '%s\n' "${CLOSURE_PRS[@]}" \
+      | jq -s --arg id "$BEAD_ID" 'add | .[] | select(.state=="MERGED")
+          | select($id != "" and ((.body // "") | ascii_downcase
+            | test("(^|[^a-z0-9._-])" + ($id|ascii_downcase|gsub("\\.";"\\.")) + "([^a-z0-9._-]|$)")))'
     ```
 
     `BEAD_ID` is the bead you are about to take — loop this query over each open bead from
@@ -692,12 +702,21 @@ implement → review loop for each bead.
     because `gh pr list` returns 30 by default — an older closure PR hides behind newer
     work PRs, which is the resume case this exists for.
 
-    An empty result from the marker query is trustworthy only for closure PRs opened
-    since the marker was prescribed. If this drain predates it, fall back to searching
-    the bead id across `--state all` and read the hits yourself: a merged PR mentioning
-    the id may be the WORK PR, which means the closure may still be missing — verify
-    against whether the bead is open in the default branch's JSONL before rebuilding
-    anything.
+    **An empty result from the marker query answers only "no closure PR was opened" — it
+    is NOT evidence that nothing merged.** A drain that stops between step 10's merge and
+    step 11's closure PR leaves exactly that state: the work merged, the bead still open
+    in the JSONL, and no marker anywhere for the first query to find. Reading empty as
+    "unfinished" there rebuilds and re-merges code already on the base. The second query
+    in the block is what tells those apart: it asks the same snapshot whether the bead's
+    WORK already merged.
+
+    Read any hit before acting on it — a merged PR carrying the id is almost certainly
+    the work PR, and the bead open in the default branch's JSONL beside it is precisely
+    the interrupted state. Then do **not** rebuild the bead: its code is on the base.
+    Resume at step 11 — close the bead and land the closure PR. Only when *both* queries
+    are empty does "not started or not merged" stand — and on a drain older than these
+    markers and id-carrying bodies, even that needs the hits read by hand, because
+    neither convention was in force when its PRs were written.
 
     An OPEN one: land it before taking another bead. A CLOSED-but-unmerged one is worse — the
     work PR already merged, the closure never did, and `--state open` cannot see it: reopen
