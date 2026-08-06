@@ -237,12 +237,15 @@ Two rules from the drain workflow matter more in this mode than usual:
 - **Serialize.** Do not start bead B's run while bead A is open. Two long-lived
   branches merging into the same base is where conflicts live.
 - **Evidence-first closure.** The closure has to say which merge satisfied the bead:
-  put the merge SHA and PR number in the **closure commit message**, beside the
-  `bead-closure: <bead-id>` marker step 12's resume discovery filters on. `br close`
-  also takes `--reason`, but the drain path closes with `br update <id> -s closed` for
-  the flush behaviour the main skill explains — so the commit message is where this
+  put the merge SHA and PR number in the **closure commit message**. `br close` also
+  takes `--reason`, but the drain path closes with `br update <id> -s closed` for the
+  flush behaviour the main skill explains — so the commit message is where this
   evidence reliably lands. A bead closed without the merged fix just reappears in the
   next review, and you will not know why.
+  The `bead-closure: <bead-id>` marker is a SEPARATE obligation and does not move here:
+  step 12's recovery query reads each PR's `.body` and nothing else, so a marker left
+  only in the commit message is invisible to a fresh clone — which is the state that
+  rebuilds merged work. Evidence in the commit message, marker in the PR body, both.
 
 ## 5. Re-review and repeat
 

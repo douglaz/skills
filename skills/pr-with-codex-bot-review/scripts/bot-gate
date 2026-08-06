@@ -255,6 +255,7 @@ WRAPPER_AT=$(printf '%s' "$WRAPPER_JSON" | jq -r '.latest' 2>/dev/null)
 # or before the ready. An undated wrapper dropped silently is exactly the round that
 # fallback cannot see, so malformed review data would fail the gate OPEN.
 WRAPPER_EPOCHS=""
+WRAPPER_TIP_EPOCHS=""
 WRAPPER_UNDATED=false
 while IFS= read -r _wt; do
   [[ -n "$_wt" ]] || continue
@@ -263,11 +264,19 @@ while IFS= read -r _wt; do
   # only garbage strings and not the absent case — the commoner one, and the one a PENDING
   # review on an older tip produces. Both are "a round that cannot be placed in time".
   [[ "$_wt" == "@undated@" ]] && { WRAPPER_UNDATED=true; continue; }
-  _we=$(iso_to_epoch "$_wt") || { WRAPPER_UNDATED=true; continue; }
+  # `<tip>\t<submitted_at>`: the same rows, but remembering which named THIS tip. The
+  # unscoped list stays the default (a round's end is evidence whichever tree it read);
+  # the tip-scoped one exists for the one caller that needs a stronger anchor — see
+  # _round_covered_on_tip.
+  _wtip="${_wt%%$'\t'*}"; _wts="${_wt#*$'\t'}"
+  _we=$(iso_to_epoch "$_wts") || { WRAPPER_UNDATED=true; continue; }
   WRAPPER_EPOCHS="${WRAPPER_EPOCHS}${WRAPPER_EPOCHS:+$'\n'}${_we}"
+  [[ "$_wtip" == "$TIP" ]] \
+    && WRAPPER_TIP_EPOCHS="${WRAPPER_TIP_EPOCHS}${WRAPPER_TIP_EPOCHS:+$'\n'}${_we}"
 done < <(printf '%s' "$REVIEWS" | jq -r --arg bot "$BOT_LOGIN" '
   .[][] | select(.user.login==$bot) | select(.user.type=="Bot")
-  | (if ((.submitted_at // "") | length) == 0 then "@undated@" else .submitted_at end)' 2>/dev/null)
+  | (if ((.submitted_at // "") | length) == 0 then "@undated@"
+     else ((.commit_id // "") + "\t" + .submitted_at) end)' 2>/dev/null)
 
 # A wrapper AFTER a request does not show the REQUESTED round ended: rounds carry no
 # identity, so that wrapper can end a round that was already in flight when the request
@@ -313,6 +322,33 @@ _round_covered() {  # $1 = request epoch. 0 iff a wrapper after it can be truste
 # iterated before marking ready) and cannot see the round a PR born NON-draft starts at
 # creation; that residual round reads the same tree this ready round would, so the leak it
 # permits is a duplicate round on an already-read diff, not an unread one.
+# Same gap test, but only a wrapper naming THIS TIP may anchor it.
+# A normal (non-force) push starts the bot's automatic round and emits NO timeline event
+# this script can see — `head_ref_force_pushed` covers force-pushes only — so that start
+# never reaches START_EPOCHS and the gap can look quiet while a round is running. The tip
+# is the one witness to it: a push moves the head, so a wrapper still naming the current
+# tip proves no push (and therefore no invisible automatic round) began after it.
+# Used only where the failure is a base mutation clearing on a wrapper that may have read
+# the OLD diff. Elsewhere the unscoped anchor is correct and deliberately kept: scoping it
+# everywhere made the first request on every fresh tip read as uncovered and demanded a
+# redundant round per push.
+_round_covered_on_tip() {  # $1 = request epoch. 0 iff a CURRENT-TIP wrapper anchors it.
+  local t=$1 wp="" e tied_starts=0
+  while IFS= read -r e; do
+    [[ -n "$e" ]] || continue
+    (( e >= t )) && continue
+    if [[ -z "$wp" ]] || (( e >= wp )); then wp=$e; fi
+  done <<< "$WRAPPER_TIP_EPOCHS"
+  [[ -n "$wp" ]] || return 1
+  while IFS= read -r e; do
+    [[ -n "$e" ]] || continue
+    (( e >= wp && e <= t )) || continue
+    if (( e == t && tied_starts == 0 )); then tied_starts=1; continue; fi
+    return 1
+  done <<< "$START_EPOCHS"
+  return 0
+}
+
 _ready_covered() {  # $1 = ready epoch. 0 iff the wrapper after it can be trusted as its round's.
   local b=$1 e n=0
   _round_covered "$b" && return 0
@@ -690,9 +726,16 @@ if [[ -n "$WRAPPER_AT" ]]; then
         # only available timestamp that establishes a new post-change round — and only
         # when _round_covered shows the request was not posted into a round already in
         # flight, whose wrapper would then masquerade as the post-change round's.
+        # _round_covered_on_tip, not _round_covered: a prior-tip wrapper anchoring this gap
+        # means the head moved after it, i.e. a push happened — and a normal push starts an
+        # automatic round that emits no observable event, so the "quiet" interval it would
+        # certify may contain exactly the round whose wrapper then gets credited to this
+        # request. That wrapper may have read the pre-mutation diff. The escape is unchanged
+        # in kind, one round longer in practice: let the automatic round land its wrapper on
+        # this tip, then `@codex review` again.
         elif [[ -z "$LAST_REVIEW_REQUEST_BEFORE_WRAPPER" ]] \
              || (( LAST_REVIEW_REQUEST_BEFORE_WRAPPER <= B )) \
-             || ! _round_covered "$LAST_REVIEW_REQUEST_BEFORE_WRAPPER"; then
+             || ! _round_covered_on_tip "$LAST_REVIEW_REQUEST_BEFORE_WRAPPER"; then
           RETARGETED_AFTER_REVIEW=true
         fi
       done <<< "$REVIEW_SURFACE_EVENTS"
@@ -784,7 +827,7 @@ OBSERVED_TO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 # unfinished round" beside `"verdict": "BLOCKED"` in the same object — a machine reader
 # taking the sentence at face value would have it exactly backwards.
 if [[ "$VERDICT" == "NO_PENDING_EVIDENCE" ]]; then
-  CLAIM="across API reads from $OBSERVED_FROM to $OBSERVED_TO, nothing indicated an unfinished round on ${TIP:0:10} or an undispositioned bot finding on it; this is not proof the bots are finished"
+  CLAIM="across API reads from $OBSERVED_FROM to $OBSERVED_TO, nothing indicated an unfinished CODEX round on ${TIP:0:10} or an undispositioned codex finding on it; CodeRabbit is reported, never gated, so a PENDING rollup is consistent with this claim; this is not proof the bots are finished"
 else
   CLAIM=""
 fi

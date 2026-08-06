@@ -304,6 +304,18 @@ printf '[[{"event":"base_ref_changed","created_at":"%s"}]]' "$MID_UTC" > "$FIX/t
 printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$NEW_UTC" > "$FIX/issues.json"
 check "a retarget followed by an explicit review clears" 0
 
+# ...but only a wrapper on THIS tip may certify that gap. A wrapper on an OLDER tip means
+# the head moved after it — a push — and a normal push starts the bot's automatic round
+# while emitting no timeline event at all (`head_ref_force_pushed` covers force-pushes
+# only). So the interval it certifies as quiet can contain exactly the round whose wrapper
+# is then credited to this request, and that round may have read the pre-retarget diff.
+new_fix
+wrappers_at "$OLDTIP:$OLD_UTC" "$TIP:$NEW2_UTC" > "$FIX/reviews.json"
+threads 0 > "$FIX/threads.json"
+printf '[[{"event":"base_ref_changed","created_at":"%s"}]]' "$MID_UTC" > "$FIX/timeline.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$NEW_UTC" > "$FIX/issues.json"
+check "a prior-tip wrapper cannot certify a quiet gap" 1
+
 # The clearing match accepts a real command with trailing text. The loose blocking match
 # already sees it; once the newer wrapper arrives, the same request must establish that a
 # post-retarget round covered the changed diff.
