@@ -159,7 +159,7 @@ clear_tip_only() { mkdir -p "$REPO/.git/drive"; printf 'cleared=%s\n' "$(G rev-p
 echo "drive-status fixtures"
 
 new_repo; add_code; record '**Phase:** HARDEN'; clear_at
-check "cleared == tip, base fresh, clean tree" LAND
+check "cleared == tip, base fresh+unchanged, clean tree" LAND
 
 new_repo; add_code; record '**Phase:** HARDEN'; clear_at "deadbeef1234"
 check "stale clearance refuses LAND" HARDEN

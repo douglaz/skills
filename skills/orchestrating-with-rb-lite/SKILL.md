@@ -4,7 +4,7 @@ description: >-
   Uses `rb-lite` to drive lightweight implement → review loops in the current
   git repo. Covers one self-contained task on a branch, a serialized `br`
   backlog drain where each ready bead becomes one branch, one rb-lite run, one
-  PR, one squash merge, and one bead closure, and a harden-until-clean drive
+  work PR, one squash merge, and one bead closure, and a harden-until-clean drive
   that reviews a whole branch with a codex + Claude Fable panel, mints beads
   from the findings, drains them, and re-reviews until clean. Use when the user
   says "rb-lite", "use rb-lite", "run the rb-lite loop", "iterate on this with
@@ -1104,7 +1104,7 @@ The reviewer contract is strict:
 | `3` | `env_error` | Not in a git repo, missing tool, unsupported `timeout`, branch creation failure, run-dir setup failure | Fix the env; rerun |
 | `10` | `implementer_failed` | Implementer subprocess returned non-zero (incl. timeout 124/137) or hit max-iters before stabilizing | Look at `implementer-round-N-iter-K.stderr` for the most recent iter |
 | `11` | `review_panel_failed` | Zero reviewers exited 0 | Check `reviewer-round-N-K.stderr` for all reviewers; usually missing CLI/auth or `jq` failure |
-| `12` | `max_rounds_hit` | Burned all `--max-rounds` without convergence | Inspect the latest review files; either bump `--max-rounds`, lower `--min-findings-severity` to skip nits, or address the remaining findings manually |
+| `12` | `max_rounds_hit` | Burned all `--max-rounds` without convergence | Inspect the latest review files; either bump `--max-rounds`, raise `--min-findings-severity` to skip nits, or address the remaining findings manually |
 | `13` | `consensus_failure` | Implementer kept declining to act on findings for `--max-noop-rounds` consecutive rounds | Read the latest review **and the implementer's recorded reasons** — it's signaling it disagrees. If its rejections are evidence-backed (false positives or over-specification), this is a legitimate stop, not a failure. Apply the fix manually if you side with reviewers, or accept the run if you side with the implementer |
 | `70` | `internal_error` | Internal invariant violation or unhandled shell failure | Read `log.txt` and the most recent stderr files; this is rare |
 

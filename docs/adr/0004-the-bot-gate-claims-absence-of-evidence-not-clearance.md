@@ -9,7 +9,10 @@ Accepted. Supersedes the settle-window and skipped-file clauses described in
 
 ## Context
 
-`scripts/bot-gate` decides whether a PR's review bots have finished with the current tip.
+`scripts/bot-gate` decides whether any EVIDENCE of an unfinished review round on the
+current tip is observable. That is not the same as deciding the bots have finished, and
+this ADR exists because the difference is the whole point: GitHub exposes no terminal
+signal, so exit 0 is `NO_PENDING_EVIDENCE`, never "the bots cleared this".
 It is a merge *prerequisite*, not merge authorization: § 8 of the skill runs the
 base-freshness ancestor test before merging, which this gate never looks at, and the skill
 explicitly forbids chaining `bot-gate && gh pr merge`.

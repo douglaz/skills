@@ -856,7 +856,7 @@ if [[ "$PHASE" == "HARDEN" ]] && $CLEARED_MATCHES_TIP && [[ "$BASE_FRESH" == "tr
   # `git status` failed both counts read 0 and this gate promoted an unreadable tree.
   if [[ "$DIRTY_COUNT" -eq 0 && "$UNTRACKED" -eq 0 ]] && $_TREE_KNOWN; then
     PHASE="LAND"
-    PHASE_SOURCE="derived (cleared == tip, base fresh, tree clean)"
+    PHASE_SOURCE="derived (cleared == tip, base fresh, base unchanged since clearance, tree clean)"
   else
     LAND_BLOCKED_DIRTY=true
   fi
@@ -952,7 +952,7 @@ printf 'cleared    %s\n' "${DRIVE_CLEARED:-<none — no panel has cleared this c
 printf '\nphase: %s   (source: %s)\n' "$PHASE" "$PHASE_SOURCE"
 # LAND is derived, so a RECORDED LAND is a stale or hand-edited file. Say so rather than
 # silently ignoring the line — an unexplained discard is the failure this warns about.
-$RECORDED_LAND && printf '  ⚠ DRIVE.md records `Phase: LAND`, which is no longer a recordable phase — LAND is\n    derived from `cleared == tip`, a fresh base and a clean tree. The line was IGNORED. Rewrite it to\n    HARDEN; the record should never claim a phase only this checkout can prove.\n'
+$RECORDED_LAND && printf '  ⚠ DRIVE.md records `Phase: LAND`, which is no longer a recordable phase — LAND is\n    derived from `cleared == tip`, a fresh base, that base still being the one the panel\n    reviewed, and a clean tree. The line was IGNORED. Rewrite it to\n    HARDEN; the record should never claim a phase only this checkout can prove.\n'
 # BRANCH_COMMITS is 0 for two unrelated reasons — no base ref to measure against, or a
 # base that resolved fine and genuinely has every commit already. Naming the first as the
 # cause of the second sent readers hunting for a broken remote that was working.

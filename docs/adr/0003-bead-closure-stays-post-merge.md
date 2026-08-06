@@ -1,9 +1,16 @@
 # Bead closure stays post-merge
 
-`br close` runs after the squash merge, and the resulting bookkeeping reaches the default
+**For a bead whose closure asserts that implemented work landed**, `br close` runs after
+the squash merge, and the resulting bookkeeping reaches the default
 branch through a reviewed path — carried into the next bead's branch, or via a small
 metadata PR when the scope is empty. It does **not** run on the feature branch before the
 review panel.
+
+That qualifier is load-bearing. GRAPH-time closures assert something else entirely — a
+bead is a duplicate, superseded, or not worth building — and `plan-to-beads-transfer`
+and `bead-polish-loop` close those during graph construction, where no implementation
+and no squash merge exist for them to follow. This ADR does not govern those; read an
+unqualified "closure is post-merge" as a rule about work that was built.
 
 This is recorded because the opposite is highly attractive and was proposed by a reviewer
 with a compelling argument: `.beads/issues.jsonl` is a tracked file, so a closure committed

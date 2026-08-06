@@ -228,16 +228,21 @@ message. Months later it explains why iteration N looks thin.
 ## 4. Drain the beads
 
 Hand off to the **Backlog-drain workflow** in the main skill and follow it
-exactly: one bead, one branch, one rb-lite run, local gates, one PR, one squash
-merge, one `br close`. Nothing about draining changes here.
+exactly: one bead, one branch, one rb-lite run, local gates, one **work** PR, one
+squash merge, one `br close`. (Closing the last bead in a scope needs its own small
+metadata PR — that is bookkeeping, not a second work PR, and the rule still holds.) Nothing about draining changes here.
 
 Two rules from the drain workflow matter more in this mode than usual:
 
 - **Serialize.** Do not start bead B's run while bead A is open. Two long-lived
   branches merging into the same base is where conflicts live.
-- **Evidence-first closure.** Close with the merge SHA and PR number in the
-  reason. A bead closed without the merged fix just reappears in the next review,
-  and you will not know why.
+- **Evidence-first closure.** The closure has to say which merge satisfied the bead:
+  put the merge SHA and PR number in the **closure commit message**, beside the
+  `bead-closure: <bead-id>` marker step 12's resume discovery filters on. `br close`
+  also takes `--reason`, but the drain path closes with `br update <id> -s closed` for
+  the flush behaviour the main skill explains — so the commit message is where this
+  evidence reliably lands. A bead closed without the merged fix just reappears in the
+  next review, and you will not know why.
 
 ## 5. Re-review and repeat
 

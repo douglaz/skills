@@ -248,7 +248,7 @@ for each in the result. A test that falsely reports PASS is worse than no test.
 
 Uses `rb-lite` as the lightweight implement/review loop for self-contained work
 on the current repo. It also drains an existing `br` backlog by running one
-focused rb-lite loop per ready bead, with one branch, one PR, one squash merge,
+focused rb-lite loop per ready bead, with one branch, one work PR, one squash merge,
 and one bead closure per item.
 
 Claude Code:

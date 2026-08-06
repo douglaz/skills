@@ -4,7 +4,9 @@ LAND must merge exactly the tree the review panel cleared, so any commit after c
 invalidates it — including the commit that records the transition into LAND. We resolved
 this by not recording LAND at all. `Phase` stays committed and honest and simply never names LAND;
 LAND is admitted by computing `Cleared == tip` against the volatile store, together with
-a base still an ancestor of that tip and a clean worktree.
+a base still an ancestor of that tip, that base still being the one the panel reviewed,
+and a clean worktree. Four conditions — see the amendment below, which added the third
+and is the reason this sentence names it rather than the three originally decided.
 
 ## Considered Options
 

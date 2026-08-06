@@ -55,7 +55,9 @@ that everyone downstream trusts. The job is to make the test *earn* its green.
 ## Tool dependencies
 
 Same core as `orchestrating-with-rb-lite`: resolve the `rb-lite` binary
-(`command -v rb-lite`, else `nix run github:douglaz/rb-lite -- ...`), and have
+(`command -v rb-lite`, else `nix run --refresh github:douglaz/rb-lite -- ...` —
+`--refresh` on the session's first invocation is required there and equally required
+here, or nix serves an hour-stale cached revision), and have
 `codex` + `claude` on PATH and authenticated for the panel. Read that skill's
 "Tool dependencies" for the details; they are not repeated here.
 
