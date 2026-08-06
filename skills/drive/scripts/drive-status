@@ -328,6 +328,16 @@ AHEAD=$(git rev-list --count "@{upstream}..HEAD" 2>/dev/null || echo "?")
 # checkout where only the feature branch exists locally the local ref does not resolve at
 # all — `|| echo 0` would mask that and make HARDEN unreachable.
 [[ -n "$DEFAULT_BRANCH" && "$BASE_ORIGIN" == "none" ]] && BASE_ORIGIN="guessed"
+# On a FORK, origin/HEAD names the fork's own default branch — never the merge target. The
+# pass that made the same point about ON_DEFAULT only guarded a branch NAMED like the base;
+# on an ordinary feature branch ON_DEFAULT is already false, so freshness was measured
+# against the fork's base, came back true, and derived LAND while the parent's real target
+# was never resolved. Only `forge` (asked of the parent) and `pr` (the PR's own base) name
+# it. Demoting to `guessed` is what the freshness guard already refuses to clear on.
+if [[ "$BASE_ORIGIN" == "origin/HEAD" ]] \
+   && [[ -n "${_PARENT:-}" && "${_PARENT:-}" != "${_SELF_R:-}" ]]; then
+  BASE_ORIGIN="guessed"
+fi
 BASE_REF=""
 if [[ -n "$DEFAULT_BRANCH" ]]; then
   if git rev-parse --verify --quiet "refs/remotes/origin/$DEFAULT_BRANCH" >/dev/null 2>&1; then

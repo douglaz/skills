@@ -99,7 +99,9 @@ The default reviewer panel runs three reviewers concurrently:
 
 - `codex review --base "$BASE"`
 - `claude -p ... --output-format json | jq ...`
-- `npx -y @google/gemini-cli@0.53.1 --policy "$RUN_DIR/gemini-policy.toml" ...`
+- `npx -y @google/gemini-cli --policy "$RUN_DIR/gemini-policy.toml" ...` — **unpinned**,
+  and this line is a description of what the rb-lite binary runs, not something this
+  skill can change. See the pin step below, which is how you actually control it.
 
 `codex` and `claude` must be on PATH for the default panel to behave as
 intended and must also be authenticated. The default Claude reviewer needs
@@ -111,20 +113,29 @@ just because the host shell
 cannot find `jq` or GNU `timeout`; the upstream wrapper supplies those to the
 rb-lite process. For source/path installs, check the host shell. Gemini is
 opportunistic: if `npx` or Gemini credentials are missing, that reviewer fails
-and the panel can still proceed with the remaining successful reviewers. If you
-intentionally want a different panel, write `.rb-lite-reviewers` before running.
+and the panel can still proceed with the remaining successful reviewers. Writing `.rb-lite-reviewers` before running is how you change any of it — including the
+Gemini pin below, which is not optional.
 
-**The Gemini version is pinned, and pinned exactly.** `npx -y` installs and runs
-whatever the registry serves at that moment, so an unpinned `@google/gemini-cli`
-means a compromised upstream release executes here with the repo checked out,
-credentials present, and — in the `.rb-lite-reviewers` line below —
-`--approval-mode yolo`. A range like `@^0.53.1` would still auto-take patch
-releases, which is the same path through a narrower door.
+**Pin Gemini by writing `.rb-lite-reviewers` before EVERY run — there is no other way.**
+rb-lite's built-in default reviewer command lives inside the rb-lite binary; a version
+written into the bullet above changes nothing, and an earlier revision of this skill did
+exactly that and left the default path unpinned. Materialize the file (the full pinned
+panel is under "Customizing the panel") or accept that a default run installs whatever
+the registry serves.
+
+Why it matters: `npx -y` installs and runs whatever is published at that moment, so an
+unpinned `@google/gemini-cli` means a compromised upstream release executes here with the
+repo checked out, credentials present, and `--approval-mode yolo`. A range like
+`@^0.53.1` would still auto-take patch releases, which is the same path through a
+narrower door.
+
+The alternative, if you would rather not carry the file: require an rb-lite whose own
+default is pinned, and verify that before running rather than assuming it.
 
 The cost is staleness: upstream ships roughly weekly, so this pin ages. Bump it
 deliberately rather than dropping it — `npm view @google/gemini-cli version` for
-the current release, then change it in both places (here and the
-`.rb-lite-reviewers` example). A reviewer a few versions behind is a much smaller
+the current release, then change it in the `.rb-lite-reviewers` panel, which is the
+only place that executes. A reviewer a few versions behind is a much smaller
 problem than one that installs anything.
 
 An exact pin is not a lockfile: it closes the auto-upgrade path, not every

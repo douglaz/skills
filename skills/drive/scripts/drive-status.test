@@ -362,6 +362,16 @@ touch "$FIX/defaultfail" "$FIX/no-pr"
 check_field "a fork base from origin/HEAD is not the parent's" base_fresh null
 check "an unresolved parent base refuses LAND" HARDEN
 
+# ...and on an ordinary FEATURE branch, where ON_DEFAULT is already false and the guard
+# above never fires. Freshness was measured against the fork's own base, came back true,
+# and derived LAND while the parent's real merge target was never resolved.
+new_repo; G remote set-head origin master; add_code; record '**Phase:** HARDEN'; clear_at
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/self.txt"
+echo "upstream/repo" > "$FIX/default-repo.txt"; echo release > "$FIX/default-branch.txt"
+touch "$FIX/defaultfail" "$FIX/no-pr"
+check_field "a fork feature branch cannot clear on the fork's base" base_fresh null
+check "a fork feature branch with an unresolved base refuses LAND" HARDEN
+
 # A GitHub checkout where the PR probe never RAN — detached HEAD here, no gh elsewhere —
 # cannot know the merge target. origin/HEAD is then just the default branch standing in for
 # a base nobody asked about, and clearing on it would authorise squashing a diff the panel

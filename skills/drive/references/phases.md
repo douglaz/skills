@@ -89,6 +89,12 @@ explicit **do NOT build** list, done-definition naming the tests.
 Resolve `rb-lite` the way `orchestrating-with-rb-lite` does — PATH first, then the Nix
 wrapper. Do not hardcode a local checkout path; most installs will not have one.
 
+Write `.rb-lite-reviewers` before the run. rb-lite's built-in default reviewer command
+invokes `npx -y @google/gemini-cli` **unpinned**, under `--approval-mode yolo`, in a
+checkout with credentials present — and that command lives inside the rb-lite binary, so
+nothing written in these docs changes it. Materializing the file is the only control this
+skill has; take the pinned panel from `orchestrating-with-rb-lite` § Customizing the panel.
+
 ```bash
 if command -v rb-lite >/dev/null 2>&1; then RB=(rb-lite)
 else RB=(nix run --refresh github:douglaz/rb-lite --); fi
