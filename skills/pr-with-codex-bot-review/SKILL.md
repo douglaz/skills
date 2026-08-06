@@ -40,7 +40,7 @@ the bot is quiet, or got findings back and need to address them.
 
 ## What "the bot reviewed" actually means on GitHub
 
-The bot communicates approval and findings through **three distinct channels**, all on
+The bot communicates approval and findings through **four distinct channels**, all on
 the same PR:
 
 1. **Reaction on the PR body** — `eyes` (👀) when the bot picks up the PR for review,
@@ -55,6 +55,12 @@ the same PR:
    build anything on that.** Measured across 19 rounds on this repo's PR #16, `+1` fired
    **zero** times — it appears only on a round that finds nothing, and this PR never had
    one. A gate that waits for it waits forever.
+
+   **That sample contained no clean rounds, so it could not show what one looks like.**
+   The conclusion drawn from it — that the clean case leaves nothing usable — was false,
+   and it shaped a gate that could not pass on success. A clean round posts the § 3
+   comment, which carries the sha. Gate on that; the reaction stays worthless because a
+   reaction has no sha.
 
    **And when it does appear it approves the tree the bot read, which is not always the
    tip.** The reaction has a timestamp and no SHA, so after a force-push a surviving `+1`
@@ -74,7 +80,24 @@ the same PR:
    The body of this review carries no findings. It's a wrapper that anchors the
    review to a specific commit SHA.
 
-3. **Line-level review comments** — where actual findings live, separate API:
+3. **Issue comment on a CLEAN round** — when the bot finds nothing it posts **no
+   pull-request review at all**. It comments on the issue thread instead:
+
+   ```
+   Codex Review: Didn't find any major issues. 👍
+   **Reviewed commit:** `523eb0fee9`
+   ```
+
+   ```bash
+   gh api repos/<owner>/<repo>/issues/<N>/comments \
+     --jq '.[] | select(.user.login=="chatgpt-codex-connector[bot]") | .body'
+   ```
+
+   **This is SHA-bearing evidence**, and it is the only proof a clean round leaves that
+   names a tree. The sha is abbreviated, so match it as a prefix of the tip. Reading only
+   `pulls/<N>/reviews` makes success indistinguishable from a stalled bot — see § 7.
+
+4. **Line-level review comments** — where actual findings live, separate API:
 
    ```bash
    gh api repos/<owner>/<repo>/pulls/<N>/comments      # actual findings
@@ -525,9 +548,13 @@ condition:
      the app is installed at all, given it can be enabled org-wide with no repo config and "absent"
      looks identical to "not started yet" on a fresh PR. Nothing depends on that fact now.
 
-     A `BLOCKED` with `wrapper 0` may just be a clean round the bot signalled with only a
-     `+1`: it leaves no wrapper then, so nothing proves which tree it read. Get a wrapper
-     with `@codex review`, or accept that round explicitly and record why.
+     A `BLOCKED` with `wrapper 0` used to be explained as "a clean round signalled with
+     only a `+1`, so nothing proves which tree it read". That was **wrong**, and the advice
+     that followed from it ("get a wrapper with `@codex review`") could never work: a
+     re-run on a clean tree produces another clean round, which again posts no review
+     object. A clean round DOES leave SHA-bearing evidence — the issue comment in § 3 — and
+     the gate reads both channels now. If `wrapper 0` persists, the bot genuinely has not
+     reported on this tip.
   3. If a `+1` exists, it is consistent with (1) and (2); if it does not, that is normal
      on a PR the bot has ever had findings on, and is not a reason to wait.
 

@@ -177,6 +177,34 @@ echo "bot-gate fixtures"
 new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 check "wrapper on tip, 0 unresolved, no CodeRabbit" 0
 
+# THE CLEAN ROUND. When the bot finds nothing it posts NO review object at all — only an
+# issue comment carrying `**Reviewed commit:** <sha>` and a `+1`. Reading /pulls/N/reviews
+# alone therefore made this gate unable to clear on success: WRAPPER_TIP was 0 on every
+# clean round, and the documented remedy (`@codex review` for a wrapper) could not help,
+# because a re-run on a clean tree produces another comment and still no review object.
+# Every fixture in this file came from a PR that always had findings, so the success path
+# was never exercised until it blocked three real merges.
+# The sha in that line is ABBREVIATED, so it is matched as a prefix of the tip.
+clean_round() {  # $1 = sha text to put in the marker, $2 = created_at
+  printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"created_at":"%s","body":"Codex Review: Didn'"'"'t find any major issues. :+1:\\n\\n**Reviewed commit:** `%s`"}]]' "$2" "$1"
+}
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+clean_round "${TIP:0:10}" "$NOW_UTC" > "$FIX/issues.json"
+check "a clean round with no review object clears" 0
+
+# ...but only for THIS tip. An abbreviated marker naming another commit proves nothing
+# about the tree about to merge.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+clean_round "${OLDTIP:0:10}" "$NOW_UTC" > "$FIX/issues.json"
+check "a clean-round marker for another tip blocks" 1
+
+# The clean-round comment is a wrapper, so the active-round rule applies to it unchanged:
+# an `eyes` at or after it means a NEW round is running on this same tip.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+clean_round "${TIP:0:10}" "$OLD_UTC" > "$FIX/issues.json"
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":"%s"}]]' "$NOW_UTC" > "$FIX/reactions.json"
+check "an eyes after a clean round still blocks" 1
+
 new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 check "no wrapper for tip blocks" 1
 

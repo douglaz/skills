@@ -209,6 +209,17 @@ require_json() {  # $1 = what it is, for the message; $2 = payload
 REVIEWS=$(api "repos/$REPO/pulls/$PR/reviews") \
   || { echo "BLOCKED: reviews query failed" >&2; exit 3; }
 require_json "reviews" "$REVIEWS"
+
+# Hoisted above the wrapper count because a CLEAN round is not a review object at all.
+# When the bot finds nothing it posts an ISSUE COMMENT — "Codex Review: Didn't find any
+# major issues" with a `**Reviewed commit:** <sha>` line — plus a `+1`. Reading only
+# /pulls/N/reviews therefore made the gate structurally unable to clear on success: on
+# every clean round WRAPPER_TIP was 0 and the verdict was BLOCKED for ever, with the
+# documented remedy ("get a wrapper with `@codex review`") unable to help, since a re-run
+# on a clean tree produces another comment and still no review object.
+ALL_COMMENTS=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/comments" 2>/dev/null) \
+  || { echo "BLOCKED: PR comments query failed" >&2; exit 3; }
+require_json "PR comments" "$ALL_COMMENTS"
 # EXACT login and Bot type, not a prefix: on a public repo anyone may submit a review, and
 # `chatgpt-codex-connector-attacker` satisfies a prefix test — which would let an outside
 # account forge the wrapper this gate treats as proof of review.
@@ -238,8 +249,34 @@ PENDING_ON_TIP=$(printf '%s' "$REVIEWS" | jq -r --arg tip "$TIP" --arg bot "$BOT
    | select(.commit_id==$tip) | select(.state=="PENDING")] | length' 2>/dev/null)
 [[ "$PENDING_ON_TIP" =~ ^[0-9]+$ ]] || { echo "BLOCKED: cannot parse reviews" >&2; exit 3; }
 
+# The OTHER wrapper channel: a clean round's issue comment. It carries
+# `**Reviewed commit:** <sha>`, so it is SHA-bearing evidence naming a tree — the same
+# thing a review wrapper is, in a different endpoint. The `+1` reaction beside it stays
+# worthless and ungated, because a reaction has no SHA; nothing here relaxes that.
+# The sha is ABBREVIATED in that line (10 chars observed), so match it as a prefix of the
+# tip rather than for equality — and require >=7 so a stray short hex string cannot match.
+CLEAN_JSON=$(printf '%s' "$ALL_COMMENTS" | jq -c --arg tip "$TIP" --arg bot "$BOT_LOGIN" '
+  [.[][] | select(.user.login==$bot)
+   | select((.body // "") | test("Reviewed commit"))
+   | . as $c
+   | (($c.body | capture("Reviewed commit:\\*{0,2}[[:space:]]*`?(?<sha>[0-9a-f]{7,40})")).sha) as $sha
+   | select($tip | startswith($sha))
+   | select(($c.created_at // "") != "")]
+  | {n: length, latest: (max_by(.created_at).created_at // "")}' 2>/dev/null)
+[[ -n "$CLEAN_JSON" ]] || CLEAN_JSON='{"n":0,"latest":""}'
+
 WRAPPER_TIP=$(printf '%s' "$WRAPPER_JSON" | jq -r '.n' 2>/dev/null)
 WRAPPER_AT=$(printf '%s' "$WRAPPER_JSON" | jq -r '.latest' 2>/dev/null)
+# Merge the two channels. A round that found nothing and a round that reported findings are
+# both rounds that READ THIS TIP, which is the only question a wrapper answers.
+_CLEAN_N=$(printf '%s' "$CLEAN_JSON" | jq -r '.n' 2>/dev/null)
+_CLEAN_AT=$(printf '%s' "$CLEAN_JSON" | jq -r '.latest' 2>/dev/null)
+if [[ "$_CLEAN_N" =~ ^[0-9]+$ ]] && [[ "$_CLEAN_N" -gt 0 ]]; then
+  WRAPPER_TIP=$(( ${WRAPPER_TIP:-0} + _CLEAN_N ))
+  # Latest across both channels: the active-round check compares `eyes` against this, and
+  # taking the older one would call a finished round active.
+  [[ -z "$WRAPPER_AT" || "$_CLEAN_AT" > "$WRAPPER_AT" ]] && WRAPPER_AT="$_CLEAN_AT"
+fi
 [[ "$WRAPPER_TIP" =~ ^[0-9]+$ ]] || { echo "BLOCKED: cannot parse reviews" >&2; exit 3; }
 
 # EVERY submitted wrapper's epoch, not just the latest — and on ANY commit, not just this
@@ -450,9 +487,6 @@ UNRESOLVED=$(count_unresolved_bot_threads) || { echo "BLOCKED: thread query fail
 # it for RERUN_REQUESTED: an `@codex review` newer than the wrapper is a round nothing else
 # can see, so losing this endpoint means losing the only evidence of it. Every other
 # verdict-feeding read here exits 3 on failure; this one silently emptied and cleared.
-ALL_COMMENTS=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/comments" 2>/dev/null) \
-  || { echo "BLOCKED: PR comments query failed" >&2; exit 3; }
-require_json "PR comments" "$ALL_COMMENTS"
 
 CR_STATE="query-failed"
 if ROLLUP=$(gh pr view "$PR" -R "$REPO" --json statusCheckRollup 2>/dev/null); then
