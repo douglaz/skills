@@ -750,6 +750,19 @@ new_fix; wrapper "chatgpt-codex-connector[bot]" "$NOW_UTC" > "$FIX/reviews.json"
 printf '[[{"event":"ready_for_review","created_at":"%s"}]]' "$OLD_UTC" > "$FIX/timeline.json"
 check "mark-ready before the review clears" 0
 
+# ...and the SAME shape with one undatable wrapper added must not. The first-ready fallback
+# reasons from the ABSENCE of a wrapper at or before the ready, so a wrapper whose
+# submitted_at cannot be parsed — dropped silently from WRAPPER_EPOCHS — read as "no round
+# was in flight" and cleared the gate on malformed review data. It may be that very round.
+# The undated wrapper sits on an OLD tip deliberately: WRAPPER_AT is tip-scoped, so an
+# undatable one on THIS tip would trip the active-round net instead and the fallback would
+# never be reached. WRAPPER_EPOCHS spans every commit, which is where the hole is.
+new_fix
+wrappers_at "$OLDTIP:not-a-date" "$TIP:$NOW_UTC" > "$FIX/reviews.json"
+threads 0 > "$FIX/threads.json"
+printf '[[{"event":"ready_for_review","created_at":"%s"}]]' "$OLD_UTC" > "$FIX/timeline.json"
+check "an undatable wrapper blocks the first-ready fallback" 1
+
 # THE READY OVERLAP: a request starts a round, the PR is marked ready while it runs, and
 # the old round submits after the ready. The pre-wrapper ready used to be exempt from
 # coverage wholesale, so the request's wrapper cleared the gate while the ready-started

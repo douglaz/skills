@@ -347,7 +347,14 @@ ON_DEFAULT=false
 # is not evidence of a fork, and this must never clear on a guess.
 # `:-` on both: neither is assigned at all unless the gh probe block ran, and under `set -u`
 # a bare reference would abort the whole script on any non-GitHub checkout.
-if $ON_DEFAULT && [[ -n "${_PARENT:-}" && "${_PARENT:-}" != "${_SELF_R:-}" ]]; then ON_DEFAULT=false; fi
+# BASE_ORIGIN gates it, because a resolved parent does not mean DEFAULT_BRANCH came FROM the
+# parent. Parent discovery and the parent's default-branch lookup are separate calls: when
+# the second fails, DEFAULT_BRANCH falls back to the FORK's own origin/HEAD. Clearing on
+# that compares the fork's trunk to itself — true by construction — so a fork defaulting to
+# `master` under a parent defaulting to `release` would derive LAND having never looked at
+# the real merge target. `pr`/`forge` are the two provenances that name the parent's branch.
+if $ON_DEFAULT && [[ -n "${_PARENT:-}" && "${_PARENT:-}" != "${_SELF_R:-}" ]] \
+   && [[ "$BASE_ORIGIN" == "forge" || "$BASE_ORIGIN" == "pr" ]]; then ON_DEFAULT=false; fi
 # Classify a newline-separated path list as bead / doc / code. Used for BOTH the working
 # tree and the committed branch diff — the two must agree, or the same change reads as
 # planning while uncommitted and as code once committed.

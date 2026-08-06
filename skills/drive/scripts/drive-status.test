@@ -66,6 +66,10 @@ case "$*" in
       printf '%s\n' "$*" >> "$FIX/gh.calls"
       _repo=$(cat "$FIX/default-repo.txt" 2>/dev/null || echo "")
       if [[ -n "$_repo" && "$*" == *"$_repo"* ]]; then
+        # Persistent failure, distinct from default-first-fails: parent DISCOVERY can
+        # succeed while the parent's default-branch lookup keeps failing, which is what
+        # sends resolution down to the fork's own origin/HEAD.
+        [ -f "$FIX/defaultfail" ] && exit 1
         if [ -f "$FIX/default-first-fails" ] && [ ! -f "$FIX/default-seen" ]; then
           touch "$FIX/default-seen"; exit 1
         fi
@@ -326,6 +330,21 @@ echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/self.t
 touch "$FIX/no-pr"
 check_field "a pre-PR fork branch named like the base is not the trunk" base_fresh true
 check "a pre-PR fork branch named like the base can LAND" LAND
+
+# ...but a resolved parent does NOT mean the default branch came from it. Parent discovery
+# and the parent's default-branch lookup are separate calls; when the second fails, the name
+# falls back to the FORK's origin/HEAD. Clearing on that compares the fork's trunk to itself
+# and derives LAND without ever resolving the parent's real target (here `release`).
+new_repo; G remote set-head origin master; G checkout -q master
+add_code; record '**Phase:** HARDEN'
+mkdir -p "$REPO/.git/drive"
+{ printf 'cleared=%s\n' "$(G rev-parse HEAD)"
+  printf 'cleared_base=%s\n' "$(G rev-parse origin/master)"; } > "$REPO/.git/drive/state"
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/self.txt"
+echo "upstream/repo" > "$FIX/default-repo.txt"; echo release > "$FIX/default-branch.txt"
+touch "$FIX/defaultfail" "$FIX/no-pr"
+check_field "a fork base from origin/HEAD is not the parent's" base_fresh null
+check "an unresolved parent base refuses LAND" HARDEN
 
 # The same name on a NON-fork really is the trunk. Identity has to clear only the fork.
 new_repo; G checkout -q master; add_code; record '**Phase:** HARDEN'

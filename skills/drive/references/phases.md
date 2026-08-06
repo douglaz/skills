@@ -566,7 +566,10 @@ and silently carry the previous bead's closure into its diff. Instead:
     || { echo "cannot resolve the parent repository — closure-PR discovery is incomplete"; exit 1; }
   CLOSURE_PRS=()
   for UP in ${PARENT:+"$PARENT"} "$SELF"; do
-    _PRS=$(gh pr list -R "$UP" --state all --limit 1000 --json number,state,headRefName,title,body) \
+    # `url` is not decoration: this loop MERGES parent and fork results, and a bare `number`
+    # is ambiguous across them — #42 exists in both. Acting on a parent hit with the fork's
+    # `-R` opens an unrelated same-numbered PR. The url carries the repository.
+    _PRS=$(gh pr list -R "$UP" --state all --limit 1000 --json number,state,headRefName,title,body,url) \
       || { echo "cannot query closure PRs in $UP — do not resume work from partial results"; exit 1; }
     CLOSURE_PRS+=("$_PRS")
   done
@@ -609,8 +612,10 @@ in the JSONL, no marker anywhere for the first query to find. Reading empty as
 block is what tells those apart: it asks the same snapshot whether the bead's WORK
 already merged (every work PR body carries the bead id — rb-lite's step 8 requires it).
 
-Read any hit before acting on it, and **read its `state` first — it names the resume
-point**:
+Read any hit before acting on it. **Take the repository from the hit's `url`, never from
+the number alone** — these results merge the parent's PRs with the fork's, and #42 exists
+in both; a parent hit acted on with the fork's `-R` lands you on an unrelated PR. Then
+**read its `state` — it names the resume point**:
 
 - **`MERGED`** — a merged PR carrying the id is almost certainly the work PR, and the bead
   open in the default branch's JSONL beside it is precisely the interrupted state. The

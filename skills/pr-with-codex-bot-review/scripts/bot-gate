@@ -248,13 +248,17 @@ WRAPPER_AT=$(printf '%s' "$WRAPPER_JSON" | jq -r '.latest' 2>/dev/null)
 # verdict separately requires a wrapper naming THIS tip. Scoping this list to the tip
 # discarded all history older than the last push, so the first request on every fresh tip
 # — and every already-answered request from a previous tip — read as never covered, and
-# the gate demanded a redundant round per push. Unparseable timestamps are simply skipped:
-# a wrapper that cannot be dated can prove nothing, and absence from this list only ever
-# points toward blocking.
+# the gate demanded a redundant round per push. Unparseable timestamps are skipped, but
+# they are REMEMBERED: absence from this list points toward blocking in `_round_covered`
+# (no wrapper before the request is an immediate `return 1`) and toward CLEARING in
+# `_ready_covered`'s first-ready fallback, which clears precisely when no wrapper sits at
+# or before the ready. An undated wrapper dropped silently is exactly the round that
+# fallback cannot see, so malformed review data would fail the gate OPEN.
 WRAPPER_EPOCHS=""
+WRAPPER_UNDATED=false
 while IFS= read -r _wt; do
   [[ -n "$_wt" ]] || continue
-  _we=$(iso_to_epoch "$_wt") || continue
+  _we=$(iso_to_epoch "$_wt") || { WRAPPER_UNDATED=true; continue; }
   WRAPPER_EPOCHS="${WRAPPER_EPOCHS}${WRAPPER_EPOCHS:+$'\n'}${_we}"
 done < <(printf '%s' "$REVIEWS" | jq -r --arg bot "$BOT_LOGIN" '
   .[][] | select(.user.login==$bot) | select(.user.type=="Bot")
@@ -307,6 +311,10 @@ _round_covered() {  # $1 = request epoch. 0 iff a wrapper after it can be truste
 _ready_covered() {  # $1 = ready epoch. 0 iff the wrapper after it can be trusted as its round's.
   local b=$1 e n=0
   _round_covered "$b" && return 0
+  # The fallback below reasons from the ABSENCE of a wrapper at or before the ready, so an
+  # undatable wrapper — invisible to WRAPPER_EPOCHS — would read as "none was in flight".
+  # It may be exactly the round this ready is waiting on: doubt blocks.
+  $WRAPPER_UNDATED && return 1
   # <=: a wrapper or start in the ready's own second is order-unknown, and a tie is doubt.
   while IFS= read -r e; do
     [[ -n "$e" ]] && (( e <= b )) && return 1
