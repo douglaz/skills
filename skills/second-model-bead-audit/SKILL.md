@@ -108,7 +108,8 @@ still stronger than guessing which single auditor to invoke.
 ## Required outputs
 
 1. Launch verdict: `FAIL`, `CONDITIONAL PASS`, or `PASS`; `NONE` when panel
-   health is `BLOCKED`.
+   health is `BLOCKED`. State whether the § 3b coherence pass was run and what it
+   found — a verdict on text nobody read end to end is worth less than it looks.
 2. Audit quality: `FULL PANEL`, `DEGRADED`, `PINNED PANEL`, or `BLOCKED`.
 3. Panel roster, model settings, exit health, and independence labels.
 4. One merged report with blockers first and every finding tagged `BOTH`,
@@ -214,13 +215,67 @@ record it as out of scope rather than expanding the graph reflexively.
 Use [references/review-report-template.md](references/review-report-template.md)
 for the synthesis.
 
-### 4. Decide the verdict
+### 3b. The coherence pass — read each bead end to end
+
+Every panel round re-reads the beads, which sounds like it should catch anything. It
+does not catch the defect class that a *long* loop creates: an edit that is correct
+where it lands and falsifies a claim three sections away. Bead text is prose with
+internal cross-references, so each fix is also a chance to contradict something the
+bead already said.
+
+**Entry:** the panel came back clean, OR you have applied fixes across two or more
+rounds. The second trigger is the important one — do not wait for a clean panel to
+check coherence, because incoherence is what keeps the panel from going clean.
+
+**How, and this is the whole point: read, do not grep.** Open each bead's full text
+and read it top to bottom, in order, as an implementer would. Targeted edits at cited
+line numbers are what introduced the drift; more targeted edits will not find it. If
+you catch yourself grepping for the phrase a reviewer quoted, you are repeating the
+mistake.
+
+Check, per bead and then across the set:
+
+- **Title against scope.** A bead retitled or rescoped mid-loop often keeps its
+  original first sentence, which is the line an implementer reads first.
+- **Requirements against each other.** A decision made in one requirement can be
+  forbidden by another written two rounds earlier.
+- **Requirements against ACs.** The commonest failure: the prose is fixed and the AC
+  that asserts the opposite survives, because the reviewer quoted the prose.
+- **Both against the authority docs.** An ADR amended mid-loop leaves beads citing
+  what it used to say — and beads that widened a rule the ADR never granted.
+- **Work-already-done sections.** "On merge, also amend X" is stale once X is amended.
+- **Superseded instructions.** "Delete the glossary entry for Y" is wrong once Y has
+  been replaced rather than removed.
+- **Counts, inventories and file lists.** These go stale silently and are cheap to
+  re-derive. Re-measure them; do not carry them forward. A count that was true two
+  rounds ago reads exactly like one that is true now.
+- **Across the set:** every cross-bead dependency rationale. A bead that says "depends
+  on X because Y" is wrong the moment X's own text stops claiming Y.
+
+Fix by **re-authoring the bead** when the contradictions are structural rather than
+local. A bead carrying half a dozen of them has been patched past the point where
+patching converges; rewriting it from the settled decisions is faster and leaves
+something an implementer can follow.
+
+Then re-run the panel. A coherence fix is a graph change like any other.
+
+**Why this is a phase and not advice.** Observed on a three-bead money-path set: four
+panel rounds, findings *rising* each round, because most were the orchestrator's own
+partial fixes coming back. One coherence pass found eleven contradictions in a single
+bead — including its own title contradicting its scope, an AC demanding exactly what a
+requirement forbade, and a smoke-conversion count wrong by a factor of two — and
+resolved more than the previous two rounds combined. `multi-reviewer-loop` § 4b makes
+the same argument for diffs; bead graphs need it more, because prose has no compiler.
 
 - `FAIL`: any blocking coverage, ownership, dependency, execution, or verification
   defect remains.
 - `CONDITIONAL PASS`: no blocker, but one or more named important conditions must
   be fixed before the intended launch shape is safe.
-- `PASS`: no blocking or important findings remain; optional nits may remain.
+- `PASS`: no blocking or important findings remain; optional nits may remain, AND
+  § 3b has been run on the current text. A panel can only see what it was asked to
+  look at; a bead that contradicts itself can pass every round, because each reviewer
+  reads the section it was pointed at. Do not issue `PASS` on a set that has been
+  edited across rounds without a coherence pass over it.
 
 Reviewer verdict votes are evidence, not a majority election. The orchestrator
 owns the final verdict and must explain any departure from either vote.
@@ -242,6 +297,13 @@ same material finding survives two genuine fix attempts, the graph drifts during
 review, reviewer health is blocked, or an architecture/product decision is
 required. Surface the remaining issue instead of recursively invoking the two
 skills forever.
+
+**When findings RISE across rounds, suspect your own fixes before the graph.** A
+panel that returns more blockers than last time is usually not finding new defects —
+it is finding the contradictions the last round's edits introduced. Two tells: the
+same finding returns in new wording after you "fixed" it, and reviewers begin citing
+your own text against itself. Neither is answered by another round. Run § 3b, then
+re-panel.
 
 Stop and ask for a product/architecture decision when a finding exposes ambiguity
 in the plan rather than a bead-quality defect.
