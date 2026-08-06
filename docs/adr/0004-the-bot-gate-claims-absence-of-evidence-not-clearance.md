@@ -181,8 +181,8 @@ post `@codex review`, and the old round submits — leaving the requested round 
 while every comparison passes.
 
 Both conditions therefore now also require that the request was posted into a quiet PR:
-some wrapper landed before it, with no round-start (any `@codex review` mention, or a
-`ready_for_review` event) in the gap. That is decidable from data already fetched, on the
+some wrapper landed before it, with no round-start (any `@codex review` mention, a
+`ready_for_review` event, a dated head force-push, or a dated `eyes` reaction) in the gap. That is decidable from data already fetched, on the
 working assumption that rounds run one at a time. Where it cannot be established, the gate
 blocks, and one more `@codex review` round is the escape.
 
@@ -196,6 +196,21 @@ request and is now held to the same quiet-PR rule (with a fallback for the first
 mark-ready of a born-draft PR, where nothing observable could have been in flight, and the
 same later-fresh-request escape a base mutation has). With prior-tip wrappers anchoring
 gaps, dated head force-pushes count as round-starts too — the bot often re-reviews a push.
+
+## Amendment, 2026-08-06: two scoping corrections
+
+A dated `eyes` reaction is also a round-start. It is two facts and only one was used — that
+a round is running now, and that one began then — so a round could add `eyes`, a request
+post while it ran, and that older round submit the newest wrapper, leaving the reaction
+neither at-or-after the wrapper nor in the gap set.
+
+And the any-commit rule for round *ends* has one exception: when clearing a base mutation,
+only a wrapper naming the CURRENT tip may anchor the gap. A prior-tip anchor implies a push
+since it landed, and a normal push starts an automatic round that emits no timeline event,
+so the interval it certifies as quiet may hold exactly the round whose wrapper is then
+credited to the request — and that round may have read the pre-mutation diff. The unscoped
+anchor remains correct everywhere else; scoping it globally was tried and made the first
+request on every fresh tip read as uncovered.
 
 The round-start list is knowingly incomplete: a non-force push leaves no dated timeline
 event, and a PR created non-draft starts a round its timeline never shows. That is a

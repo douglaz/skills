@@ -236,10 +236,12 @@ a reviewer.
      fi
      ```
 
-   **The feature branch's OWN tracking ref is INELIGIBLE when it equals HEAD — skip that
-   ref and keep going down the ladder.** On a pushed feature branch `@{upstream}` is
-   `origin/<feature>`, which resolves to HEAD; `git diff` against it is empty and both
-   reviewers return clean having read nothing. But OID equality alone cannot disqualify a
+   **The feature branch's OWN tracking ref is INELIGIBLE, by NAME and regardless of what
+   it points at — skip that ref and keep going down the ladder.** On a pushed feature
+   branch `@{upstream}` is `origin/<feature>`: when it equals HEAD, `git diff` against it
+   is empty and both reviewers return clean having read nothing; when HEAD is AHEAD of it,
+   the diff covers only the unpushed commits while clearance still covers the whole tip,
+   which is worse. Neither is a valid base. But OID equality alone cannot disqualify a
    candidate, and neither can being the upstream: a branch cut from and tracking its
    *target* (`git checkout -b feat origin/release`) has `@{upstream}` = `origin/release`,
    which equals HEAD exactly when the whole review surface is staged, unstaged, or

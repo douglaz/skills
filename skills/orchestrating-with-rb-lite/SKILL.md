@@ -1061,9 +1061,10 @@ failure.
 ## Customizing the panel
 
 rb-lite's built-in panel is `codex review` + `claude -p ... | jq ...` + Gemini via `npx`.
-This skill runs **two** reviewers instead. Drop a `.rb-lite-reviewers` file in the repo
-root before running, one shell command per line — this is the canonical panel, and both
-models are pinned rather than left to whatever each CLI defaults to:
+This skill runs **two** reviewers instead. The canonical file is the two-line one in
+§ Tool dependencies; the block below shows those same two lines plus OPTIONAL extras, so
+read it as a menu rather than a file to paste — the last two entries are a third reviewer
+and a placeholder that does not exist on any PATH:
 
 ```bash
 # .rb-lite-reviewers

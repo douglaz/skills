@@ -467,7 +467,7 @@ if ROLLUP=$(gh pr view "$PR" -R "$REPO" --json statusCheckRollup 2>/dev/null); t
 fi
 
 # A CodeRabbit SUCCESS may be a rate-limit skip or a files-skipped result, in which case
-# nobody reviewed them — and since the documented usage chains this exit code straight
+# nobody reviewed them.
 # § 7 forbids chaining this exit code into `gh pr merge` — the merge sequence has
 # preconditions this gate never checks — so what follows is for the report, not the verdict.
 # A `@codex review` comment newer than the wrapper means a round was REQUESTED and has not

@@ -414,10 +414,15 @@ condition:
      review naming this tip; no PENDING review from the bot on it (a rerun in flight); no
      `@codex review` request left unanswered — one newer than the wrapper has not reported,
      and one older than it only counts as answered when a completed round separates it from
-     any earlier round-start (a trigger comment, a mark-ready, or a head force-push, since
-     the bot often re-reviews a push), because rounds carry no identity and the wrapper
-     after a request can otherwise be an already-running round's submission — round *ends*
-     are the bot's submitted wrappers on any commit, not just the tip's; no `eyes` reaction
+     any earlier round-start (a trigger comment, a mark-ready, a head force-push since the
+     bot often re-reviews a push, or a dated `eyes` reaction, which marks the moment a
+     round began), because rounds carry no identity and the wrapper after a request can
+     otherwise be an already-running round's submission — round *ends* are the bot's
+     submitted wrappers on any commit, not just the tip's, EXCEPT when clearing a base
+     mutation, where only a wrapper naming the current tip may anchor the gap: a prior-tip
+     anchor implies a push since, and a normal push starts an automatic round that emits no
+     timeline event at all, so the interval it would certify as quiet can contain exactly
+     the round whose wrapper is then credited to the request; no `eyes` reaction
      post-dating the wrapper; no base mutation not followed by such a provably-fresh
      review request (the whole `base_ref_*` / `automatic_base_change_*` family; submission
      time alone cannot prove whether the bot read the diff before or after an in-flight

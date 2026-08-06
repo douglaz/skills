@@ -92,7 +92,9 @@ wrapper. Do not hardcode a local checkout path; most installs will not have one.
 Write `.rb-lite-reviewers` before the run — the panel is codex + claude, both models
 pinned, and the file is the only way to set it: rb-lite's built-in default lives inside
 the binary and additionally runs Gemini through `npx -y`, which this stack does not use.
-Take the file from `orchestrating-with-rb-lite` § Customizing the panel.
+Take the two-line file from `orchestrating-with-rb-lite` § Tool dependencies — NOT the
+block under § Customizing the panel, which shows the same two lines beside optional
+extras and a `my-linter` placeholder that would run as a command-not-found reviewer.
 
 ```bash
 if command -v rb-lite >/dev/null 2>&1; then RB=(rb-lite)
