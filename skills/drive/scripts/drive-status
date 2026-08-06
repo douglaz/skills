@@ -614,7 +614,15 @@ HEAD_SHA=$(git rev-parse --verify --quiet HEAD 2>/dev/null || echo "")
 # marker, but displaying a SHA and then refusing to match it reads as a bug.
 CLEARED_MATCHES_TIP=false
 _c_lc=$(printf '%s' "$DRIVE_CLEARED" | tr '[:upper:]' '[:lower:]')
-[[ -n "$_c_lc" && -n "$HEAD_SHA" && "$HEAD_SHA" == "$_c_lc"* ]] && CLEARED_MATCHES_TIP=true
+# RESOLVE the marker as an object; do not prefix-match the string. A prefix test accepts
+# any later HEAD that happens to share the abbreviation, and this marker survives
+# checkout — so a collision, or a prefix ground on purpose, derived LAND for a tree no
+# panel read. `--verify` also fails on an AMBIGUOUS abbreviation, which is the same
+# answer we want: unresolvable and ambiguous both mean unproven, and unproven blocks.
+if [[ -n "$_c_lc" && -n "$HEAD_SHA" ]]; then
+  _c_full=$(git rev-parse --verify --quiet "${_c_lc}^{commit}" 2>/dev/null || echo "")
+  [[ -n "$_c_full" && "$_c_full" == "$HEAD_SHA" ]] && CLEARED_MATCHES_TIP=true
+fi
 # ...and the base must still be the one the panel diffed against. `== true`, not
 # `!= false`: a marker with no `cleared_base` line (written before this field existed, or
 # hand-trimmed) is UNVERIFIED, and unverified is not the same as verified-and-fine — the
@@ -630,7 +638,9 @@ CLEARED_BASE_MATCHES="n/a"
 if [[ -n "$DRIVE_CLEARED_BASE" && -n "$BASE_REF" ]]; then
   _b_lc=$(printf '%s' "$DRIVE_CLEARED_BASE" | tr '[:upper:]' '[:lower:]')
   _cur_base=$(git rev-parse --verify --quiet "$BASE_REF" 2>/dev/null || echo "")
-  if [[ -n "$_cur_base" && "$_cur_base" == "$_b_lc"* ]]; then CLEARED_BASE_MATCHES=true
+  # Same object resolution as the tip marker above, for the same reason.
+  _b_full=$(git rev-parse --verify --quiet "${_b_lc}^{commit}" 2>/dev/null || echo "")
+  if [[ -n "$_cur_base" && -n "$_b_full" && "$_cur_base" == "$_b_full" ]]; then CLEARED_BASE_MATCHES=true
   else CLEARED_BASE_MATCHES=false; fi
 fi
 

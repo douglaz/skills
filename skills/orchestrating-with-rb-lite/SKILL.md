@@ -567,14 +567,6 @@ implement → review loop for each bead.
     # the HEAD — a squash replays onto the CURRENT base, so a behind branch lands a
     # composition nobody reviewed while every SHA still matches. Fetch the live base and
     # test ancestry before merging, the same way pr-with-codex-bot-review § 8 does.
-    # Re-read the branch NAME first. Ancestry answers "did $BASE advance"; it cannot answer
-    # "is $BASE still the target". A retarget between resolving the branches above and
-    # merging leaves this validating one branch while gh squashes onto another, and the
-    # head never moves so --match-head-commit stays satisfied.
-    BASE_NOW=$(gh pr view <pr> -R "$R" --json baseRefName -q .baseRefName) \
-      || { echo "cannot re-read the merge target — do NOT merge"; exit 1; }
-    [ -n "$BASE_NOW" ] && [ "$BASE_NOW" = "$BASE" ] \
-      || { echo "the PR was retargeted ($BASE -> ${BASE_NOW:-unknown}) — the panel reviewed against $BASE; re-run the panel"; exit 1; }
     git fetch "https://github.com/$R.git" "+refs/heads/$BASE:refs/remotes/upstream/$BASE" \
       || { echo "cannot fetch the merge target — base unknown, do NOT merge"; echo "  (on a private repo cloned over SSH this is usually missing git credentials for https, not a missing base)"; exit 1; }
     # Against $MERGING_SHA, not HEAD: that is the commit --match-head-commit pins and the
@@ -584,6 +576,17 @@ implement → review loop for each bead.
       || { echo "local HEAD moved since step 9 — re-run the panel and the checks"; exit 1; }
     git merge-base --is-ancestor "refs/remotes/upstream/$BASE" "$MERGING_SHA" \
       || { echo "REBASE FIRST — $BASE advanced since the review"; exit 1; }
+    # LAST, immediately before the merge, for the reason pr-with-codex-bot-review § 8 gives
+    # at the same spot: ancestry answers "did $BASE advance", never "is $BASE still the
+    # target". A retarget points the PR at a different branch, leaving every check above
+    # validating the old one while gh squashes onto the new one — and the head never moves,
+    # so --match-head-commit stays satisfied. Read here, not earlier: each check between
+    # this read and the merge widens the window. It cannot reach zero (GitHub has no base
+    # pin), but it is one API call wide.
+    BASE_NOW=$(gh pr view <pr> -R "$R" --json baseRefName -q .baseRefName) \
+      || { echo "cannot re-read the merge target — do NOT merge"; exit 1; }
+    [ -n "$BASE_NOW" ] && [ "$BASE_NOW" = "$BASE" ] \
+      || { echo "the PR was retargeted ($BASE -> ${BASE_NOW:-unknown}) — the panel reviewed against $BASE; re-run the panel"; exit 1; }
     gh pr merge <pr> -R "$R" --squash --delete-branch --match-head-commit "$MERGING_SHA" \
       || { echo "merge did not land — do NOT close the bead"; exit 1; }
 

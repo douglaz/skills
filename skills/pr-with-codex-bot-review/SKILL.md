@@ -648,16 +648,6 @@ GATE_JSON=$("$BOT_GATE" <N> --json) || { echo "bot-gate says do NOT merge"; exit
 [ "$(printf %s "$GATE_JSON" | jq -r .verdict)" = "NO_PENDING_EVIDENCE" ] \
   || { echo "gate verdict is not NO_PENDING_EVIDENCE"; exit 1; }
 REVIEWED_TIP=$(printf %s "$GATE_JSON" | jq -r .tip)
-# Re-read the target branch NAME, do not reuse the one read before the gate. Moving the
-# fetch after the gate closed the case where the base branch advanced; it does nothing for
-# a RETARGET, where the PR is pointed at a different branch entirely. $BASE then names the
-# old target, this ancestry check validates that one, and `gh pr merge` squashes onto
-# whatever the PR points at now — `--match-head-commit` cannot see it, because the head
-# never moved. Bot rounds take minutes and a retarget is one click.
-BASE_NOW=$(gh pr view <N> -R "$R" --json baseRefName -q .baseRefName) \
-  || { echo "cannot re-read the merge target — do NOT merge"; exit 1; }
-[ -n "$BASE_NOW" ] && [ "$BASE_NOW" = "$BASE" ] \
-  || { echo "the PR was retargeted ($BASE -> ${BASE_NOW:-unknown}) — the panel reviewed a diff against $BASE; re-run § 7"; exit 1; }
 # Fetch the base AFTER the potentially slow bot gate. Fetching it before the API sweep lets
 # the merge target advance during the gate, making the ancestry result stale at merge time.
 git fetch "https://github.com/$R.git" "+refs/heads/$BASE:refs/remotes/upstream/$BASE" \
@@ -666,6 +656,18 @@ git merge-base --is-ancestor "refs/remotes/upstream/$BASE" HEAD \
   || { echo "REBASE FIRST — $BASE advanced since the review"; exit 1; }
 [ "$REVIEWED_TIP" = "$(git rev-parse HEAD)" ] \
   || { echo "local HEAD moved since the gate ran — re-run § 7"; exit 1; }
+# LAST, immediately before the merge. Ancestry answers "did $BASE advance"; it cannot
+# answer "is $BASE still the target". A RETARGET points the PR at a different branch
+# entirely: $BASE then names the old one, everything above validates that one, and
+# `gh pr merge` squashes onto whatever the PR points at now — with the head unmoved, so
+# --match-head-commit stays satisfied. Read it here rather than beside the gate because
+# every check between the read and the merge widens the window. The window is not zero and
+# cannot be: GitHub offers no base pin to match --match-head-commit. It is now one API call
+# wide instead of a fetch plus two checks, and a retarget is one click.
+BASE_NOW=$(gh pr view <N> -R "$R" --json baseRefName -q .baseRefName) \
+  || { echo "cannot re-read the merge target — do NOT merge"; exit 1; }
+[ -n "$BASE_NOW" ] && [ "$BASE_NOW" = "$BASE" ] \
+  || { echo "the PR was retargeted ($BASE -> ${BASE_NOW:-unknown}) — the panel reviewed a diff against $BASE; re-run § 7"; exit 1; }
 gh pr merge <N> -R "$R" --squash --delete-branch --match-head-commit "$REVIEWED_TIP" \
   || { echo "merge did not land — do NOT proceed"; exit 1; }
 
