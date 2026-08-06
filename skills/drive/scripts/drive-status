@@ -52,11 +52,12 @@ _gh_said_absent() {  # 0 iff the last captured stderr shows gh itself establishe
   # Matching those as absence collapsed an unreadable candidate into "no PR there".
   [[ -n "$_GH_ERR" ]] && grep -qiE 'could not resolve to a pullrequest|no pull requests found' "$_GH_ERR"
 }
-# A present gh binary says nothing about which forge owns the checkout. On a non-GitHub
-# remote every repo lookup fails, which used to masquerade as an unresolved fork parent
-# and suppress an otherwise authoritative origin/HEAD freshness check forever.
+# A present gh binary says nothing about which forge owns the checkout. Inspect origin,
+# not every remote: a GitHub mirror beside a GitLab/Codeberg origin cannot answer for this
+# checkout, and its failed probe would suppress the authoritative origin/HEAD fallback.
 _GITHUB_REMOTE=false
-if git remote -v 2>/dev/null | grep -qi 'github\.com'; then _GITHUB_REMOTE=true; fi
+_ORIGIN_URL=$(git remote get-url origin 2>/dev/null || echo "")
+if printf '%s' "$_ORIGIN_URL" | grep -qi 'github\.com'; then _GITHUB_REMOTE=true; fi
 if $_GITHUB_REMOTE && command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   # OPEN only. `gh pr view` falls back to the most recent CLOSED or MERGED PR on the
   # branch (this script guards PR_STATE on OPEN/* for the same reason), and HARDEN

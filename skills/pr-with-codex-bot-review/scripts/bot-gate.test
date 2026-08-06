@@ -458,6 +458,20 @@ new_fix; wrapper2 "chatgpt-codex-connector[bot]" "$OLD_UTC" "$NEW2_UTC" > "$FIX/
 printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"},{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$MID_UTC" "$NEW_UTC" > "$FIX/issues.json"
 check "a round-start inside the gap still blocks" 1
 
+# GitHub timestamps have one-second precision. With two requests in the same second, the
+# later wrapper may answer the first while the second is still pending; neither request has
+# an identity in the wrapper, so the tie cannot be resolved toward clearance.
+new_fix; wrapper2 "chatgpt-codex-connector[bot]" "$OLD_UTC" "$NEW2_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"},{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$NEW_UTC" "$NEW_UTC" > "$FIX/issues.json"
+check "two same-second review requests block" 1
+
+# The tie rule covers every round-start source, not only comments. A force-push in the
+# request's second may have started the round that owns the later wrapper.
+new_fix; wrapper2 "chatgpt-codex-connector[bot]" "$OLD_UTC" "$NEW2_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$NEW_UTC" > "$FIX/issues.json"
+printf '[[{"event":"head_ref_force_pushed","created_at":"%s"}]]' "$NEW_UTC" > "$FIX/timeline.json"
+check "a same-second push and review request block" 1
+
 # Round ENDS are wrappers on ANY commit, not just this tip. Here a request on a prior tip
 # was bracketed by that tip's wrappers, then a force-push and a fresh round produced the
 # tip wrapper. Scoping the epochs to the tip discarded the bracketing history, so the old

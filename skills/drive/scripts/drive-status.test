@@ -137,10 +137,10 @@ new_repo() {  # a feature branch one commit ahead of master, with an origin
   # case's unrelated history, so the push silently fails and BRANCH_COMMITS is measured
   # against the wrong ref — a case then passes or fails for reasons unrelated to the code.
   rm -rf "$WORK/origin.git"; git init -q --bare "$WORK/origin.git"
-  G remote add origin "$WORK/origin.git"
-  # Production only asks gh about GitHub checkouts. Keep the ordinary fixtures on that
-  # path while origin remains a local bare repo that pushes and fetches without network.
-  G remote add github-marker https://github.com/owner/repo.git
+  # Give origin a GitHub fetch identity while keeping pushes local. Forge detection must
+  # follow origin itself; an unrelated marker remote no longer stands in for the checkout.
+  G remote add origin https://github.com/owner/repo.git
+  G remote set-url --push origin "$WORK/origin.git"
   G push -q origin master
   G checkout -q -b feat
   echo master > "$FIX/prbase.txt"
@@ -220,7 +220,7 @@ check "DONE with uncommitted closure metadata is not DONE" HARDEN
 # Base resolution: a base picked BECAUSE HEAD descends from it makes the ancestry test
 # vacuous, so freshness must be reported unknown rather than true.
 new_repo; add_code; record '**Phase:** HARDEN'; clear_at
-echo x > "$FIX/ghfail"; G remote remove origin 2>/dev/null || true; G remote remove github-marker 2>/dev/null || true
+echo x > "$FIX/ghfail"; G remote remove origin 2>/dev/null || true
 check_field "guessed base reports unknown freshness" base_fresh null
 check "guessed base refuses LAND" HARDEN
 
@@ -232,7 +232,7 @@ check "a dirty AGENTS.md does not imply BUILD" SHAPE
 # to HEAD compared the marker's BASE sha to the TIP, which never matches — so a valid
 # marker read false and the warning blamed a moved PR base while printing the tip as "now".
 new_repo; add_code; record '**Phase:** HARDEN'; clear_at
-echo x > "$FIX/ghfail"; G remote remove origin 2>/dev/null || true; G remote remove github-marker 2>/dev/null || true
+echo x > "$FIX/ghfail"; G remote remove origin 2>/dev/null || true
 G branch -D master >/dev/null 2>&1 || true
 check_field "no base ref leaves cleared_base unverified" cleared_base_matches null
 
@@ -344,9 +344,17 @@ check "parent failure + fork PR refuses LAND" HARDEN
 new_repo; add_code; record '**Phase:** HARDEN'; clear_at
 G remote set-head origin master
 G remote set-url origin https://codeberg.org/owner/repo.git
-G remote remove github-marker
 touch "$FIX/ghfail"
 check "a non-GitHub authoritative base can derive LAND" LAND
+
+# An auxiliary GitHub mirror does not make gh authoritative for a GitLab checkout. Probing
+# the mirror poisons base discovery when gh fails and suppresses the valid origin/HEAD path.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+G remote set-head origin master
+G remote set-url origin https://gitlab.com/owner/repo.git
+G remote add github-mirror https://github.com/owner/repo.git
+touch "$FIX/ghfail"
+check "a GitLab origin ignores an auxiliary GitHub mirror" LAND
 
 # The later forge fallback must keep the selected repository too. A transient failure in
 # the first selected-repo query must not make the fallback silently query the fork.

@@ -620,15 +620,6 @@ HEAD_BRANCH=$(printf %s "$PR_REFS" | jq -r '.headRefName // ""')
 [ -n "$BASE" ] && [ -n "$HEAD_BRANCH" ] \
   || { echo "cannot resolve the PR branches"; exit 1; }
 
-# Fetch the base BEFORE merging, not after, because the answer decides whether to merge at
-# all. Bot rounds take time and the base moves during them; `bot-gate` reasons about the
-# HEAD and never looks at the base, so a branch that fell behind during review would
-# otherwise squash into a composition no reviewer ever saw.
-git fetch "https://github.com/$R.git" "+refs/heads/$BASE:refs/remotes/upstream/$BASE" \
-  || { echo "cannot fetch the merge target — base unknown, do NOT merge"; echo "  (on a private repo cloned over SSH this is usually missing git credentials for https, not a missing base)"; exit 1; }
-git merge-base --is-ancestor "refs/remotes/upstream/$BASE" HEAD \
-  || { echo "REBASE FIRST — $BASE advanced since the review"; exit 1; }
-
 # Check the exit status. `--delete-branch` makes gh switch branches as a side effect, so a
 # FAILED merge still leaves you somewhere plausible-looking; without this the steps below
 # "confirm $BASE is healthy" on a tree where nothing landed, and any caller that closes a
@@ -657,6 +648,12 @@ GATE_JSON=$("$BOT_GATE" <N> --json) || { echo "bot-gate says do NOT merge"; exit
 [ "$(printf %s "$GATE_JSON" | jq -r .verdict)" = "NO_PENDING_EVIDENCE" ] \
   || { echo "gate verdict is not NO_PENDING_EVIDENCE"; exit 1; }
 REVIEWED_TIP=$(printf %s "$GATE_JSON" | jq -r .tip)
+# Fetch the base AFTER the potentially slow bot gate. Fetching it before the API sweep lets
+# the merge target advance during the gate, making the ancestry result stale at merge time.
+git fetch "https://github.com/$R.git" "+refs/heads/$BASE:refs/remotes/upstream/$BASE" \
+  || { echo "cannot fetch the merge target — base unknown, do NOT merge"; echo "  (on a private repo cloned over SSH this is usually missing git credentials for https, not a missing base)"; exit 1; }
+git merge-base --is-ancestor "refs/remotes/upstream/$BASE" HEAD \
+  || { echo "REBASE FIRST — $BASE advanced since the review"; exit 1; }
 [ "$REVIEWED_TIP" = "$(git rev-parse HEAD)" ] \
   || { echo "local HEAD moved since the gate ran — re-run § 7"; exit 1; }
 gh pr merge <N> -R "$R" --squash --delete-branch --match-head-commit "$REVIEWED_TIP" \

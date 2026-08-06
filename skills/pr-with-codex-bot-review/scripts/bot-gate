@@ -272,17 +272,22 @@ done < <(printf '%s' "$REVIEWS" | jq -r --arg bot "$BOT_LOGIN" '
 # wrapper before the request, or a start in the gap, is doubt, and doubt blocks; one more
 # `@codex review` round is the escape.
 _round_covered() {  # $1 = request epoch. 0 iff a wrapper after it can be trusted as its round's.
-  local t=$1 wp="" e
+  local t=$1 wp="" e tied_starts=0
   while IFS= read -r e; do
     [[ -n "$e" ]] || continue
-    (( e < t )) || continue
-    if [[ -z "$wp" ]] || (( e > wp )); then wp=$e; fi
+    # A same-second wrapper cannot prove it landed before this start; excluding the tie is
+    # fail-closed because it can only remove a candidate coverage anchor.
+    (( e >= t )) && continue
+    if [[ -z "$wp" ]] || (( e >= wp )); then wp=$e; fi
   done <<< "$WRAPPER_EPOCHS"
   [[ -n "$wp" ]] || return 1
   while IFS= read -r e; do
     [[ -n "$e" ]] || continue
-    # >=: a start in that wrapper's own second is order-unknown, and a tie is doubt.
-    (( e >= wp && e < t )) && return 1
+    # Inclusive at both ends: either tie has unknown order. Exactly one start at t is the
+    # request (or ready event) being tested; any second one may own the later wrapper.
+    (( e >= wp && e <= t )) || continue
+    if (( e == t && tied_starts == 0 )); then tied_starts=1; continue; fi
+    return 1
   done <<< "$START_EPOCHS"
   return 0
 }
@@ -465,7 +470,7 @@ if [[ -n "$WRAPPER_AT" ]] && [[ -n "${ALL_COMMENTS:-}" ]]; then
       # Dated triggers double as round-START evidence for the coverage check: any mention
       # might have started a round, which is the same loose-match rationale as blocking.
       TRIGGER_EPOCHS="${TRIGGER_EPOCHS}${TRIGGER_EPOCHS:+$'\n'}${_T}"
-      if [[ -z "$T_LAST_LOOSE" ]] || (( _T > T_LAST_LOOSE )); then T_LAST_LOOSE=$_T; fi
+      if [[ -z "$T_LAST_LOOSE" ]] || (( _T >= T_LAST_LOOSE )); then T_LAST_LOOSE=$_T; fi
       [[ -n "$_W" ]] && (( _T >= _W )) && RERUN_REQUESTED=true
     done <<< "$_TRIGGERS"
   fi
@@ -473,9 +478,11 @@ if [[ -n "$WRAPPER_AT" ]] && [[ -n "${ALL_COMMENTS:-}" ]]; then
   if [[ -n "$_TRIGGERS_STRICT" && -n "$_W" ]]; then
     while IFS= read -r _ts; do
       _T=$(iso_to_epoch "$_ts") || true
+      # Strictly before: the >= blocker above already treats a same-second request as
+      # pending, so a timestamp tie can never become clearing evidence here.
       if [[ -n "$_T" ]] && (( _T < _W )) \
          && { [[ -z "$LAST_REVIEW_REQUEST_BEFORE_WRAPPER" ]] \
-              || (( _T > LAST_REVIEW_REQUEST_BEFORE_WRAPPER )); }; then
+              || (( _T >= LAST_REVIEW_REQUEST_BEFORE_WRAPPER )); }; then
         LAST_REVIEW_REQUEST_BEFORE_WRAPPER="$_T"
       fi
     done <<< "$_TRIGGERS_STRICT"
