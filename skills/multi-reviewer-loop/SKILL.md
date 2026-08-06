@@ -156,7 +156,10 @@ a reviewer.
      _GH_ERR=$(mktemp) || { echo "mktemp failed"; exit 1; }
      UP="$SELF"; SEL="$BR"; PRNUM=""; _M=0; _HM=0
      for _c in ${PARENT:+"$PARENT"} "$SELF"; do
-       [ "$_c" = "$SELF" ] && [ "$PARENT" = "$SELF" ] && continue   # do not probe one repo twice
+       # Skips a degenerate candidate: a PARENT that duplicates SELF, and — load-bearing —
+       # the SELF="" case above, where PARENT is empty too, so the lone "" iteration is
+       # skipped, no `gh pr view -R ""` ever runs, and the ladder below resolves the base.
+       [ "$_c" = "$SELF" ] && [ "$PARENT" = "$SELF" ] && continue
        _s="$BR"; [ "$_c" != "$SELF" ] && _s="${SELF%%/*}:$BR"    # gh matches the head LABEL
        # "No such PR" and "the query failed" share an exit code, so absence is read out of
        # gh's own error text. A transient failure read as absence erases one candidate —
