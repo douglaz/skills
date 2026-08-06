@@ -148,6 +148,58 @@ full timeout on the same hung reviewer. Record it, drop
 that reviewer from the pass, and mark the pass `DEGRADED` — the same as any other
 non-zero exit.
 
+### Do not touch the repo while `codex review` is running
+
+**An edit made to a tracked file while `codex review` is in flight is silently
+destroyed.** Both reviewers must have exited — `wait` returned for each PID —
+before you change a single file. If you must edit sooner, `pkill -f "codex
+review"` first and accept the lost pass.
+
+This loop is the most exposed skill in the repo to it: § 2 backgrounds both
+reviewers *by design*, and § 3 is entirely about editing. An agent that starts on
+codex's findings while Fable is still running is inside the hazard window with
+no warning.
+
+The loss does not present as a failure. It presents as a **successful commit**:
+
+```console
+$ git add -A && git commit -m "fix the retry path"
+nothing to commit, working tree clean
+```
+
+— which is indistinguishable from "already committed". `git status` is clean and
+the content is gone from both the working file and `HEAD`. Observed twice on a
+money-path branch, both times after the edits had been applied, verified on disk
+with `grep -c`, and compiled green (clippy clean, 867 tests passing). Gates that
+passed *before* the loss are not evidence.
+
+So when you commit a fix, **assert the content landed, not the exit code**:
+
+```bash
+git show HEAD:path/to/file | grep -c "<distinctive phrase from the fix>"   # must be >0
+```
+
+A clean `git status` is not that assertion — it is equally consistent with the
+edits having been reverted underneath you.
+
+**If you re-test this, do not plant the marker first.** An edit made *before* the
+review starts survives: it disappears mid-run and comes back at the end. Only
+edits made *during* the run are lost. A probe planted early returns a null result
+and would tell the next reader the tool is safe — a worse error than the original.
+Plant it with the review confirmed running (`ps -eo pid,args | grep '[c]odex
+review'`), then re-check on disk before the run ends:
+
+```
+planted mid-run                  count=1
+t=125s, still inside the review  count=0
+```
+
+The mechanism is not established. `git stash list`, `git reflog` and `git
+worktree list` show no trace, and codex's own 1.4 MB transcript contains only
+`git diff` and `git show` — no stash, checkout, reset, or worktree. "Restores a
+snapshot taken at start" fits every observation but was never confirmed at the
+implementation level. The rule above does not depend on which mechanism is right.
+
 ### When a pass looks stuck
 
 Check elapsed time against the 5-15 minute norm before assuming progress:

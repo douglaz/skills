@@ -32,6 +32,13 @@ Treat that as the default for anything non-trivial.
    # no PROMPT arg when --base is used — they are mutually exclusive
    ```
 4. Apply findings, re-commit, re-review. Loop until a pass returns no P0/P1.
+   **Apply nothing until the review process has exited.** An edit to a tracked file
+   while `codex review` is running is silently destroyed and the loss reads as a
+   *successful* commit — `nothing to commit, working tree clean`, with the content
+   gone from the file and from `HEAD`. On re-commit, assert the content landed
+   (`git show HEAD:<file> | grep -c '<phrase>'`), not the exit code; a clean `git
+   status` cannot tell the two apart. See
+   [multi-reviewer-loop/references/reviewer-panel.md](../../multi-reviewer-loop/references/reviewer-panel.md).
 5. For plan-shaped work, `plan-eng-review` / `plan-ceo-review` add a product lens.
 
 **Exit gate:** spec committed **and** a codex xhigh pass returns no P0/P1. Quote the pass.
@@ -203,7 +210,9 @@ phase whose entire job is to establish that the instrument works.
      -c 'model="gpt-5.6-sol"' -c 'model_reasoning_effort="xhigh"'
    ```
    Budget ~2 fix rounds of narrow P2 edges on delicate paths, then hold the line and
-   surface further P2s to the user rather than auto-chasing them.
+   surface further P2s to the user rather than auto-chasing them. As in SPEC, do not
+   edit while that review is in flight — the edit is destroyed silently and the failed
+   commit looks like a successful one.
 
 Re-verify the build and tests yourself after every fix round. **And re-run the panel after
 any final-gate fix** — once you change code, the earlier clean verdicts no longer cover the

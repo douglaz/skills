@@ -119,6 +119,23 @@ different trees — and any edit it made would bypass the implementer loop entir
 also told to read `AGENTS.md`, which is how a repo's own invariants reach the panel when
 this runs under `drive`; without it half the panel reviews without them.
 
+**The same prohibition binds you.** An edit made to a tracked file while `codex review`
+is running is silently destroyed, and rb-lite runs `codex review` inside every review
+round — so for the length of a run the repo is not yours to touch. The loss does not
+surface as an error; it surfaces as `nothing to commit, working tree clean` on a commit
+you expected to carry work, with the content absent from the file *and* from `HEAD`.
+Wait for the run to exit before editing anything, and when you commit the accepted diff
+(step 10.5) assert the content landed rather than trusting the exit code:
+
+```bash
+git show HEAD:path/to/file | grep -c "<distinctive phrase from the change>"   # must be >0
+```
+
+A clean `git status` is not that assertion — it reads identically whether the work was
+committed or reverted underneath you. Detail, including the probe design that gives a
+false all-clear, is in
+[multi-reviewer-loop/references/reviewer-panel.md](../multi-reviewer-loop/references/reviewer-panel.md).
+
 "Customizing the panel" below shows the same two commands alongside OPTIONAL extras — a
 skeptical third reviewer and a `my-linter --json | wrap-as-p-tags` placeholder — which are
 illustrative, not prerequisites. Pasting that block wholesale puts a command-not-found

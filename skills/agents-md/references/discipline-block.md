@@ -39,6 +39,13 @@ afterwards for both the new text and the absence of the old. Prose and markdown
 are where this bites hardest: nothing compiles a README, so a silently skipped
 edit survives and gets reported as done.
 
+The check does not stop at the file. A commit can report success with the content
+absent from `HEAD`: `nothing to commit, working tree clean` reads exactly the same
+whether the work was already committed or was reverted underneath you by another
+process holding the tree. After committing something you care about, look in the
+commit — `git show HEAD:<file> | grep -c "<distinctive phrase>"` — rather than
+trusting a clean `git status`.
+
 The same tools also corrupt without failing. In a `sed` replacement string `&`
 means "the whole match", so substituting a value containing `&&` — any shell
 command that chains, which is most of them — silently doubles it and reports

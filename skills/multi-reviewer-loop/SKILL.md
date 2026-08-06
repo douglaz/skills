@@ -389,6 +389,17 @@ For each pass `N` from `1` to `MAX_PASSES`:
    value is two *independent* reads. Feeding codex's findings into the Claude
    reviewer's prompt collapses it into an echo chamber.
 
+   **Do not edit the repo until both `wait`s have returned.** An edit made to a
+   tracked file while `codex review` is in flight is silently destroyed, and the
+   loss presents as a *successful* commit (`nothing to commit, working tree
+   clean`) with the content absent from the file and from `HEAD`. Backgrounding
+   both reviewers is exactly what puts this loop in the hazard window: codex's
+   findings are readable while Fable is still running, and acting on them there
+   is how the work disappears. If you must edit sooner, `pkill -f "codex review"`
+   first and accept the lost pass. Full detail, the commit-time assertion, and
+   the probe that gives a false all-clear are in
+   [references/reviewer-panel.md](references/reviewer-panel.md).
+
 2. Unwrap the Claude reviewer's JSON into a plain findings file with `jq`, and
    parse findings from both reviewers with the shared pattern in
    [references/reviewer-panel.md](references/reviewer-panel.md) § Parsing findings.
@@ -453,6 +464,13 @@ For each pass `N` from `1` to `MAX_PASSES`:
    reviewer output into the conversation unless the user asks.
 
 ### 3. Fix and validate
+
+**Entry condition: every reviewer has exited.** Not "codex has finished and I can
+see its findings" — both `wait`s returned. Editing a tracked file while `codex
+review` is still running destroys the edit silently (§ 2), so the first fix of
+this phase cannot legally start until the last reviewer of the previous one is
+dead. This is an ordering rule, not a preference; the skill tells you to run the
+reviewers in parallel, which is precisely what makes the early-start tempting.
 
 If every panel reviewer is clean, go to § 4b (the consistency pass) — not
 straight to "Finish". A clean diff is the entry condition for that phase, not
