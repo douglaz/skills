@@ -289,7 +289,13 @@ check "an advanced base refuses LAND" HARDEN
 new_repo; add_code; record '**Phase:** HARDEN'; clear_at
 echo "upstream/repo" > "$FIX/upstream.txt"
 rm -f "$FIX/gh.calls"; phase >/dev/null
-if [[ -s "$FIX/gh.calls" ]] && ! grep -q 'pr view' "$FIX/gh.calls"; then
+# An ABSENT or empty log is a failure, not a pass. Guarding the first branch on `-s` meant
+# that when no call was recorded at all every later grep also came back false and control
+# reached the PASS branch — so "every gh pr view is fork-aware" reported success over zero
+# calls, which is the one outcome it exists to catch.
+if [[ ! -s "$FIX/gh.calls" ]]; then
+  FAIL=$((FAIL+1)); echo "  FAIL gh pr view is called at all (no calls recorded)"
+elif ! grep -q 'pr view' "$FIX/gh.calls"; then
   FAIL=$((FAIL+1)); echo "  FAIL gh pr view is called at all"
 elif grep 'pr view' "$FIX/gh.calls" | grep -qv -- '-R upstream/repo'; then
   FAIL=$((FAIL+1)); echo "  FAIL every gh pr view passes -R <upstream>"
@@ -355,6 +361,28 @@ echo "upstream/repo" > "$FIX/default-repo.txt"; echo release > "$FIX/default-bra
 touch "$FIX/defaultfail" "$FIX/no-pr"
 check_field "a fork base from origin/HEAD is not the parent's" base_fresh null
 check "an unresolved parent base refuses LAND" HARDEN
+
+# A GitHub checkout where the PR probe never RAN — detached HEAD here, no gh elsewhere —
+# cannot know the merge target. origin/HEAD is then just the default branch standing in for
+# a base nobody asked about, and clearing on it would authorise squashing a diff the panel
+# never read: the explicit-number merge path still merges a PR whose base is a release or
+# stacked branch. "Not attempted" is not "attempted and found nothing".
+new_repo; G remote set-head origin master; add_code; record '**Phase:** HARDEN'; clear_at
+G checkout -q --detach
+check_field "an unprobed checkout does not trust origin/HEAD" base_fresh null
+
+# An unreadable branch diff is unknown, not empty. In a shallow or grafted clone BASE_REF
+# and HEAD can share no merge base: the diff fails, the substitution swallowed it, and a
+# branch carrying committed code classified as `none` and fell through to a planning phase.
+# Asserted on tree_phase, not phase: the recorded phase would satisfy `phase` on its own
+# and the fixture would pass with the defect still in place. tree_phase is what this
+# classification actually decides.
+new_repo; add_code; record '**Phase:** HARDEN'
+G checkout -q --orphan unrelated
+printf 'z\n' > "$REPO/z.md"; G add -A; G commit -q -m unrelated
+G push -q -f origin unrelated:master
+G checkout -q feat
+check_field "an unreadable branch diff does not read as no work" tree_phase HARDEN
 
 # The same name on a NON-fork really is the trunk. Identity has to clear only the fork.
 new_repo; G checkout -q master; add_code; record '**Phase:** HARDEN'

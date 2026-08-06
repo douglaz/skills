@@ -58,6 +58,18 @@ _gh_said_absent() {  # 0 iff the last captured stderr shows gh itself establishe
 _GITHUB_REMOTE=false
 _ORIGIN_URL=$(git remote get-url origin 2>/dev/null || echo "")
 if printf '%s' "$_ORIGIN_URL" | grep -qi 'github\.com'; then _GITHUB_REMOTE=true; fi
+# NOT ATTEMPTED is a third state, distinct from both "probed and found none" and "probed
+# and failed". On a GitHub checkout with no gh, or on a detached HEAD, the probe never
+# runs — so _PR_PROBE_FAILED stays false and origin/HEAD went on to be treated as the
+# authoritative merge target. A PR targeting a release or stacked branch then cleared
+# against the DEFAULT branch, and the explicit-number merge path would still merge it: a
+# panel that read one diff authorising a squash of another.
+# Scoped to GitHub checkouts on purpose. Elsewhere there is no PR to be blind to, and
+# marking those unknown would re-block the GitLab-with-a-GitHub-mirror case fixed earlier.
+_PR_PROBE_SKIPPED=false
+if $_GITHUB_REMOTE && { ! command -v gh >/dev/null 2>&1 || [[ -z "$BRANCH" ]]; }; then
+  _PR_PROBE_SKIPPED=true
+fi
 if $_GITHUB_REMOTE && command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   # OPEN only. `gh pr view` falls back to the most recent CLOSED or MERGED PR on the
   # branch (this script guards PR_STATE on OPEN/* for the same reason), and HARDEN
@@ -248,7 +260,10 @@ if [[ -z "$DEFAULT_BRANCH" && -n "${_RREPO:-}" ]] && ! $_PR_BASE_UNKNOWN && ! $_
 fi
 if [[ -z "$DEFAULT_BRANCH" ]] && ! $_PR_BASE_UNKNOWN && ! $_PR_AMBIGUOUS && ! $_PR_PROBE_FAILED; then
   DEFAULT_BRANCH=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
-  [[ -n "$DEFAULT_BRANCH" ]] && BASE_ORIGIN="origin/HEAD"
+  # Authoritative only when a PR probe actually ran. Unprobed, this is the default branch
+  # standing in for a merge target nobody asked about — a guess, and line ~315 labels it
+  # one, which is what the freshness guard already refuses to clear on.
+  [[ -n "$DEFAULT_BRANCH" ]] && ! $_PR_PROBE_SKIPPED && BASE_ORIGIN="origin/HEAD"
 fi
 # Probe remote candidates too: a fresh clone of a single branch has origin/main but no
 # local main, and without this BASE_REF stays empty, BRANCH_COMMITS reads 0, and HARDEN
@@ -389,7 +404,17 @@ if [[ "$BRANCH_COMMITS" -gt 0 ]]; then
   # DRIVE.md alone classified as `doc` and drove tree_phase to SHAPE, while the identical
   # change uncommitted classified as nothing. DRIVE.md is this skill's own bookkeeping,
   # never the work being reviewed.
-  BRANCH_DIFF_KIND=$(_classify_paths "$(git -c core.quotePath=false diff --name-only "$BASE_REF...HEAD" 2>/dev/null | grep -vx 'DRIVE\.md')")
+  # Capture the diff SEPARATELY so its exit status survives. Inline in the substitution,
+  # a failure (a shallow or grafted clone where BASE_REF and HEAD share no merge base)
+  # produced no paths and was indistinguishable from a diff of DRIVE.md alone — so a
+  # branch carrying committed code classified as `none` and fell through to SHAPE/GRAPH.
+  # An unreadable diff is unknown, and unknown here means the committed work is unclassified
+  # rather than absent: `code` routes it to HARDEN, which is where unreviewed commits belong.
+  if _BRANCH_DIFF=$(git -c core.quotePath=false diff --name-only "$BASE_REF...HEAD" 2>/dev/null); then
+    BRANCH_DIFF_KIND=$(_classify_paths "$(printf '%s' "$_BRANCH_DIFF" | grep -vx 'DRIVE\.md')")
+  else
+    BRANCH_DIFF_KIND="code"
+  fi
 fi
 
 # --- gate command detection (first match wins) ---

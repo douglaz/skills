@@ -258,11 +258,16 @@ WRAPPER_EPOCHS=""
 WRAPPER_UNDATED=false
 while IFS= read -r _wt; do
   [[ -n "$_wt" ]] || continue
+  # A SENTINEL, not a filter. `select(length > 0)` dropped a missing/null/empty
+  # submitted_at before this loop could see it, so the undated-wrapper rule below covered
+  # only garbage strings and not the absent case — the commoner one, and the one a PENDING
+  # review on an older tip produces. Both are "a round that cannot be placed in time".
+  [[ "$_wt" == "@undated@" ]] && { WRAPPER_UNDATED=true; continue; }
   _we=$(iso_to_epoch "$_wt") || { WRAPPER_UNDATED=true; continue; }
   WRAPPER_EPOCHS="${WRAPPER_EPOCHS}${WRAPPER_EPOCHS:+$'\n'}${_we}"
 done < <(printf '%s' "$REVIEWS" | jq -r --arg bot "$BOT_LOGIN" '
   .[][] | select(.user.login==$bot) | select(.user.type=="Bot")
-  | (.submitted_at // "") | select(length > 0)' 2>/dev/null)
+  | (if ((.submitted_at // "") | length) == 0 then "@undated@" else .submitted_at end)' 2>/dev/null)
 
 # A wrapper AFTER a request does not show the REQUESTED round ended: rounds carry no
 # identity, so that wrapper can end a round that was already in flight when the request

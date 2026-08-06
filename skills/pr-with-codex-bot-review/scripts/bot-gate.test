@@ -763,6 +763,16 @@ threads 0 > "$FIX/threads.json"
 printf '[[{"event":"ready_for_review","created_at":"%s"}]]' "$OLD_UTC" > "$FIX/timeline.json"
 check "an undatable wrapper blocks the first-ready fallback" 1
 
+# The same hole with an EMPTY timestamp rather than a garbage one. This is the commoner
+# shape — a missing or null submitted_at, which is also what a PENDING review on an older
+# tip looks like — and it was filtered out one stage earlier than the rule above, so the
+# fix for the garbage case did not cover it.
+new_fix
+wrappers_at "$OLDTIP:" "$TIP:$NOW_UTC" > "$FIX/reviews.json"
+threads 0 > "$FIX/threads.json"
+printf '[[{"event":"ready_for_review","created_at":"%s"}]]' "$OLD_UTC" > "$FIX/timeline.json"
+check "an empty wrapper timestamp blocks it too" 1
+
 # An `eyes` reaction is TWO facts: a round is running now, and a round STARTED then. Only
 # the first was ever used, so a round could add `eyes`, `@codex review` post while it ran,
 # and that older round submit the newest wrapper — leaving the reaction neither at-or-after
