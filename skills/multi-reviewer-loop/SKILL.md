@@ -541,6 +541,20 @@ Otherwise:
    Passing validation supports a fix, but it does not by itself prove that a
    rejected finding was false.
 
+   **When the finding is that a behavior is untested — or when your fix adds or
+   changes a test — a green suite is not evidence the fix landed.** Invert the
+   code the test is supposed to pin, confirm the test FAILS, then revert. A test
+   written in answer to "nothing catches this" is worthless if it also passes
+   against the defect, and running it green proves only that it runs. This is the
+   one validation step that separates a test that *pins* a behavior from one that
+   merely *exercises* it.
+
+   Keep the trigger narrow — a coverage finding, or a test you touched — not
+   every fix. It is one edit, one targeted test run, one revert. It earns its
+   cost exactly where reading cannot help: a mapping, an ordering, a clock or
+   lock choice, whose absence changes no test outcome. **If the mutation changes
+   nothing, you have not verified the fix — you have found a second finding.**
+
 6. **Launch the next pass before you write the summary.** Not after — before. Go back to
    § 2 with `N+1`, start the reviewers, and only then write up what this pass did.
 

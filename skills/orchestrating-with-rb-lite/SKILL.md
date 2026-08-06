@@ -346,9 +346,12 @@ ready bead if the queue is not empty, and the exact reason the loop stopped.
     commit it yourself; (b) check `log.txt` for `K of M reviewers succeeded` —
     a `clean` resting on 1-of-3 (e.g. a dead/unauthenticated reviewer) is one
     opinion, not a panel consensus; (c) re-run the repo's own gates on the
-    landed diff (tests, goldens/digests, fmt/clippy); (d) for high-stakes work,
-    add a separate adversarial result-review (e.g. `codex exec` over the
-    committed diff). See "Verify the landed diff" below.
+    landed diff (tests, goldens/digests, fmt/clippy); (d) invert one
+    load-bearing behavior the diff introduces and confirm a gate can actually go
+    red, since re-running an already-green suite cannot tell you whether the
+    behavior is pinned at all; (e) for high-stakes work, add a separate
+    adversarial result-review (e.g. `codex exec` over the committed diff). See
+    "Verify the landed diff" below.
 
 11. **Report concisely.** Tell the user what shipped, what didn't, where
     artifacts are, and whether anything needs manual follow-up. Don't
@@ -378,7 +381,7 @@ when rb-lite runs for more than a quick pass:
 ## Verify the landed diff
 
 The single most important habit when driving rb-lite for real work: **`clean`
-means "no surviving reviewer raised a P0/P1/P2," not "correct."** Four things
+means "no surviving reviewer raised a P0/P1/P2," not "correct."** Five things
 dogfooding made concrete:
 
 - **The diff is uncommitted.** rb-lite leaves the final accepted changes in the
@@ -411,6 +414,19 @@ dogfooding made concrete:
   reviewers then echoed the corrupted comment — a self-reinforcing loop that only
   broke on reading the unchanged cap code. Tests passing does not catch this;
   reading the claims against the code does.
+- **A green suite does not prove the diff is covered.** Re-running gates that
+  already passed cannot tell you whether the loop shipped a behavior no test
+  pins. For each load-bearing behavior the diff *introduces* — a new invariant,
+  an ordering, a clock or lock choice — **invert it in the working tree, confirm
+  a test FAILS, then revert.** If nothing fails, the loop wrote code the panel
+  described and the suite ignores. Observed: a nine-round run ended `clean` with
+  every gate green — `fmt`, `clippy -D warnings`, 685 workspace tests, three
+  demos, a 16/16 adversarial suite, and CI on a dedicated runner — and swapping a
+  single argument at one call site (the mapping anchoring a security deadline)
+  still left all 498 lib tests passing. Nine rounds of reading missed it; one
+  mutation found it. Keep it scoped to the handful of behaviors the diff
+  introduces — each check is one edit, one targeted test, one revert — and treat
+  it as the cheapest thing that separates "tests pass" from "tests would notice."
 
 ## Backlog-drain workflow
 

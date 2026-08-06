@@ -122,6 +122,15 @@ forbidden, and check for each when you review the result. They are the reason
   SUCCEEDING — report it, don't paper over it. (A genuinely wrong comment the
   test exposes may be corrected, but that carries the same evidence burden as any
   behavior claim, and the code itself stays put.)
+- **A gate that has never been red.** Every trap above is a way a test passes
+  without proving anything; this is the one check that catches the whole family
+  at once, including the ones not on this list. Before you accept a green run,
+  break the thing the test exists to detect — invert the invariant, skip the
+  setup step, corrupt the value — and confirm the gate FAILS, then revert. A gate
+  that has only ever been observed green is an untested instrument, and reading
+  its source cannot tell you whether it can fail: rb-lite's panel reads that
+  source and this is precisely what it cannot establish. Report the red run
+  alongside the green one; a PASS with no matching FAIL is half the evidence.
 
 ## Workflow
 
@@ -167,6 +176,14 @@ forbidden, and check for each when you review the result. They are the reason
    If your run reveals a real bug in the code under test, that's the gate
    working — stop and report it.
 
+   **Then run it once more with the thing it detects deliberately broken, and
+   watch it FAIL.** Invert the invariant, skip the setup step, or corrupt the
+   asserted value in your own scratch copy; confirm the gate goes red for the
+   right reason (read the failure message, not just the exit code); revert. Green
+   proves the test runs. Only the red run proves it can tell the difference — and
+   it is the one piece of evidence rb-lite's panel structurally cannot supply,
+   since the panel reads the test's source and never executes it.
+
 7. **Land the exact verified artifact.** Commit the test *as you verified it*
    (don't apply last-minute cosmetic edits to a money gate without re-verifying —
    commit-what-passed). Report per "Required outputs."
@@ -182,10 +199,13 @@ When you finish, report:
 3. **The independent run you did and its real result** — the actual markers you
    checked (the PASS line, the exact assertion values), not the exit code. This
    is the sentence the whole skill exists to let you write truthfully.
-4. Any false-PASS trap you caught and corrected (in the test or in your own
+4. **The red run** — what you broke to make the gate fail, and the failure it
+   printed. A PASS with no matching FAIL is half the evidence: report both, or
+   say plainly that you never saw the gate fail.
+5. Any false-PASS trap you caught and corrected (in the test or in your own
    runner).
-5. The test artifact path and where it landed (branch/PR).
-6. If the gate revealed a real bug, what it was — a bug found here is a success.
+6. The test artifact path and where it landed (branch/PR).
+7. If the gate revealed a real bug, what it was — a bug found here is a success.
 
 ## Task file template
 
@@ -219,11 +239,15 @@ ordering, exact-assertion helpers, and failure diagnostics verbatim>.
   checks that marker, not a trailing exit code.
 - Do NOT modify the code under test to make the test pass. If the code has a bug,
   report it — do not hide it.
+- Prove the gate can fail: after it passes, break the exact thing it detects
+  (invert the invariant / skip the setup / corrupt the asserted value), show the
+  FAIL and its message, then revert. A gate never observed red is not evidence.
 
 ## RUN IT and report the real output
 Actually run the test (<the exact runner command / how to bring up the
-environment>) and paste the real tail showing the PASS marker. Do NOT claim PASS
-without the actual output.
+environment>) and paste the real tail showing the PASS marker, plus the tail of
+the deliberately-broken run showing the FAIL. Do NOT claim PASS without the
+actual output, and do not claim the gate works on the green run alone.
 
 ## Forbidden
 - Do NOT run rb-lite, `br`, `gh`, or signal any parent process. Do NOT commit.
