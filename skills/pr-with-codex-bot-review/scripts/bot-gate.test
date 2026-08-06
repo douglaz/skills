@@ -31,9 +31,24 @@ f() { cat "$FIX/$1" 2>/dev/null || echo "$2"; }
 # lookup carrying -R <upstream> misses — which is how a missing PR actually behaves, and
 # the only way the stub can tell the two repos apart. Gating just one query let an
 # unconditional .parent redirect pass the suite.
+# It misses WITH gh's real error text: the gate now distinguishes established absence
+# from a failed query by that text, so a silent exit 1 is the transient-failure case,
+# modelled separately by pr-upstream-transient.
 if [ -f "$FIX/pr-not-upstream" ]; then
   case "$*" in
+    *"-R $(cat "$FIX/upstream.txt" 2>/dev/null)"*)
+      echo "GraphQL: Could not resolve to a PullRequest with the number of 16. (repository.pullRequest)" >&2
+      exit 1 ;;
+  esac
+fi
+if [ -f "$FIX/pr-upstream-transient" ]; then
+  case "$*" in
     *"-R $(cat "$FIX/upstream.txt" 2>/dev/null)"*) exit 1 ;;
+  esac
+fi
+if [ -f "$FIX/parentfail" ]; then
+  case "$*" in
+    *"repo view"*parent*) exit 1 ;;
   esac
 fi
 case "$*" in
@@ -604,6 +619,22 @@ new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"
 echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/repo.txt"
 printf '%s' "$TIP" > "$FIX/prhead-upstream.txt"
 check "PR matching BOTH repos at this head is exit 3" 3
+
+# A FAILED query on one candidate is not that candidate's absence. Here the upstream query
+# dies with no "no such PR" text while the fork's PR matches: reading the failure as
+# absence collapses a possible BOTH-match into a single match, and the gate clears for a
+# PR the caller may not have meant. Doubt about a candidate is doubt about the verdict.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/repo.txt"
+touch "$FIX/pr-upstream-transient"
+check "a transient candidate-query failure is exit 3" 3
+
+# A failed parent lookup is not "not a fork". `|| echo ""` silently dropped the upstream
+# candidate, which is the same collapse one query earlier: the ambiguity refusal can then
+# never fire against a parent PR nobody could see.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+touch "$FIX/parentfail"
+check "a failed parent lookup is exit 3, not a non-fork" 3
 
 # GitHub emits automatic_base_change_succeeded as a SEPARATE event from base_ref_changed,
 # and it fires in the stacked-PR case: B targets A, A merges and is deleted after B's

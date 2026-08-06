@@ -35,7 +35,18 @@ _RREPO=""
 _BASE_REPO_UNKNOWN=false
 _PR_BASE_UNKNOWN=false
 _PR_AMBIGUOUS=false
+_PR_PROBE_FAILED=false
 _RFLAG=()
+# "No such PR" and "the query failed" share an exit code, so absence is read out of gh's
+# own error text. A failed probe treated as absence collapsed two different states in the
+# clearing direction: an open PR (or the second of two — the ambiguity the probe refuses)
+# could hide behind a transient failure, and freshness was then validated against a base
+# that PR does not target. The same split _PARENT_RESOLVED makes for the parent lookup.
+_GH_ERR=$(mktemp 2>/dev/null) || _GH_ERR=""
+[[ -n "$_GH_ERR" ]] && trap 'rm -f "$_GH_ERR"' EXIT
+_gh_said_absent() {  # 0 iff the last captured stderr shows gh itself established absence
+  [[ -n "$_GH_ERR" ]] && grep -qiE 'could not resolve to a (pullrequest|repository)|no pull requests found|HTTP 404' "$_GH_ERR"
+}
 # A present gh binary says nothing about which forge owns the checkout. On a non-GitHub
 # remote every repo lookup fails, which used to masquerade as an unresolved fork parent
 # and suppress an otherwise authoritative origin/HEAD freshness check forever.
@@ -54,7 +65,13 @@ if $_GITHUB_REMOTE && command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   # or finds an unrelated parent PR with the same number and validates clearance against
   # its base. Pick the candidate whose PR head is this checkout's HEAD; that is the only
   # question with one answer. bot-gate and § 8 resolve the same way.
-  _SELF_R=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "")
+  # A failed self lookup degrades the head-label selector below into a bare branch name,
+  # which finds nothing on exactly the fork clones it exists for — absence by broken
+  # query. Mark the probe unknown rather than let that read as "no PR".
+  if ! _SELF_R=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null); then
+    _SELF_R=""
+    _PR_PROBE_FAILED=true
+  fi
   _PARENT_RESOLVED=true
   if ! _PARENT=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end' 2>/dev/null); then
     _PARENT=""
@@ -87,8 +104,14 @@ if $_GITHUB_REMOTE && command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   for _c in ${_CANDS[@]+"${_CANDS[@]}"}; do
     _sel="$BRANCH"
     [[ -n "$_SELF_R" && "$_c" != "$_SELF_R" ]] && _sel="${_SELF_R%%/*}:$BRANCH"
-    _oid=$(gh pr view "$_sel" -R "$_c" --json headRefOid,state \
-      -q 'select(.state=="OPEN") | .headRefOid' 2>/dev/null) || continue
+    if ! _oid=$(gh pr view "$_sel" -R "$_c" --json headRefOid,state \
+        -q 'select(.state=="OPEN") | .headRefOid' 2>"${_GH_ERR:-/dev/null}"); then
+      # gh's own "no such PR" is absence; anything else could be hiding this candidate's
+      # PR — or the second one the ambiguity refusal exists for. Unknown, not absent.
+      _gh_said_absent && continue
+      _PR_PROBE_FAILED=true
+      continue
+    fi
     [[ -n "$_oid" ]] || continue
     _OPEN_N=$((_OPEN_N + 1))
     [[ -z "$_FOUND" ]] && _FOUND="$_c"
@@ -99,6 +122,10 @@ if $_GITHUB_REMOTE && command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   elif (( _OPEN_N == 1 )); then
     _UP="$_FOUND"
   fi
+  # A failed probe poisons the selection, found PR or not: the unqueried repo may hold the
+  # PR — or a second one, the state the double-open refusal above exists to refuse.
+  # Keeping a single survivor here would adopt one of two merge targets by outage order.
+  $_PR_PROBE_FAILED && _UP=""
   # `-R` still needs a repo even with no PR: fall back to the parent when there is one, so
   # the lookup below asks the place a PR would live. A failed parent query is UNKNOWN, not
   # proof this is not a fork: falling back to the fork there validates against the wrong
@@ -109,6 +136,11 @@ if $_GITHUB_REMOTE && command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
     # Two open PRs are two merge targets. Falling back to the parent here silently adopts
     # one PR's base for a surface the driver may mean to land as the other PR — the same
     # arbitrary pick the probe above just refused. Unknown, and LAND is refused below.
+    _RREPO=""
+  elif $_PR_PROBE_FAILED; then
+    # An unqueryable candidate may host an open PR with its own merge target. Falling back
+    # to the parent default would validate freshness against a base that PR may not use —
+    # the same substitution _PR_BASE_UNKNOWN forbids one step later.
     _RREPO=""
   elif $_PARENT_RESOLVED; then
     _RREPO="${_PARENT:-$_SELF_R}"
@@ -125,14 +157,22 @@ if $_GITHUB_REMOTE && command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   # First match is not an arbitrary pick here: only a PR whose head IS this checkout
   # counts, and two repos having merged the same head prove the same fact.
   _MERGED_REPO=""
-  if [[ -z "$_UP" && -n "$_HEAD_NOW" ]] && ! $_PR_AMBIGUOUS; then
+  if [[ -z "$_UP" && -n "$_HEAD_NOW" ]] && ! $_PR_AMBIGUOUS && ! $_PR_PROBE_FAILED; then
     for _c in ${_CANDS[@]+"${_CANDS[@]}"}; do
       _sel="$BRANCH"
       [[ -n "$_SELF_R" && "$_c" != "$_SELF_R" ]] && _sel="${_SELF_R%%/*}:$BRANCH"
-      _oid=$(gh pr view "$_sel" -R "$_c" --json headRefOid,state \
-        -q 'select(.state=="MERGED") | .headRefOid' 2>/dev/null) || continue
+      if ! _oid=$(gh pr view "$_sel" -R "$_c" --json headRefOid,state \
+          -q 'select(.state=="MERGED") | .headRefOid' 2>"${_GH_ERR:-/dev/null}"); then
+        # Same absence/failure split as the open probe: a failure here is not "never
+        # merged", and reading it that way feeds the "none" claim downstream.
+        _gh_said_absent && continue
+        _PR_PROBE_FAILED=true
+        continue
+      fi
       [[ "$_oid" == "$_HEAD_NOW" ]] && { _MERGED_REPO="$_c"; break; }
     done
+    # A failure discovered mid-probe invalidates the resolution already made above.
+    if $_PR_PROBE_FAILED; then _RREPO=""; _MERGED_REPO=""; fi
   fi
   # An array, so the flag and its value stay two words without relying on how a `${x:+...}`
   # expansion splits. (The often-repeated claim that quotes inside `${_UP:+-R "$_UP"}` are
@@ -171,8 +211,13 @@ if $_GITHUB_REMOTE && command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   # the snapshot is an ancestor of HEAD from the moment the branch is even with it — and
   # permanently after any rebase — so base_fresh would read true no matter how far the real
   # base advanced. It was briefly used here and reverted; do not reach for it again.
-  DEFAULT_BRANCH=$(gh pr view ${_RFLAG[@]+"${_RFLAG[@]}"} --json baseRefName,state \
-    -q 'select(.state=="OPEN") | .baseRefName' 2>/dev/null || echo "")
+  # Skipped when the probe failed: _RFLAG is empty then, and a BARE `gh pr view` resolves
+  # against the fork — adopting a base from exactly the arbitrary selection the poisoned
+  # probe refused to make.
+  if ! $_PR_PROBE_FAILED; then
+    DEFAULT_BRANCH=$(gh pr view ${_RFLAG[@]+"${_RFLAG[@]}"} --json baseRefName,state \
+      -q 'select(.state=="OPEN") | .baseRefName' 2>/dev/null || echo "")
+  fi
   [[ -n "$DEFAULT_BRANCH" ]] && BASE_ORIGIN="pr"
   # FAIL CLOSED when the probe above SAW an open PR but this base read came back empty:
   # that PR's base is knowable and simply was not read, so the repository default is NOT a
@@ -186,12 +231,12 @@ fi
 # parent, so using the fork's origin/HEAD pairs the parent's fetch URL with the fork's
 # branch name and can fetch the wrong target or no target at all.
 if [[ -z "$DEFAULT_BRANCH" && -n "${_RREPO:-}" ]] && ! $_PR_BASE_UNKNOWN && ! $_PR_AMBIGUOUS \
-   && $_GITHUB_REMOTE && command -v gh >/dev/null 2>&1; then
+   && ! $_PR_PROBE_FAILED && $_GITHUB_REMOTE && command -v gh >/dev/null 2>&1; then
   DEFAULT_BRANCH=$(gh repo view "$_RREPO" --json defaultBranchRef \
     -q .defaultBranchRef.name 2>/dev/null || echo "")
   [[ -n "$DEFAULT_BRANCH" ]] && BASE_ORIGIN="forge"
 fi
-if [[ -z "$DEFAULT_BRANCH" ]] && ! $_PR_BASE_UNKNOWN && ! $_PR_AMBIGUOUS; then
+if [[ -z "$DEFAULT_BRANCH" ]] && ! $_PR_BASE_UNKNOWN && ! $_PR_AMBIGUOUS && ! $_PR_PROBE_FAILED; then
   DEFAULT_BRANCH=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
   [[ -n "$DEFAULT_BRANCH" ]] && BASE_ORIGIN="origin/HEAD"
 fi
@@ -205,7 +250,8 @@ fi
 # develop/trunk but still carries a legacy `main` in the ancestry would otherwise resolve to
 # `main`, and BASE_FRESH would then validate the WRONG base — deriving LAND even after the
 # real default branch advanced, which is the unreviewed-squash case this all exists to stop.
-if [[ -z "$DEFAULT_BRANCH" ]] && ! $_PR_BASE_UNKNOWN && ! $_PR_AMBIGUOUS && $_GITHUB_REMOTE && command -v gh >/dev/null 2>&1; then
+if [[ -z "$DEFAULT_BRANCH" ]] && ! $_PR_BASE_UNKNOWN && ! $_PR_AMBIGUOUS && ! $_PR_PROBE_FAILED \
+   && $_GITHUB_REMOTE && command -v gh >/dev/null 2>&1; then
   if [[ -n "${_RREPO:-}" ]]; then
     DEFAULT_BRANCH=$(gh repo view "$_RREPO" --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || echo "")
   else
@@ -427,11 +473,18 @@ elif $_PR_AMBIGUOUS; then
   # against the fork and report ITS number and state as "the PR" — re-admitting through
   # this door the arbitrary selection the probe refused. Name the ambiguity instead.
   PR_STATE="ambiguous"
+elif $_PR_PROBE_FAILED; then
+  # A candidate could not be queried and its failure was not established absence, so
+  # whether this branch has a PR — and which repo hosts it — is unknown. A bare view here
+  # could still "succeed" against the fork and reintroduce the arbitrary pick.
+  PR_STATE="unknown"
 else
   # Same -R + selector as the base lookup: a bare `gh pr view` resolves against the fork,
   # so PR_STATE would read `none` on a fork clone — which also makes the merged-head
   # exemption downstream dead code, since it gates on PR_STATE == MERGED/*.
-  if PR_JSON=$(gh pr view ${_RFLAG[@]+"${_RFLAG[@]}"} --json number,state,reviewDecision 2>/dev/null) && [[ -n "$PR_JSON" ]]; then
+  _PRV_RC=0
+  PR_JSON=$(gh pr view ${_RFLAG[@]+"${_RFLAG[@]}"} --json number,state,reviewDecision 2>"${_GH_ERR:-/dev/null}") || _PRV_RC=$?
+  if [[ "$_PRV_RC" -eq 0 && -n "$PR_JSON" ]]; then
     PR_NUM=$(echo "$PR_JSON" | jq -r '.number // ""' 2>/dev/null)
           # reviewDecision is an empty STRING when undecided, not null, so `//` never
       # fires — test for emptiness explicitly or the label is dead in the common case.
@@ -441,8 +494,12 @@ else
     # transient, not evidence of absence — "none" here would route an already-reviewed
     # branch into another full HARDEN cycle.
     PR_STATE="unknown"
+  elif [[ "$_PRV_RC" -ne 0 ]] && ! _gh_said_absent; then
+    # The view itself failed for some reason other than "no such PR". A reachable repo
+    # (the check below) does not turn that failure into absence.
+    PR_STATE="unknown"
   elif gh repo view >/dev/null 2>&1; then
-    PR_STATE="none"     # gh reached the repo and found no PR for this branch
+    PR_STATE="none"     # gh reached the repo and its own error text said no PR is here
   else
     PR_STATE="unknown"  # gh could not reach the repo (auth, network, permissions)
   fi
@@ -544,7 +601,8 @@ if $ON_DEFAULT && [[ "$PR_STATE" == OPEN* ]]; then ON_DEFAULT=false; fi
 
 BASE_FRESH="n/a"
 if [[ -n "$BASE_REF" && -n "$HEAD_SHA" && "$BASE_ORIGIN" != "guessed" ]] \
-   && ! $_BASE_REPO_UNKNOWN && ! $_PR_BASE_UNKNOWN && ! $_PR_AMBIGUOUS && ! $ON_DEFAULT; then
+   && ! $_BASE_REPO_UNKNOWN && ! $_PR_BASE_UNKNOWN && ! $_PR_AMBIGUOUS && ! $_PR_PROBE_FAILED \
+   && ! $ON_DEFAULT; then
   if git merge-base --is-ancestor "$BASE_REF" HEAD 2>/dev/null; then BASE_FRESH=true; else BASE_FRESH=false; fi
 fi
 
@@ -873,6 +931,7 @@ $_PR_AMBIGUOUS && printf '  ⚠ this branch has an OPEN PR in BOTH %s and %s, an
 # Base drift is invisible in every SHA the driver checks, so it has to be surfaced here.
 [[ "$BASE_FRESH" == "false" ]] && printf '  ⚠ %s has advanced since this branch forked. A squash merge replays onto the CURRENT\n    base, so what lands is a tree no panel and no bot reviewed — while every SHA still\n    matches. Rebase or merge base in, then re-clear before merging.\n' "${BASE_REF:-the base}"
 $_BASE_REPO_UNKNOWN && printf '  ⚠ the parent-repository lookup failed, so the merge target is unknown. The fork itself\n    is not a safe fallback: its base may lag upstream. LAND is refused until base_repo resolves.\n'
+$_PR_PROBE_FAILED && printf '  ⚠ a PR lookup failed without establishing absence, so whether this branch has an open\n    PR — and what its merge target is — is unknown. Unknown is not "none": the base is\n    treated as unresolved and LAND is refused until the query succeeds.\n'
 $_PR_BASE_UNKNOWN && printf '  ⚠ an open PR exists but its base could not be read, so the merge target is unknown.\n    The repository default is NOT a safe substitute — the PR may target a release or\n    stacked branch. LAND is refused until the PR base resolves; re-clearing will not help.\n'
 # A present DRIVE.md whose phase cannot be used is the silently-resolved fallback
 # whether the Phase line is malformed or missing entirely — warn on both.

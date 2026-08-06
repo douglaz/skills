@@ -153,12 +153,21 @@ a reviewer.
      fi
      BR=$(git branch --show-current)
      HEAD_OID=$(git rev-parse HEAD)
+     _GH_ERR=$(mktemp) || { echo "mktemp failed"; exit 1; }
      UP="$SELF"; SEL="$BR"; PRNUM=""; _M=0; _HM=0
      for _c in ${PARENT:+"$PARENT"} "$SELF"; do
        [ "$_c" = "$SELF" ] && [ "$PARENT" = "$SELF" ] && continue   # do not probe one repo twice
        _s="$BR"; [ "$_c" != "$SELF" ] && _s="${SELF%%/*}:$BR"    # gh matches the head LABEL
-       _j=$(gh pr view "$_s" -R "$_c" --json number,state,headRefOid \
-              -q 'select(.state=="OPEN") | "\(.number) \(.headRefOid)"' 2>/dev/null || echo "")
+       # "No such PR" and "the query failed" share an exit code, so absence is read out of
+       # gh's own error text. A transient failure read as absence erases one candidate —
+       # and with it the double-match refusal below — so the pass reviews against
+       # whichever PR the outage left visible.
+       if ! _j=$(gh pr view "$_s" -R "$_c" --json number,state,headRefOid \
+              -q 'select(.state=="OPEN") | "\(.number) \(.headRefOid)"' 2>"$_GH_ERR"); then
+         grep -qiE 'could not resolve|no pull requests found|HTTP 404' "$_GH_ERR" \
+           || { echo "cannot query $_c for $BR's PR — absence not established; do not guess the review base"; exit 1; }
+         _j=""
+       fi
        [ -n "$_j" ] || continue
        _M=$((_M+1))
        if [ "${_j#* }" = "$HEAD_OID" ]; then
@@ -221,12 +230,16 @@ a reviewer.
      fi
      ```
 
-   **The feature branch's HEAD-equal upstream is INELIGIBLE — skip that ref and keep going
-   down the ladder.** On a pushed feature branch `@{upstream}` is `origin/<feature>`, which
-   resolves to HEAD; `git diff` against it is empty and both reviewers return clean having
-   read nothing. Other candidates may legitimately equal HEAD when the entire review
-   surface is staged, unstaged, or untracked work on a branch just cut from the base, so
-   OID equality alone cannot disqualify them.
+   **The feature branch's OWN tracking ref is INELIGIBLE when it equals HEAD — skip that
+   ref and keep going down the ladder.** On a pushed feature branch `@{upstream}` is
+   `origin/<feature>`, which resolves to HEAD; `git diff` against it is empty and both
+   reviewers return clean having read nothing. But OID equality alone cannot disqualify a
+   candidate, and neither can being the upstream: a branch cut from and tracking its
+   *target* (`git checkout -b feat origin/release`) has `@{upstream}` = `origin/release`,
+   which equals HEAD exactly when the whole review surface is staged, unstaged, or
+   untracked work — and that is the correct base, not a degenerate one. What identifies
+   the degenerate ref is its *name*: it is this branch's own remote counterpart. Skip
+   only that.
 
    Only when the ladder is EXHAUSTED with no eligible candidate is it a resolution
    failure. Say so and stop then; do not review air.
@@ -244,9 +257,14 @@ a reviewer.
             origin/main main origin/master master; do
      [ -n "$c" ] || continue
      git rev-parse --verify --quiet "$c" >/dev/null 2>&1 || continue
+     # Only the branch's OWN remote counterpart (`origin/<this-branch>`), and only when it
+     # equals HEAD. A HEAD-equal upstream by another name (origin/release, tracked as the
+     # target, with the surface still uncommitted) is a legitimate base — discarding it
+     # falls through to the repository default and reviews the wrong diff.
      if [ -n "$UPSTREAM" ] && [ "$c" = "$UPSTREAM" ] \
+        && [ "${UPSTREAM#*/}" = "$(git branch --show-current)" ] \
         && [ "$(git rev-parse "$c")" = "$(git rev-parse HEAD)" ]; then
-       continue   # the feature tracking ref would hide all worktree-only changes
+       continue   # the branch's own push ref IS HEAD; diffing against it reviews nothing
      fi
      DIFF_BASE="$c"; break
    done

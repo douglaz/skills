@@ -22,8 +22,14 @@ cat > "$WORK/bin/gh" <<'STUB'
 if [ -f "$FIX/parentfail" ] && [[ "$*" == *"repo view"*parent* ]]; then
   exit 1
 fi
+# no-pr is ESTABLISHED absence, so it fails with gh's real error text — the script now
+# tells that apart from a transient failure, which prfail below models (exit 1, silent).
 if [ -f "$FIX/no-pr" ] && [[ "$*" == *"pr view"* ]]; then
   printf '%s\n' "$*" >> "$FIX/gh.calls"
+  echo 'no pull requests found for branch "feat"' >&2
+  exit 1
+fi
+if [ -f "$FIX/prfail" ] && [[ "$*" == *"pr view"* ]]; then
   exit 1
 fi
 # Weaker than no-pr: PRs exist but none is OPEN, so only the OPEN-filtered probes come
@@ -374,6 +380,16 @@ check "an unreadable PR base refuses LAND" HARDEN
 new_repo; add_code
 printf '%s' "$(G rev-parse HEAD)" > "$FIX/prhead.txt"   # probe succeeds; the state read returns nothing
 check_field "a found PR whose state read fails is unknown" pr.state unknown
+
+# A TRANSIENT probe failure is not absence. Treated as "no PR here", it let the base fall
+# through to the repository default and cleared LAND while an open PR — possibly targeting
+# a release branch — hid behind the outage; and PR_STATE claimed an absence nothing
+# established. Everything derived from the probe must read unknown instead.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+touch "$FIX/prfail"
+check_field "a failed PR probe leaves pr state unknown" pr.state unknown
+check_field "a failed PR probe leaves freshness unknown" base_fresh null
+check "a failed PR probe refuses LAND" HARDEN
 
 # A failed `git status` (corrupt index) left both cleanliness counts at 0, so an
 # UNREADABLE tree satisfied the clean-tree gate and a cleared HARDEN promoted to LAND

@@ -474,15 +474,27 @@ implement → review loop for each bead.
     # so it is per-checkout and never committed (ADR 0001).
     # Probe both repositories: a fork can host its own PR, and a colliding number in the
     # parent can otherwise make the drain watch checks for somebody else's tree.
-    SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner)
-    PARENT=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end')
+    # Guarded: a failed parent lookup is not "not a fork" — it silently drops the one
+    # candidate whose same-number PR the ambiguity refusal below exists to catch.
+    SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner) \
+      || { echo "cannot resolve this repository"; exit 1; }
+    PARENT=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end') \
+      || { echo "cannot resolve the parent repository — a PR there would be invisible"; exit 1; }
     LOCAL_HEAD=$(git rev-parse HEAD)
     # Both repos matching is ambiguous, not a tiebreak: the same branch can be opened as a
     # PR against the parent AND the fork, and picking the parent silently can watch and
     # merge a PR the drain never gated. Refuse; pin the intended repo in every -R instead.
+    # And a FAILED query is not a miss: "no such PR" is read out of gh's own error text,
+    # because a transient failure treated as absence erases one candidate — and with it
+    # the refusal — leaving the drain watching whichever PR the outage left visible.
+    _GH_ERR=$(mktemp) || { echo "mktemp failed"; exit 1; }
     R=""; _M=0
     for _r in ${PARENT:+"$PARENT"} "$SELF"; do
-      _h=$(gh pr view <pr> -R "$_r" --json headRefOid -q .headRefOid 2>/dev/null || echo "")
+      if ! _h=$(gh pr view <pr> -R "$_r" --json headRefOid -q .headRefOid 2>"$_GH_ERR"); then
+        grep -qiE 'could not resolve|no pull requests found|HTTP 404' "$_GH_ERR" \
+          || { echo "cannot query PR <pr> in $_r — absence not established"; exit 1; }
+        _h=""
+      fi
       if [ "$_h" = "$LOCAL_HEAD" ]; then _M=$((_M+1)); [ -n "$R" ] || R="$_r"; fi
     done
     [ "$_M" -le 1 ] || { echo "PR <pr> matches this head in BOTH $PARENT and $SELF — ambiguous"; exit 1; }
@@ -517,13 +529,22 @@ implement → review loop for each bead.
     # a same-number PR in the parent from winning when the real PR is owned by the fork.
     MERGING_SHA=$(cat "$(git rev-parse --git-path rb-lite-merging-sha)" 2>/dev/null || echo "")
     [ -n "$MERGING_SHA" ] || { echo "no pinned SHA — re-run step 9"; exit 1; }
-    SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner)
-    PARENT=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end')
+    SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner) \
+      || { echo "cannot resolve this repository"; exit 1; }
+    PARENT=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end') \
+      || { echo "cannot resolve the parent repository — a PR there would be invisible"; exit 1; }
     # Same ambiguity rule as step 9: both repos carrying PR <pr> at the pinned SHA means
     # two distinct PRs, and merging the parent's silently can land the one nobody gated.
+    # Same absence rule too: only gh's own "no such PR" counts as a miss — a transient
+    # failure treated as one hides the second match and merges the survivor.
+    _GH_ERR=$(mktemp) || { echo "mktemp failed"; exit 1; }
     R=""; _M=0
     for _r in ${PARENT:+"$PARENT"} "$SELF"; do
-      _h=$(gh pr view <pr> -R "$_r" --json headRefOid -q .headRefOid 2>/dev/null || echo "")
+      if ! _h=$(gh pr view <pr> -R "$_r" --json headRefOid -q .headRefOid 2>"$_GH_ERR"); then
+        grep -qiE 'could not resolve|no pull requests found|HTTP 404' "$_GH_ERR" \
+          || { echo "cannot query PR <pr> in $_r — absence not established; do NOT merge"; exit 1; }
+        _h=""
+      fi
       if [ "$_h" = "$MERGING_SHA" ]; then _M=$((_M+1)); [ -n "$R" ] || R="$_r"; fi
     done
     [ "$_M" -le 1 ] || { echo "PR <pr> matches the pinned SHA in BOTH $PARENT and $SELF — ambiguous"; exit 1; }
@@ -587,6 +608,13 @@ implement → review loop for each bead.
         exit 1
       fi
     fi
+    # Refuse a dirty worktree HERE, immediately before the reset: the merge-queue wait
+    # above can run ten minutes, and `checkout -B` silently CARRIES any nonconflicting
+    # tracked modification onto the fresh base — the build below then passes and the next
+    # bead inherits work that was never on this branch. Tracked files only (`-uno`):
+    # checkout does not move untracked files.
+    _WT=$(git status --porcelain -uno) || { echo "cannot read the worktree — not resetting"; exit 1; }
+    [ -z "$_WT" ] || { echo "worktree changed while waiting for the merge — resolve that before resetting to $BASE"; exit 1; }
     git checkout -B "$BASE" "refs/remotes/upstream/$BASE" \
       || { echo "cannot reset to the merge target"; exit 1; }
     nix build

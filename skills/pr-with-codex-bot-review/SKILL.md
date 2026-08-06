@@ -579,11 +579,25 @@ _ST=$(git status --porcelain) || { echo "cannot read the worktree — do NOT mer
 # the parent AND the fork, and the two PRs were gated separately — silently merging the
 # parent's can land a PR whose reviews nobody checked. Refuse and make the caller say
 # which repo.
-SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner)
-UP=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end')
+# Guarded, because a failed lookup is not an answer: an unguarded SELF empties the loop's
+# only sure candidate, and a failed parent lookup silently reads as "not a fork" — dropping
+# the very candidate whose second PR the ambiguity refusal below exists to catch.
+SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner) \
+  || { echo "cannot resolve this repository — do NOT merge"; exit 1; }
+UP=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end') \
+  || { echo "cannot resolve the fork parent — a PR there would be invisible; do NOT merge"; exit 1; }
+# "No such PR" and "the query failed" share an exit code, so absence is read out of gh's
+# own error text; any other failure may be hiding the second match. bot-gate makes the
+# same split, but this loop picks the repo the MERGE targets, so it cannot lean on that.
+_GH_ERR=$(mktemp) || { echo "mktemp failed"; exit 1; }
 R=""; _M=0
 for _c in ${UP:+"$UP"} "$SELF"; do
-  if [ "$(gh pr view <N> -R "$_c" --json headRefOid -q .headRefOid 2>/dev/null)" = "$(git rev-parse HEAD)" ]; then
+  if ! _h=$(gh pr view <N> -R "$_c" --json headRefOid -q .headRefOid 2>"$_GH_ERR"); then
+    grep -qiE 'could not resolve|no pull requests found|HTTP 404' "$_GH_ERR" \
+      || { echo "cannot query PR <N> in $_c — absence not established; do NOT merge"; exit 1; }
+    _h=""
+  fi
+  if [ "$_h" = "$(git rev-parse HEAD)" ]; then
     _M=$((_M+1)); [ -n "$R" ] || R="$_c"
   fi
 done
@@ -673,6 +687,13 @@ if git show-ref --verify --quiet "refs/heads/$BASE" \
     exit 1
   fi
 fi
+# Re-check the worktree HERE, not only at the top of this block: the merge-queue wait
+# above can run ten minutes, and `checkout -B` silently CARRIES any nonconflicting tracked
+# modification made meanwhile onto the fresh base — the build below then "confirms" a tree
+# that is not the branch tip. Tracked files only (`-uno`): checkout does not move
+# untracked files, and the top-of-block check already refused them before merging.
+_ST=$(git status --porcelain -uno) || { echo "cannot re-read the worktree — not resetting"; exit 1; }
+[ -z "$_ST" ] || { echo "worktree changed while waiting for the merge — resolve that, then reset to $BASE by hand"; exit 1; }
 git checkout -B "$BASE" "refs/remotes/upstream/$BASE" \
   || { echo "cannot reset to the merge target — do NOT treat what follows as a check of it"; exit 1; }
 nix build                                    # confirm the base is healthy

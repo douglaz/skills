@@ -82,6 +82,18 @@ for c in gh jq git; do
   command -v "$c" >/dev/null 2>&1 || { echo "BLOCKED: $c not on PATH" >&2; exit 3; }
 done
 
+# "No such PR" and "the query failed" share an exit code, so absence has to be read out of
+# gh's own error text. Treating any failure as absence let a transient network, auth, or
+# rate-limit error on ONE candidate erase it from the resolution below — with the other
+# candidate matching, the double-match refusal is skipped and the gate reports on (and a
+# caller later merges) a PR the caller may not have meant. Same split drive-status makes
+# with _PARENT_RESOLVED: established absence continues, anything else is doubt.
+_GH_ERR=$(mktemp) || { echo "BLOCKED: cannot create a scratch file" >&2; exit 3; }
+trap 'rm -f "$_GH_ERR"' EXIT
+_gh_said_absent() {  # 0 iff the last captured stderr shows gh itself established absence
+  grep -qiE 'could not resolve to a (pullrequest|repository)|no pull requests found|HTTP 404' "$_GH_ERR"
+}
+
 # Resolve the UPSTREAM repo once, then pass `-R` to every call. On a fork clone the PR
 # number belongs to upstream, but a bare `gh pr view N` resolves it against the fork —
 # finding nothing, or worse, a different PR that happens to share the number. `.parent`
@@ -96,7 +108,13 @@ TIP=$(git rev-parse --verify --quiet HEAD) \
 # Try upstream, and fall back to this repo when the PR is not there.
 SELF_REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null) \
   || { echo "BLOCKED: cannot resolve repo" >&2; exit 3; }
-UP_REPO=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end' 2>/dev/null || echo "")
+# FAIL CLOSED, not `|| echo ""`. This query succeeds with "" on a genuine non-fork, so a
+# non-zero exit is a failed lookup — and mapping it to "" silently drops the upstream
+# candidate from the loop below, which is the same absence-for-failure collapse: on a fork
+# whose parent carries the same PR number at this head, the ambiguity refusal can never
+# fire and the gate reports on the one PR it happened to be able to see.
+UP_REPO=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end' 2>/dev/null) \
+  || { echo "BLOCKED: cannot resolve the fork parent — a PR there would be invisible" >&2; exit 3; }
 # Select by HEAD, not by existence. Both a fork and its parent can carry PR number N —
 # likely, since a fork's own PRs are low-numbered and a mature parent has thousands — so an
 # upstream-first existence probe reliably picks the parent's unrelated PR, and the gate
@@ -109,7 +127,13 @@ UP_REPO=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)
 REPO=""
 _REPO_MATCHES=0
 for _cand in ${UP_REPO:+"$UP_REPO"} "$SELF_REPO"; do
-  _h=$(gh pr view "$PR" -R "$_cand" --json headRefOid -q .headRefOid 2>/dev/null) || continue
+  if ! _h=$(gh pr view "$PR" -R "$_cand" --json headRefOid -q .headRefOid 2>"$_GH_ERR"); then
+    # Only gh's own "no such PR" is absence. Any other failure may be hiding this
+    # candidate's PR — including the second match the ambiguity refusal below exists for.
+    _gh_said_absent && continue
+    echo "BLOCKED: cannot query PR $PR in $_cand — absence not established" >&2
+    exit 3
+  fi
   if [[ "$_h" == "$TIP" ]]; then
     _REPO_MATCHES=$((_REPO_MATCHES + 1))
     [[ -n "$REPO" ]] || REPO="$_cand"
