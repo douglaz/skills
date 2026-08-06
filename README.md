@@ -32,15 +32,22 @@ The phase machine, and the skill each phase delegates to:
 | GRAPH | `plan-to-beads-transfer` → `bead-polish-loop` → `second-model-bead-audit` | audit PASS, a scoped `br ready` bead exists |
 | BUILD | `orchestrating-with-rb-lite` | rb-lite clean **and** you ran the gate yourself |
 | PROVE | `testing-with-rb-lite` | the gate ran green at a real exit code |
-| HARDEN | `multi-reviewer-loop` + a final pinned `codex review --base` | `multi-reviewer-loop` reports `CLEAN` (reviewers **and** consistency pass) |
-| LAND | `pr-with-codex-bot-review` | squash-merged, bead closed, `DRIVE.md` committed, branch reset |
+| HARDEN | `multi-reviewer-loop` + a final pinned `codex review --base` | `multi-reviewer-loop` reports `CLEAN` (reviewers **and** consistency pass), then the cleared SHA is recorded |
+| LAND | `pr-with-codex-bot-review` | no evidence of a pending bot round on the tip, base still an ancestor of it, squash-merged; closure lands via a reviewed path |
+| DONE | — | the scope is empty and any `Pending:` closure PR has merged |
 
 Four guards automate what previously took a human nudge: **evidence** (run the real
 gate, never piped through `tail`, make new tests fail first), **scope budget** (a
 file-lock and a do-NOT-build list up front, hard brake at 2× budget or round 4),
 **transitions fire their own gates** (commit/push/review are part of the transition,
-not a separate request), and **durable state** (`DRIVE.md` at the repo root, so
-`status?` is answered before it is asked and a fresh session resumes cleanly).
+not a separate request), and **durable state** split by lifetime — `DRIVE.md` at the repo
+root carries the committed narrative, while per-checkout facts (which tree the panel
+cleared) live under the git dir and are correctly absent from a fresh clone.
+
+LAND is *derived*, never recorded: a commit cannot honestly say its own SHA was reviewed,
+because writing the record changes the SHA. `Phase:` never records LAND — it is computed
+from `cleared == tip`, the current base still being the one the panel reviewed, that base
+still being fresh enough that the squash lands the reviewed tree, and a clean worktree — post-clearance edits are not in the commit a merge would take. See `docs/adr/` for that decision and two others.
 
 A short stop-list still ends a turn. It does not cover landing the drive's own work —
 its branch, its PR, `--force-with-lease` on that branch, the squash-merge once gates are
@@ -51,7 +58,11 @@ turned out to be wrong. The rationale for each rule, with the transcript evidenc
 behind it, is in `references/autonomy-contract.md`.
 
 Ships with `scripts/drive-status`, a read-only detector that prints branch, gate command,
-bead counts, PR state, specs, and an inferred phase (`--json` for scripting).
+bead counts, PR state, specs, the cleared SHA, and an inferred phase (`--json` for
+scripting). It also flags the failures that are otherwise invisible: a base that advanced
+after clearance (a squash merge would then land a tree nobody reviewed, while every SHA
+still matches), and a `DONE` record that names a closure PR — it reports `WAITING_FOR_MERGE` and hands
+you the number to query, deliberately not calling the forge itself.
 
 ### agents-md
 
@@ -208,11 +219,36 @@ Codex:
 Use the second-model-bead-audit skill and give me a launch verdict.
 ```
 
+### testing-with-rb-lite
+
+Uses `rb-lite` to **author** a test or verification gate, then independently **runs**
+it — because rb-lite's reviewer panel reads the test's source and never executes the
+gate, so a clean run means "no reviewer objected", not "the test passes". Reach for it
+when the deliverable *is* the test: a smoke, an integration or property test, or a live
+end-to-end gate that has to go green against real infrastructure.
+
+Claude Code:
+
+```text
+/testing-with-rb-lite write a smoke test that proves the retry budget holds
+```
+
+Codex:
+
+```text
+Use the testing-with-rb-lite skill to build and verify an end-to-end gate for this flow.
+```
+
+Front-loads the six ways a test reports PASS without proving anything — stale binaries,
+substring assertions, assertion-weakening to force green, fake setup, false PASS on a
+hang, and editing the code under test — as hard constraints in the task file, then checks
+for each in the result. A test that falsely reports PASS is worse than no test.
+
 ### orchestrating-with-rb-lite
 
 Uses `rb-lite` as the lightweight implement/review loop for self-contained work
 on the current repo. It also drains an existing `br` backlog by running one
-focused rb-lite loop per ready bead, with one branch, one PR, one squash merge,
+focused rb-lite loop per ready bead, with one branch, one work PR, one squash merge,
 and one bead closure per item.
 
 Claude Code:
@@ -270,6 +306,29 @@ Use the pr-with-codex-bot-review skill to open this PR and handle the bot review
 
 Best fit: you want a GitHub PR carried from local changes through review-bot
 feedback and merge.
+
+Ships with `scripts/bot-gate`, which reports whether anything says the review bots are
+still working on the *current* tip, or have left findings nobody dispositioned: a submitted
+review naming this tip, no PENDING review, no `@codex review` request left unanswered (one
+newer than the wrapper has not reported; one older only counts as answered when a completed
+round separates it from any earlier round-start, since the wrapper after a request can
+otherwise be an already-running round's submission), no `eyes` reaction newer than the
+wrapper, no base mutation lacking such a provably-fresh later review request (a retarget
+grows the diff without moving the head), and zero unresolved threads from either gated bot. It fails closed on any API error or missing tool **in the signals that feed those six** —
+a CodeRabbit query failure is reported and does not block, deliberately. Exit 0, 1 blocked,
+2 usage, 3 cannot determine, and "cannot determine" is never clearance.
+
+CodeRabbit's status is printed and ignored. It is a PR-level signal, not evidence about a
+tree: measured on this repo, CodeRabbit stamped `success`/"Review completed" on a commit
+75 seconds after it was pushed while its own reviews were paused. Its review threads still
+gate; its green does not.
+
+Exit 0 says `NO_PENDING_EVIDENCE`, not "cleared", and the distinction is the point:
+neither bot emits a round-terminal signal, so every conclusion is drawn from absence over a
+bounded observation window, which the JSON reports both ends of. It is a stop sign, not a
+green light — where the forge can enforce a rule server-side, put it there instead.
+`scripts/bot-gate.test` exercises it against a stubbed `gh` — each case
+a defect found in review, each shown to go red against the real bug.
 
 ### galtland-architecture
 
@@ -400,11 +459,11 @@ directories created by `--migrate-existing`.
 - SHA-256 tooling (`sha256sum` or `shasum`) for
   `second-model-bead-audit` snapshot integrity
 - GNU `timeout` with `--kill-after` support (named `timeout`, or `gtimeout` from
-  Homebrew coreutils) for `second-model-bead-audit` and normal
-  `orchestrating-with-rb-lite` runs when using a source/path rb-lite install;
-  Nix-wrapped rb-lite supplies GNU coreutils
-- `npx` plus Gemini credentials to enable the optional third default
-  `orchestrating-with-rb-lite` reviewer
+  Homebrew coreutils) to bound each reviewer in `multi-reviewer-loop` — both CLIs can
+  hang with no output and no exit, and a backgrounded one has nothing to reap it —
+  and for `second-model-bead-audit` unconditionally — it never uses rb-lite, so nothing
+  can supply `timeout` on its behalf — and for normal `orchestrating-with-rb-lite` runs
+  when using a source/path rb-lite install; Nix-wrapped rb-lite supplies GNU coreutils
 - `rb-lite` on `PATH`, or `nix run --refresh github:douglaz/rb-lite -- ...`
   (the `--refresh` avoids running an hour-stale cached revision), for
   `orchestrating-with-rb-lite`

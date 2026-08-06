@@ -120,7 +120,18 @@ run `second-model-bead-audit` by default after the graph meets these gates.
 - Reconcile priority with graph reality so critical blockers are obvious.
 
 4. Apply only justified changes with `br`.
-5. Flush mutations with `br sync --flush-only`.
+
+5. Flush with an **explicit** `br sync --flush-only` and require it to succeed:
+
+   ```bash
+   br sync --flush-only || { echo "flush failed — mutations not persisted"; exit 1; }
+   ```
+
+   The explicit sync is the whole guard: the hazard is the *automatic* flush after a
+   mutating `br` command swallowing its error, and the mutation is still in the shared DB,
+   so this either writes it or fails loudly. A round that applied no changes syncs cleanly
+   and reports nothing — a healthy convergence signal, not a failed flush.
+
 6. Write a round summary:
    - beads added, rewritten, merged, closed, or reprioritized
    - findings ledger entries closed this round

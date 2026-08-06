@@ -1,0 +1,591 @@
+#!/usr/bin/env bash
+# drive-status.test — fixture tests for the phase derivation.
+#
+# Same argument as bot-gate.test: this is decision logic whose failure direction is an
+# unreviewed merge, and whose consumers (phases.md's clearance snippets) `exit 1` on its
+# JSON. Every case below is a behaviour a reviewer asked for or a defect found in review.
+#
+# Usage: ./drive-status.test        (exits 0 if all pass)
+
+set -uo pipefail
+HERE=$(cd "$(dirname "$0")" && pwd)
+DS="$HERE/drive-status"
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+PASS=0; FAIL=0
+
+# gh is stubbed so the tests never touch the network and can model a degraded forge.
+mkdir -p "$WORK/bin"
+cat > "$WORK/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+[ -f "$FIX/ghfail" ] && exit 1
+if [ -f "$FIX/parentfail" ] && [[ "$*" == *"repo view"*parent* ]]; then
+  exit 1
+fi
+# no-pr is ESTABLISHED absence, so it fails with gh's real error text — the script now
+# tells that apart from a transient failure, which prfail below models (exit 1, silent).
+if [ -f "$FIX/no-pr" ] && [[ "$*" == *"pr view"* ]]; then
+  printf '%s\n' "$*" >> "$FIX/gh.calls"
+  echo 'no pull requests found for branch "feat"' >&2
+  exit 1
+fi
+if [ -f "$FIX/prfail" ] && [[ "$*" == *"pr view"* ]]; then
+  exit 1
+fi
+# PARTIAL failure: the merged-head read alone. It is the only pr-view carrying headRefOid
+# WITHOUT state, so this cannot disturb the OPEN/MERGED resolution probes, which is the
+# whole point — the suite already covered all-calls-fail via prfail and not this.
+if [ -f "$FIX/mergedheadfail" ] && [[ "$*" == *"pr view"*headRefOid* && "$*" != *state* ]]; then
+  exit 1
+fi
+# REPOSITORY-level not-found: the repo exists (the parent lookup just named it) but the
+# token cannot read it. gh's wording differs from no-pr's PullRequest-level text, and only
+# the latter establishes absence.
+if [ -f "$FIX/pr-repo-404" ] && [[ "$*" == *"pr view"* ]]; then
+  echo "GraphQL: Could not resolve to a Repository with the name 'owner/repo'. (repository)" >&2
+  exit 1
+fi
+# Weaker than no-pr: PRs exist but none is OPEN, so only the OPEN-filtered probes come
+# back empty — the way real gh behaves once a PR merges. The filter text is visible in
+# "$*" because the stub sees the raw -q argument.
+if [ -f "$FIX/no-open-pr" ] && [[ "$*" == *"pr view"* && "$*" == *'select(.state=="OPEN")'* ]]; then
+  printf '%s\n' "$*" >> "$FIX/gh.calls"
+  echo ""
+  exit 0
+fi
+case "$*" in
+  *"pr view"*'select(.state=="MERGED")'*)
+      # The merged-head probe. Per-repo like the open-PR heads below, so "the merged PR
+      # lives in the fork, not the parent" is expressible.
+      printf '%s\n' "$*" >> "$FIX/gh.calls"
+      _up=$(cat "$FIX/upstream.txt" 2>/dev/null || echo "")
+      _at_up=false
+      [ -n "$_up" ] && case "$*" in *"-R $_up"*) _at_up=true;; esac
+      if [ -f "$FIX/prmerged-upstream.txt" ] && $_at_up; then
+        cat "$FIX/prmerged-upstream.txt"
+      elif [ -f "$FIX/prmerged.txt" ] && ! $_at_up; then
+        cat "$FIX/prmerged.txt"
+      else echo ""; fi ;;
+  *"repo view"*parent*)   cat "$FIX/upstream.txt" 2>/dev/null || echo "owner/repo" ;;
+  *"repo view"*nameWithOwner*) cat "$FIX/self.txt" 2>/dev/null || cat "$FIX/upstream.txt" 2>/dev/null || echo "owner/repo" ;;
+  *"repo view"*defaultBranchRef*)
+      printf '%s\n' "$*" >> "$FIX/gh.calls"
+      _repo=$(cat "$FIX/default-repo.txt" 2>/dev/null || echo "")
+      if [[ -n "$_repo" && "$*" == *"$_repo"* ]]; then
+        # Persistent failure, distinct from default-first-fails: parent DISCOVERY can
+        # succeed while the parent's default-branch lookup keeps failing, which is what
+        # sends resolution down to the fork's own origin/HEAD.
+        [ -f "$FIX/defaultfail" ] && exit 1
+        if [ -f "$FIX/default-first-fails" ] && [ ! -f "$FIX/default-seen" ]; then
+          touch "$FIX/default-seen"; exit 1
+        fi
+        cat "$FIX/default-branch.txt"
+      else echo master; fi ;;
+  *"pr view"*baseRefName*)
+      printf '%s\n' "$*" >> "$FIX/gh.calls"
+      # An open PR whose base read fails — the probe by head succeeds, this one does not.
+      [ -f "$FIX/basefail" ] && exit 1
+      # Honour the requested fields. Asking for baseRefOid hands back the CREATION-TIME
+      # snapshot, which is what GitHub really returns — so a fixture can prove what
+      # happens when someone tests freshness against it.
+      if [[ "$*" == *baseRefOid* ]]; then
+        printf '%s %s\n' "$(cat "$FIX/prbase.txt" 2>/dev/null)" "$(cat "$FIX/prbaseoid.txt" 2>/dev/null)"
+      else
+        cat "$FIX/prbase.txt" 2>/dev/null || echo ""
+      fi ;;
+  *"pr view"*headRefOid*)
+      printf '%s\n' "$*" >> "$FIX/gh.calls"
+      # Per-repo heads: a lookup carrying -R <upstream> gets prhead-upstream.txt when it
+      # exists, so "the PR lives in the fork, not the parent" can actually be modelled.
+      if [ -f "$FIX/prhead-upstream.txt" ] && case "$*" in *"-R $(cat "$FIX/upstream.txt" 2>/dev/null)"*) true;; *) false;; esac; then
+        if [ -f "$FIX/prclosed-upstream" ] && [[ "$*" == *state* ]]; then echo ""
+        else cat "$FIX/prhead-upstream.txt"; fi
+      else
+        cat "$FIX/prhead.txt" 2>/dev/null || echo ""
+      fi ;;
+  *"pr view"*number*)
+      printf '%s\n' "$*" >> "$FIX/gh.calls"
+      # prview-repo.txt pins the PR to ONE repository. Without it the stub answered the
+      # state query for whichever -R was passed, so a query aimed at the wrong repo still
+      # found the PR and a wrong-repo defect could not make any fixture fail.
+      if [ -f "$FIX/prview-repo.txt" ]; then
+        case "$*" in
+          *"-R $(cat "$FIX/prview-repo.txt")"*) cat "$FIX/prview.json" 2>/dev/null || echo "" ;;
+          *) echo "" ;;
+        esac
+      else
+        cat "$FIX/prview.json" 2>/dev/null || echo ""
+      fi ;;
+  *"repo view"*)          echo "owner/repo" ;;
+  *) echo "" ;;
+esac
+exit 0
+STUB
+chmod +x "$WORK/bin/gh"
+
+G() { git -C "$REPO" -c user.email=t@t -c user.name=t "$@"; }
+phase() { ( cd "$REPO" && PATH="$WORK/bin:$PATH" FIX="$FIX" "$DS" --json | jq -r '.phase' ); }
+field() { ( cd "$REPO" && PATH="$WORK/bin:$PATH" FIX="$FIX" "$DS" --json | jq -r ".$1" ); }
+
+check() {  # $1 name, $2 expected phase
+  local got; got=$(phase)
+  if [[ "$got" == "$2" ]]; then PASS=$((PASS+1)); printf '  ok   %-48s (%s)\n' "$1" "$got"
+  else FAIL=$((FAIL+1)); printf '  FAIL %-48s want %s got %s\n' "$1" "$2" "$got"; fi
+}
+check_field() {  # $1 name, $2 field, $3 expected
+  local got; got=$(field "$2")
+  if [[ "$got" == "$3" ]]; then PASS=$((PASS+1)); printf '  ok   %-48s (%s=%s)\n' "$1" "$2" "$got"
+  else FAIL=$((FAIL+1)); printf '  FAIL %-48s %s want %s got %s\n' "$1" "$2" "$3" "$got"; fi
+}
+
+new_repo() {  # a feature branch one commit ahead of master, with an origin
+  REPO="$WORK/r"; FIX="$WORK/fix"
+  rm -rf "$REPO" "$FIX"; mkdir -p "$REPO" "$FIX"
+  git init -q "$REPO"; G branch -M master
+  printf 'x\n' > "$REPO/README.md"; G add -A; G commit -q -m init
+  # A FRESH bare origin per case. Reusing one leaves origin/master pointing at a previous
+  # case's unrelated history, so the push silently fails and BRANCH_COMMITS is measured
+  # against the wrong ref — a case then passes or fails for reasons unrelated to the code.
+  rm -rf "$WORK/origin.git"; git init -q --bare "$WORK/origin.git"
+  # Give origin a GitHub fetch identity while keeping pushes local. Forge detection must
+  # follow origin itself; an unrelated marker remote no longer stands in for the checkout.
+  G remote add origin https://github.com/owner/repo.git
+  G remote set-url --push origin "$WORK/origin.git"
+  G push -q origin master
+  G checkout -q -b feat
+  echo master > "$FIX/prbase.txt"
+}
+add_code()   { printf 'c\n' > "$REPO/a.py"; G add -A; G commit -q -m work; }
+record()     { printf '%s\n' "$1" > "$REPO/DRIVE.md"; G add -A; G commit -q -m rec; }
+clear_at()   { mkdir -p "$REPO/.git/drive"
+               { printf 'cleared=%s\n' "${1:-$(G rev-parse HEAD)}"
+                 printf 'cleared_base=%s\n' "$(G rev-parse master)"; } > "$REPO/.git/drive/state"; }
+clear_tip_only() { mkdir -p "$REPO/.git/drive"; printf 'cleared=%s\n' "$(G rev-parse HEAD)" > "$REPO/.git/drive/state"; }
+
+echo "drive-status fixtures"
+
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+check "cleared == tip, base fresh+unchanged, clean tree" LAND
+
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at "deadbeef1234"
+check "stale clearance refuses LAND" HARDEN
+
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+printf 'edit\n' >> "$REPO/a.py"
+check "dirty worktree refuses LAND" HARDEN
+
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+printf 'new\n' > "$REPO/untracked.py"
+check "untracked file refuses LAND" HARDEN
+
+new_repo; add_code; record '**Phase:** HARDEN'
+check "no clearance marker refuses LAND" HARDEN
+
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at "$(G rev-parse HEAD | tr 'a-f' 'A-F')"
+check "uppercase marker still matches" LAND
+
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at "$(G rev-parse HEAD | cut -c1-10)"
+check "abbreviated marker still matches" LAND
+
+new_repo; add_code; record '**Phase:** LAND'
+check "a recorded LAND is ignored" HARDEN
+
+new_repo; add_code; record '**Phase:** DONE'
+check "DONE on a branch with unmerged commits" HARDEN
+
+new_repo; add_code; record '**Phase:** DONE'; clear_at
+check "DONE-on-branch then cleared derives LAND" LAND
+
+# "Landed" means PUSHED: with the record still unpushed the branch has commits the remote
+# does not, which is the unpushed-closure state below, not a finished drive.
+new_repo; record '**Phase:** DONE · **Pending:** metadata PR #7'
+G checkout -q master; G merge -q feat 2>/dev/null || true; G push -q origin master
+check "landed DONE with a pending closure PR" WAITING_FOR_MERGE
+check_field "a bare pending number names no repository" pending_pr_repo null
+
+# `#N` alone cannot say WHERE, and on a fork the same number is a different PR in the
+# parent and in the fork. The qualified form carries the repository into the fresh clone,
+# which is the one thing a checkout cannot derive.
+new_repo; record '**Phase:** DONE · **Pending:** metadata PR upstream/repo#7'
+G checkout -q master; G merge -q feat 2>/dev/null || true; G push -q origin master
+check_field "a qualified pending record keeps its repository" pending_pr_repo upstream/repo
+check_field "a qualified pending record still yields the number" pending_pr 7
+check "a qualified pending record is still WAITING_FOR_MERGE" WAITING_FOR_MERGE
+
+# A PR retargeted after clearance expands the diff the panel reviewed without moving HEAD.
+# Written directly, not appended: the parser takes the FIRST cleared_base line, so
+# appending a second leaves the good one in force and the case passes vacuously.
+new_repo; add_code; record '**Phase:** HARDEN'
+mkdir -p "$REPO/.git/drive"
+{ printf 'cleared=%s\n' "$(G rev-parse HEAD)"; printf 'cleared_base=deadbeef1234\n'; } > "$REPO/.git/drive/state"
+check "clearance whose base moved refuses LAND" HARDEN
+
+# A marker with no cleared_base at all is UNVERIFIED, not grandfathered.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_tip_only
+check "clearance without a recorded base refuses LAND" HARDEN
+
+# A closure committed locally on the default branch, never pushed: reporting DONE there
+# meant a fresh clone still saw the bead open.
+new_repo
+G checkout -q master
+record '**Phase:** DONE'
+check "unpushed closure on the default branch is not DONE" HARDEN
+
+# A DONE record written before the closure is committed: uncommitted metadata has landed
+# nowhere, so a resumed drive must not stop.
+new_repo; G checkout -q master; record '**Phase:** DONE'; G push -q origin master
+printf 'closure\n' > "$REPO/pending.jsonl"
+check "DONE with uncommitted closure metadata is not DONE" HARDEN
+
+# Base resolution: a base picked BECAUSE HEAD descends from it makes the ancestry test
+# vacuous, so freshness must be reported unknown rather than true.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+echo x > "$FIX/ghfail"; G remote remove origin 2>/dev/null || true
+check_field "guessed base reports unknown freshness" base_fresh null
+check "guessed base refuses LAND" HARDEN
+
+# AGENTS.md is a doc; classifying it as code sent a fresh repo to BUILD.
+new_repo; printf '# A\n' > "$REPO/AGENTS.md"
+check "a dirty AGENTS.md does not imply BUILD" SHAPE
+
+# With no base ref resolvable, `cleared_base` has nothing to compare against. Falling back
+# to HEAD compared the marker's BASE sha to the TIP, which never matches — so a valid
+# marker read false and the warning blamed a moved PR base while printing the tip as "now".
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+echo x > "$FIX/ghfail"; G remote remove origin 2>/dev/null || true
+G branch -D master >/dev/null 2>&1 || true
+check_field "no base ref leaves cleared_base unverified" cleared_base_matches null
+
+# A branch whose only committed change is DRIVE.md carries no reviewable code. The
+# classifier strips DRIVE.md, so the diff classifies as `none` — which fell into the
+# catch-all arm and reported HARDEN, "unreviewed substantive code", for a diff containing
+# nothing but this skill's own bookkeeping. The working-tree path already falls through to
+# the bead states for the identical change; the two call sites must agree.
+new_repo
+printf '**Phase:** BUILD\n' > "$REPO/DRIVE.md"; G add -A; G commit -q -m rec
+check_field "a DRIVE.md-only branch is not HARDEN by tree" tree_phase SHAPE
+
+# The header promises exit 0 even when signals are missing.
+new_repo
+( cd "$REPO" && PATH="$WORK/bin:$PATH" FIX="$FIX" "$DS" >/dev/null 2>&1 )
+rc=$?
+if [[ "$rc" -eq 0 ]]; then PASS=$((PASS+1)); echo "  ok   no DRIVE.md still exits 0                      (0)"
+else FAIL=$((FAIL+1)); echo "  FAIL no DRIVE.md still exits 0                      got $rc"; fi
+
+# --- freshness must come from the tracking ref, never from baseRefOid ---
+# `baseRefOid` is a CREATION-TIME SNAPSHOT of the base tip, not the base's current commit,
+# and no fetch refreshes it: git/git PR #206 has reported the same 2016 OID for a decade
+# while master moved thousands of commits. Testing freshness against it reads true forever,
+# because the snapshot is an ancestor of HEAD from the moment the branch is even with it.
+# This fixture is the discriminator: the base has ADVANCED past the branch point, so the
+# tracking ref is correctly NOT an ancestor, while the snapshot still is. The stub hands
+# out the snapshot to anyone who asks for it, so reintroducing that preference turns
+# base_fresh true here and derives LAND over a base nobody reviewed.
+new_repo
+SNAPSHOT=$(G rev-parse master)          # what the PR was opened against
+add_code; record '**Phase:** HARDEN'; clear_at
+G checkout -q master; printf 'upstream\n' > "$REPO/other.py"; G add -A; G commit -q -m upstream
+G push -q origin master; G checkout -q feat
+printf '%s\n' "$SNAPSHOT" > "$FIX/prbaseoid.txt"
+check_field "an advanced base is NOT fresh (snapshot ignored)" base_fresh false
+check "an advanced base refuses LAND" HARDEN
+
+# The stub used to answer any command containing the JSON field, so dropping the branch
+# selector or `-R <upstream>` — the fork-clone handling — left the suite green.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+echo "upstream/repo" > "$FIX/upstream.txt"
+rm -f "$FIX/gh.calls"; phase >/dev/null
+# An ABSENT or empty log is a failure, not a pass. Guarding the first branch on `-s` meant
+# that when no call was recorded at all every later grep also came back false and control
+# reached the PASS branch — so "every gh pr view is fork-aware" reported success over zero
+# calls, which is the one outcome it exists to catch.
+if [[ ! -s "$FIX/gh.calls" ]]; then
+  FAIL=$((FAIL+1)); echo "  FAIL gh pr view is called at all (no calls recorded)"
+elif ! grep -q 'pr view' "$FIX/gh.calls"; then
+  FAIL=$((FAIL+1)); echo "  FAIL gh pr view is called at all"
+elif grep 'pr view' "$FIX/gh.calls" | grep -qv -- '-R upstream/repo'; then
+  FAIL=$((FAIL+1)); echo "  FAIL every gh pr view passes -R <upstream>"
+  grep 'pr view' "$FIX/gh.calls" | sed 's/^/       /'
+elif grep 'pr view' "$FIX/gh.calls" | grep -qv 'feat'; then
+  FAIL=$((FAIL+1)); echo "  FAIL every gh pr view passes the branch selector"
+else
+  PASS=$((PASS+1)); echo "  ok   every gh pr view is fork-aware (-R + selector)"
+fi
+
+# A fork can host its OWN PRs. Forcing `.parent` misses them, or finds an unrelated parent
+# PR with the same number and validates clearance against its base. The resolver probes by
+# matching HEAD; here only the fork has a PR whose head is this tree.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/self.txt"
+printf '%s' "$(G rev-parse HEAD)" > "$FIX/prhead.txt"
+printf 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' > "$FIX/prhead-upstream.txt"
+check_field "a fork-owned PR resolves to the fork" pr_repo forkowner/repo
+
+# A stale CLOSED parent PR must not become the host merely because it is probed first.
+# Local HEAD is ahead of both remote PR heads, so the exact-head tiebreak cannot mask the
+# first-open selection this case exercises.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/self.txt"
+printf 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' > "$FIX/prhead-upstream.txt"
+printf 'cafebabecafebabecafebabecafebabecafebabe' > "$FIX/prhead.txt"
+touch "$FIX/prclosed-upstream"
+check_field "a closed parent PR cannot hide an open fork PR" pr_repo forkowner/repo
+
+# With no PR yet, base_repo is the parent. Its default branch must come from that same
+# repository rather than the fork's origin/HEAD, whose branch can have another name.
+new_repo
+G branch release master; G push -q origin release; G remote set-head origin master
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/self.txt"
+echo "upstream/repo" > "$FIX/default-repo.txt"; echo release > "$FIX/default-branch.txt"
+touch "$FIX/no-pr"
+check_field "a pre-PR fork uses the parent default branch" default_branch release
+
+# ...and that fork's branch can legitimately BE named like the parent's default branch
+# (`forkowner:master -> upstream:master`). Waiting for an open PR to tell those apart left
+# BASE_FRESH at n/a for the FIRST clearance, which phases.md prescribes running with no PR
+# yet — so the fork workflow could never reach LAND on its first pass. Identity, not name.
+new_repo; G checkout -q master; add_code; record '**Phase:** HARDEN'
+mkdir -p "$REPO/.git/drive"
+{ printf 'cleared=%s\n' "$(G rev-parse HEAD)"
+  printf 'cleared_base=%s\n' "$(G rev-parse origin/master)"; } > "$REPO/.git/drive/state"
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/self.txt"
+touch "$FIX/no-pr"
+check_field "a pre-PR fork branch named like the base is not the trunk" base_fresh true
+check "a pre-PR fork branch named like the base can LAND" LAND
+
+# ...but a resolved parent does NOT mean the default branch came from it. Parent discovery
+# and the parent's default-branch lookup are separate calls; when the second fails, the name
+# falls back to the FORK's origin/HEAD. Clearing on that compares the fork's trunk to itself
+# and derives LAND without ever resolving the parent's real target (here `release`).
+new_repo; G remote set-head origin master; G checkout -q master
+add_code; record '**Phase:** HARDEN'
+mkdir -p "$REPO/.git/drive"
+{ printf 'cleared=%s\n' "$(G rev-parse HEAD)"
+  printf 'cleared_base=%s\n' "$(G rev-parse origin/master)"; } > "$REPO/.git/drive/state"
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/self.txt"
+echo "upstream/repo" > "$FIX/default-repo.txt"; echo release > "$FIX/default-branch.txt"
+touch "$FIX/defaultfail" "$FIX/no-pr"
+check_field "a fork base from origin/HEAD is not the parent's" base_fresh null
+check "an unresolved parent base refuses LAND" HARDEN
+
+# ...and on an ordinary FEATURE branch, where ON_DEFAULT is already false and the guard
+# above never fires. Freshness was measured against the fork's own base, came back true,
+# and derived LAND while the parent's real merge target was never resolved.
+new_repo; G remote set-head origin master; add_code; record '**Phase:** HARDEN'; clear_at
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/self.txt"
+echo "upstream/repo" > "$FIX/default-repo.txt"; echo release > "$FIX/default-branch.txt"
+touch "$FIX/defaultfail" "$FIX/no-pr"
+check_field "a fork feature branch cannot clear on the fork's base" base_fresh null
+check "a fork feature branch with an unresolved base refuses LAND" HARDEN
+
+# A GitHub checkout where the PR probe never RAN — detached HEAD here, no gh elsewhere —
+# cannot know the merge target. origin/HEAD is then just the default branch standing in for
+# a base nobody asked about, and clearing on it would authorise squashing a diff the panel
+# never read: the explicit-number merge path still merges a PR whose base is a release or
+# stacked branch. "Not attempted" is not "attempted and found nothing".
+new_repo; G remote set-head origin master; add_code; record '**Phase:** HARDEN'; clear_at
+G checkout -q --detach
+check_field "an unprobed checkout does not trust origin/HEAD" base_fresh null
+
+# ...and it must not trust the FORGE either. With origin/HEAD absent, resolution falls past
+# that block to the forge lookup, whose `else` branch asks a bare `gh repo view` for this
+# repo's default branch — authoritative-looking, but no PR probe ran to say the PR even
+# targets it. Third recurrence of the skipped-probe idea, so the whole ladder is guarded.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+G checkout -q --detach
+check_field "an unprobed checkout does not trust the forge" base_fresh null
+check "an unprobed forge lookup refuses LAND" HARDEN
+
+# An unreadable branch diff is unknown, not empty. In a shallow or grafted clone BASE_REF
+# and HEAD can share no merge base: the diff fails, the substitution swallowed it, and a
+# branch carrying committed code classified as `none` and fell through to a planning phase.
+# Asserted on tree_phase, not phase: the recorded phase would satisfy `phase` on its own
+# and the fixture would pass with the defect still in place. tree_phase is what this
+# classification actually decides.
+new_repo; add_code; record '**Phase:** HARDEN'
+G checkout -q --orphan unrelated
+printf 'z\n' > "$REPO/z.md"; G add -A; G commit -q -m unrelated
+G push -q -f origin unrelated:master
+G checkout -q feat
+check_field "an unreadable branch diff does not read as no work" tree_phase HARDEN
+
+# The same name on a NON-fork really is the trunk. Identity has to clear only the fork.
+new_repo; G checkout -q master; add_code; record '**Phase:** HARDEN'
+mkdir -p "$REPO/.git/drive"
+{ printf 'cleared=%s\n' "$(G rev-parse HEAD)"
+  printf 'cleared_base=%s\n' "$(G rev-parse origin/master)"; } > "$REPO/.git/drive/state"
+echo "owner/repo" > "$FIX/self.txt"; : > "$FIX/upstream.txt"
+touch "$FIX/no-pr"
+check_field "the default branch of a non-fork stays the trunk" base_fresh null
+
+# A failed parent query is not evidence that this is a non-fork. Falling back to the
+# fork itself makes its stale base look authoritative and can promote a cleared tree to
+# LAND even though the real upstream base was never resolved.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+echo "forkowner/repo" > "$FIX/self.txt"
+touch "$FIX/parentfail" "$FIX/no-pr"
+check_field "a failed parent lookup leaves base repo unknown" base_repo null
+check_field "a failed parent lookup leaves freshness unknown" base_fresh null
+check "a failed parent lookup refuses LAND" HARDEN
+
+# ...and it poisons a FOUND fork PR too, not only the no-PR case above. With the parent
+# unenumerable the double-open refusal cannot fire, so adopting the fork's open PR — and
+# validating freshness against its base — picks one of possibly two merge targets by
+# outage. This promoted to LAND with the other candidate not even nameable.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+echo "forkowner/repo" > "$FIX/self.txt"
+touch "$FIX/parentfail"
+printf '%s' "$(G rev-parse HEAD)" > "$FIX/prhead.txt"
+echo "forkowner/repo" > "$FIX/prview-repo.txt"
+printf '{"number":7,"state":"OPEN","reviewDecision":""}' > "$FIX/prview.json"
+check_field "parent failure poisons a found fork PR" pr.state unknown
+check_field "parent failure + fork PR: freshness unknown" base_fresh null
+check "parent failure + fork PR refuses LAND" HARDEN
+
+# A non-GitHub forge is distinguishable from an unauthenticated GitHub checkout. gh
+# cannot resolve it, but origin/HEAD still authoritatively identifies the base and must
+# not be discarded behind a fictional failed-fork-parent diagnosis.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+G remote set-head origin master
+G remote set-url origin https://codeberg.org/owner/repo.git
+touch "$FIX/ghfail"
+check "a non-GitHub authoritative base can derive LAND" LAND
+
+# An auxiliary GitHub mirror does not make gh authoritative for a GitLab checkout. Probing
+# the mirror poisons base discovery when gh fails and suppresses the valid origin/HEAD path.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+G remote set-head origin master
+G remote set-url origin https://gitlab.com/owner/repo.git
+G remote add github-mirror https://github.com/owner/repo.git
+touch "$FIX/ghfail"
+check "a GitLab origin ignores an auxiliary GitHub mirror" LAND
+
+# The later forge fallback must keep the selected repository too. A transient failure in
+# the first selected-repo query must not make the fallback silently query the fork.
+new_repo
+G branch release master; G push -q origin release
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/self.txt"
+echo "upstream/repo" > "$FIX/default-repo.txt"; echo release > "$FIX/default-branch.txt"
+touch "$FIX/no-pr" "$FIX/default-first-fails"
+check_field "the forge retry keeps the selected base repo" default_branch release
+
+# On a FORK clone the selector must be the head LABEL `<forkowner>:<branch>`, not the bare
+# branch: gh matches `-R <upstream>` lookups against that label for a cross-repo PR, so a
+# bare name finds nothing on exactly the clones -R exists for. The earlier fixture asserts
+# the flags are PASSED; this one asserts their form, which is what actually breaks.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/self.txt"
+rm -f "$FIX/gh.calls"; phase >/dev/null
+if grep 'pr view' "$FIX/gh.calls" | grep -q 'forkowner:feat'; then
+  PASS=$((PASS+1)); echo "  ok   a fork clone selects <owner>:<branch>       (label form)"
+else
+  FAIL=$((FAIL+1)); echo "  FAIL a fork clone selects <owner>:<branch>"
+  grep 'pr view' "$FIX/gh.calls" | sed 's/^/       /' | head -2
+fi
+
+# ...and a NON-fork must stay on the bare branch, or gh cannot match it either.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+echo "owner/repo" > "$FIX/upstream.txt"; echo "owner/repo" > "$FIX/self.txt"
+rm -f "$FIX/gh.calls"; phase >/dev/null
+if grep 'pr view' "$FIX/gh.calls" | grep -q ':feat'; then
+  FAIL=$((FAIL+1)); echo "  FAIL a non-fork keeps the bare branch selector"
+else
+  PASS=$((PASS+1)); echo "  ok   a non-fork keeps the bare branch selector   (no owner: prefix)"
+fi
+
+# DONE + unmerged commits + a Pending: PR overlap. Unreviewed commits dominate: the record
+# describes the world after this PR lands, so it is HARDEN, not WAITING_FOR_MERGE.
+new_repo; add_code; record '**Phase:** DONE · **Pending:** metadata PR #7'
+check "DONE with BOTH unmerged commits and Pending is HARDEN" HARDEN
+
+# An open PR whose base cannot be read is not a license to substitute the repository
+# default: the PR may target a release or stacked branch, and validating freshness against
+# the default branch can derive LAND over a diff no panel reviewed. Unknown stays unknown.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+printf '%s' "$(G rev-parse HEAD)" > "$FIX/prhead.txt"   # the probe finds an open PR...
+touch "$FIX/basefail"                                    # ...whose base read then fails
+check_field "an unreadable PR base is not the repo default" base_fresh null
+check "an unreadable PR base refuses LAND" HARDEN
+
+# The probe found an open PR; a failed state read afterwards is "unknown", not "none" —
+# "none" would claim an absence the same run just disproved, and route an already-reviewed
+# branch into another full HARDEN cycle.
+new_repo; add_code
+printf '%s' "$(G rev-parse HEAD)" > "$FIX/prhead.txt"   # probe succeeds; the state read returns nothing
+check_field "a found PR whose state read fails is unknown" pr.state unknown
+
+# A TRANSIENT probe failure is not absence. Treated as "no PR here", it let the base fall
+# through to the repository default and cleared LAND while an open PR — possibly targeting
+# a release branch — hid behind the outage; and PR_STATE claimed an absence nothing
+# established. Everything derived from the probe must read unknown instead.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+touch "$FIX/prfail"
+check_field "a failed PR probe leaves pr state unknown" pr.state unknown
+check_field "a failed PR probe leaves freshness unknown" base_fresh null
+check "a failed PR probe refuses LAND" HARDEN
+
+# A REPOSITORY-level not-found is lost access to a repo the API just named, not "no PR
+# there". Reading it as absence let the probe continue, PR_STATE claim "none", and the
+# base fall through to the repo default — deriving LAND behind an unreadable candidate
+# that may host the PR, or the second PR the double-open refusal exists for.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+touch "$FIX/pr-repo-404"
+check_field "a repo-level 404 leaves pr state unknown" pr.state unknown
+check "a repo-level 404 refuses LAND" HARDEN
+
+# A failed `git status` (corrupt index) left both cleanliness counts at 0, so an
+# UNREADABLE tree satisfied the clean-tree gate and a cleared HARDEN promoted to LAND
+# with cleanliness never established.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+printf 'garbage' > "$REPO/.git/index"
+check "an unreadable worktree refuses LAND" HARDEN
+
+# Same fail-open on the DONE path: with the counts unreadable the dirty guard cannot
+# fire, and a DONE record stood over a closure that may never have been committed.
+new_repo; G checkout -q master; record '**Phase:** DONE'; G push -q origin master
+printf 'garbage' > "$REPO/.git/index"
+check "an unreadable worktree invalidates DONE" HARDEN
+
+# The same branch with an OPEN PR in BOTH the parent and the fork: both report the same
+# head (it is the same branch), so a head match cannot break the tie, and first-match
+# silently picked the parent — validating clearance against one of two independently
+# reviewed merge targets. Refuse instead.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/self.txt"
+printf '%s' "$(G rev-parse HEAD)" > "$FIX/prhead-upstream.txt"
+printf '%s' "$(G rev-parse HEAD)" > "$FIX/prhead.txt"
+check "ambiguous parent+fork open PRs refuse LAND" HARDEN
+check_field "ambiguous open PRs are reported as such" pr_ambiguous true
+check_field "ambiguous open PRs leave the base repo unknown" base_repo null
+
+# A PR the FORK hosted and merged, with the checkout still on its head: the OPEN-only
+# probe finds nothing, and the parent fallback then aimed the state query at a repo that
+# never hosted the PR — PR_STATE read "none", the merged-head exemption could not fire,
+# and a valid DONE record was downgraded to HARDEN for a branch that already landed.
+new_repo; add_code; record '**Phase:** DONE'
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/self.txt"
+touch "$FIX/no-open-pr"
+printf '%s' "$(G rev-parse HEAD)" > "$FIX/prmerged.txt"
+printf '%s' "$(G rev-parse HEAD)" > "$FIX/prhead.txt"
+echo "forkowner/repo" > "$FIX/prview-repo.txt"
+printf '{"number":7,"state":"MERGED","reviewDecision":"APPROVED"}' > "$FIX/prview.json"
+check "a merged fork-hosted PR keeps its DONE record" DONE
+
+# ...and when the merged-head read itself fails, the downgrade is still right (an unread
+# head must not excuse genuinely new post-merge commits) but the REASON must not assert
+# unreviewed commits it never managed to check. Partial failure: the state read succeeds,
+# the head read does not — which prfail could not model, because it fails everything.
+new_repo; add_code; record '**Phase:** DONE'
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/self.txt"
+touch "$FIX/no-open-pr"
+printf '%s' "$(G rev-parse HEAD)" > "$FIX/prmerged.txt"
+printf '%s' "$(G rev-parse HEAD)" > "$FIX/prhead.txt"
+echo "forkowner/repo" > "$FIX/prview-repo.txt"
+printf '{"number":7,"state":"MERGED","reviewDecision":"APPROVED"}' > "$FIX/prview.json"
+touch "$FIX/mergedheadfail"
+check "an unreadable merged head still refuses DONE" HARDEN
+check_field "and does not assert unreviewed commits it never checked" phase_source "DRIVE.md (DONE, but the merged head could not be read, so these commits cannot be shown to be the ones that landed)"
+
+echo
+echo "passed $PASS, failed $FAIL"
+[[ "$FAIL" -eq 0 ]]

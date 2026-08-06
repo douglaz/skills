@@ -1,0 +1,930 @@
+#!/usr/bin/env bash
+# bot-gate.test — fixture tests for bot-gate, run with a stubbed `gh`.
+#
+# Every case here corresponds to a real defect found in review. bot-gate had four separate
+# fail-open bugs and two deadlocks across its first day, each caught only by a reviewer
+# reading it; these assert the behaviour instead.
+#
+# A note on what changed when the settle window and the skipped-vs-changed intersection
+# were removed. Their fixtures did not all die with them: the ones that pinned the SKIP
+# PARSER (backticks, bold, embedded spaces, extensionless paths, the awk range end) were
+# each written against a real bug and are kept, converted from "blocks" to "is reported".
+# The parser still runs — it just no longer decides anything — so a regression in it now
+# costs a human the information rather than costing them a merge, and that is still worth
+# catching. Only the assertions that were about GATING on the skip list are gone.
+#
+# Usage: ./bot-gate.test          (exits 0 if all pass)
+
+set -uo pipefail
+HERE=$(cd "$(dirname "$0")" && pwd)
+GATE="$HERE/bot-gate"
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+PASS=0; FAIL=0
+
+# The stub reads $FIX (a directory of canned responses) and answers by endpoint shape.
+mkdir -p "$WORK/bin"
+cat > "$WORK/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+f() { cat "$FIX/$1" 2>/dev/null || echo "$2"; }
+# Model a PR that exists in ONE repo only. With $FIX/pr-not-upstream set, EVERY `pr`
+# lookup carrying -R <upstream> misses — which is how a missing PR actually behaves, and
+# the only way the stub can tell the two repos apart. Gating just one query let an
+# unconditional .parent redirect pass the suite.
+# It misses WITH gh's real error text: the gate now distinguishes established absence
+# from a failed query by that text, so a silent exit 1 is the transient-failure case,
+# modelled separately by pr-upstream-transient.
+if [ -f "$FIX/pr-not-upstream" ]; then
+  case "$*" in
+    *"-R $(cat "$FIX/upstream.txt" 2>/dev/null)"*)
+      echo "GraphQL: Could not resolve to a PullRequest with the number of 16. (repository.pullRequest)" >&2
+      exit 1 ;;
+  esac
+fi
+if [ -f "$FIX/pr-upstream-transient" ]; then
+  case "$*" in
+    *"-R $(cat "$FIX/upstream.txt" 2>/dev/null)"*) exit 1 ;;
+  esac
+fi
+# A REPOSITORY-level not-found: the repo exists (the .parent lookup just named it) but the
+# token cannot see it. gh's wording differs from the PullRequest case, and only the latter
+# establishes that no PR is there.
+if [ -f "$FIX/pr-upstream-repo-404" ]; then
+  case "$*" in
+    *"-R $(cat "$FIX/upstream.txt" 2>/dev/null)"*)
+      echo "GraphQL: Could not resolve to a Repository with the name '$(cat "$FIX/upstream.txt" 2>/dev/null)'. (repository)" >&2
+      exit 1 ;;
+  esac
+fi
+if [ -f "$FIX/parentfail" ]; then
+  case "$*" in
+    *"repo view"*parent*) exit 1 ;;
+  esac
+fi
+case "$*" in
+  # `--json parent` and `--json nameWithOwner` are distinct queries now: the gate asks who
+  # it is, then whether there is an upstream, and resolves the PR in whichever repo owns
+  # it. Default: no upstream.txt = not a fork.
+  *"repo view"*parent*)         cat "$FIX/upstream.txt" 2>/dev/null || echo "" ;;
+  *"repo view"*nameWithOwner*)  f repo.txt "owner/repo" ;;
+  *"pr view"*headRefOid*)
+      # Per-repo heads, so "PR N exists in both" can be modelled: a lookup carrying
+      # -R <upstream> gets prhead-upstream.txt when it exists. Without this the stub
+      # answers every repo identically and an upstream-first probe passes the suite.
+      if [ -f "$FIX/prhead-after-signals.txt" ]; then
+        _head_calls=$(cat "$FIX/head.calls" 2>/dev/null || echo 0)
+        _head_calls=$((_head_calls + 1)); printf '%s' "$_head_calls" > "$FIX/head.calls"
+      fi
+      if [ -f "$FIX/prhead-after-signals.txt" ] && [ "${_head_calls:-0}" -ge 3 ]; then
+        cat "$FIX/prhead-after-signals.txt"
+      elif [ -f "$FIX/prhead-upstream.txt" ] && case "$*" in *"-R $(cat "$FIX/upstream.txt" 2>/dev/null)"*) true;; *) false;; esac; then
+        cat "$FIX/prhead-upstream.txt"
+      else
+        cat "$FIX/prhead.txt" 2>/dev/null || echo ""
+      fi ;;
+  *"pr view"*number*)           f prnum.txt "16" ;;
+  *"pr view"*statusCheckRollup*) [ -f "$FIX/rollupfail" ] && exit 1; f rollup.json '{"statusCheckRollup":[]}' ;;
+  *timeline*)                   [ -f "$FIX/timelinefail" ] && exit 1; f timeline.json '[[]]' ;;
+  *reactions*)                  [ -f "$FIX/reactionsfail" ] && exit 1; f reactions.json '[[]]' ;;
+  *graphql*)                    f threads.json '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}' ;;
+  *"pulls/"*"/reviews"*)        f reviews.json '[[]]' ;;
+  *"issues/"*"/comments"*)      printf '%s\n' "$*" >> "$FIX/gh.calls"
+                                   [ -f "$FIX/commentsfail" ] && exit 1; f issues.json '[[]]' ;;
+  *) echo "[]" ;;
+esac
+[ -f "$FIX/FAIL" ] && exit 1
+exit 0
+STUB
+chmod +x "$WORK/bin/gh"
+# Only `gh` is stubbed: $WORK/bin is PREPENDED to the real PATH so it shadows gh while
+# bash, git, jq and coreutils resolve normally. Replacing PATH outright fails on distros
+# where bash does not live in /bin (exit 127 for everything).
+
+# Fixed literals, not `date -d`: that is GNU-only, and on BSD it would leave these empty
+# and fail the clearing fixtures — the suite reproducing the very portability bug it exists
+# to catch. Only NOW needs the clock, and `date -u +FORMAT` is portable.
+OLD_UTC="2000-01-01T00:00:00Z"
+MID_UTC="2000-01-01T00:00:01Z"
+NEW_UTC="2000-01-01T00:00:02Z"
+NEW2_UTC="2000-01-01T00:00:03Z"
+NEW3_UTC="2000-01-01T00:00:04Z"
+NEW4_UTC="2000-01-01T00:00:05Z"
+NOW_UTC=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+# A prior tip's SHA, for wrappers submitted before a force-push. Any 40-hex value that is
+# not $TIP models it; the gate never resolves it against the repo.
+OLDTIP="1111111111111111111111111111111111111111"
+
+wrapper() {  # $1 = login, $2 = submitted_at  (shape matches `gh api --paginate --slurp`)
+  # commit_id is what the gate matches on now — the API's own full SHA, not a body prefix.
+  printf '[[{"user":{"login":"%s","type":"Bot"},"submitted_at":"%s","commit_id":"%s","body":"Reviewed commit: `%s`"}]]' \
+    "$1" "$2" "$TIP" "$TIP"
+}
+wrapper2() {  # $1 = login, $2/$3 = two submitted_at values — a tip with two completed rounds
+  printf '[[{"user":{"login":"%s","type":"Bot"},"submitted_at":"%s","commit_id":"%s","body":"x"},{"user":{"login":"%s","type":"Bot"},"submitted_at":"%s","commit_id":"%s","body":"x"}]]' \
+    "$1" "$2" "$TIP" "$1" "$3" "$TIP"
+}
+wrappers_at() {  # each arg = "<commit_id>:<submitted_at>" — codex wrappers across tips
+  local out="" p
+  for p in "$@"; do
+    out="$out${out:+,}{\"user\":{\"login\":\"chatgpt-codex-connector[bot]\",\"type\":\"Bot\"},\"submitted_at\":\"${p#*:}\",\"commit_id\":\"${p%%:*}\",\"body\":\"x\"}"
+  done
+  printf '[[%s]]' "$out"
+}
+threads() {  # $1 = count of unresolved threads, $2 = GraphQL author login (default codex)
+  local n=$1 login=${2:-chatgpt-codex-connector} nodes=""
+  for ((i=0;i<n;i++)); do nodes="$nodes${nodes:+,}{\"isResolved\":false,\"comments\":{\"nodes\":[{\"author\":{\"__typename\":\"Bot\",\"login\":\"$login\"}}]}}"; done
+  printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[%s]}}}}}' "$nodes"
+}
+
+run() {  # runs the gate, stdout on fd 1
+  PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 2>/dev/null
+}
+check() {  # $1 = name, $2 = expected exit
+  local name=$1 want=$2
+  run >/dev/null
+  local got=$?
+  if [[ "$got" == "$want" ]]; then PASS=$((PASS+1)); printf '  ok   %-46s (exit %s)\n' "$name" "$got"
+  else FAIL=$((FAIL+1)); printf '  FAIL %-46s want %s got %s\n' "$name" "$want" "$got"; fi
+}
+check_reports() {  # $1 = name, $2 = literal string that must appear in the report
+  local name=$1 want=$2 out
+  out=$(run); local got=$?
+  if [[ "$got" == 0 ]] && printf '%s' "$out" | grep -qF -- "$want"; then
+    PASS=$((PASS+1)); printf '  ok   %-46s (reported, exit 0)\n' "$name"
+  else
+    FAIL=$((FAIL+1)); printf '  FAIL %-46s exit %s, %s not reported\n' "$name" "$got" "$want"
+  fi
+}
+
+# A real repo so `git rev-parse HEAD` works.
+git init -q "$WORK/repo"; cd "$WORK/repo"
+git -c user.email=t@t -c user.name=t commit -q --allow-empty -m x
+TIP=$(git rev-parse HEAD)
+
+new_fix() { FIX="$WORK/fix"; rm -rf "$FIX"; mkdir -p "$FIX"
+            echo "owner/repo" > "$FIX/repo.txt"; echo 16 > "$FIX/prnum.txt"
+            # The PR head must equal local HEAD or the gate refuses to reason at all.
+            printf '%s' "$TIP" > "$FIX/prhead.txt"; }
+# A CodeRabbit walkthrough body with $1 spliced in after the skip header.
+cr_skip() { printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes:\\n%s\\n"}]]' "$1"; }
+# The rollup is the single source of CodeRabbit's state now — `gh pr checks` is no longer
+# consulted, because it exits non-zero on merely-pending checks and the rollup answers both
+# questions in one query.
+cr_success() { echo '{"statusCheckRollup":[{"name":"CodeRabbit","state":"SUCCESS"}]}' > "$FIX/rollup.json"; }
+
+echo "bot-gate fixtures"
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+check "wrapper on tip, 0 unresolved, no CodeRabbit" 0
+
+# THE CLEAN ROUND. When the bot finds nothing it posts NO review object at all — only an
+# issue comment carrying `**Reviewed commit:** <sha>` and a `+1`. Reading /pulls/N/reviews
+# alone therefore made this gate unable to clear on success: WRAPPER_TIP was 0 on every
+# clean round, and the documented remedy (`@codex review` for a wrapper) could not help,
+# because a re-run on a clean tree produces another comment and still no review object.
+# Every fixture in this file came from a PR that always had findings, so the success path
+# was never exercised until it blocked three real merges.
+# The sha in that line is ABBREVIATED, so it is matched as a prefix of the tip.
+clean_round() {  # $1 = sha text to put in the marker, $2 = created_at
+  printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"created_at":"%s","body":"Codex Review: Didn'"'"'t find any major issues. :+1:\\n\\n**Reviewed commit:** `%s`"}]]' "$2" "$1"
+}
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+clean_round "${TIP:0:10}" "$NOW_UTC" > "$FIX/issues.json"
+check "a clean round with no review object clears" 0
+
+# ...but only for THIS tip. An abbreviated marker naming another commit proves nothing
+# about the tree about to merge.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+clean_round "${OLDTIP:0:10}" "$NOW_UTC" > "$FIX/issues.json"
+check "a clean-round marker for another tip blocks" 1
+
+# The clean-round comment is a wrapper, so the active-round rule applies to it unchanged:
+# an `eyes` at or after it means a NEW round is running on this same tip.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+clean_round "${TIP:0:10}" "$OLD_UTC" > "$FIX/issues.json"
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":"%s"}]]' "$NOW_UTC" > "$FIX/reactions.json"
+check "an eyes after a clean round still blocks" 1
+
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+check "no wrapper for tip blocks" 1
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 3 > "$FIX/threads.json"
+check "unresolved codex threads block" 1
+
+# GraphQL returns HTTP 200 with a PARTIAL data payload plus an errors array. Counting the
+# nodes that survived under-reports unresolved threads — the clearing direction — so the
+# page is a query failure however successful the HTTP call was.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"
+printf '{"errors":[{"message":"timeout"}],"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}' > "$FIX/threads.json"
+check "a partial GraphQL page with errors is exit 3" 3
+
+# Both gated bots count, not just codex: § 7 says "either bot".
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 2 coderabbitai > "$FIX/threads.json"
+check "unresolved CodeRabbit threads block" 1
+
+# ...but an unrelated app's thread must NOT. Counting every account GitHub types as a Bot
+# let a linter or coverage reporter hold the merge for a reason this gate has no opinion
+# about — and left no way to clear it, since the author cannot resolve another app's thread
+# by fixing anything this skill talks about.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 4 some-other-linter > "$FIX/threads.json"
+check "unrelated bot's unresolved thread does not block" 0
+
+# A human account cannot borrow a gated login: __typename must ALSO be Bot.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"
+printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"isResolved":false,"comments":{"nodes":[{"author":{"__typename":"User","login":"coderabbitai"}}]}}]}}}}}' > "$FIX/threads.json"
+check "a User posing as a gated bot login does not block" 0
+
+new_fix; wrapper "chatgpt-codex-connector-attacker" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+check "spoofed login (prefix match) blocks" 1
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success
+# CodeRabbit's real wording: the phrase is broken by a markdown link, so a naive
+# "reviews are subject to rate limits" pattern misses it entirely (it did).
+printf '[[{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\\nYour plan includes PR reviews subject to [rate limits](https://docs.coderabbit.ai/x)."}]]' > "$FIX/issues.json"
+check_reports "rate-limit notice (real wording) is reported" "rate-limited or its review is paused"
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success
+printf '[[{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: review paused by coderabbit.ai -->"}]]' > "$FIX/issues.json"
+check_reports "paused-review marker is reported" "rate-limited or its review is paused"
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success
+printf '[[{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nwalkthrough, all files reviewed"}]]' > "$FIX/issues.json"
+check "CodeRabbit genuine SUCCESS clears" 0
+
+# A walkthrough that merely DISCUSSES rate limiting must not be read as a skip — the old
+# bare `rate limit` substring blocked such a PR forever.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success
+printf '[[{"user":{"login":"coderabbitai[bot]"},"body":"Adds a rate limit to the API client"}]]' > "$FIX/issues.json"
+check "walkthrough mentioning rate limiting still clears" 0
+
+# --- the skip list: PARSED and REPORTED, never gated ---
+# CodeRabbit's skip list enumerates files of the PR it is reviewing, by construction, so
+# intersecting it against the changed files was non-empty whenever a skip existed — the
+# blanket "any skip blocks" deadlock wearing a different hat. Skips no longer block. But
+# each parser bug below was real, and a regression that silently drops an entry now costs
+# a human the information, so the formats stay pinned.
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success; cr_skip '- src/core.py' > "$FIX/issues.json"
+check_reports "a skipped changed file is reported, not blocked" "src/core.py"
+
+# Inline form: the path sits on the header line after the colon, so a line-oriented parser
+# that skips the header never sees it.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success
+printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes: src/inline.py"}]]' > "$FIX/issues.json"
+check_reports "inline skip form is parsed" "src/inline.py"
+
+# Content AFTER the skip section must not be swallowed: a "Files selected for processing"
+# list names files CodeRabbit REVIEWED. The end address used to be a BRE alternation
+# (`/^#|^<\/details>/`), where `|` is literal — so it matched nothing and the range ran to
+# the end of the body, reporting reviewed files as skipped.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success
+printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nFiles skipped from review due to trivial changes:\\n- docs/unrelated.md\\n</details>\\nFiles selected for processing:\\n- src/reviewed.py\\n"}]]' > "$FIX/issues.json"
+out=$(run)
+if printf '%s' "$out" | grep -qF 'docs/unrelated.md' && ! printf '%s' "$out" | grep -qF 'src/reviewed.py'; then
+  PASS=$((PASS+1)); echo "  ok   reviewed-files list is not read as skipped   (bounded)"
+else
+  FAIL=$((FAIL+1)); echo "  FAIL reviewed-files list is not read as skipped"
+fi
+
+# Markdown formats CodeRabbit really uses. The shape filter used to run BEFORE the markdown
+# strip, so anything ending in a non-alphanumeric was dropped; requiring a dot-extension
+# then dropped extensionless paths, which this repo's own deliverables are; requiring a
+# slash then dropped root-level ones. There is no shape test now.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success; cr_skip '- `Makefile` (1 hunks)' > "$FIX/issues.json"
+check_reports "root-level extensionless path is parsed" "Makefile"
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success; cr_skip '- `skills/x/scripts/bot-gate` (2 hunks)' > "$FIX/issues.json"
+check_reports "backticked extensionless path is parsed" "skills/x/scripts/bot-gate"
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success; cr_skip '* **src/bold.py** (3 hunks)' > "$FIX/issues.json"
+check_reports "bold path is parsed" "src/bold.py"
+
+# An ASCII token regex reduced `src/my file.py` to `file.py`.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success; cr_skip '- src/my file.py' > "$FIX/issues.json"
+check_reports "path containing a space is parsed whole" "src/my file.py"
+
+# --- rounds in flight ---
+
+# A retarget expands the PR's diff without moving its head, so `commit_id` still matches
+# while part of the diff was never read. `base_ref_changed` carries a timestamp, so this is
+# decidable rather than another inference from absence.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"base_ref_changed","created_at":"%s"}]]' "$NOW_UTC" > "$FIX/timeline.json"
+check "a retarget after the review blocks" 1
+
+# A base change followed by an explicit request and then a wrapper is covered by the new
+# round — when a completed round SEPARATES the change from the request. Here one does: a
+# wrapper landed before the request, so nothing was in flight when it posted, and the
+# wrapper that follows it is the requested round's.
+new_fix; wrapper2 "chatgpt-codex-connector[bot]" "$OLD_UTC" "$NEW2_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"base_ref_changed","created_at":"%s"}]]' "$MID_UTC" > "$FIX/timeline.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$NEW_UTC" > "$FIX/issues.json"
+check "a retarget followed by an explicit review clears" 0
+
+# ...but only a wrapper on THIS tip may certify that gap. A wrapper on an OLDER tip means
+# the head moved after it — a push — and a normal push starts the bot's automatic round
+# while emitting no timeline event at all (`head_ref_force_pushed` covers force-pushes
+# only). So the interval it certifies as quiet can contain exactly the round whose wrapper
+# is then credited to this request, and that round may have read the pre-retarget diff.
+new_fix
+wrappers_at "$OLDTIP:$OLD_UTC" "$TIP:$NEW2_UTC" > "$FIX/reviews.json"
+threads 0 > "$FIX/threads.json"
+printf '[[{"event":"base_ref_changed","created_at":"%s"}]]' "$MID_UTC" > "$FIX/timeline.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$NEW_UTC" > "$FIX/issues.json"
+check "a prior-tip wrapper cannot certify a quiet gap" 1
+
+# The clearing match accepts a real command with trailing text. The loose blocking match
+# already sees it; once the newer wrapper arrives, the same request must establish that a
+# post-retarget round covered the changed diff.
+new_fix; wrapper2 "chatgpt-codex-connector[bot]" "$OLD_UTC" "$NEW2_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"base_ref_changed","created_at":"%s"}]]' "$MID_UTC" > "$FIX/timeline.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review please"}]]' "$NEW_UTC" > "$FIX/issues.json"
+check "a decorated post-retarget review clears" 0
+
+# THE OVERLAP CASE: the base is retargeted while a round is running, `@codex review` is
+# posted, and the OLD round submits after it. The only wrapper post-dates the request, so
+# every timestamp comparison passes — but no wrapper separates the retarget from the
+# request, so that wrapper may describe the pre-retarget diff while the requested round is
+# still pending. Rounds carry no identity; this state must block.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$NEW_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"base_ref_changed","created_at":"%s"}]]' "$OLD_UTC" > "$FIX/timeline.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$MID_UTC" > "$FIX/issues.json"
+check "a request inside a still-running round cannot clear" 1
+
+# Mentioning the command in prose does not request a round. Treating any substring match
+# as explicit lets quoted instructions post-date a retarget and clear a diff no bot read.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$NEW_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"base_ref_changed","created_at":"%s"}]]' "$OLD_UTC" > "$FIX/timeline.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"per the skill, run `@codex review` after retargeting"}]]' "$MID_UTC" > "$FIX/issues.json"
+check "quoted review text does not clear a retarget" 1
+
+# The bot can read the old diff, then the base can move, then the bot can submit its
+# wrapper. The wrapper is newer than the move but still describes the old surface.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$NEW_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"base_ref_changed","created_at":"%s"}]]' "$MID_UTC" > "$FIX/timeline.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$OLD_UTC" > "$FIX/issues.json"
+check "a base change during an in-flight review blocks" 1
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"base_ref_changed","created_at":"not-a-date"}]]' > "$FIX/timeline.json"
+check "an unparseable retarget timestamp blocks" 1
+
+# A retarget that happened but cannot be dated is not the same as no retarget, and
+# `max // ""` collapsed both to empty — which SKIPPED the check rather than blocking.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"base_ref_changed","created_at":null}]]' > "$FIX/timeline.json"
+check "a retarget with a null timestamp blocks" 1
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"base_ref_changed"}]]' > "$FIX/timeline.json"
+check "a retarget with no timestamp field blocks" 1
+
+# The EMPTY STRING, which is neither null nor garbage and slipped through both guards:
+# jq's `//` fires on null but not on "", so the sentinel was never substituted; and GNU
+# `date -u -d "" +%s` SUCCEEDS, returning today at 00:00 UTC, so the "did it parse?"
+# fail-closed branch never fired either. Two independent guards, same blind spot.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"base_ref_changed","created_at":""}]]' > "$FIX/timeline.json"
+check "a retarget with an EMPTY timestamp blocks" 1
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":""}]]' > "$FIX/reactions.json"
+check "an eyes with an EMPTY timestamp blocks" 1
+
+# The one an emptiness test cannot catch: a NON-EMPTY garbage timestamp sorts below a valid
+# one, so taking the lexical max returns the valid value and the malformed event vanishes.
+# Both events here pre-date the wrapper, so only the unparseable one can cause a block.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$NOW_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"base_ref_changed","created_at":"!"},{"event":"base_ref_changed","created_at":"%s"}]]' "$OLD_UTC" > "$FIX/timeline.json"
+check "a garbage timestamp beside a valid one blocks" 1
+
+# ...while a timeline carrying only OTHER events must still clear: "no retarget" is the
+# common case and must not be confused with "malformed retarget".
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"commented","created_at":null},{"event":"labeled"}]]' > "$FIX/timeline.json"
+check "unrelated timeline events do not block" 0
+
+# These timestamps carry one-second precision, so a retarget in the SAME second as the
+# review is indistinguishable from one just before it. A strict `>` resolved that tie
+# toward clearing; a tie is doubt.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"base_ref_changed","created_at":"%s"}]]' "$OLD_UTC" > "$FIX/timeline.json"
+check "a retarget in the wrapper's own second blocks" 1
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":"%s"}]]' "$OLD_UTC" > "$FIX/reactions.json"
+check "an eyes in the wrapper's own second blocks" 1
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo 'x' > "$FIX/timelinefail"
+check "timeline query failure is exit 3" 3
+
+# An `eyes` that exists but cannot be dated is not the same as no `eyes` — it is the signal
+# that a round is RUNNING. `max // ""` merged the two, so a malformed one cleared. Same
+# collapse as the timeline check; swept together.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":null}]]' > "$FIX/reactions.json"
+check "an eyes with a null timestamp blocks" 1
+
+# ...and a reaction that is not `eyes` must still clear, so "no eyes" is not swept up.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"+1","created_at":null}]]' > "$FIX/reactions.json"
+check "a non-eyes reaction with no timestamp clears" 0
+
+# A PENDING review on the tip is a round in flight. It is excluded from the wrapper count
+# (nothing was submitted) but must block: on a rerun against an unchanged tip, `eyes` is
+# never refreshed, so nothing else would notice.
+new_fix
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]","type":"Bot"},"submitted_at":"%s","commit_id":"%s","body":"x"},{"user":{"login":"chatgpt-codex-connector[bot]","type":"Bot"},"state":"PENDING","commit_id":"%s","body":"draft"}]]' \
+  "$OLD_UTC" "$TIP" "$TIP" > "$FIX/reviews.json"
+threads 0 > "$FIX/threads.json"
+check "a pending rerun beside a submitted wrapper blocks" 1
+
+J=$(PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 --json 2>/dev/null)
+if printf '%s' "$J" | jq -e '(.verdict=="BLOCKED") and (.pending_review_on_tip==true)' >/dev/null 2>&1; then
+  PASS=$((PASS+1)); echo "  ok   JSON reports the PENDING-review blocker       (machine-readable)"
+else
+  FAIL=$((FAIL+1)); echo "  FAIL JSON reports the PENDING-review blocker"
+fi
+
+# `@codex review` after the wrapper is a round that was REQUESTED and has not reported.
+# Nothing else can see it: `eyes` cannot be re-added once present, and PENDING reviews are
+# hidden from everyone but their author. Without this the gate clears during exactly the
+# rerun this skill tells you to trigger.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$NOW_UTC" > "$FIX/issues.json"
+check "a rerun requested after the wrapper blocks" 1
+
+# The two consumers want OPPOSITE errors, so they get different matches. BLOCKING takes
+# the loose one: a decorated but real trigger must still block, and a false positive here
+# only makes you wait. Anchoring this direction — which the first fix for the clearing hole
+# did — means `@codex review please` stops blocking while that round is in flight.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review please"}]]' "$NOW_UTC" > "$FIX/issues.json"
+check "a decorated real trigger still blocks" 1
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review - retargeted to main"}]]' "$NOW_UTC" > "$FIX/issues.json"
+check "a trigger with a trailing note still blocks" 1
+
+# ...and one from BEFORE the wrapper is the normal case — when an earlier wrapper shows
+# the tip's previous round had already ended, so the request started a fresh one and the
+# wrapper that followed is that round's.
+new_fix; wrapper2 "chatgpt-codex-connector[bot]" "$OLD_UTC" "$NOW_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$MID_UTC" > "$FIX/issues.json"
+check "a rerun requested before the wrapper clears" 0
+
+# A request with NO wrapper before it is ambiguous even with no retarget anywhere: the
+# tip's first round may still have been in flight when the request posted, and the single
+# wrapper after it may be THAT round's submission, with the requested round still pending.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$NOW_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$OLD_UTC" > "$FIX/issues.json"
+check "a request no completed round separates blocks" 1
+
+# A round-start in the gap between the last pre-request wrapper and the request is the
+# same ambiguity one level in: that round may still be running when the request posts.
+new_fix; wrapper2 "chatgpt-codex-connector[bot]" "$OLD_UTC" "$NEW2_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"},{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$MID_UTC" "$NEW_UTC" > "$FIX/issues.json"
+check "a round-start inside the gap still blocks" 1
+
+# GitHub timestamps have one-second precision. With two requests in the same second, the
+# later wrapper may answer the first while the second is still pending; neither request has
+# an identity in the wrapper, so the tie cannot be resolved toward clearance.
+new_fix; wrapper2 "chatgpt-codex-connector[bot]" "$OLD_UTC" "$NEW2_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"},{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$NEW_UTC" "$NEW_UTC" > "$FIX/issues.json"
+check "two same-second review requests block" 1
+
+# The tie rule covers every round-start source, not only comments. A force-push in the
+# request's second may have started the round that owns the later wrapper.
+new_fix; wrapper2 "chatgpt-codex-connector[bot]" "$OLD_UTC" "$NEW2_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$NEW_UTC" > "$FIX/issues.json"
+printf '[[{"event":"head_ref_force_pushed","created_at":"%s"}]]' "$NEW_UTC" > "$FIX/timeline.json"
+check "a same-second push and review request block" 1
+
+# Round ENDS are wrappers on ANY commit, not just this tip. Here a request on a prior tip
+# was bracketed by that tip's wrappers, then a force-push and a fresh round produced the
+# tip wrapper. Scoping the epochs to the tip discarded the bracketing history, so the old
+# request read as never covered and every later tip deadlocked into a redundant round —
+# the same scoping made the FIRST request on any fresh tip unclearable.
+new_fix
+wrappers_at "$OLDTIP:$OLD_UTC" "$OLDTIP:$NEW_UTC" "$TIP:$NEW3_UTC" > "$FIX/reviews.json"
+threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$MID_UTC" > "$FIX/issues.json"
+printf '[[{"event":"head_ref_force_pushed","created_at":"%s"}]]' "$NEW2_UTC" > "$FIX/timeline.json"
+check "prior-tip wrappers cover an answered old request" 0
+
+# ...but a HEAD FORCE-PUSH in the gap is a round-start (the bot often re-reviews a push),
+# so a request posted after one is not provably fresh: the wrapper that follows may be the
+# push-started round's, with the requested round still pending. Without counting pushes as
+# starts, the cross-tip epochs above would clear this.
+new_fix
+wrappers_at "$OLDTIP:$OLD_UTC" "$TIP:$NEW2_UTC" > "$FIX/reviews.json"
+threads 0 > "$FIX/threads.json"
+printf '[[{"event":"head_ref_force_pushed","created_at":"%s"}]]' "$MID_UTC" > "$FIX/timeline.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$NEW_UTC" > "$FIX/issues.json"
+check "a force-push inside the gap still blocks" 1
+
+# A force-push that happened but cannot be dated cannot be placed relative to anything —
+# the same doubt rule as an undatable retarget or ready event.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"head_ref_force_pushed","created_at":null}]]' > "$FIX/timeline.json"
+check "an undatable head force-push blocks" 1
+
+# ...while the documented iterate loop — force-push, round, wrapper — must clear: a dated
+# pre-wrapper push is a round-start for coverage, NOT a base mutation demanding a later
+# explicit request. Routing it into the mutation branch would block every normal push.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$NOW_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"head_ref_force_pushed","created_at":"%s"}]]' "$OLD_UTC" > "$FIX/timeline.json"
+check "a push answered by the tip wrapper clears" 0
+
+# A fresh `eyes` newer than the wrapper means a round is running on the same tip.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":"%s"}]]' "$NOW_UTC" > "$FIX/reactions.json"
+check "active round (eyes newer than wrapper) blocks" 1
+
+# The active-round guard must fail CLOSED. Neither of these was covered by the happy-path
+# case above: reverting the fail-closed logic left it green, which is how an untested
+# branch hides.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":"not-a-date"}]]' > "$FIX/reactions.json"
+check "unparseable eyes timestamp blocks" 1
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo 'x' > "$FIX/reactionsfail"
+check "reactions query failure is exit 3" 3
+
+# A 200 whose BODY will not parse is a different failure from a non-zero exit, and it used
+# to clear: every reader takes `2>/dev/null` with a fallback, and each fallback points the
+# clearing way — unparseable reactions read as "no eyes", unparseable comments read as "no
+# skip notice" AND "CodeRabbit never commented here".
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf 'not json at all' > "$FIX/reactions.json"
+check "unparseable reactions body is exit 3" 3
+
+# The comments payload STOPPED being report-only when the verdict began reading it for
+# RERUN_REQUESTED: an `@codex review` newer than the wrapper is a round nothing else can
+# see. This fixture asserted exit 0 and was therefore PINNING the fail-open — a reviewer
+# had to point out that it agreed with the bug instead of contradicting it.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success; printf '<html>502 Bad Gateway</html>' > "$FIX/issues.json"
+check "unparseable PR-comments body is exit 3" 3
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo 'x' > "$FIX/commentsfail"
+check "PR-comments query failure is exit 3" 3
+
+# RERUN_REQUESTED and the CodeRabbit report must use one comment snapshot. Fetching the
+# endpoint twice can produce a verdict from one history and notes from another.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success; rm -f "$FIX/gh.calls"; run >/dev/null
+comment_calls=$(grep -c 'issues/.*/comments' "$FIX/gh.calls" 2>/dev/null || true)
+if [[ "$comment_calls" == 1 ]]; then
+  PASS=$((PASS+1)); echo "  ok   PR comments are fetched once per gate run        (one snapshot)"
+else
+  FAIL=$((FAIL+1)); echo "  FAIL PR comments are fetched once per gate run        got $comment_calls"
+fi
+
+new_fix; printf 'not json' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+check "unparseable reviews body is exit 3" 3
+
+# The wrapper timestamp is the reference for the rerun, timeline, and eyes comparisons.
+# It must still block when unparseable, and with NO reaction present: the eyes detector
+# cannot run without it, and a check that cannot run has not passed. (This is the
+# fail-closed half of the macOS `date -d` problem. The BSD
+# fallback itself cannot be exercised on Linux — shadowing GNU `-d` leaves no working
+# `date -j` either — so that half is verified by inspection against the BSD syntax.)
+new_fix; wrapper "chatgpt-codex-connector[bot]" "not-a-timestamp" > "$FIX/reviews.json"
+threads 0 > "$FIX/threads.json"
+check "unparseable wrapper timestamp blocks" 1
+
+# --- CodeRabbit presence ---
+
+# Configured (it has commented) but no check for THIS head yet. This used to block; since
+# CodeRabbit left the verdict (ADR 0004) it is REPORTED, and `absent` is still worth
+# distinguishing from "not installed" for the human reading the output.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\nwalkthrough"}]]' > "$FIX/issues.json"
+check_reports "no check for this head is reported as absent" "coderabbit       absent"
+
+# A newer REPLY must not mask an older status comment's skip notice: CodeRabbit's replies
+# interleave with its status body, so "latest comment" picks a reply that says nothing.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success
+printf '[[{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-01-01","body":"<!-- auto-generated comment: review paused by coderabbit.ai -->"},{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-02-01","body":"<!-- This is an auto-generated reply by CodeRabbit --> thanks"}]]' > "$FIX/issues.json"
+check_reports "a newer reply does not mask the skip notice" "rate-limited or its review is paused"
+
+# Editing in place is what CodeRabbit's status comment IS, and an edit moves only
+# `updated_at`. So the live status can sit in an OLDER comment that was just rewritten,
+# and created_at ordering then picks a staler sibling. Both directions are wrong; this is
+# the clearing one — a current `review paused` losing to a later-created success.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success
+printf '[[{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-01-01","updated_at":"2026-03-01","body":"<!-- auto-generated comment: review paused by coderabbit.ai -->"},{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-02-01","updated_at":"2026-02-01","body":"<!-- auto-generated comment: summarize by coderabbit.ai --> walkthrough"}]]' > "$FIX/issues.json"
+check_reports "an edited status outranks a later-created one" "rate-limited or its review is paused"
+
+# ...and the blocking direction: a stale rate-limit marker must not outrank a retrigger
+# whose status comment was edited after it.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success
+printf '[[{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-01-01","updated_at":"2026-03-01","body":"<!-- auto-generated comment: summarize by coderabbit.ai --> walkthrough"},{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-02-01","updated_at":"2026-02-01","body":"<!-- auto-generated comment: rate limited by coderabbit.ai -->"}]]' > "$FIX/issues.json"
+check "an edited success outranks a stale rate limit" 0
+
+# A payload with no updated_at at all must still work — the fallback is created_at.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success
+printf '[[{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-02-01","body":"<!-- auto-generated comment: review paused by coderabbit.ai -->"},{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-01-01","body":"<!-- auto-generated comment: summarize by coderabbit.ai --> walkthrough"}]]' > "$FIX/issues.json"
+check_reports "missing updated_at falls back to created_at" "rate-limited or its review is paused"
+
+# But a genuinely newer STATUS comment must clear a stale skip — the retrigger must work.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success
+printf '[[{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-01-01","body":"<!-- auto-generated comment: rate limited by coderabbit.ai -->"},{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-02-01","body":"<!-- auto-generated comment: summarize by coderabbit.ai --> walkthrough"}]]' > "$FIX/issues.json"
+check "newer status comment clears a stale skip" 0
+
+# A PENDING CheckRun has no `.state` and a null `.conclusion`. Reading that as "absent"
+# cleared past a review that was still running — the fail-open half that survived the
+# name/state fix.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo '{"statusCheckRollup":[{"__typename":"CheckRun","name":"CodeRabbit","conclusion":null}]}' > "$FIX/rollup.json"
+check_reports "a pending CheckRun is reported as PENDING" "coderabbit       PENDING" 
+
+# No CodeRabbit signal at all used to block until the operator asserted --no-coderabbit.
+# Both are gone: absence cannot be established by any query, and it no longer needs to be.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+check "no CodeRabbit signal at all does not block" 0
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 --no-coderabbit >/dev/null 2>&1
+[[ $? == 2 ]] && { PASS=$((PASS+1)); echo "  ok   --no-coderabbit is rejected, not ignored   (exit 2)"; } \
+              || { FAIL=$((FAIL+1)); echo "  FAIL --no-coderabbit is rejected, not ignored"; }
+
+# THE case this rework exists for. CodeRabbit auto-paused PR #16 and then stamped
+# `success`/"Review completed" on f69bf01 75 seconds after the push, with zero of its
+# comments anchored there. A green CodeRabbit beside a pause marker must NOT block (it is
+# not evidence either way) and must still be VISIBLE, or the human loses the only cue that
+# nobody reviewed this tree.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success
+printf '[[{"user":{"login":"coderabbitai[bot]"},"created_at":"2026-01-01","updated_at":"2026-01-01","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\\n<!-- auto-generated comment: review paused by coderabbit.ai -->\\n> ## Reviews paused\\n<!-- walkthrough_start -->walkthrough"}]]' > "$FIX/issues.json"
+check_reports "green + paused is reported and does not block" "rate-limited or its review is paused"
+
+# --- integrity of the wrapper itself ---
+
+# A wrapper whose BODY shares the tip's first 7 hex chars but whose commit_id names a
+# different commit. Matching 7 body characters accepted it as approval of the current
+# tree; 28 bits collides in a large history and can be ground out deliberately.
+new_fix
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]","type":"Bot"},"submitted_at":"%s","commit_id":"%s","body":"Reviewed commit: `%s`"}]]' \
+  "$OLD_UTC" "0000000000000000000000000000000000000000" "$TIP" > "$FIX/reviews.json"
+threads 0 > "$FIX/threads.json"
+check "wrapper whose commit_id differs from the body blocks" 1
+
+# A stale local checkout: the PR head has moved past local HEAD, so an old wrapper for
+# local HEAD must not clear.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' > "$FIX/prhead.txt"
+check "local HEAD behind the PR head is exit 3" 3
+
+# The first two head reads select the PR and validate the local checkout. A push while the
+# slower API signals are being collected changes the third read only; without the final
+# revalidation the old tip's wrapper produces a clearing verdict for a stale tree.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' > "$FIX/prhead-after-signals.txt"
+check "PR head moving during signal collection is exit 3" 3
+
+new_fix; touch "$FIX/FAIL"
+check "API failure is exit 3, never clearance" 3
+
+# A fork can host its own PRs. Redirecting every query to `.parent` either finds nothing
+# or — if the parent happens to have a PR with that number — reports on an unrelated PR's
+# reviews and threads. The gate now resolves the PR in whichever repo actually owns it.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/self.txt"
+echo "forkowner/repo" > "$FIX/repo.txt"; touch "$FIX/pr-not-upstream"
+check "a fork clone still resolves a PR the fork owns" 0
+
+# Both repos can carry PR number N — likely, since a fork's own PRs are low-numbered and a
+# mature parent has thousands. An upstream-first EXISTENCE probe picks the parent's
+# unrelated PR every time; selecting by matching head is the only question with one answer.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/self.txt"
+echo "forkowner/repo" > "$FIX/repo.txt"
+# The upstream HAS a PR 16 — a different one, whose head is not our tree.
+printf 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' > "$FIX/prhead-upstream.txt"
+check "a colliding PR number in the parent is not used" 0
+
+# Both repos can carry PR 16 at the SAME head — the same branch opened against the parent
+# and against the fork. The two PRs have separate reviews and threads, so silently picking
+# the parent can gate one PR while the caller merges the other. Ambiguity is exit 3.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/repo.txt"
+printf '%s' "$TIP" > "$FIX/prhead-upstream.txt"
+check "PR matching BOTH repos at this head is exit 3" 3
+
+# A FAILED query on one candidate is not that candidate's absence. Here the upstream query
+# dies with no "no such PR" text while the fork's PR matches: reading the failure as
+# absence collapses a possible BOTH-match into a single match, and the gate clears for a
+# PR the caller may not have meant. Doubt about a candidate is doubt about the verdict.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/repo.txt"
+touch "$FIX/pr-upstream-transient"
+check "a transient candidate-query failure is exit 3" 3
+
+# A REPOSITORY-level not-found is not PR absence. The parent repo exists — the .parent
+# lookup just named it — so gh failing to resolve the Repository means lost access, and
+# the PR inside it (possibly the second match the ambiguity refusal exists for) was never
+# ruled out. Only the PullRequest-level text establishes absence.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/repo.txt"
+touch "$FIX/pr-upstream-repo-404"
+check "a repository-level 404 on a candidate is exit 3" 3
+
+# A failed parent lookup is not "not a fork". `|| echo ""` silently dropped the upstream
+# candidate, which is the same collapse one query earlier: the ambiguity refusal can then
+# never fire against a parent PR nobody could see.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+touch "$FIX/parentfail"
+check "a failed parent lookup is exit 3, not a non-fork" 3
+
+# GitHub emits automatic_base_change_succeeded as a SEPARATE event from base_ref_changed,
+# and it fires in the stacked-PR case: B targets A, A merges and is deleted after B's
+# review, GitHub retargets B, and B's diff grows to include A's squash with B's head
+# untouched. Matching only the manual event left that open.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"automatic_base_change_succeeded","created_at":"%s"}]]' "$NOW_UTC" > "$FIX/timeline.json"
+check "an AUTOMATIC retarget after the review blocks" 1
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"automatic_base_change_failed","created_at":"%s"}]]' "$NOW_UTC" > "$FIX/timeline.json"
+check "a failed automatic retarget also blocks" 1
+
+# A force-push of the base is a fourth event type, and a backward one leaves the new base
+# an ancestor of the head so the downstream ancestry check passes too. The filter matches
+# the family by prefix now — enumerating types lost to the next one five times running.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"base_ref_force_pushed","created_at":"%s"}]]' "$NOW_UTC" > "$FIX/timeline.json"
+check "a base force-push after the review blocks" 1
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"base_ref_deleted","created_at":"%s"}]]' "$NOW_UTC" > "$FIX/timeline.json"
+check "a base deletion after the review blocks" 1
+
+# Marking a draft ready starts a new round and moves no SHA — so with `eyes` unable to
+# refresh and PENDING reviews invisible, the old same-tip wrapper satisfied everything.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"ready_for_review","created_at":"%s"}]]' "$NOW_UTC" > "$FIX/timeline.json"
+check "mark-ready after the review blocks" 1
+
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$NOW_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"ready_for_review","created_at":"%s"}]]' "$OLD_UTC" > "$FIX/timeline.json"
+check "mark-ready before the review clears" 0
+
+# ...and the SAME shape with one undatable wrapper added must not. The first-ready fallback
+# reasons from the ABSENCE of a wrapper at or before the ready, so a wrapper whose
+# submitted_at cannot be parsed — dropped silently from WRAPPER_EPOCHS — read as "no round
+# was in flight" and cleared the gate on malformed review data. It may be that very round.
+# The undated wrapper sits on an OLD tip deliberately: WRAPPER_AT is tip-scoped, so an
+# undatable one on THIS tip would trip the active-round net instead and the fallback would
+# never be reached. WRAPPER_EPOCHS spans every commit, which is where the hole is.
+new_fix
+wrappers_at "$OLDTIP:not-a-date" "$TIP:$NOW_UTC" > "$FIX/reviews.json"
+threads 0 > "$FIX/threads.json"
+printf '[[{"event":"ready_for_review","created_at":"%s"}]]' "$OLD_UTC" > "$FIX/timeline.json"
+check "an undatable wrapper blocks the first-ready fallback" 1
+
+# The same hole with an EMPTY timestamp rather than a garbage one. This is the commoner
+# shape — a missing or null submitted_at, which is also what a PENDING review on an older
+# tip looks like — and it was filtered out one stage earlier than the rule above, so the
+# fix for the garbage case did not cover it.
+new_fix
+wrappers_at "$OLDTIP:" "$TIP:$NOW_UTC" > "$FIX/reviews.json"
+threads 0 > "$FIX/threads.json"
+printf '[[{"event":"ready_for_review","created_at":"%s"}]]' "$OLD_UTC" > "$FIX/timeline.json"
+check "an empty wrapper timestamp blocks it too" 1
+
+# An `eyes` reaction is TWO facts: a round is running now, and a round STARTED then. Only
+# the first was ever used, so a round could add `eyes`, `@codex review` post while it ran,
+# and that older round submit the newest wrapper — leaving the reaction neither at-or-after
+# the newest wrapper (so the active-round check clears) nor in the gap set (so coverage
+# credits the wrapper to the request). The requested round can still be pending.
+new_fix
+wrappers_at "$TIP:$OLD_UTC" "$TIP:$NEW2_UTC" > "$FIX/reviews.json"
+threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":"%s"}]]' "$MID_UTC" > "$FIX/reactions.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$NEW_UTC" > "$FIX/issues.json"
+check "an eyes-started round in the gap blocks a request" 1
+
+# ...and it must not deadlock: the reaction is never re-added, so once a wrapper lands after
+# it the gap no longer contains it and the next request clears normally.
+new_fix
+wrappers_at "$TIP:$NEW2_UTC" "$TIP:$NEW4_UTC" > "$FIX/reviews.json"
+threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":"%s"}]]' "$MID_UTC" > "$FIX/reactions.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$NEW3_UTC" > "$FIX/issues.json"
+check "an eyes older than the covering wrapper clears" 0
+
+# THE READY OVERLAP: a request starts a round, the PR is marked ready while it runs, and
+# the old round submits after the ready. The pre-wrapper ready used to be exempt from
+# coverage wholesale, so the request's wrapper cleared the gate while the ready-started
+# round was still queued. A ready with a prior wrapper is held to the same freshness rule
+# as a request.
+new_fix; wrapper2 "chatgpt-codex-connector[bot]" "$OLD_UTC" "$NEW2_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$MID_UTC" > "$FIX/issues.json"
+printf '[[{"event":"ready_for_review","created_at":"%s"}]]' "$NEW_UTC" > "$FIX/timeline.json"
+check "mark-ready during a requested round blocks" 1
+
+# The first-ever mark-ready fallback covers a PR born as a draft — nothing observable
+# before it could have been in flight. A SECOND ready with no wrapper before either is a
+# different state: the first ready's round may still be running when the second fires.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$NOW_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"ready_for_review","created_at":"%s"},{"event":"ready_for_review","created_at":"%s"}]]' "$OLD_UTC" "$MID_UTC" > "$FIX/timeline.json"
+check "a second mark-ready with no wrapper between blocks" 1
+
+# A blocked ready must not deadlock: a later provably fresh request that completed shows
+# every earlier round — the ready's included — had submitted. Same escape as a retarget.
+new_fix
+wrappers_at "$TIP:$OLD_UTC" "$TIP:$NEW2_UTC" "$TIP:$NEW4_UTC" > "$FIX/reviews.json"
+threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"},{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$MID_UTC" "$NEW3_UTC" > "$FIX/issues.json"
+printf '[[{"event":"ready_for_review","created_at":"%s"}]]' "$NEW_UTC" > "$FIX/timeline.json"
+check "a fresh completed request clears a blocked ready" 0
+
+# A PENDING review is a draft nobody submitted, and GitHub omits `submitted_at` on it. It
+# named the tip, so it satisfied the wrapper count — while leaving WRAPPER_AT empty, which
+# is what the active-round check is guarded on. So the check never ran and the verdict saw
+# an unopposed wrapper. Two ways to reintroduce it, so assert against both.
+new_fix
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]","type":"Bot"},"state":"PENDING","commit_id":"%s","body":"draft"}]]' "$TIP" > "$FIX/reviews.json"
+threads 0 > "$FIX/threads.json"
+check "an unsubmitted (PENDING) wrapper blocks" 1
+
+# ...and the belt-and-braces half: a submitted_at that is present but empty.
+new_fix
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]","type":"Bot"},"submitted_at":"","commit_id":"%s","body":"x"}]]' "$TIP" > "$FIX/reviews.json"
+threads 0 > "$FIX/threads.json"
+check "a wrapper with an empty submitted_at blocks" 1
+
+# CodeRabbit's state is REPORTED, so failing to read it cannot make the verdict
+# indeterminate — exit follows the gate's six conditions. This was exit 3 while CodeRabbit
+# still gated (correctly: "could not ask" is not "not done"), and ADR 0004 changed what
+# the gate claims, not this fixture's shape. Do not "restore" exit 3 here.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo 'x' > "$FIX/rollupfail"
+check_reports "unreadable CodeRabbit status is reported, not fatal" "coderabbit       query-failed"
+
+# --- what exit 0 says it means ---
+
+# The verdict is NO_PENDING_EVIDENCE, not CLEAR, and the claim travels with it. A caller
+# chaining `&&` into `gh pr merge` reads only the exit code, so the wording is for the
+# human reading the report — but if it silently reverts to "CLEAR" the whole point of this
+# rework is gone, and nothing else would notice.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+out=$(run)
+if printf '%s' "$out" | grep -q 'verdict: NO_PENDING_EVIDENCE' && ! printf '%s' "$out" | grep -q 'verdict: CLEAR'; then
+  PASS=$((PASS+1)); echo "  ok   verdict is NO_PENDING_EVIDENCE, not CLEAR   (bounded claim)"
+else
+  FAIL=$((FAIL+1)); echo "  FAIL verdict is NO_PENDING_EVIDENCE, not CLEAR"
+fi
+
+# The observation window must be reported at BOTH ends. "As of instant T" is false — these
+# reads are not atomic — so a consumer needs the interval to judge staleness itself.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+J=$(PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 --json 2>/dev/null)
+if printf '%s' "$J" | jq -e '.observed_from and .observed_to and .claim and (.verdict=="NO_PENDING_EVIDENCE")' >/dev/null 2>&1; then
+  PASS=$((PASS+1)); echo "  ok   JSON carries the claim and both window ends (bounded claim)"
+else
+  FAIL=$((FAIL+1)); echo "  FAIL JSON carries the claim and both window ends"
+fi
+
+# ...and does NOT carry it when blocked. Emitting the sentence unconditionally put
+# "nothing indicated an unfinished round" in the same object as `"verdict": "BLOCKED"`,
+# which a machine reader taking it at face value would have exactly backwards.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 3 > "$FIX/threads.json"
+J=$(PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 --json 2>/dev/null)
+if printf '%s' "$J" | jq -e '(.verdict=="BLOCKED") and (.claim==null)' >/dev/null 2>&1; then
+  PASS=$((PASS+1)); echo "  ok   a BLOCKED verdict asserts no claim         (bounded claim)"
+else
+  FAIL=$((FAIL+1)); echo "  FAIL a BLOCKED verdict asserts no claim"
+fi
+
+# --settle-seconds is REJECTED, not ignored: a caller passing it believes it is buying a
+# guarantee, and quietly accepting the flag would keep that belief alive.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 --settle-seconds 0 >/dev/null 2>&1
+[[ $? == 2 ]] && { PASS=$((PASS+1)); echo "  ok   --settle-seconds is rejected, not ignored  (exit 2)"; } \
+              || { FAIL=$((FAIL+1)); echo "  FAIL --settle-seconds is rejected, not ignored"; }
+
+echo
+echo "passed $PASS, failed $FAIL"
+[[ "$FAIL" -eq 0 ]]

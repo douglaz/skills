@@ -46,7 +46,8 @@ The default panel is two reviewers, run in parallel every pass:
 | `fable` | `claude -p "<review prompt>" --model fable --effort high --output-format json` | Repo-aware, reads beyond the diff |
 
 Both CLIs must be on `PATH` and authenticated. `jq` is needed to unwrap the
-Claude reviewer's JSON.
+Claude reviewer's JSON, and GNU `timeout` — named `timeout`, or `gtimeout` from
+Homebrew coreutils; resolve it once with `command -v` — to bound each reviewer — both CLIs can hang indefinitely, writing nothing and never exiting.
 
 - If **both** are missing, stop and tell the user to install them.
 - If **one** is missing or unauthenticated, run the loop with the survivor and
@@ -128,7 +129,160 @@ a reviewer.
 
 2. Resolve `DIFF_BASE` in this order. Use the first candidate that resolves to a
    commit:
-   - PR base branch from `gh pr view --json baseRefName -q .baseRefName`
+   - PR base branch from `gh pr view`. **On a fork clone this needs the upstream and the
+     head-label selector**, or it silently finds nothing and falls through to the next
+     candidate — which on a fork is `origin/<feature>`, i.e. HEAD itself, so the pass
+     reviews an empty diff and reports "Nothing to review" on a branch full of changes:
+
+     ```bash
+     # Probe both, do not force the parent: a fork can host its own PR, and forcing
+     # `.parent` makes it invisible. ENUMERATE both — the same branch can have an open PR
+     # in the parent AND in the fork, two separately reviewed surfaces with two merge
+     # targets, and taking the first found reviews one of them by iteration order. A HEAD
+     # match is the tiebreak when it singles one out; otherwise refuse, the same
+     # double-match rule bot-gate enforces. A failed parent lookup is UNKNOWN, not "not a
+     # fork": guessing "self" there reviews against the fork's base on a real fork.
+     SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "")
+     # SELF empty means gh cannot see this checkout at all (no gh, no auth, non-GitHub
+     # remote): no PR is findable, so fall through to the ladder below. A failed PARENT
+     # lookup on a repo gh CAN see is different — that is unknown, and refuses here.
+     PARENT=""
+     if [ -n "$SELF" ]; then
+       PARENT=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end') \
+         || { echo "cannot resolve the fork parent — do not guess the review base"; exit 1; }
+     fi
+     BR=$(git branch --show-current)
+     HEAD_OID=$(git rev-parse HEAD)
+     _GH_ERR=$(mktemp); trap 'rm -f "$_GH_ERR"' EXIT   # both scripts do this; the snippets leaked it || { echo "mktemp failed"; exit 1; }
+     UP="$SELF"; SEL="$BR"; PRNUM=""; _M=0; _HM=0
+     for _c in ${PARENT:+"$PARENT"} "$SELF"; do
+       # Skips a degenerate candidate: a PARENT that duplicates SELF, and — load-bearing —
+       # the SELF="" case above, where PARENT is empty too, so the lone "" iteration is
+       # skipped, no `gh pr view -R ""` ever runs, and the ladder below resolves the base.
+       [ "$_c" = "$SELF" ] && [ "$PARENT" = "$SELF" ] && continue
+       _s="$BR"; [ "$_c" != "$SELF" ] && _s="${SELF%%/*}:$BR"    # gh matches the head LABEL
+       # "No such PR" and "the query failed" share an exit code, so absence is read out of
+       # gh's own error text. A transient failure read as absence erases one candidate —
+       # and with it the double-match refusal below — so the pass reviews against
+       # whichever PR the outage left visible. PullRequest-level not-found only: both
+       # candidates are repos the API just named, so a Repository-level "could not
+       # resolve" or an HTTP 404 is lost access, not absence.
+       if ! _j=$(gh pr view "$_s" -R "$_c" --json number,state,headRefOid \
+              -q 'select(.state=="OPEN") | "\(.number) \(.headRefOid)"' 2>"$_GH_ERR"); then
+         grep -qiE 'could not resolve to a pullrequest|no pull requests found' "$_GH_ERR" \
+           || { echo "cannot query $_c for $BR's PR — absence not established; do not guess the review base"; exit 1; }
+         _j=""
+       fi
+       [ -n "$_j" ] || continue
+       _M=$((_M+1))
+       if [ "${_j#* }" = "$HEAD_OID" ]; then
+         _HM=$((_HM+1)); UP="$_c"; SEL="$_s"; PRNUM="${_j%% *}"
+       elif [ -z "$PRNUM" ]; then
+         UP="$_c"; SEL="$_s"; PRNUM="${_j%% *}"
+       fi
+     done
+     if [ "$_M" -ge 2 ] && [ "$_HM" -ne 1 ]; then
+       echo "branch $BR has an OPEN PR in BOTH $PARENT and $SELF and HEAD singles neither out"
+       echo "  — two review surfaces, two merge targets. Close one, or pin the intended repo"
+       echo "  in every -R before reviewing; do not let iteration order pick."
+       exit 1
+     fi
+     # OPEN only, and an empty PRNUM means "no PR" — fall through to candidate 2, do not
+     # abort. The first HARDEN panel runs BEFORE any PR exists (that is the prescribed
+     # ordering), so aborting here stops the panel in its most common state. And an
+     # abandoned CLOSED PR must not win: `gh pr view` falls back to the most recent closed
+     # or merged PR on the branch, which may have targeted a different base entirely.
+     # But once a PR IS found, a failed base read is FATAL, not a fall-through: the PR's
+     # base is knowable, and the ladder below substitutes the repo default — so a release
+     # or stacked PR would silently get reviewed against the wrong diff. Same rule as the
+     # fetch below.
+     BASE_NAME=""
+     if [ -n "$PRNUM" ]; then
+       BASE_NAME=$(gh pr view "$SEL" -R "$UP" --json baseRefName \
+                     -q .baseRefName 2>/dev/null) && [ -n "$BASE_NAME" ] \
+         || { echo "PR $PRNUM exists but its base cannot be read — do not review against a guess"; exit 1; }
+     fi
+     # FETCH IT. The name alone is not a reviewable ref: on a fork clone `origin` is your
+     # fork, so `origin/$BASE_NAME` is stale or absent — and when it is absent the ladder
+     # falls through to the branch's own upstream, which IS HEAD. The panel then reviews an
+     # empty diff and reports clean on a branch full of changes. Fetch the PR's real base
+     # repository into a ref of its own and review against that.
+     if [ -n "$BASE_NAME" ]; then
+       # A PR exists, so its base is knowable and a failure to fetch it is fatal — that is
+       # different from having no PR at all, which is candidate 2's job.
+       BASE_REMOTE=$(gh api "repos/$UP/pulls/$PRNUM" --jq .base.repo.clone_url)
+       git fetch -q "$BASE_REMOTE" "+refs/heads/$BASE_NAME:refs/remotes/prbase/$BASE_NAME" \
+         || { echo "PR $PRNUM exists but its base cannot be fetched — do not review against a guess"; exit 1; }
+       DIFF_BASE="refs/remotes/prbase/$BASE_NAME"
+     fi
+     # else: no open PR — leave DIFF_BASE unset and try the next candidate.
+     # ...EXCEPT on a fork. The prescribed ordering runs the first HARDEN panel BEFORE any
+     # PR exists, and every candidate the ladder below can reach — @{upstream}, the fork's
+     # origin/HEAD, a bare `gh repo view` default — lives in the FORK. When the parent's
+     # default branch has a different name (or its tip has moved), those candidates review
+     # the wrong diff, and drive's post-panel OID check (phases.md § HARDEN pins the
+     # PARENT's base via `base_repo`) then rejects every rerun with "different base commit"
+     # — a deadlock whose remedy re-reviews the same wrong base. Resolve and fetch the
+     # parent's own default here, exactly as the PR path above fetches the PR's base.
+     if [ -z "${DIFF_BASE:-}" ] && [ -n "$PARENT" ]; then
+       P_DEFAULT=$(gh repo view "$PARENT" --json defaultBranchRef \
+                     -q .defaultBranchRef.name 2>/dev/null) && [ -n "$P_DEFAULT" ] \
+         || { echo "fork with no PR: cannot resolve $PARENT's default branch — do not review against the fork's"; exit 1; }
+       PARENT_URL=$(gh repo view "$PARENT" --json url -q .url 2>/dev/null) \
+         || { echo "cannot resolve the parent clone URL — base unknown"; exit 1; }
+       git fetch -q "$PARENT_URL.git" \
+           "+refs/heads/$P_DEFAULT:refs/remotes/prbase/$P_DEFAULT" \
+         || { echo "cannot fetch $PARENT $P_DEFAULT — do not review against a guess"; exit 1; }
+       DIFF_BASE="refs/remotes/prbase/$P_DEFAULT"
+     fi
+     ```
+
+   **The feature branch's OWN tracking ref is INELIGIBLE, by NAME and regardless of what
+   it points at — skip that ref and keep going down the ladder.** On a pushed feature
+   branch `@{upstream}` is `origin/<feature>`: when it equals HEAD, `git diff` against it
+   is empty and both reviewers return clean having read nothing; when HEAD is AHEAD of it,
+   the diff covers only the unpushed commits while clearance still covers the whole tip,
+   which is worse. Neither is a valid base. But OID equality alone cannot disqualify a
+   candidate, and neither can being the upstream: a branch cut from and tracking its
+   *target* (`git checkout -b feat origin/release`) has `@{upstream}` = `origin/release`,
+   which equals HEAD exactly when the whole review surface is staged, unstaged, or
+   untracked work — and that is the correct base, not a degenerate one. What identifies
+   the degenerate ref is its *name*: it is this branch's own remote counterpart. Skip
+   only that.
+
+   Only when the ladder is EXHAUSTED with no eligible candidate is it a resolution
+   failure. Say so and stop then; do not review air.
+
+   ```bash
+   UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || echo "")
+   ORIGIN_HEAD=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || echo "")
+   FORGE_BRANCH=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || echo "")
+   FORGE_DEFAULT=""
+   if [ -n "$FORGE_BRANCH" ]; then
+     git rev-parse --verify --quiet "origin/$FORGE_BRANCH" >/dev/null 2>&1 \
+       && FORGE_DEFAULT="origin/$FORGE_BRANCH" || FORGE_DEFAULT="$FORGE_BRANCH"
+   fi
+   for c in "${DIFF_BASE:-}" "$UPSTREAM" "$ORIGIN_HEAD" "$FORGE_DEFAULT" \
+            origin/main main origin/master master; do
+     [ -n "$c" ] || continue
+     git rev-parse --verify --quiet "$c" >/dev/null 2>&1 || continue
+     # Only the branch's OWN remote counterpart (`origin/<this-branch>`), by NAME — not by
+     # OID. A HEAD-equal upstream under another name (origin/release, tracked as the target,
+     # with the surface still uncommitted) is a legitimate base, and the name test already
+     # tells the two apart; adding an OID test on top broke the case it was meant to cover.
+     # When the branch is AHEAD of its own push ref, the OID differs, the guard stopped
+     # firing, and `origin/<this-branch>` became the base — so the panel reviewed only the
+     # unpushed commits while clearance still covered the whole tip. Every earlier commit on
+     # the branch went unread, which is the partial-diff-full-clearance failure this file
+     # exists to prevent.
+     if [ -n "$UPSTREAM" ] && [ "$c" = "$UPSTREAM" ] \
+        && [ "${UPSTREAM#*/}" = "$(git branch --show-current)" ]; then
+       continue   # the branch's own push ref is never the base, however far HEAD has moved
+     fi
+     DIFF_BASE="$c"; break
+   done
+   [ -n "${DIFF_BASE:-}" ] || { echo "no eligible base candidate resolves"; exit 1; }
+   ```
    - current branch upstream from `git rev-parse --abbrev-ref --symbolic-full-name @{upstream}`
    - remote default branch from `git symbolic-ref refs/remotes/origin/HEAD`
    - repo default branch from `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`
@@ -196,23 +350,31 @@ For each pass `N` from `1` to `MAX_PASSES`:
 1. Run every panel reviewer **in parallel** and write full output to that pass's
    files. A pass can take 10-15 minutes. In Claude Code the Bash tool's timeout
    caps at 600000 ms, so either run the block in background mode or split it into
-   two backgrounded calls; in Codex, the shell will wait naturally. The full
+   two backgrounded calls; in Codex, the shell will wait naturally. **Backgrounding
+   removes the harness's own timeout, so wrap each reviewer in `timeout` yourself** —
+   an unbounded reviewer can hang with no output and no exit, and a backgrounded one
+   has nothing left to reap it. The full
    command block, including the Claude reviewer prompt, is in
    [references/reviewer-panel.md](references/reviewer-panel.md). The shape is:
 
    ```bash
    PASS_ID=$(printf '%02d' "$N")
-   codex review --base "$DIFF_BASE" \
+   TO=$(command -v timeout || command -v gtimeout) \
+     || { echo "no GNU timeout — see references/reviewer-panel.md"; exit 1; }
+   "$TO" --kill-after=60 1500 codex review --base "$DIFF_BASE" \
      -c 'model="gpt-5.6-sol"' -c 'model_reasoning_effort="xhigh"' \
      </dev/null >"$REVIEW_DIR/pass-${PASS_ID}.codex.txt" 2>"$REVIEW_DIR/pass-${PASS_ID}.codex.stderr.txt" &
    CODEX_PID=$!
-   claude -p "$(cat "$FABLE_PROMPT_FILE")" --model fable --effort high --output-format json \
+   "$TO" --kill-after=60 1500 \
+     claude -p "$(cat "$FABLE_PROMPT_FILE")" --model fable --effort high --output-format json \
      --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
      --disallowedTools "Edit,Write,NotebookEdit" \
      </dev/null >"$REVIEW_DIR/pass-${PASS_ID}.fable.raw.json" 2>"$REVIEW_DIR/pass-${PASS_ID}.fable.stderr.txt" &
    FABLE_PID=$!
-   wait "$CODEX_PID"; CODEX_RC=$?
-   wait "$FABLE_PID"; FABLE_RC=$?
+   # `|| VAR=$?` — a timeout kill returns 124/137, and under `set -e` the bare
+   # `; VAR=$?` form terminates the shell before the status is ever captured.
+   CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?
+   FABLE_RC=0; wait "$FABLE_PID" || FABLE_RC=$?
    ```
 
    **Do not pass focus text as a `codex review` argument.** `codex review` rejects
@@ -246,12 +408,16 @@ For each pass `N` from `1` to `MAX_PASSES`:
    - **Ambiguous**: exit 0, no `[P*]` items, no explicit clean signal. Do not
      treat as clean — surface the log.
    - **Failed**: non-zero exit, `is_error: true` in the Claude JSON, or empty
-     output. Record it, drop that reviewer from this pass, and mark the pass
-     `DEGRADED`. See the recovery rules in the reviewer-panel reference.
+     output. **Exit 124 or 137 is the timeout** and counts here — a reviewer that ran
+     out of time reviewed nothing. (137 is the `--kill-after` path, used when the
+     reviewer ignored TERM.) Record it, drop that reviewer from this pass, and mark
+     the pass `DEGRADED`. See the recovery rules in the reviewer-panel reference.
 
 4. Merge the two finding lists into `pass-NN.merged.md`. Dedupe on *claim*, not
    wording: same file, same code path, same defect = one merged finding. Tag each
-   merged finding with its source — `BOTH`, `CODEX`, or `FABLE` — and keep both
+   merged finding with its source — `BOTH`, `CODEX`, `FABLE`, or `CONFLICT` when the two
+   reviewers explicitly disagree about the same code (§ 3.4 — those rows are the
+   highest-value ones in the pass) — and keep both
    reviewers' phrasings when they differ in what they'd have you do about it.
    Cross-reviewer agreement rules are in
    [references/disposition-rules.md](references/disposition-rules.md).
@@ -264,7 +430,15 @@ For each pass `N` from `1` to `MAX_PASSES`:
    - tokens line from stderr, if present
    - log file paths
 
-6. In chat, show only a compact summary:
+6. **If this pass produced findings, do not stop here — go straight to § 3.** The summary
+   below belongs to a pass that is *finished*, and a pass with findings is not: the fixes,
+   the validation, and the next pass's launch all still have to happen. Emitting it now
+   ends the turn at the pre-fix boundary, which is the same stall § 3.6 exists to prevent,
+   one step earlier. § 3.7 is where a findings pass reports, and by then the next pass is
+   already running.
+
+   Show this only when the pass was clean (so § 3 has nothing to do) or when a § 4 stop
+   condition fires — the cases where stopping is the correct outcome rather than a lapse:
 
    ```text
    PASS N/MAX  [DEGRADED if a reviewer failed]
@@ -290,6 +464,36 @@ Otherwise:
    editing and prefer fixing the root cause once over patching each comment
    independently — including when the two reviewers describe the same root cause
    from different angles.
+
+   **A finding names a class, not a line.** This is the single highest-leverage
+   habit in the loop, and skipping it is what makes a run take six passes instead
+   of two. A reviewer cites the one site it happened to read; the same mistake is
+   usually elsewhere too. Before you mark a finding fixed, search the repo for
+   every other instance of that class and fix them in the same edit:
+
+   - a rule stated in one file is usually restated in two or three others — grep a
+     distinctive phrase from it, not just the file you were pointed at
+   - a snippet with a bug (`echo` where it needed `exit 1`, a missing flag, an
+     unbounded command) usually has siblings that were copied from it
+   - a fact corrected in one place (an exit code, a condition, a command name)
+     leaves every other statement of it stale, and the stale ones now *contradict*
+     the fixed one — a worse state than before you started
+
+   Measured on one real run: findings per pass went 13 → 7 → 11 → 7 → 6 → 8 → 6,
+   and **most findings after pass 2 were drift introduced by the previous pass's
+   fixes** — a rule updated at the cited site and left stale two files over. Rising
+   or flat counts late in a loop usually mean fixes are being applied line-by-line.
+
+   **Prefer a guard keyed on the condition over one keyed on named cases.** A check
+   written as "suppress this when the phase came from *X*" silently re-breaks the
+   moment someone adds state *Y*; the same check written as "suppress this unless
+   the record actually won" covers *Y* and everything after it. When a finding says
+   "you handled case X but not case Y", that is the tell — do not add Y to the list,
+   replace the list with the property the cases share.
+
+   After the edits, spend one command confirming the class is gone repo-wide
+   (`grep -rn '<the stale phrasing>' .`) rather than re-reading the file you just
+   changed. Quote that check in the pass summary.
 
 2. Order by confidence, then priority: `BOTH` findings first (two independent
    reads agree), then single-source findings by priority. Agreement is a
@@ -337,10 +541,30 @@ Otherwise:
    Passing validation supports a fix, but it does not by itself prove that a
    rejected finding was false.
 
-6. Print a brief disposition summary in chat:
+6. **Launch the next pass before you write the summary.** Not after — before. Go back to
+   § 2 with `N+1`, start the reviewers, and only then write up what this pass did.
+
+   Writing a report to the user is the most turn-ending act available, so putting it last
+   in a loop iteration reliably ends the loop instead of advancing it. Measured on a real
+   run of this skill: every boundary whose final act was a summary stalled and needed a
+   human "continue"; every boundary whose final act was a tool call did not. An explicit
+   don't-stop instruction was already in place for both stalls and prevented neither — the
+   failure is sequencing, not resolve, so inverting the order removes the failure state
+   rather than asking you to resist it.
+
+   Two things fall out: the reviewers work for 10-15 minutes while you write, and the
+   summary becomes a fact ("pass 3 is running, task X") rather than a promise. Name the
+   running task in it — a turn that ends with a pass running and one that ends with a pass
+   merely announced read identically otherwise.
+
+   The exceptions are § 4's stop conditions and § 4a/§ 4b, where the loop is deliberately
+   not continuing.
+
+7. Print a brief disposition summary in chat:
 
    ```text
    PASS N ACTIONS
+   Next pass: <launched, task/PID> | <not launched — why>
    Fixed:
    - [P1][BOTH] <what changed>
    Deferred:
@@ -364,6 +588,8 @@ Stop early and surface the issue if any of these happen:
   sighting is not evidence the fix failed. Quote the line that closes it and
   reject; do not re-fix something already fixed.
 - a reviewer's output is ambiguous or empty twice in a row
+- a reviewer times out (exit 124 or 137) twice in a row — the hang is the finding; stop and
+  say so rather than starting a third pass that may sit for an hour
 - both reviewers fail in the same pass (nothing reviewed the code)
 - a finding remains plausible but fixing it would require a larger architectural
   rewrite or product decision
@@ -386,6 +612,22 @@ stops converging:
 
 More normal passes will not converge these; they grow the change. The audit is
 the corrective.
+
+**Two different causes produce that same rising-count symptom, and they need
+opposite corrections — diagnose before you reach for the audit.** Read a sample of
+the last pass's findings and ask what each one *is*:
+
+- **New mechanism acquiring its own edge cases** (a check you added now needs its
+  own error handling, a flag now needs a fallback) → over-specification. Run § 4a
+  and cut.
+- **The same rule stale in a file you didn't edit**, a snippet's sibling still
+  carrying the bug you fixed, a fact corrected in one place and now contradicting
+  its restatement elsewhere → not over-specification at all. That is line-by-line
+  fixing, and the corrective is the class sweep in § 3.1, not cutting. Cutting here
+  removes correct material and leaves the drift.
+
+The tell is whether a finding is about something the previous pass *added* (audit)
+or something the previous pass *failed to update* (sweep).
 
 **Falling severity is not the same as done.** P1 counts dropping pass over pass
 feels like convergence, and usually is — but both reviewers are re-reading the

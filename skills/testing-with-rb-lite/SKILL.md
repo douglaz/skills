@@ -20,7 +20,7 @@ description: >-
 ## What this skill is, in one paragraph
 
 `rb-lite` can write a good test, but it cannot certify that the test passes. Its
-reviewer panel (codex + Claude Fable) reads the test's **code** — it does not
+reviewer panel (codex + Claude, per `.rb-lite-reviewers`) reads the test's **code** — it does not
 run a live gate, boot a database, stand up a federation, or execute the smoke
 against real infrastructure. So a `clean` rb-lite run means "no reviewer
 objected to the test's source," not "the test runs and passes." This skill
@@ -55,7 +55,9 @@ that everyone downstream trusts. The job is to make the test *earn* its green.
 ## Tool dependencies
 
 Same core as `orchestrating-with-rb-lite`: resolve the `rb-lite` binary
-(`command -v rb-lite`, else `nix run github:douglaz/rb-lite -- ...`), and have
+(`command -v rb-lite`, else `nix run --refresh github:douglaz/rb-lite -- ...` —
+`--refresh` on the session's first invocation is required there and equally required
+here, or nix serves an hour-stale cached revision), and have
 `codex` + `claude` on PATH and authenticated for the panel. Read that skill's
 "Tool dependencies" for the details; they are not repeated here.
 

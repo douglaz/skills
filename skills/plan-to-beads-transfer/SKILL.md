@@ -77,7 +77,17 @@ Stop and report plan gaps when any of these are still fuzzy:
    - beads -> plan: every bead has clear backing in the plan or an explicitly approved delta
    - if the audit feels suspiciously short or self-satisfied, assume coverage is incomplete and rerun more exhaustively
 9. Split, merge, rewrite, or close beads until the graph can stand on its own as executable memory.
-10. Flush the state with `br sync --flush-only`.
+10. Flush with an **explicit** `br sync --flush-only` and require it to succeed:
+
+    ```bash
+    br sync --flush-only || { echo "flush failed — mutations not persisted"; exit 1; }
+    ```
+
+    The explicit sync propagates a real exit code, which the *automatic* flush after each
+    `br` mutation does not — it swallows its error and leaves the JSONL unwritten. The
+    mutation is still in the shared DB, so this sync either writes it or fails loudly. A
+    re-run whose graph already matches the plan syncs cleanly and writes nothing; that is
+    a no-op, not a failure.
 11. If the repo workflow supports it, run `br lint` after major rewrites to catch missing sections.
 
 ## Quality bar

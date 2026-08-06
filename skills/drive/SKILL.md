@@ -82,7 +82,8 @@ Everything else is yours to decide.
 3. **The cross-cutting tell**: a second review round adds *another* consumer of the same
    concept. Stop expanding scope file-by-file — run a design pass and surface it.
    (See `references/autonomy-contract.md` § 5.)
-4. **Scope budget blown** — see Guard 2.
+4. **Scope budget blown** — see Guard 2. A PR still producing bot findings after three
+   rounds is the same signal: the change is wrong-shaped, not one patch short.
 5. **The goal itself was wrong** — what you learned building contradicts the premise.
 
 When you hit one, state the fork in a few sentences, give your recommendation first, and
@@ -111,11 +112,44 @@ If none resolve, you are running from a checkout rather than an install: run
 `<skill-dir>/scripts/drive-status` explicitly. If you cannot locate it, say so — do not
 infer the phase by hand.
 
-It prints repo, branch, cleanliness, gate command, bead counts, PR state, spec files, and
-an inferred phase. Read it, then confirm the inference against `DRIVE.md` if present.
-**Never guess the phase.**
+It prints repo, branch, cleanliness, gate command, bead counts, PR state, spec files, the
+cleared SHA, and an inferred phase. `scripts/drive-status.test` covers the derivation —
+one case per real defect, against scratch repos and a stubbed `gh`, each shown to go red against a
+real defect. Run it after touching the phase logic. Read it, then confirm the inference against `DRIVE.md`
+if present. **Never guess the phase.**
 
-**The record wins when it exists; the tree wins when it does not.** `DRIVE.md` is written
+### Install the working agreement, once per repo
+
+Invoke the **`agents-md` skill** with `--check` — as a skill, not a shell command; it is a
+skill directory, not a PATH executable. `--check` is read-only and reports whether the
+block is present *and* current. If it says absent or stale, invoke `agents-md` without
+`--check`. It is a no-op on every later run.
+
+These rules only bind agents that read them, and `AGENTS.md` is the only place they travel
+— including to the rb-lite implementers and reviewer panels this skill spawns. `agents-md`
+writes but never commits.
+
+**Who carries the edit depends on where the drive entered.** If a BUILD branch is coming,
+leave it uncommitted and let that branch carry it through review like any other change. If
+one is not — a drive resuming at HARDEN or LAND, or the tiny-change path that skips BUILD
+outright — that instruction has no addressee, and the edit sits dirty until LAND's
+clean-tree guard refuses the merge. Commit it onto the current branch instead and let the
+panel and the bots review it there. Do not leave it for a branch that will never exist.
+
+### Reading the `pr` field
+
+Distrust it in both directions — it reads review wrappers, so a PR two bots approved by
+*reaction* still prints `no-review`, and a `SUCCESS` check may be a *skip* rather than a
+review. `pr-with-codex-bot-review` § 7 owns the rules for both and carries the queries.
+
+**Bot approval is never clearance.** LAND is admitted by the *local* `cleared` marker
+alone. A fresh clone has no marker by design, however thoroughly the bots approved — so
+"the bots already approved, no need to re-run HARDEN" is the bypass the derivation exists
+to prevent. Use PR state to avoid *duplicate bot rounds*, never to skip the panel.
+
+**The record is the default when it exists; the tree is the fallback when it does not** —
+with three exceptions the detector announces, where the record cannot honestly describe
+this checkout (see Guard 4). `DRIVE.md` is written
 at every transition, and several phases leave no trace git can distinguish — a `PROVE`
 branch and a `HARDEN` branch are byte-identical, a spec committed but not yet reviewed
 looks finished, and a dirty tree cannot say whether the edit is implementation, a test
@@ -140,11 +174,19 @@ wants to re-run a phase.
 | **BUILD** | A ready bead exists | `orchestrating-with-rb-lite` (one bead = one branch) | rb-lite exits clean **and** you independently ran the gate |
 | **PROVE** | Bead's deliverable is a test/gate, or the change touches money/data/infra | gate folded into the BUILD task, **or** a separate test bead run through `testing-with-rb-lite` — decide *before* BUILD starts, since a second rb-lite run on the same branch is forbidden | The gate **ran** and printed green, with the real exit code |
 | **HARDEN** | Branch has unreviewed substantive code | `multi-reviewer-loop` (its "ask the user at the end" step is satisfied by the drive goal — keep going; its stop-list still applies), then a final pinned `codex review --base <ref>` | `multi-reviewer-loop` reports `CLEAN` — both reviewers clean **and** its consistency pass clean, on the same tree; gate green at a real exit code |
-| **LAND** | Branch is clean, reviewed, and gate-green | `pr-with-codex-bot-review` | Squash-merged; bead closed; `DRIVE.md` updated and committed; branch reset |
+| **LAND** | The panel cleared this checkout, `cleared` still equals the tip, the base is an ancestor of it *and* is still the base the panel reviewed, and the worktree is clean (derived, never recorded — see Guard 4). Exit needs `bot-gate` at `NO_PENDING_EVIDENCE` — no bot exposes a terminal "cleared" signal, so waiting for one never ends (ADR 0004) | `pr-with-codex-bot-review` | `bot-gate` exits 0 (`NO_PENDING_EVIDENCE`) and no bot thread is left unresolved — never "the bots cleared it", which ADR 0004 shows cannot be observed; base still fresh at merge time, squash-merged, branch reset; bead closed and `DRIVE.md` updated **by a reviewed path** |
 | → **BUILD** | More ready beads **in scope** | — | loop until the scoped set is empty — not the repository backlog |
+| **DONE** | The scope is empty — not the repository backlog | — | Any outstanding closure has merged. A `Pending:` PR that has not merged is `WAITING_FOR_MERGE`, not DONE |
 
-Full per-phase mechanics, including how to skip phases legitimately, live in
+Full per-phase mechanics — including how to skip phases legitimately, LAND's SHA and
+base-freshness checks, the bot-round cap, and the closure path — live in
 `references/phases.md`.
+
+**LAND merges the tree the panel cleared, and nothing else.** That is the one invariant
+worth carrying in your head: "the panel was clean" and "the thing I am merging was
+reviewed" stop being the same sentence the moment a commit lands between them, and every
+dashboard keeps saying `reviewed` regardless. Everything in `phases.md` about LAND is
+machinery for keeping those two sentences identical.
 
 ### Sizing — do not run the whole machine for a typo
 
@@ -178,6 +220,28 @@ A phase closes on evidence or it does not close.
   green test that never could have gone red proves nothing.
 - Words that need a number or an exit code behind them: "passing", "working", "clean",
   "verified", "done". Without one, say what you actually observed instead.
+- **`br` is not exempt — but know which failure you are guarding.** An *explicit*
+  `br sync --flush-only` propagates a real exit code, so just require it to succeed. The
+  *automatic* flush that follows a mutating command like `br close` does not: its error is
+  caught and logged at debug level, so `br close` exits 0 with the JSONL unwritten. A
+  closed bead is not a closed bead until an explicit sync has confirmed the write:
+
+  ```bash
+  br close <id> || { echo "br close failed"; exit 1; }
+  br sync --flush-only || { echo "closure not persisted to the JSONL"; exit 1; }
+  ```
+
+  The explicit sync is the whole guard, and it needs to know nothing about the repo: the
+  mutation is already in the shared DB, so the sync either writes it out or fails with a
+  real exit code. This replaced a before/after fingerprint of the JSONL files, which had to
+  know every beads layout, stay portable across GNU and BSD userland, and be captured
+  before the first mutation — and got each of those wrong once, in review, across six
+  copies of itself.
+
+
+The rules above are what closes a *phase*. The fuller set on not lying about *edits* —
+`sed -i` succeeding on zero matches, `&` silently doubling a replacement — lives in the
+discipline block this skill installs at Phase 0, and applies to every agent in the repo.
 
 ### Guard 2 — Scope budget (the overengineering brake)
 
@@ -186,7 +250,9 @@ Declare before entering BUILD, in the task file:
 - exact file list (file-lock — forbid all others from round 1), **plus a standing
   exemption for `DRIVE.md` and the beads JSONL**. Guard 4 rewrites `DRIVE.md` at every
   transition and LAND runs `br close`, so a lock that forbids them forbids the
-  bookkeeping this skill requires. Exempt them; do not spend budget on them.
+  bookkeeping this skill requires. Exempt them; do not spend budget on them. The exemption
+  is from the **budget**, not from review — they ride the same branch, the same panel and
+  the same bots as everything else (`references/phases.md` § LAND).
 - rough LOC budget
 - an explicit **do NOT build** list: defensive edges, abstractions, and config knobs
   beyond this milestone
@@ -220,17 +286,21 @@ Exception: the stop-list. Never auto-push to a protected branch. `--force-with-l
 force-push to a shared or protected branch, over someone else's work, or without a lease,
 is not.
 
-### Guard 4 — Durable state (`DRIVE.md`)
+### Guard 4 — Durable state (`DRIVE.md` + the volatile store)
 
-Maintain `DRIVE.md` at the repo root. Rewrite it at **every phase transition**, before
-starting the next phase. It exists so a fresh session resumes without re-deriving
-anything, and so "status?" is already answered.
+State splits by **lifetime**, and the split is the whole design. Facts that stay true get
+committed; facts true only of this checkout never do.
+
+**`DRIVE.md`, committed, at the repo root.** Rewritten at every phase transition, before
+starting the next one. It exists so a fresh session resumes without re-deriving anything,
+and so "status?" is already answered.
 
 ```markdown
 # DRIVE — <goal, one line>
 
 **Scope:** epic acme-M2 (beads acme-40..acme-49) — the ONLY beads this drive may take
 **Phase:** BUILD · **Bead:** acme-42 · **Branch:** acme-42-retry-budget
+**Pending:** —
 **Gate:** `nix develop -c ./check.sh` · last green 2026-08-01 (exit 0)
 
 ## Done
@@ -250,6 +320,50 @@ acme-43 (blocked on 42) → acme-44 → re-audit graph
 
 Commit it with the work. Keep it under a screen — it is a resume point, not a log.
 
+**Three states override even a valid record**, each announced in the output: a `HARDEN`
+record with fresh clearance becomes derived LAND; a `DONE` record on a branch that still
+has unmerged commits becomes HARDEN, because that record describes the world after its PR
+lands rather than this checkout; and a `DONE` record with an unmerged `Pending:` PR becomes
+`WAITING_FOR_MERGE`.
+
+**`Phase:` never reads `LAND`.** LAND is *derived* — from `cleared == tip`, a base still
+an ancestor of that tip, that base still being the one the panel reviewed
+(`cleared_base`), and a clean worktree. All four: edits made after clearance leave
+`HEAD` untouched, so the marker still matches while the commit a merge takes does not
+contain them. A commit cannot honestly record that its own SHA was reviewed, because writing the
+record changes the SHA — so the record does not try. `Phase:` simply never names LAND;
+it is computed. This is why there is no write-ahead, no "leave the line alone during re-review"
+rule, and no downgrade path for an unproven LAND: nothing can claim LAND falsely because
+nothing claims it at all. (ADR 0002.)
+
+**The volatile store, never committed, at `$(git rev-parse --git-path drive/state)`.**
+Two facts matter: which tree a panel cleared, and which base it diffed that tree against.
+A marker carrying only the first is refused — retargeting a PR to an older ancestor grows
+the reviewed surface without moving `HEAD`, so `cleared` alone still matches:
+
+```text
+cleared=4456b8c0b8f1e2d3...
+cleared_base=9f2a1c77e30b4d55...
+```
+
+Under the git dir, not the worktree, so it needs no `.gitignore` entry and survives
+`checkout`/`reset --hard` (ADR 0001).
+
+**Do not write it from here.** The moment a panel reports clean is precisely when the tree
+is *dirty* — `multi-reviewer-loop` leaves its fixes uncommitted — so writing `HEAD` at that
+instant records a commit the panel never saw. The guarded snippet in
+`references/phases.md` § HARDEN has the four preconditions; use it.
+
+A fresh clone has narrative but no clearance. That is correct: clearance is a claim about
+a panel run in *this* checkout. Re-run the panel.
+
+**`Pending: metadata PR owner/repo#N` stays committed**, because it is the one fact that
+must reach a fresh clone: it is how a reader learns DONE is conditional on a PR. A record
+reading `DONE` with a `Pending:` PR means "DONE once that PR merges" — query it. Qualify it
+with the repository: a bare `#N` is ambiguous on a fork, where the same number names a
+different PR in the parent and in the fork. `references/phases.md` § LAND covers the
+ordering.
+
 **`Scope:` is the one canonical definition and every phase reads it.** `drive-status`
 counts the whole repository — it cannot know your scope — so its bead numbers and its
 `DONE` are repository-wide. Filter them through `Scope:` before believing either. GRAPH
@@ -257,11 +371,12 @@ needs a *scoped* ready bead, BUILD may only take a bead inside the scope, and DO
 the scope is empty, not the backlog. Without this line a fresh session inherits the goal
 but not its boundary, and will happily pick up unrelated work.
 
+
 ## Reporting
 
 At each transition, one compact block. No preamble, no re-explaining what the user asked.
 
-```
+```text
 ✅ BUILD acme-42 — clean in 2 rounds, 3 files, +180 LOC (budget 250)
    gate: nix develop -c ./check.sh → EXIT=0
    → HARDEN: launching codex + fable panel now
@@ -282,7 +397,7 @@ the hook confirm it is active.
 If the drive spans a long backlog and you have been stopping early, set a session goal so
 the harness enforces continuation:
 
-```
+```text
 /goal drain all ready beads for <project>
 ```
 

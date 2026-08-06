@@ -149,7 +149,10 @@ recorded acceptance of the reduced review coverage.
    either reviewer:
 
    ```bash
-   br sync --flush-only
+   # An explicit sync propagates a real exit code, so require success. (Only the automatic
+   # post-mutation flush swallows its error.) An unchanged graph legitimately reports no
+   # diff, so do not also demand that the JSONL changed here.
+   br sync --flush-only || { echo "flush failed"; exit 1; }
    br list --limit 0 --json -a
    bv --robot-triage
    bv --robot-plan
@@ -166,8 +169,9 @@ recorded acceptance of the reduced review coverage.
 ### 2. Run the panel
 
 Start Codex and Fable in parallel with the same prompt. Close stdin on both batch
-commands, persist stdout/stderr separately, and bound hangs when `timeout` is
-available.
+commands, persist stdout/stderr separately, and bound hangs with GNU `timeout`, which is
+**required** — the prerequisites say to stop if it is missing, and the reference's snippet
+`exit 1`s rather than run an unbounded panel.
 
 The panel audits:
 

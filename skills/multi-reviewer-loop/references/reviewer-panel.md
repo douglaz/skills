@@ -103,12 +103,20 @@ returns non-zero when `FOCUS` is unset, which aborts the whole group under
 Both reviewers start together and neither sees the other's output.
 
 ```bash
-codex review --base "$DIFF_BASE" \
+RC_TIMEOUT=1500   # 25 min; a normal pass is 5-15
+# Homebrew coreutils installs GNU timeout as `gtimeout`; hardcoding `timeout` makes both
+# reviewers exit command-not-found on macOS and the loop can never reach clean.
+TO=$(command -v timeout || command -v gtimeout) \
+  || { echo "no GNU timeout (nor gtimeout) — bound the pass another way; see below"; exit 1; }
+
+"$TO" --kill-after=60 "$RC_TIMEOUT" \
+  codex review --base "$DIFF_BASE" \
   -c 'model="gpt-5.6-sol"' -c 'model_reasoning_effort="xhigh"' \
   </dev/null >"$CODEX_OUT" 2>"$CODEX_ERR" &
 CODEX_PID=$!
 
-claude -p "$(cat "$FABLE_PROMPT_FILE")" \
+"$TO" --kill-after=60 "$RC_TIMEOUT" \
+  claude -p "$(cat "$FABLE_PROMPT_FILE")" \
   --model fable \
   --effort high \
   --output-format json \
@@ -118,9 +126,43 @@ claude -p "$(cat "$FABLE_PROMPT_FILE")" \
   </dev/null >"$FABLE_RAW" 2>"$FABLE_ERR" &
 FABLE_PID=$!
 
-wait "$CODEX_PID"; CODEX_RC=$?
-wait "$FABLE_PID"; FABLE_RC=$?
+# `|| VAR=$?`, not `; VAR=$?`. A timeout kill makes `wait` return 124/137, and under
+# `set -e` — which this file assumes at line 99 — the bare form terminates the shell right
+# there: CODEX_RC is never assigned, Fable is never reaped, and the degraded-pass and
+# two-consecutive-timeout handling below never runs. The `||` keeps errexit off the hook.
+CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?
+FABLE_RC=0; wait "$FABLE_PID" || FABLE_RC=$?
 ```
+
+**Do not drop the `timeout`.** Either reviewer can hang indefinitely — no output, no
+exit, no error. Measured: an unbounded consistency pass ran **6h20m and wrote zero
+bytes** while comparable calls finished in 5-15 minutes; nothing reaped it, and the
+loop reported "still running" the whole time because an empty output file is
+indistinguishable from a slow one. `--kill-after` matters too: a process ignoring
+`TERM` needs the follow-up `KILL`.
+
+Exit **124 — and 137** are reviewer failures, never clean and never ambiguous. 124 is the
+TERM path; a reviewer that ignores TERM is killed by `--kill-after` and returns **137**,
+which is the very case that flag exists for. Counting only 124 lets the loop spend another
+full timeout on the same hung reviewer. Record it, drop
+that reviewer from the pass, and mark the pass `DEGRADED` — the same as any other
+non-zero exit.
+
+### When a pass looks stuck
+
+Check elapsed time against the 5-15 minute norm before assuming progress:
+
+```bash
+ps -eo pid,etime,args | grep -E '[c]odex review|[c]laude -p'
+```
+
+`etime` (`[[dd-]hh:]mm:ss`), not `etimes` (raw seconds): `etimes` is a GNU extension and
+macOS `ps` rejects it with a keyword error — on the platform the `gtimeout` fallback
+exists to support.
+
+An empty output file is not evidence of work. If a reviewer is far past the norm,
+kill it **by exact PID** — never `pkill -f`, which matches your own shell and other
+sessions' reviewers running the same command — then relaunch that reviewer alone.
 
 Notes on the flags:
 
@@ -159,8 +201,12 @@ Notes on the flags:
   tool restriction closes the Edit/Write path; the prompt's "do not modify any
   file" is what covers the rest. If that matters for your repo, drop `Bash` and
   hand the reviewer a pre-computed diff on stdin instead.
-- If `timeout` is available, wrapping each reviewer (`timeout 900 ...`) bounds a
-  hung pass. Treat exit 124 as a reviewer failure, not as clean.
+- The `timeout` wrapper in the invocation above is **not optional** — see the note
+  there. The guard `exit 1`s rather than warning: with `$TO` empty the invocation becomes
+  `"" --kill-after=…`, i.e. exit 127 for both reviewers, which is a confusing way to
+  discover a missing dependency. If the host genuinely has neither binary, bound the pass
+  some other way and say so in the summary; an unbounded reviewer can hang the loop
+  silently.
 
 ## Unwrapping the Claude reviewer's output
 
@@ -272,7 +318,7 @@ code yourself.
 | Claude reviewer returns prose but no `[P*]` and no `No findings.` | `$FABLE_OUT` | Ambiguous, not clean. Re-run once; if it repeats, the prompt file is likely truncated — rewrite it. |
 | `.permission_denials` contains `Bash`/`Read`/`Glob`/`Grep` | `$FABLE_RAW` | The reviewer was blocked from looking. Confirm `--allowedTools` lists every tool in `--tools`, then re-run that reviewer. |
 | `.permission_denials` contains only `Edit`/`Write`/`NotebookEdit` | `$FABLE_RAW` | Working as intended — the read-only guard fired. Not a failure; do not re-run. |
-| Either reviewer times out (exit 124) | the partial output file | Treat as failed for that pass. Do not mine a truncated review for findings. |
+| Either reviewer times out (exit 124 **or 137**) | the partial output file | Treat as failed for that pass. Do not mine a truncated review for findings. 137 is the `--kill-after` path — counting only 124 spends another full timeout on the same hung reviewer. |
 | Both fail in the same pass | both stderr files | Stop the loop. Nothing reviewed the code; report `BLOCKED`. |
 
 A pass that lost a reviewer is `DEGRADED`. The loop can still fix what the
@@ -327,6 +373,7 @@ that is both committed-changed and currently dirty appears twice.
 
 ```bash
 CONSISTENCY_OUT="$REVIEW_DIR/consistency.fable.txt"
+CONSISTENCY_RC=0
 CONSISTENCY_RAW="$REVIEW_DIR/consistency.fable.raw.json"
 
 # -z everywhere: NUL-delimited output is the only form that survives a path
@@ -347,17 +394,45 @@ changed_z() {
 # No `sort -zu` here: -z is a GNU extension and BSD/macOS sort rejects it, which
 # would empty EXISTING and DELETED and let the reviewer return clean having been
 # handed no files at all. Read NUL-delimited (the part that must be exact), then
-# dedupe with plain `sort -u` once the paths are already newline-delimited.
+# ESCAPE each path onto one line with `printf '%q'` before the newline-delimited
+# tools touch it. A bare `printf '%s\n'` here re-splits a path containing a newline
+# into fragments — `sort -u`, the DELETED filter, and the prompt then all carry
+# nonexistent names, and the reviewer skips the real file and reports it clean.
+# `%q` leaves an ordinary path byte-identical and renders the pathological ones as
+# shell quoting ($'a\nb'), which stays one line per path end to end.
+_q() { while IFS= read -r -d "" f; do printf '%q\n' "$f"; done; true; }
 
-# Split into files that still exist and files this change deleted. `|| true` on the
-# loop keeps a trailing deleted path from leaving status 1 and aborting under `set -e`.
-EXISTING=$(changed_z | { while IFS= read -r -d "" f; do [ -e "$f" ] && printf '%s\n' "$f"; done; true; } | sort -u)
-DELETED=$( changed_z | { while IFS= read -r -d "" f; do [ -e "$f" ] || printf '%s\n' "$f"; done; true; } | sort -u)
+# Split into files that still exist and files this change deleted.
+# Ask GIT which paths were deleted, not the filesystem. `[ -e "$f" ]` is false for a path
+# missing from a sparse checkout and for a present-but-dangling symlink — neither of which
+# was deleted — and the prompt below tells the reviewer not to open anything in DELETED.
+# That is a clean verdict over part of the artifact nobody read.
+# Deletion is a property of the FINAL state, not of any one view. A path deleted in a
+# committed commit and RECREATED in the index or worktree appears in the committed diff's
+# D-list while its replacement is live — and since EXISTING subtracts DELETED, the live
+# file was dropped from the review list and the prompt below told the reviewer not to open
+# it. That is the same clean-verdict-over-unread-content this block exists to prevent, one
+# level in. So subtract what git says is live NOW: index entries plus untracked files,
+# minus any whose worktree copy is gone (an unstaged `rm` leaves the entry in the index).
+_LIVE=$( { git ls-files -z --cached
+           git ls-files -z --others --exclude-standard
+         } | _q | sort -u)
+_GONE=$(git ls-files -z --deleted | _q | sort -u)
+[ -n "$_GONE" ] && _LIVE=$(printf '%s\n' "$_LIVE" \
+                           | { grep -vxF -f <(printf '%s\n' "$_GONE") || true; })
+DELETED=$( { git diff -z --no-renames --diff-filter=D --name-only "$DIFF_BASE...HEAD"
+             git diff -z --no-renames --diff-filter=D --name-only
+             git diff -z --no-renames --diff-filter=D --name-only --cached
+           } | _q | sort -u \
+           | { [ -n "$_LIVE" ] && { grep -vxF -f <(printf '%s\n' "$_LIVE") || true; } || cat; })
+EXISTING=$(changed_z | _q | sort -u \
+           | { [ -n "$DELETED" ] && grep -vxF -f <(printf '%s\n' "$DELETED") || cat; })
 
 cat >"$REVIEW_DIR/fable-consistency-prompt.txt" <<EOF
 Do not hunt for bugs — another pass owns those. You own INTERNAL AGREEMENT.
 
-Read these files as one artifact:
+Read these files as one artifact — one path per line, shell-quoted where a name
+contains unusual characters (a line like $'a\nb' names ONE file):
 ${EXISTING}
 
 These paths were DELETED by this change. Do not try to open them; instead check
@@ -397,14 +472,26 @@ effort, and the three tool flags), pointing at this prompt file and these output
 files:
 
 ```bash
-claude -p "$(cat "$REVIEW_DIR/fable-consistency-prompt.txt")" \
+TO=$(command -v timeout || command -v gtimeout) \
+  || { echo "no GNU timeout — see the panel invocation above"; exit 1; }
+"$TO" --kill-after=60 1500 \
+  claude -p "$(cat "$REVIEW_DIR/fable-consistency-prompt.txt")" \
   --model fable --effort high --output-format json \
   --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
   --disallowedTools "Edit,Write,NotebookEdit" \
-  </dev/null >"$CONSISTENCY_RAW" 2>"$REVIEW_DIR/consistency.fable.stderr.txt"
+  </dev/null >"$CONSISTENCY_RAW" 2>"$REVIEW_DIR/consistency.fable.stderr.txt" \
+  || CONSISTENCY_RC=$?   # `||`, so a 124/137 timeout under `set -e` does not kill the
+                         # shell before the status is captured — and captured BEFORE any
+                         # pipeline replaces it
+[[ "$CONSISTENCY_RC" -eq 0 ]] \
+  || { echo "consistency reviewer exited $CONSISTENCY_RC (124/137 = timeout) — NOT clean"; exit 1; }
 jq -er 'if .is_error then error(.result // "err") else (.result // empty) end' \
   <"$CONSISTENCY_RAW" >"$CONSISTENCY_OUT"
 ```
+
+A timed-out reviewer can still leave syntactically valid JSON on disk — killed during
+teardown, say — and `jq` succeeding on it would replace the 124/137 with 0. Capture the
+reviewer's own status first; a pass that did not finish is never clean.
 
 On a `--reviewers codex` pinned run, use
 `codex exec --sandbox read-only "$(cat ...)" </dev/null` with the same prompt instead

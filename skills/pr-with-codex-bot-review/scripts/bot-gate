@@ -1,0 +1,905 @@
+#!/usr/bin/env bash
+# bot-gate — report whether anything indicates a PR's review bots are still working, or
+# have left findings nobody dispositioned.
+#
+# WHAT EXIT 0 CLAIMS, exactly:
+#
+#   Across a set of API reads finishing at time T, nothing indicated an unfinished review
+#   round on this exact tip, and no bot finding on it was left undispositioned.
+#
+# It does NOT claim the bots are finished, and the name of the verdict says so:
+# NO_PENDING_EVIDENCE, not CLEAR. Neither bot emits a round-terminal signal. Measured
+# across 19 rounds on this repo's PR #16, the codex bot's review state is always
+# COMMENTED — never APPROVED, GitHub's natural completion signal — and its +1 reaction
+# fired zero times. There is no field to read. Every conclusion below is drawn from
+# ABSENCE, and absence observed over a finite window is not proof.
+#
+# Nor is T an instant. These reads are not atomic; they span the run, so the claim is
+# bounded by an interval, and the JSON reports both ends of it.
+#
+# The honest primitive would be a bot-owned CheckRun bound to head_sha carrying
+# status=completed, made a required status check — GitHub defines exactly those fields and
+# neither bot here emits one. Polling cannot synthesize it. So this is a stop sign, not a
+# green light: exit 0 means "nothing here says wait", and a human still owns the merge.
+# Where the forge can enforce a rule server-side — required checks, required conversation
+# resolution — prefer that. Those are decidable. This is not.
+#
+# Any doubt exits non-zero: an API failure or a missing signal is NOT clearance.
+#
+# CODERABBIT DOES NOT GATE. Its status is reported and ignored, because it is a PR-level
+# signal, not evidence about a tree: it lands on whatever head exists when the bot posts
+# it. Measured on this repo's PR #16 — CodeRabbit auto-paused the PR, and 75 seconds after
+# f69bf01 was pushed it stamped `success` / "Review completed" on that commit, with zero of
+# its comments anchored there. Five of the last six heads carry a green status and no
+# review. Nothing distinguishes the two cases: the status has a null target_url, the
+# walkthrough carries no SHA, and CodeRabbit's only head-bound artifact is `commit_id` on
+# line comments, which exist only when it has findings — so a genuinely clean round is
+# indistinguishable from no round at all.
+#
+# Requiring a comment anchored to the tip would prove it read this tree, and would deadlock
+# every PR that converges. Branch protection does not help either: the signal already IS a
+# commit status on the head, so a required check reads the same green.
+#
+# What survives is CodeRabbit's REVIEW THREADS, which carry disposition and are counted
+# below, and its markers, which are printed so a human can see that nobody reviewed.
+#
+# Usage: bot-gate <pr-number> [--json]
+#
+# This exists as a script rather than a snippet in SKILL.md because the same logic was
+# written three times as prose and was wrong three different ways: it enforced nothing
+# (a trailing `echo` returns 0), then it was unsatisfiable (counting every comment on the
+# tip never reaches zero, because answered findings stay anchored and GitHub re-anchors
+# unresolved ones to each new head), then it broke past 100 comments (`--paginate` with
+# `--jq` emits one result per page). Shell embedded in documentation cannot be tested;
+# this can. The first version of THIS file still carried half of the second bug — it
+# excluded the author's reply from the count but not the bot's original finding — which
+# is why the count is now reported and not gated.
+#
+# TWO CLAUSES WERE REMOVED deliberately — a settle window, and an intersection of
+# CodeRabbit's skip list against the changed files. Both defended hazards that measurement
+# showed could not occur, and both are post-mortemed in full in ADR 0004. Do not restore
+# either without refuting the evidence there.
+
+set -uo pipefail
+
+PR="${1:-}"; shift || true
+JSON=false
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --json)           JSON=true; shift ;;
+    *)                echo "unknown arg: $1" >&2; exit 2 ;;
+  esac
+done
+[[ -n "$PR" ]] || { echo "usage: bot-gate <pr-number> [--json]" >&2; exit 2; }
+[[ "$PR" =~ ^[0-9]+$ ]] || { echo "PR must be a number" >&2; exit 2; }
+
+# Both ends of the observation interval are reported: the claim is bounded by a window,
+# not asserted at an instant, and a consumer that wants to know how stale the read is
+# needs the numbers rather than a promise.
+OBSERVED_FROM=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+for c in gh jq git; do
+  command -v "$c" >/dev/null 2>&1 || { echo "BLOCKED: $c not on PATH" >&2; exit 3; }
+done
+
+# "No such PR" and "the query failed" share an exit code, so absence has to be read out of
+# gh's own error text. Treating any failure as absence let a transient network, auth, or
+# rate-limit error on ONE candidate erase it from the resolution below — with the other
+# candidate matching, the double-match refusal is skipped and the gate reports on (and a
+# caller later merges) a PR the caller may not have meant. Same split drive-status makes
+# with _PARENT_RESOLVED: established absence continues, anything else is doubt.
+_GH_ERR=$(mktemp) || { echo "BLOCKED: cannot create a scratch file" >&2; exit 3; }
+trap 'rm -f "$_GH_ERR"' EXIT
+_gh_said_absent() {  # 0 iff the last captured stderr shows gh itself established absence
+  # PullRequest-level not-found ONLY. Both candidates below are repos the API just named
+  # (SELF is this checkout's repo, UP is its own `.parent` field), so a Repository-level
+  # "could not resolve" or a bare HTTP 404 means the token lost access to a repo that
+  # exists — which proves nothing about the PR inside it, including the second match the
+  # ambiguity refusal needs. Matching those as absence let an unreadable parent erase its
+  # candidate and clear the one PR the gate happened to be able to see.
+  grep -qiE 'could not resolve to a pullrequest|no pull requests found' "$_GH_ERR"
+}
+
+# Resolve the UPSTREAM repo once, then pass `-R` to every call. On a fork clone the PR
+# number belongs to upstream, but a bare `gh pr view N` resolves it against the fork —
+# finding nothing, or worse, a different PR that happens to share the number. `.parent`
+# is the upstream when this repo is a fork, and the repo itself otherwise.
+# Read local HEAD first: the repo resolution below selects the PR whose head matches it.
+TIP=$(git rev-parse --verify --quiet HEAD) \
+  || { echo "BLOCKED: no HEAD" >&2; exit 3; }
+
+# Upstream FIRST, but not unconditionally: a fork can host its own PRs, and redirecting
+# those to the parent either finds nothing or — worse, if the parent happens to have a PR
+# with the same number — inspects an unrelated PR's reviews and threads and reports on it.
+# Try upstream, and fall back to this repo when the PR is not there.
+SELF_REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null) \
+  || { echo "BLOCKED: cannot resolve repo" >&2; exit 3; }
+# FAIL CLOSED, not `|| echo ""`. This query succeeds with "" on a genuine non-fork, so a
+# non-zero exit is a failed lookup — and mapping it to "" silently drops the upstream
+# candidate from the loop below, which is the same absence-for-failure collapse: on a fork
+# whose parent carries the same PR number at this head, the ambiguity refusal can never
+# fire and the gate reports on the one PR it happened to be able to see.
+UP_REPO=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end' 2>/dev/null) \
+  || { echo "BLOCKED: cannot resolve the fork parent — a PR there would be invisible" >&2; exit 3; }
+# Select by HEAD, not by existence. Both a fork and its parent can carry PR number N —
+# likely, since a fork's own PRs are low-numbered and a mature parent has thousands — so an
+# upstream-first existence probe reliably picks the parent's unrelated PR, and the gate
+# then reports on somebody else's reviews and threads. The tip we are gating IS local HEAD,
+# so ask each candidate whose head matches it.
+# BOTH matching is still ambiguous — the same branch can be opened as a PR against the
+# parent AND against the fork, and the two PRs have separate reviews and threads. Picking
+# one silently means gating (and later merging) a PR the caller may not have meant, so a
+# double match refuses rather than preferring the parent.
+REPO=""
+_REPO_MATCHES=0
+for _cand in ${UP_REPO:+"$UP_REPO"} "$SELF_REPO"; do
+  if ! _h=$(gh pr view "$PR" -R "$_cand" --json headRefOid -q .headRefOid 2>"$_GH_ERR"); then
+    # Only gh's own "no such PR" is absence. Any other failure may be hiding this
+    # candidate's PR — including the second match the ambiguity refusal below exists for.
+    _gh_said_absent && continue
+    echo "BLOCKED: cannot query PR $PR in $_cand — absence not established" >&2
+    exit 3
+  fi
+  if [[ "$_h" == "$TIP" ]]; then
+    _REPO_MATCHES=$((_REPO_MATCHES + 1))
+    [[ -n "$REPO" ]] || REPO="$_cand"
+  fi
+done
+if (( _REPO_MATCHES > 1 )); then
+  echo "BLOCKED: PR $PR matches this tree in BOTH $UP_REPO and $SELF_REPO — ambiguous" >&2
+  echo "  (the two PRs have separate reviews and threads; run the gate where the intended PR lives)" >&2
+  exit 3
+fi
+if [[ -z "$REPO" ]]; then
+  echo "BLOCKED: no PR $PR whose head is ${TIP:0:10} in ${UP_REPO:+$UP_REPO or }$SELF_REPO" >&2
+  echo "  (a PR with that number may exist in either, but not for this tree — check the number and the checkout)" >&2
+  exit 3
+fi
+[[ "$REPO" == */* ]] || { echo "BLOCKED: cannot parse repo: $REPO" >&2; exit 3; }
+
+PR_HEAD=$(gh pr view "$PR" -R "$REPO" --json headRefOid -q .headRefOid 2>/dev/null) \
+  || { echo "BLOCKED: PR $PR not found in $REPO" >&2; exit 3; }
+[[ -n "$PR_HEAD" ]] || { echo "BLOCKED: cannot read the PR head" >&2; exit 3; }
+# The gate reasons about local HEAD, so a stale or behind checkout would otherwise be
+# cleared by a wrapper for a commit the remote has moved past. The documented merge pins
+# --match-head-commit and would refuse later, but a JSON consumer reading `verdict` gets
+# no such protection.
+[[ "$PR_HEAD" == "$TIP" ]] \
+  || { echo "BLOCKED: local HEAD ${TIP:0:10} is not the PR head ${PR_HEAD:0:10}" >&2; exit 3; }
+
+# ISO-8601 -> epoch, portably. GNU date wants -d; BSD/macOS date treats -d as the set-DST
+# flag and errors, which would leave the wrapper age unknowable and the gate permanently
+# BLOCKED on a platform this repo explicitly supports (see the gtimeout fallback).
+iso_to_epoch() {
+  # Reject empty FIRST. `date -u -d "" +%s` SUCCEEDS on GNU and returns today at 00:00 UTC,
+  # so an empty timestamp parses into a plausible epoch and every caller's fail-closed
+  # "did it parse?" branch is skipped — clearing on exactly the undatable input it guards.
+  [[ -n "$1" ]] || return 1
+  date -u -d "$1" +%s 2>/dev/null && return 0
+  date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$1" +%s 2>/dev/null && return 0
+  return 1
+}
+# --slurp, then pipe to jq: --paginate applies --jq per page, so a filter passed with
+# --jq emits one result per page and any comparison against a single value breaks once
+# the endpoint spans more than one page.
+api() {
+  local out
+  out=$(gh api --paginate --slurp "$1" 2>/dev/null) || return 1
+  [[ -n "$out" ]] || return 1
+  printf '%s' "$out"
+}
+
+# A 200 whose body jq cannot parse is not an answer. Every reader below uses `2>/dev/null`
+# with a fallback, and each of those fallbacks points the same way: an unparseable
+# reactions page becomes "no eyes reaction", an unparseable comments page becomes "no skip
+# notice" AND "CodeRabbit never commented here". All three clear. Validate the payload once
+# at the point it arrives instead of trusting each reader to invent a safe default —
+# a guard keyed on the condition, not on the list of readers that happen to exist today.
+require_json() {  # $1 = what it is, for the message; $2 = payload
+  printf '%s' "$2" | jq -e 'type' >/dev/null 2>&1 \
+    || { echo "BLOCKED: $1 response is not valid JSON" >&2; exit 3; }
+}
+
+# --- did the codex bot submit a review naming THIS tip? ---
+# This is the one thing here that is decidable: a submitted review object carries
+# `.commit_id`, so it proves WHICH tree the bot read. It does not prove the round is over,
+# and nothing else in the API does either. The +1 reaction is sometimes described as the
+# clean-round signal, but it fired zero times across 19 rounds on PR #16 and GitHub allows
+# one reaction per user per item — so an old one may never refresh. Do not gate on it.
+REVIEWS=$(api "repos/$REPO/pulls/$PR/reviews") \
+  || { echo "BLOCKED: reviews query failed" >&2; exit 3; }
+require_json "reviews" "$REVIEWS"
+
+# Hoisted above the wrapper count because a CLEAN round is not a review object at all.
+# When the bot finds nothing it posts an ISSUE COMMENT — "Codex Review: Didn't find any
+# major issues" with a `**Reviewed commit:** <sha>` line — plus a `+1`. Reading only
+# /pulls/N/reviews therefore made the gate structurally unable to clear on success: on
+# every clean round WRAPPER_TIP was 0 and the verdict was BLOCKED for ever, with the
+# documented remedy ("get a wrapper with `@codex review`") unable to help, since a re-run
+# on a clean tree produces another comment and still no review object.
+ALL_COMMENTS=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/comments" 2>/dev/null) \
+  || { echo "BLOCKED: PR comments query failed" >&2; exit 3; }
+require_json "PR comments" "$ALL_COMMENTS"
+# EXACT login and Bot type, not a prefix: on a public repo anyone may submit a review, and
+# `chatgpt-codex-connector-attacker` satisfies a prefix test — which would let an outside
+# account forge the wrapper this gate treats as proof of review.
+BOT_LOGIN="chatgpt-codex-connector[bot]"
+# `.commit_id` (the API's own full 40-char SHA), not a 7-char prefix matched out of the
+# body: 28 bits collides in a large history and can be ground out deliberately, which
+# would let a stale wrapper stand in as approval of the current tree.
+# `submitted_at` must be present, not just the commit_id. GitHub omits that field on
+# PENDING reviews — a draft that was never submitted — so an unsubmitted review naming the
+# tip used to satisfy the wrapper count while leaving WRAPPER_AT empty. That combination is
+# the worst one available: the active-round check below is guarded on WRAPPER_AT, so it
+# would not run at all, and the verdict saw a wrapper on the tip with nothing contradicting
+# it. A review nobody submitted is not evidence that anybody read anything.
+WRAPPER_JSON=$(printf '%s' "$REVIEWS" | jq -c --arg tip "$TIP" --arg bot "$BOT_LOGIN" '
+  [.[][] | select(.user.login==$bot) | select(.user.type=="Bot")
+   | select(.commit_id==$tip) | select((.submitted_at // "") != "")]
+  | {n: length, latest: (max_by(.submitted_at).submitted_at // "")}' 2>/dev/null)
+# A PENDING review is excluded from the wrapper count above — nothing was submitted, so it
+# proves nothing — but it is positive evidence that a round is IN FLIGHT, which is the
+# opposite of nothing. Without this, a rerun on an unchanged tip could sit pending behind
+# an older submitted wrapper while `eyes` (one reaction per user, never refreshed) says
+# nothing, and the gate would clear before the rerun filed its findings.
+# GitHub normally shows a PENDING review only to its author, so this may never be visible;
+# it costs one jq filter over a payload already fetched, and blocks if it ever is.
+PENDING_ON_TIP=$(printf '%s' "$REVIEWS" | jq -r --arg tip "$TIP" --arg bot "$BOT_LOGIN" '
+  [.[][] | select(.user.login==$bot) | select(.user.type=="Bot")
+   | select(.commit_id==$tip) | select(.state=="PENDING")] | length' 2>/dev/null)
+[[ "$PENDING_ON_TIP" =~ ^[0-9]+$ ]] || { echo "BLOCKED: cannot parse reviews" >&2; exit 3; }
+
+# The OTHER wrapper channel: a clean round's issue comment. It carries
+# `**Reviewed commit:** <sha>`, so it is SHA-bearing evidence naming a tree — the same
+# thing a review wrapper is, in a different endpoint. The `+1` reaction beside it stays
+# worthless and ungated, because a reaction has no SHA; nothing here relaxes that.
+# The sha is ABBREVIATED in that line (10 chars observed), so match it as a prefix of the
+# tip rather than for equality — and require >=7 so a stray short hex string cannot match.
+CLEAN_JSON=$(printf '%s' "$ALL_COMMENTS" | jq -c --arg tip "$TIP" --arg bot "$BOT_LOGIN" '
+  [.[][] | select(.user.login==$bot)
+   | select((.body // "") | test("Reviewed commit"))
+   | . as $c
+   | (($c.body | capture("Reviewed commit:\\*{0,2}[[:space:]]*`?(?<sha>[0-9a-f]{7,40})")).sha) as $sha
+   | select($tip | startswith($sha))
+   | select(($c.created_at // "") != "")]
+  | {n: length, latest: (max_by(.created_at).created_at // "")}' 2>/dev/null)
+[[ -n "$CLEAN_JSON" ]] || CLEAN_JSON='{"n":0,"latest":""}'
+
+WRAPPER_TIP=$(printf '%s' "$WRAPPER_JSON" | jq -r '.n' 2>/dev/null)
+WRAPPER_AT=$(printf '%s' "$WRAPPER_JSON" | jq -r '.latest' 2>/dev/null)
+# Merge the two channels. A round that found nothing and a round that reported findings are
+# both rounds that READ THIS TIP, which is the only question a wrapper answers.
+_CLEAN_N=$(printf '%s' "$CLEAN_JSON" | jq -r '.n' 2>/dev/null)
+_CLEAN_AT=$(printf '%s' "$CLEAN_JSON" | jq -r '.latest' 2>/dev/null)
+if [[ "$_CLEAN_N" =~ ^[0-9]+$ ]] && [[ "$_CLEAN_N" -gt 0 ]]; then
+  WRAPPER_TIP=$(( ${WRAPPER_TIP:-0} + _CLEAN_N ))
+  # Latest across both channels: the active-round check compares `eyes` against this, and
+  # taking the older one would call a finished round active.
+  [[ -z "$WRAPPER_AT" || "$_CLEAN_AT" > "$WRAPPER_AT" ]] && WRAPPER_AT="$_CLEAN_AT"
+fi
+[[ "$WRAPPER_TIP" =~ ^[0-9]+$ ]] || { echo "BLOCKED: cannot parse reviews" >&2; exit 3; }
+
+# EVERY submitted wrapper's epoch, not just the latest — and on ANY commit, not just this
+# tip. The coverage check below needs to know whether a round ENDED before a given
+# request; a round's end is evidence about round traffic whichever tree it read, and the
+# verdict separately requires a wrapper naming THIS tip. Scoping this list to the tip
+# discarded all history older than the last push, so the first request on every fresh tip
+# — and every already-answered request from a previous tip — read as never covered, and
+# the gate demanded a redundant round per push. Unparseable timestamps are skipped, but
+# they are REMEMBERED: absence from this list points toward blocking in `_round_covered`
+# (no wrapper before the request is an immediate `return 1`) and toward CLEARING in
+# `_ready_covered`'s first-ready fallback, which clears precisely when no wrapper sits at
+# or before the ready. An undated wrapper dropped silently is exactly the round that
+# fallback cannot see, so malformed review data would fail the gate OPEN.
+WRAPPER_EPOCHS=""
+WRAPPER_TIP_EPOCHS=""
+WRAPPER_UNDATED=false
+while IFS= read -r _wt; do
+  [[ -n "$_wt" ]] || continue
+  # A SENTINEL, not a filter. `select(length > 0)` dropped a missing/null/empty
+  # submitted_at before this loop could see it, so the undated-wrapper rule below covered
+  # only garbage strings and not the absent case — the commoner one, and the one a PENDING
+  # review on an older tip produces. Both are "a round that cannot be placed in time".
+  [[ "$_wt" == "@undated@" ]] && { WRAPPER_UNDATED=true; continue; }
+  # `<tip>\t<submitted_at>`: the same rows, but remembering which named THIS tip. The
+  # unscoped list stays the default (a round's end is evidence whichever tree it read);
+  # the tip-scoped one exists for the one caller that needs a stronger anchor — see
+  # _round_covered_on_tip.
+  _wtip="${_wt%%$'\t'*}"; _wts="${_wt#*$'\t'}"
+  _we=$(iso_to_epoch "$_wts") || { WRAPPER_UNDATED=true; continue; }
+  WRAPPER_EPOCHS="${WRAPPER_EPOCHS}${WRAPPER_EPOCHS:+$'\n'}${_we}"
+  [[ "$_wtip" == "$TIP" ]] \
+    && WRAPPER_TIP_EPOCHS="${WRAPPER_TIP_EPOCHS}${WRAPPER_TIP_EPOCHS:+$'\n'}${_we}"
+done < <(printf '%s' "$REVIEWS" | jq -r --arg bot "$BOT_LOGIN" '
+  .[][] | select(.user.login==$bot) | select(.user.type=="Bot")
+  | (if ((.submitted_at // "") | length) == 0 then "@undated@"
+     else ((.commit_id // "") + "\t" + .submitted_at) end)' 2>/dev/null)
+
+# A wrapper AFTER a request does not show the REQUESTED round ended: rounds carry no
+# identity, so that wrapper can end a round that was already in flight when the request
+# was posted — retarget mid-round, post `@codex review`, and the OLD round submits; every
+# timestamp comparison then passes while the requested round is still running. What CAN be
+# established, on the working assumption that rounds run one at a time: if some wrapper
+# landed BEFORE the request, and no round-start (any `@codex review` mention, a
+# ready_for_review event, or a head force-push — the bot often re-reviews a push) sits in
+# the gap between that wrapper and the request, then nothing was in flight when the
+# request posted — so the wrapper that follows it really is the requested round's. No
+# wrapper before the request, or a start in the gap, is doubt, and doubt blocks; one more
+# `@codex review` round is the escape.
+_round_covered() {  # $1 = request epoch. 0 iff a wrapper after it can be trusted as its round's.
+  local t=$1 wp="" e tied_starts=0
+  while IFS= read -r e; do
+    [[ -n "$e" ]] || continue
+    # A same-second wrapper cannot prove it landed before this start; excluding the tie is
+    # fail-closed because it can only remove a candidate coverage anchor.
+    (( e >= t )) && continue
+    if [[ -z "$wp" ]] || (( e >= wp )); then wp=$e; fi
+  done <<< "$WRAPPER_EPOCHS"
+  [[ -n "$wp" ]] || return 1
+  while IFS= read -r e; do
+    [[ -n "$e" ]] || continue
+    # Inclusive at both ends: either tie has unknown order. Exactly one start at t is the
+    # request (or ready event) being tested; any second one may own the later wrapper.
+    (( e >= wp && e <= t )) || continue
+    if (( e == t && tied_starts == 0 )); then tied_starts=1; continue; fi
+    return 1
+  done <<< "$START_EPOCHS"
+  return 0
+}
+
+# Marking a draft ready STARTS a round, so a pre-wrapper ready event poses the same
+# attribution question as a request: is the wrapper that follows it that round's? Exempting
+# every pre-wrapper ready assumed yes — but a round already in flight when ready fired
+# (started by a request or an earlier ready) can be the one that submitted, with the
+# ready round still pending. Same rule as a request, plus one fallback the request check
+# cannot have: a PR born as a draft has NO wrapper and NO observable start before its
+# first mark-ready, and that flow must clear — nothing observable could have been in
+# flight. The fallback deliberately ignores force-pushes (a draft is not auto-reviewed, so
+# pre-ready pushes start nothing, and counting them would deadlock every draft that
+# iterated before marking ready) and cannot see the round a PR born NON-draft starts at
+# creation; that residual round reads the same tree this ready round would, so the leak it
+# permits is a duplicate round on an already-read diff, not an unread one.
+# Same gap test, but only a wrapper naming THIS TIP may anchor it.
+# A normal (non-force) push starts the bot's automatic round and emits NO timeline event
+# this script can see — `head_ref_force_pushed` covers force-pushes only — so that start
+# never reaches START_EPOCHS and the gap can look quiet while a round is running. The tip
+# is the one witness to it: a push moves the head, so a wrapper still naming the current
+# tip proves no push (and therefore no invisible automatic round) began after it.
+# Used only where the failure is a base mutation clearing on a wrapper that may have read
+# the OLD diff. Elsewhere the unscoped anchor is correct and deliberately kept: scoping it
+# everywhere made the first request on every fresh tip read as uncovered and demanded a
+# redundant round per push.
+_round_covered_on_tip() {  # $1 = request epoch. 0 iff a CURRENT-TIP wrapper anchors it.
+  local t=$1 wp="" e tied_starts=0
+  while IFS= read -r e; do
+    [[ -n "$e" ]] || continue
+    (( e >= t )) && continue
+    if [[ -z "$wp" ]] || (( e >= wp )); then wp=$e; fi
+  done <<< "$WRAPPER_TIP_EPOCHS"
+  [[ -n "$wp" ]] || return 1
+  while IFS= read -r e; do
+    [[ -n "$e" ]] || continue
+    (( e >= wp && e <= t )) || continue
+    if (( e == t && tied_starts == 0 )); then tied_starts=1; continue; fi
+    return 1
+  done <<< "$START_EPOCHS"
+  return 0
+}
+
+_ready_covered() {  # $1 = ready epoch. 0 iff the wrapper after it can be trusted as its round's.
+  local b=$1 e n=0
+  _round_covered "$b" && return 0
+  # The fallback below reasons from the ABSENCE of a wrapper at or before the ready, so an
+  # undatable wrapper — invisible to WRAPPER_EPOCHS — would read as "none was in flight".
+  # It may be exactly the round this ready is waiting on: doubt blocks.
+  $WRAPPER_UNDATED && return 1
+  # <=: a wrapper or start in the ready's own second is order-unknown, and a tie is doubt.
+  while IFS= read -r e; do
+    [[ -n "$e" ]] && (( e <= b )) && return 1
+  done <<< "$WRAPPER_EPOCHS"
+  while IFS= read -r e; do
+    [[ -n "$e" ]] && (( e <= b )) && return 1
+  done <<< "$TRIGGER_EPOCHS"
+  while IFS= read -r e; do
+    [[ -n "$e" ]] && (( e <= b )) && n=$((n + 1))
+  done <<< "$READY_EPOCHS"
+  # One entry at or before b is this event itself; a second is an earlier (or same-second)
+  # mark-ready whose round may still have been in flight.
+  (( n <= 1 ))
+}
+
+# --- unaddressed bot findings on this tip ---
+# Only bot-authored comments count: § 6 tells you to answer a misread finding with your
+# own comment, and counting that reply would make the gate unsatisfiable. Resolution
+# state lives in GraphQL review threads; this reports the count for judgement and gates
+# only on whether it is STABLE, which is the part a human cannot eyeball reliably.
+# UNRESOLVED bot threads, via GraphQL. This is the measure that satisfies both failure
+# modes: gating on a raw comment count is unsatisfiable (an answered false positive stays
+# anchored forever), while not gating at all lets a genuinely unaddressed finding merge.
+# Thread resolution is the disposition signal — you resolve a thread once you have fixed
+# or answered it — so it blocks what should block and clears what should clear.
+# `__typename == "Bot"`, NOT `login|endswith("[bot]")`. REST reports bot logins as
+# `chatgpt-codex-connector[bot]`; GraphQL reports the same account as
+# `chatgpt-codex-connector` with `__typename: "Bot"`. The suffix filter matches nothing
+# here — measured, it counted 0 against 23 genuinely unresolved bot threads, making this
+# gate silently fail-open on the one hazard it exists to block.
+# Scoped to the two bots this skill actually gates on, not to every account GitHub types
+# as a Bot. § 7 says "either bot"; counting all of them let an unrelated app's unresolved
+# thread — a linter, a coverage reporter, anything installed on the repo — block a merge
+# for a reason this gate has no business having an opinion about. Both filters apply:
+# __typename guards against a human account registering one of these logins.
+# Paginated with a cursor: resolved threads count toward the page size, so a long PR
+# overflows 100 and an unresolved finding in the overflow would be invisible.
+GRAPHQL_BOT_LOGINS='["chatgpt-codex-connector","coderabbitai"]'
+count_unresolved_bot_threads() {
+  local cursor=null total=0 page
+  while :; do
+    page=$(gh api graphql -f query='
+      query($o:String!,$r:String!,$n:Int!,$c:String){ repository(owner:$o,name:$r){ pullRequest(number:$n){
+        reviewThreads(first:100, after:$c){ pageInfo{ hasNextPage endCursor }
+          nodes { isResolved comments(first:1){ nodes { author{ __typename login } } } } } } } }' \
+      -F o="${REPO%%/*}" -F r="${REPO##*/}" -F n="$PR" -F c="$cursor" 2>/dev/null) || return 1
+    # A 200 with a partial `data` plus an `errors` array is a successful HTTP call and a
+    # failed query. Counting whatever nodes survived under-reports unresolved threads —
+    # the clearing direction — so treat any errors as a query failure.
+    printf '%s' "$page" | jq -e '(.errors // []) | length == 0' >/dev/null 2>&1 || return 1
+    local n
+    n=$(printf '%s' "$page" | jq -r --argjson bots "$GRAPHQL_BOT_LOGINS" '
+          [.data.repository.pullRequest.reviewThreads.nodes[]
+          | select(.isResolved==false)
+          | select(.comments.nodes[0].author.__typename=="Bot")
+          | select(.comments.nodes[0].author.login as $l | $bots | index($l))] | length' 2>/dev/null) || return 1
+    [[ "$n" =~ ^[0-9]+$ ]] || return 1
+    total=$(( total + n ))
+    [[ "$(printf '%s' "$page" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')" == "true" ]] || break
+    cursor=$(printf '%s' "$page" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor')
+    [[ -n "$cursor" && "$cursor" != "null" ]] || return 1
+  done
+  printf '%s' "$total"
+}
+# One sample, no settle window: see the header. Sampling twice around a sleep tested
+# whether findings were still arriving, but a round arrives atomically, so the second
+# sample could only ever differ if a WHOLE new round landed inside the window — which the
+# `eyes` check below detects directly and without the two-minute wait.
+UNRESOLVED=$(count_unresolved_bot_threads) || { echo "BLOCKED: thread query failed" >&2; exit 3; }
+
+# --- CodeRabbit, when configured ---
+# "query failed" is not "not configured": mapping both to absent would let a transient
+# network or auth failure satisfy CLEAR on a repo that DOES gate on CodeRabbit, against
+# this script's own fail-closed contract.
+# `gh pr checks` normalises both rollup shapes. A StatusContext carries context/state; a
+# CheckRun carries name/conclusion — selecting only on `.context` missed a CheckRun-shaped
+# CodeRabbit entirely, read it as "not configured", and cleared past a pending or failed
+# review.
+# One query, best effort. This is REPORT data — nothing here reaches the verdict — so it
+# does not need the two-path resolution it used to have. `gh pr checks` exits non-zero when
+# checks are merely pending, which is why a rollup fallback existed to tell that apart from
+# a real failure; asking the rollup directly answers both without the fallback.
+#
+# Presence and state stay separate questions. A PENDING CheckRun has no `.state` and a null
+# `.conclusion`, so `(.state // .conclusion)` yields nothing — reading that as `absent`
+# would report "no CodeRabbit here" for a review that is running. And any entry without a
+# terminal state means a run is in flight, so worst-state-wins over the set rather than
+# taking the first: a stale SUCCESS can sit beside a pending rerun.
+# Fetched unconditionally: the `@codex review` trigger check below needs it regardless of
+# CodeRabbit's state, and it is one paginated call either way.
+# FAIL CLOSED. This payload stopped being report-only the moment the verdict began reading
+# it for RERUN_REQUESTED: an `@codex review` newer than the wrapper is a round nothing else
+# can see, so losing this endpoint means losing the only evidence of it. Every other
+# verdict-feeding read here exits 3 on failure; this one silently emptied and cleared.
+
+CR_STATE="query-failed"
+if ROLLUP=$(gh pr view "$PR" -R "$REPO" --json statusCheckRollup 2>/dev/null); then
+  CR_STATE=$(printf %s "$ROLLUP" | jq -r '
+    [.statusCheckRollup[]? | select((.context // .name)=="CodeRabbit")] as $cr
+    | if ($cr | length) == 0 then "absent"
+      elif any($cr[]; (((.state // .conclusion) // "") | length) == 0) then "PENDING"
+      else ([$cr[] | ((.state // .conclusion) // "")]
+            | if any(.[]; . != "SUCCESS") then (map(select(. != "SUCCESS")) | first) else "SUCCESS" end)
+      end' 2>/dev/null) || CR_STATE="query-failed"
+  [[ -n "$CR_STATE" ]] || CR_STATE="query-failed"
+fi
+
+# A CodeRabbit SUCCESS may be a rate-limit skip or a files-skipped result, in which case
+# nobody reviewed them.
+# § 7 forbids chaining this exit code into `gh pr merge` — the merge sequence has
+# preconditions this gate never checks — so what follows is for the report, not the verdict.
+# A `@codex review` comment newer than the wrapper means a round was REQUESTED and has not
+# reported yet. Nothing else sees it: the `eyes` reaction cannot be re-added once present,
+# and PENDING reviews are hidden from everyone but their author — so without this the gate
+# clears during exactly the rerun the skill tells you to trigger.
+# A request OLDER than the wrapper is not automatically answered either — that wrapper can
+# end a round that was already running when the request posted. The second half of this
+# check (`_round_covered`, applied after the timeline is read) blocks that case.
+RERUN_REQUESTED=false
+LAST_REVIEW_REQUEST_BEFORE_WRAPPER=""
+TRIGGER_EPOCHS=""
+T_LAST_LOOSE=""
+START_EPOCHS=""
+READY_EPOCHS=""
+
+# The `eyes` reaction is read HERE, before the coverage machinery below, because it is two
+# facts and only one of them was ever used. It says a round is running NOW (the active-round
+# check further down), and it says a round STARTED at that timestamp — which the coverage
+# gap test needs and never had. Without it: a round adds `eyes`, `@codex review` posts while
+# that round runs, the old round submits the newest wrapper, and since the reaction is
+# neither at-or-after that wrapper nor in START_EPOCHS, the gap looks empty and the wrapper
+# is credited to the request while the requested round is still pending.
+# No deadlock from pinning one old timestamp: a start only blocks while it sits between the
+# last wrapper and the request, so the first wrapper to land after it clears it forever.
+EYES_AT=""
+EYES_EPOCH=""
+if [[ -n "$WRAPPER_AT" ]]; then
+  # Pipe to jq rather than `--jq`, like every other query here: it keeps the raw response
+  # inspectable and lets the fixture stub answer without reimplementing gh's filtering.
+  # --paginate like every other endpoint here, and fail CLOSED: a failed query or an
+  # unparseable timestamp is doubt, and doubt is not clearance. Previously both were
+  # indistinguishable from "no eyes reaction", which cleared.
+  if REACTIONS=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/reactions" 2>/dev/null); then
+    require_json "reactions" "$REACTIONS"
+    # Same three-way split as the timeline check: no reaction, an undatable one, and a
+    # dated one are different states. `max // ""` merged the first two, so a malformed
+    # `eyes` — the signal that a round is RUNNING — read as "no round running" and cleared.
+    EYES_AT=$(printf '%s' "$REACTIONS" | jq -r '
+      [.[][] | select(.user.login=="chatgpt-codex-connector[bot]") | select(.content=="eyes")] as $e
+      | if ($e | length) == 0 then ""
+        elif any($e[]; ((.created_at // "") | length) == 0) then "malformed"
+        else ([$e[].created_at] | max) end') \
+      || { echo "BLOCKED: cannot read reactions" >&2; exit 3; }
+    # Only a DATED reaction can anchor a gap. An undatable one still blocks, via the
+    # active-round check below, which treats it as a round running right now.
+    [[ -n "$EYES_AT" && "$EYES_AT" != "malformed" ]] && EYES_EPOCH=$(iso_to_epoch "$EYES_AT") || true
+  else
+    echo "BLOCKED: reactions query failed" >&2; exit 3
+  fi
+fi
+if [[ -n "$WRAPPER_AT" ]] && [[ -n "${ALL_COMMENTS:-}" ]]; then
+  _W=$(iso_to_epoch "$WRAPPER_AT")
+  # EVERY trigger, not `last`. Taking only the final one meant an undated trigger followed
+  # by an older dated one was invisible — the same collapse passes 8-11 swept out of the
+  # retarget and eyes checks, left in the one site added after them.
+  # TWO matches, because the two consumers want opposite errors.
+  #
+  # BLOCKING (RERUN_REQUESTED) takes the LOOSE match: any mention might be a real trigger,
+  # and missing one clears the gate while a requested round is in flight. A false positive
+  # here only makes you wait.
+  #
+  # CLEARING (LAST_REVIEW_REQUEST_BEFORE_WRAPPER) takes the PREFIX match: the comment must
+  # begin with the command, which excludes prose and fenced examples, but trailing text is
+  # valid trigger decoration. Requiring a command-only body leaves a completed decorated
+  # post-retarget round unable to clear the retarget blocker.
+  #
+  # One list for both is wrong in whichever direction it is tuned. Anchoring both (as the
+  # first fix for the clearing hole did) means `@codex review please` — a real trigger —
+  # stops blocking.
+  _mk_triggers() {  # $1 = jq test expression
+    printf '%s' "$ALL_COMMENTS" \
+      | jq -r --arg re "$1" '.[][] | select((.body // "") | test($re; "i"))
+               | if ((.created_at // "") | length) == 0 then "@undated@" else .created_at end' 2>/dev/null
+  }
+  _TRIGGERS=$(_mk_triggers "@codex[[:space:]]+review") \
+    || { echo "BLOCKED: cannot read PR comments" >&2; exit 3; }
+  _TRIGGERS_STRICT=$(_mk_triggers "^[[:space:]]*@codex[[:space:]]+review([[:space:]]|$)") \
+    || { echo "BLOCKED: cannot read PR comments" >&2; exit 3; }
+  if [[ -n "$_TRIGGERS" ]]; then
+    [[ -n "$_W" ]] || RERUN_REQUESTED=true
+    while IFS= read -r _tt; do
+      _T=$(iso_to_epoch "$_tt")
+      if [[ -z "$_T" ]]; then RERUN_REQUESTED=true; continue; fi
+      # Dated triggers double as round-START evidence for the coverage check: any mention
+      # might have started a round, which is the same loose-match rationale as blocking.
+      TRIGGER_EPOCHS="${TRIGGER_EPOCHS}${TRIGGER_EPOCHS:+$'\n'}${_T}"
+      if [[ -z "$T_LAST_LOOSE" ]] || (( _T >= T_LAST_LOOSE )); then T_LAST_LOOSE=$_T; fi
+      [[ -n "$_W" ]] && (( _T >= _W )) && RERUN_REQUESTED=true
+    done <<< "$_TRIGGERS"
+  fi
+  # Clearing evidence comes only from the strict list.
+  if [[ -n "$_TRIGGERS_STRICT" && -n "$_W" ]]; then
+    while IFS= read -r _ts; do
+      _T=$(iso_to_epoch "$_ts") || true
+      # Strictly before: the >= blocker above already treats a same-second request as
+      # pending, so a timestamp tie can never become clearing evidence here.
+      if [[ -n "$_T" ]] && (( _T < _W )) \
+         && { [[ -z "$LAST_REVIEW_REQUEST_BEFORE_WRAPPER" ]] \
+              || (( _T >= LAST_REVIEW_REQUEST_BEFORE_WRAPPER )); }; then
+        LAST_REVIEW_REQUEST_BEFORE_WRAPPER="$_T"
+      fi
+    done <<< "$_TRIGGERS_STRICT"
+  fi
+fi
+
+CR_SKIPPED=false
+# Read for `absent` too — for the REPORT, not to block: nothing here gates any more.
+# It is how the output can tell "CodeRabbit is not installed" from "it has commented here
+# before but has no check for this head yet", which are worth distinguishing to a reader
+# even though neither changes the verdict.
+if [[ "$CR_STATE" == "SUCCESS" || "$CR_STATE" == "absent" ]]; then
+  # Reuse the validated snapshot that feeds RERUN_REQUESTED. Fetching this endpoint again
+  # let the verdict and its CodeRabbit notes describe two different comment histories.
+  CRC="$ALL_COMMENTS"
+  # CodeRabbit's own markers, verified against its real output: the plan notice reads
+  # "PR reviews subject to [rate limits](...)" — a markdown link, so the phrase is not
+  # contiguous — and the HTML marker is "review paused"/"rate limited by coderabbit.ai".
+  # A bare "rate limit" match
+  # would block forever on a walkthrough that merely discusses rate limiting, and the
+  # "Files skipped from review" header covers skips the skill explicitly permits — that
+  # list is for reading, not for blocking.
+  # The latest STATUS comment, not the latest comment of any kind. CodeRabbit posts
+  # `auto-generated comment:` status/walkthrough bodies and edits them in place, while
+  # `auto-generated reply` bodies interleave and say nothing about review state — taking
+  # the newest comment overall picks a reply and reads as "not skipped". Scanning ALL
+  # history is the opposite error: a stale rate-limit notice would block forever and the
+  # prescribed retrigger could never clear it.
+  # Ordered by `updated_at`, NOT `created_at`. Editing in place is the whole point of
+  # CodeRabbit's status comment, and an edit moves only `updated_at` — so whenever the
+  # live status lives in an OLDER comment that was just rewritten, created_at ordering
+  # picks a staler sibling instead. Both directions are wrong: a current `review paused`
+  # loses to a later-created success and clears, and a stale rate-limit marker outranks a
+  # successful retrigger and blocks forever.
+  # Checked for `absent` too, not just SUCCESS. The comments are already fetched in both
+  # branches, and a paused or rate-limited notice is exactly the evidence a human needs
+  # when there is no check for this head — suppressing it reported a bare "absent" and
+  # withheld the reason.
+  printf '%s' "$CRC" | jq -e '[[.[][] | select(.user.login=="coderabbitai[bot]")
+        | select(.body|test("auto-generated comment:";"i"))]
+      | sort_by(.updated_at // .created_at) | last // empty
+      | select(.body|test("review (paused|skipped)|rate limited by coderabbit|reviews subject to \\[?rate limits";"i"))] | length > 0' \
+    >/dev/null 2>&1 && CR_SKIPPED=true
+fi
+
+# A retarget expands the reviewed surface without moving the head. `commit_id` proves which
+# TREE the bot read; it says nothing about which DIFF, and a PR retargeted to an older
+# ancestor during a review still has the same head while its diff has grown to include
+# commits nobody read. A wrapper submitted afterwards is insufficient: submission records
+# when the round ended, not whether the bot read the diff before or after the base moved.
+#
+# `ready_for_review` rides along in the same sweep. The skill documents that marking a
+# draft ready starts a new bot round, and it changes no SHA — so with `eyes` unable to
+# refresh and PENDING reviews invisible, the old same-tip wrapper satisfied every condition
+# while a fresh round was running. Different cause from a base move, same question: did
+# something happen after the review that the review could not have accounted for?
+#
+# The whole FAMILY of base mutations, matched by prefix rather than enumerated. GitHub has
+# at least `base_ref_changed`, `base_ref_force_pushed`, `base_ref_deleted`,
+# `automatic_base_change_succeeded` and `_failed`, and this clause was wrong five times
+# running because each fix listed the types known at the time and the next input was one
+# more. Every one of them changes what the PR's diff contains without touching its head, so
+# the question is never "which event" — it is "did the base move at all", and a prefix test
+# answers that including for types nobody has added yet.
+# The stacked-PR case is why the automatic variants matter: B targets A, A merges and is
+# deleted after B's review, GitHub retargets B, and B's diff grows to include A's squash
+# with B's head untouched — so every SHA still matches. A backward force-push is the same
+# hazard by a different route: the new base is still an ancestor of the head, so the
+# ancestry check downstream also passes.
+# These are real timeline events with timestamps, so this is decidable — the kind of clause
+# ADR 0004 asks for, not another inference from absence. Fails closed: an
+# unreadable timeline or an unparseable timestamp is doubt.
+RETARGETED_AFTER_REVIEW=false
+if [[ -n "$WRAPPER_AT" ]]; then
+  if TL=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/timeline" 2>/dev/null); then
+    require_json "timeline" "$TL"
+    # Distinguish "no retarget happened" from "a retarget happened and I cannot date it".
+    # `max // ""` collapsed both to the empty string, and the guard below then SKIPPED the
+    # check entirely — so a malformed event cleared instead of blocking, which is the one
+    # direction this whole clause exists to prevent.
+    # EVERY event is parsed, not just the lexical max. Testing only for emptiness let a
+    # non-empty garbage timestamp ("!") sort below a valid one, so `max` returned the valid
+    # value and the malformed retarget vanished. There is no way to know a garbage string
+    # is a timestamp without parsing it, so parse them all.
+    # A SENTINEL, not the empty string. `(.created_at // "")` emits a blank line for a null
+    # timestamp, which makes the whole variable empty when that is the only event — so "no
+    # retarget happened" and "one retarget I cannot date" collapse again, one level below
+    # where they last did. There is no empty-string value that means only one of them.
+    REVIEW_SURFACE_EVENTS=$(printf '%s' "$TL" \
+      | jq -r '.[][] | select((.event // "") | test("^(base_ref_|automatic_base_change_)|^ready_for_review$|^head_ref_force_pushed$"))
+              | [.event, (if ((.created_at // "") | length) == 0 then "@undated@" else .created_at end)]
+              | @tsv' 2>/dev/null) \
+      || { echo "BLOCKED: cannot read the PR timeline" >&2; exit 3; }
+    W2=$(iso_to_epoch "$WRAPPER_AT")
+    # Dated ready_for_review events are round starts too, and the coverage check needs
+    # them: a ready in the gap between the last wrapper and a request means a round may
+    # still be in flight when the request posts. So are dated head force-pushes — the bot
+    # often re-reviews a push, and with prior-tip wrappers now anchoring gaps, a push in a
+    # gap is the invisible round-start that would let an auto round's wrapper masquerade
+    # as the requested one. Undated events already block in the loop below, so skipping
+    # them here loses nothing.
+    START_EPOCHS="$TRIGGER_EPOCHS"
+    # A dated `eyes` is a round start like any other — see the hoisted read above.
+    [[ -n "$EYES_EPOCH" ]] \
+      && START_EPOCHS="${START_EPOCHS}${START_EPOCHS:+$'\n'}${EYES_EPOCH}"
+    READY_EPOCHS=""
+    if [[ -n "$REVIEW_SURFACE_EVENTS" ]]; then
+      while IFS=$'\t' read -r _event _ts; do
+        case "$_event" in ready_for_review|head_ref_force_pushed) ;; *) continue ;; esac
+        _se=$(iso_to_epoch "$_ts") || continue
+        [[ -n "$_se" ]] || continue
+        START_EPOCHS="${START_EPOCHS}${START_EPOCHS:+$'\n'}${_se}"
+        [[ "$_event" == "ready_for_review" ]] \
+          && READY_EPOCHS="${READY_EPOCHS}${READY_EPOCHS:+$'\n'}${_se}"
+      done <<< "$REVIEW_SURFACE_EVENTS"
+    fi
+    # The other half of the fulfilled-request check. The trigger loop above only cleared
+    # requests older than the newest wrapper; that clearance holds only when the request's
+    # round provably started fresh — otherwise the wrapper that post-dates the request may
+    # be an already-running round's submission, with the requested round still pending.
+    # Only the NEWEST request needs coverage: any round it started also post-dates every
+    # older request on the same tip.
+    if ! $RERUN_REQUESTED && [[ -n "$T_LAST_LOOSE" ]]; then
+      _round_covered "$T_LAST_LOOSE" || RERUN_REQUESTED=true
+    fi
+    if [[ -n "$REVIEW_SURFACE_EVENTS" ]]; then
+      [[ -n "$W2" ]] || RETARGETED_AFTER_REVIEW=true
+      while IFS=$'\t' read -r _event _ts; do
+        B=$(iso_to_epoch "$_ts")
+        # Unparseable (or empty) is doubt about an event that demonstrably happened.
+        if [[ -z "$B" ]]; then RETARGETED_AFTER_REVIEW=true
+        # `>=`, not `>`: one-second precision means an event in the wrapper's own second
+        # is indistinguishable from one just before it, and a tie is doubt.
+        elif [[ -n "$W2" ]] && (( B >= W2 )); then RETARGETED_AFTER_REVIEW=true
+        # A dated pre-wrapper head force-push is a round-START for the coverage rule and
+        # nothing more: it moved the head, so the tip-naming checks already own "was the
+        # new tree read", and routing it through the mutation branch below would demand an
+        # explicit request after every push of the documented amend-and-force-push loop.
+        elif [[ "$_event" == "head_ref_force_pushed" ]]; then
+          :
+        # A pre-wrapper mark-ready started a round; the wrapper after it is only trustable
+        # as that round's under the same freshness rule a request gets (or the draft-flow
+        # fallback inside _ready_covered). Otherwise a later provably-fresh request is the
+        # escape, exactly as for a base mutation: nothing was in flight when that request
+        # posted, so every earlier round — the ready's included — had already submitted.
+        elif [[ "$_event" == "ready_for_review" ]]; then
+          if ! _ready_covered "$B" \
+             && { [[ -z "$LAST_REVIEW_REQUEST_BEFORE_WRAPPER" ]] \
+                  || (( LAST_REVIEW_REQUEST_BEFORE_WRAPPER <= B )) \
+                  || ! _round_covered "$LAST_REVIEW_REQUEST_BEFORE_WRAPPER"; }; then
+            RETARGETED_AFTER_REVIEW=true
+          fi
+        # Submission time is the END of a review, not its start. A base move can happen
+        # after the bot read the diff but before it submits the wrapper, so B < W2 alone
+        # does not show that the changed diff was read. A later explicit request is the
+        # only available timestamp that establishes a new post-change round — and only
+        # when _round_covered shows the request was not posted into a round already in
+        # flight, whose wrapper would then masquerade as the post-change round's.
+        # _round_covered_on_tip, not _round_covered: a prior-tip wrapper anchoring this gap
+        # means the head moved after it, i.e. a push happened — and a normal push starts an
+        # automatic round that emits no observable event, so the "quiet" interval it would
+        # certify may contain exactly the round whose wrapper then gets credited to this
+        # request. That wrapper may have read the pre-mutation diff. The escape is unchanged
+        # in kind, one round longer in practice: let the automatic round land its wrapper on
+        # this tip, then `@codex review` again.
+        elif [[ -z "$LAST_REVIEW_REQUEST_BEFORE_WRAPPER" ]] \
+             || (( LAST_REVIEW_REQUEST_BEFORE_WRAPPER <= B )) \
+             || ! _round_covered_on_tip "$LAST_REVIEW_REQUEST_BEFORE_WRAPPER"; then
+          RETARGETED_AFTER_REVIEW=true
+        fi
+      done <<< "$REVIEW_SURFACE_EVENTS"
+    fi
+  else
+    echo "BLOCKED: timeline query failed" >&2; exit 3
+  fi
+fi
+
+# A new round can start on an UNCHANGED tip (`@codex review`), so a wrapper plus resolved
+# threads is not proof nothing is in flight. An `eyes` reaction newer than the latest
+# wrapper means the bot is reviewing right now.
+#
+# ONE-WAY ONLY. Its presence blocks; its absence clears nothing, and must never be read as
+# "no round is running". GitHub allows one reaction per user per item, so the bot cannot
+# re-add an `eyes` it already left, and a round started by any means that does not react
+# leaves no trace here at all. This is a detector for a hazard, not a proof of its absence
+# — which is the whole shape of this script.
+ROUND_ACTIVE=false
+if [[ -n "$WRAPPER_AT" ]]; then
+  # EYES_AT and EYES_EPOCH come from the hoisted read above — the reaction had to be known
+  # before the coverage machinery, which also treats a dated one as a round start. This is
+  # the other half: the same reaction, asked whether a round is running RIGHT NOW.
+  # An unparseable WRAPPER_AT blocks whether or not a reaction exists: it is the only
+  # reference point the active-round detector has, so without it the detector cannot run
+  # at all, and a check that cannot run has not passed.
+  W=$(iso_to_epoch "$WRAPPER_AT")
+  if [[ -z "$W" ]]; then
+    ROUND_ACTIVE=true
+  elif [[ -n "$EYES_AT" ]]; then
+    # `>=` for the same one-second-precision reason as the retarget check above.
+    if [[ -n "$EYES_EPOCH" ]]; then (( EYES_EPOCH >= W )) && ROUND_ACTIVE=true
+    else ROUND_ACTIVE=true; fi   # cannot compare -> assume a round is running
+  fi
+fi
+
+# REPORTED, NOT GATED. This list used to be intersected against the PR's changed files, on
+# the theory that a skip is benign when it covers files the PR did not touch. It cannot:
+# CodeRabbit's skip list enumerates files of the PR it is reviewing, by construction, so
+# the intersection was non-empty whenever a skip existed — behaviourally identical to the
+# blanket "any skip blocks" rule it replaced, which deadlocked every permitted skip. The
+# one way to empty it was a truncated changed-files response, i.e. the fail-open direction.
+# So the clause could only be the old deadlock or a fail-open, never the thing it claimed.
+# Decide the underlying policy instead, and this skill's answer is that a vendor skipping
+# what it judged trivial is acceptable: print the list so a human can disagree.
+CR_SKIPLIST=""
+if [[ "$CR_STATE" == "SUCCESS" ]] && ! $CR_SKIPPED && [[ -n "${CRC:-}" ]]; then
+  CR_SKIPLIST=$(printf '%s' "$CRC" | jq -r '[.[][] | select(.user.login=="coderabbitai[bot]")
+      | select(.body|test("auto-generated comment:";"i"))] | sort_by(.updated_at // .created_at) | last // empty | .body' 2>/dev/null \
+    | awk '
+        tolower($0) ~ /files skipped from review/ {
+          inskip=1
+          # Inline form: the path can sit on the header line after the colon.
+          if (match($0, /:[[:space:]]*[^[:space:]].*$/)) print substr($0, RSTART+1)
+          next
+        }
+        inskip && (/^<\/details>/ || /^#/ || tolower($0) ~ /files selected for processing/ \
+                   || tolower($0) ~ /^[[:space:]]*<summary>/) { inskip=0 }
+        inskip' \
+    | sed -E 's/^[[:space:]]*[-*][[:space:]]+//' \
+    | sed -E 's/[[:space:]]*\([0-9]+ hunks?\)[[:space:]]*$//' \
+    | sed -E 's/`//g; s/\*\*//g' \
+    | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | grep -v '^$' | sort -u | head -20)
+fi
+
+# The endpoint reads above span time. If the PR head moved during them, every signal was
+# collected for a tree that is no longer mergeable; returning a verdict for it lets a JSON
+# consumer act on stale evidence even though the early head check passed.
+PR_HEAD_FINAL=$(gh pr view "$PR" -R "$REPO" --json headRefOid -q .headRefOid 2>/dev/null) \
+  || { echo "BLOCKED: cannot revalidate the PR head" >&2; exit 3; }
+[[ -n "$PR_HEAD_FINAL" ]] || { echo "BLOCKED: cannot revalidate the PR head" >&2; exit 3; }
+[[ "$PR_HEAD_FINAL" == "$TIP" ]] \
+  || { echo "BLOCKED: PR head moved from ${TIP:0:10} to ${PR_HEAD_FINAL:0:10} while signals were collected" >&2; exit 3; }
+
+# WRAPPER_AT is required alongside the count: it is the reference point the active-round
+# check needs, so a wrapper without one means that check never ran, and a check that did
+# not run has not passed.
+VERDICT="BLOCKED"
+if [[ "$WRAPPER_TIP" -gt 0 ]] && [[ -n "$WRAPPER_AT" ]] && [[ "$PENDING_ON_TIP" -eq 0 ]] \
+   && ! $RERUN_REQUESTED && ! $ROUND_ACTIVE \
+   && ! $RETARGETED_AFTER_REVIEW && [[ "$UNRESOLVED" -eq 0 ]]; then
+  VERDICT="NO_PENDING_EVIDENCE"
+fi
+OBSERVED_TO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+# Carried in the output, not just in this file's header, because the exit code is chained
+# into `gh pr merge` by a caller who will never read the header.
+# Only asserted when it holds. Emitting it unconditionally put "nothing indicated an
+# unfinished round" beside `"verdict": "BLOCKED"` in the same object — a machine reader
+# taking the sentence at face value would have it exactly backwards.
+if [[ "$VERDICT" == "NO_PENDING_EVIDENCE" ]]; then
+  CLAIM="across API reads from $OBSERVED_FROM to $OBSERVED_TO, nothing indicated an unfinished CODEX round on ${TIP:0:10} or an undispositioned codex finding on it; CodeRabbit's status and rollup are report-only, so a PENDING rollup is consistent with this claim, but its unresolved review threads DO count toward the unresolved-thread conjunct; this is not proof the bots are finished"
+else
+  CLAIM=""
+fi
+
+if $JSON; then
+  jq -n --arg tip "$TIP" --arg v "$VERDICT" --arg cr "$CR_STATE" \
+        --argjson w "$WRAPPER_TIP" --argjson u "$UNRESOLVED" --argjson pending "$PENDING_ON_TIP" \
+        --arg from "$OBSERVED_FROM" --arg to "$OBSERVED_TO" --arg claim "$CLAIM" \
+        --arg cr_skipped "$CR_SKIPPED" --arg round_active "$ROUND_ACTIVE" --arg retargeted "$RETARGETED_AFTER_REVIEW" --arg rerun "$RERUN_REQUESTED" --arg skiplist "$CR_SKIPLIST" \
+    '{tip:$tip,verdict:$v,claim:(if $claim=="" then null else $claim end),observed_from:$from,observed_to:$to,
+      wrapper_on_tip:$w,unresolved_bot_threads:$u,
+      coderabbit:$cr,coderabbit_skipped:($cr_skipped=="true"),round_active:($round_active=="true"),retargeted_after_review:($retargeted=="true"),
+      rerun_requested:($rerun=="true"),pending_review_on_tip:($pending > 0),
+      coderabbit_skipped_files:($skiplist|split("\n")|map(select(length>0)))}'
+else
+  printf 'tip              %s\n' "${TIP:0:10}"
+  printf 'codex wrapper    %s naming this tip\n' "$WRAPPER_TIP"
+  printf 'unresolved bot   %s thread(s)\n' "$UNRESOLVED"
+  printf 'coderabbit       %s   (reported, does not gate)\n' "$CR_STATE"
+  printf 'observed         %s .. %s\n' "$OBSERVED_FROM" "$OBSERVED_TO"
+  printf '\nverdict: %s\n' "$VERDICT"
+  [[ "$VERDICT" == "NO_PENDING_EVIDENCE" ]] && printf '  = %s\n' "$CLAIM"
+  [[ "$WRAPPER_TIP" -eq 0 ]] && printf '  ⚠ no review from the codex bot names this tip, so nothing proves WHICH tree it read.\n    Push or `@codex review` to get one, or accept the round explicitly and say so.\n'
+  [[ "$UNRESOLVED" -gt 0 ]] && printf '  ⚠ %s UNRESOLVED bot thread(s). Fix each, or answer it with evidence and resolve the\n    thread — resolving is how you record that it was dispositioned.\n' "$UNRESOLVED"
+  [[ "$CR_STATE" == "query-failed" ]] && printf '  · CodeRabbit status could not be queried.\n'
+  $RERUN_REQUESTED && printf '  ⚠ an `@codex review` request is not provably answered — either it is newer than the\n    wrapper, or no completed round separates it from an earlier round-start, so the\n    wrapper after it may belong to a round that was already running. Wait, or\n    `@codex review` once more and wait for that wrapper.\n'
+  [[ "$PENDING_ON_TIP" -gt 0 ]] && printf '  ⚠ a PENDING review from the bot names this tip — a round is in flight and has not\n    submitted yet. Wait for it.\n'
+  $RETARGETED_AFTER_REVIEW && printf '  ⚠ the base changed, a mark-ready started a round, or the head moved — with no later\n    provably fresh round to cover it, so part of the diff may never have been read or a\n    started round may not have reported. `@codex review` (again, if needed) and wait for\n    its wrapper.\n'
+  $ROUND_ACTIVE && printf '  ⚠ an `eyes` reaction is newer than the wrapper — a fresh round is running on this\n    same tip. Wait for it to finish.\n'
+  # Reported, never gated — see the CR_SKIPLIST block. Every file here is one this PR
+  # changes, since that is the only kind CodeRabbit can skip; read the list and decide.
+  [[ -n "$CR_SKIPLIST" ]] && printf '  · CodeRabbit skipped these file(s) as trivial — it did not review them:\n%s\n' "$(printf '%s' "$CR_SKIPLIST" | sed 's/^/      /')"
+  $CR_SKIPPED && printf '  · CodeRabbit is rate-limited or its review is paused, so its status describes no\n    review at all. This does NOT block — read it and decide. `@coderabbitai resume`\n    (or `review`) if you want its opinion on this tree.\n'
+fi
+
+# A CodeRabbit query failure used to be exit 3, correctly, while CodeRabbit could change
+# the verdict — "I could not find out" is not "not done". It no longer can, so failing to
+# read it is missing REPORT data, not doubt about the answer, and exiting 3 would refuse a
+# decidable PR because a warning could not be printed. Exit follows the verdict.
+[[ "$VERDICT" == "NO_PENDING_EVIDENCE" ]] && exit 0
+exit 1
