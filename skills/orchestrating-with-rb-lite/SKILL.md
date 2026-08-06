@@ -683,9 +683,19 @@ implement → review loop for each bead.
       _PRS=$(gh pr list -R "$UP" --state all --limit 1000 --json number,state,headRefName,title,body,url) \
         || { echo "cannot query closure PRs in $UP — do not resume work from partial results"; exit 1; }
       CLOSURE_PRS+=("$_PRS")
+      # 1000 is a CAP, not "all of them". With more newer PRs than that, the older closure
+      # or work PR this recovery exists to find falls outside the snapshot, both filters
+      # come back empty, and the drain rebuilds work that already merged. A saturated page
+      # is the only case where anything can hide, so pay for the search only then.
+      if [ "$(printf '%s' "$_PRS" | jq 'length')" -ge 1000 ]; then
+        _MORE=$(gh pr list -R "$UP" --state all --limit 1000 --search "$BEAD_ID in:body" \
+                  --json number,state,headRefName,title,body,url) \
+          || { echo "closure search in $UP failed — do not resume from partial results"; exit 1; }
+        CLOSURE_PRS+=("$_MORE")
+      fi
     done
     printf '%s\n' "${CLOSURE_PRS[@]}" \
-      | jq -s --arg id "$BEAD_ID" 'add | .[] | select($id != "" and ((.body // "") | ascii_downcase
+      | jq -s --arg id "$BEAD_ID" 'add | unique_by(.url) | .[] | select($id != "" and ((.body // "") | ascii_downcase
         | test("(^|\\r|\\n)[[:space:]]*bead-closure:[[:space:]]*" + ($id|ascii_downcase|gsub("\\.";"\\.")) + "[[:space:]]*(\\r|\\n|$)")))'
     # SAME shell, same snapshot: the bead's work PRs, MERGED **or still OPEN**. Consulted
     # whenever the marker query above is empty — see below. MERGED-only hid the third
@@ -695,7 +705,7 @@ implement → review loop for each bead.
     # and a fetch that failed here while the marker query succeeded would silently read as
     # "nothing merged", the exact collapse this query exists to close.
     printf '%s\n' "${CLOSURE_PRS[@]}" \
-      | jq -s --arg id "$BEAD_ID" 'add | .[] | select(.state=="MERGED" or .state=="OPEN")
+      | jq -s --arg id "$BEAD_ID" 'add | unique_by(.url) | .[] | select(.state=="MERGED" or .state=="OPEN")
           | select($id != "" and ((.body // "") | ascii_downcase
             | test("(^|[^a-z0-9._-])" + ($id|ascii_downcase|gsub("\\.";"\\.")) + "([^a-z0-9._-]|$)")))'
     ```

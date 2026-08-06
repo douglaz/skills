@@ -537,6 +537,7 @@ fi
 # branch, but the comparisons that read them do not, and `set -u` turns the no-DRIVE.md
 # case — the common one, and every first run — into a hard crash instead of an empty value.
 DRIVE_MD="absent"; DRIVE_PHASE=""; DRIVE_CLEARED=""; DRIVE_PENDING=""; DRIVE_CLEARED_BASE=""
+DRIVE_PENDING_REPO=""
 if [[ -f DRIVE.md ]]; then
   DRIVE_MD="present"
   # Case-insensitive and non-alpha-tolerant on purpose: `**Phase:** build` is a plausible
@@ -548,8 +549,15 @@ if [[ -f DRIVE.md ]]; then
   # `Pending: metadata PR #N` — a `DONE` record conditional on a PR that has to be queried.
   # Stays in the COMMITTED record on purpose: it must reach a fresh clone, which is the one
   # thing that cannot be derived from a checkout.
-  DRIVE_PENDING=$(grep -m1 -oiE '\*\*Pending:\*\*[^#]*#[0-9]+' DRIVE.md 2>/dev/null \
-    | grep -oE '[0-9]+$' || echo "")
+  _PENDING_RAW=$(grep -m1 -oiE '\*\*Pending:\*\*[^#]*#[0-9]+' DRIVE.md 2>/dev/null || echo "")
+  DRIVE_PENDING=$(printf '%s' "$_PENDING_RAW" | grep -oE '[0-9]+$' || echo "")
+  # A bare `#N` cannot say WHERE. On a fork the metadata PR may live in the parent or in
+  # the fork, and the same number identifies unrelated PRs in both — so a resumed clone
+  # querying the wrong one reads another PR's state as this drive's. `owner/repo#N` is the
+  # qualified form; the bare form is still accepted because records already exist in it,
+  # and it resolves against base_repo with the usual fork caveat.
+  DRIVE_PENDING_REPO=$(printf '%s' "$_PENDING_RAW" \
+    | grep -oE '[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#[0-9]+$' | sed 's/#.*//' || echo "")
 fi
 
 # --- volatile per-checkout state (ADR 0001 sites it, ADR 0002 derives LAND from it) ---
@@ -864,6 +872,7 @@ if $JSON; then
     --arg br_ready "$BR_READY" --arg br_unresolved "$BR_UNRESOLVED" --arg br_blocked "$BR_BLOCKED" \
     --arg br_inprogress "$BR_INPROGRESS" \
     --arg cleared "$DRIVE_CLEARED" --arg pending_pr "$DRIVE_PENDING" \
+    --arg pending_pr_repo "$DRIVE_PENDING_REPO" \
     --arg cleared_matches "$CLEARED_MATCHES_TIP" --arg recorded_land "$RECORDED_LAND" \
     --arg done_pending "$DONE_PENDING" --arg head_sha "$HEAD_SHA" \
     --arg land_blocked_dirty "$LAND_BLOCKED_DIRTY" --arg done_on_branch "$DONE_ON_BRANCH" \
@@ -886,7 +895,9 @@ if $JSON; then
       base_repo:(if $base_repo=="" then null else $base_repo end),
       base_origin:$base_origin,cleared_base:$cleared_base,
       cleared_base_matches:(if $cleared_base_matches=="n/a" then null else $cleared_base_matches=="true" end),
-      pending_pr:$pending_pr,done_pending:($done_pending=="true"),
+      pending_pr:$pending_pr,
+      pending_pr_repo:(if $pending_pr_repo=="" then null else $pending_pr_repo end),
+      done_pending:($done_pending=="true"),
       pr_ambiguous:($pr_ambiguous=="true"),tree_known:($tree_known=="true"),
       land_blocked_dirty:($land_blocked_dirty=="true"),
       done_on_branch:($done_on_branch=="true"),
@@ -911,7 +922,7 @@ printf 'specs      %s\n' "$(printf '%s' "${SPECS:-<none>}" | paste -sd, -)"
 [[ -n "$ADRS" ]] && printf 'adrs       %s\n' "$ADRS"
 printf 'pr         %s%s\n' "$PR_STATE" "${PR_NUM:+ (#$PR_NUM)}"
 printf 'DRIVE.md   %s%s%s\n' "$DRIVE_MD" "${DRIVE_PHASE:+ (says $DRIVE_PHASE)}" \
-  "${DRIVE_PENDING:+, pending #$DRIVE_PENDING}"
+  "${DRIVE_PENDING:+, pending ${DRIVE_PENDING_REPO}#$DRIVE_PENDING}"
 printf 'cleared    %s\n' "${DRIVE_CLEARED:-<none — no panel has cleared this checkout>}"
 printf '\nphase: %s   (source: %s)\n' "$PHASE" "$PHASE_SOURCE"
 # LAND is derived, so a RECORDED LAND is a stale or hand-edited file. Say so rather than
@@ -935,7 +946,8 @@ fi
 $DONE_ON_BRANCH && $_DONE_DIRTY && [[ "$PHASE" != "LAND" ]] && printf '  ⚠ %s says DONE but the tree is dirty (%s modified, %s untracked) — closure metadata\n    that is not committed has not landed anywhere. Finish it before reporting DONE.\n' "$PHASE_WAS" "$DIRTY_COUNT" "$UNTRACKED"
 $DONE_ON_BRANCH && ! $_DONE_DIRTY && $ON_DEFAULT && [[ "$PHASE" != "LAND" ]] && printf '  ⚠ %s says DONE but %s has %s unpushed commit(s) — a fresh clone would still see the\n    bead open. Push them, or carry them into the next branch; do NOT report DONE.\n' "$PHASE_WAS" "${BRANCH:-HEAD}" "$BRANCH_COMMITS"
 $DONE_ON_BRANCH && ! $ON_DEFAULT && [[ "$PHASE" != "LAND" && "$BRANCH_COMMITS" -gt 0 ]] && printf '  ⚠ %s says DONE but this branch has %s unmerged commit(s) — that record\n    describes the state AFTER this PR lands. Treating it as HARDEN: these commits are\n    unreviewed and go through the panel like any others.\n' "$PHASE_WAS" "$BRANCH_COMMITS"
-$DONE_PENDING && printf '  ⚠ DONE is pending metadata PR #%s, so this is WAITING_FOR_MERGE, not DONE. Query that\n    PR: merged means the drive really is done; open means go finish landing it.\n' "$DRIVE_PENDING"
+$DONE_PENDING && printf '  ⚠ DONE is pending metadata PR %s, so this is WAITING_FOR_MERGE, not DONE. Query that\n    PR: merged means the drive really is done; open means go finish landing it.\n' "${DRIVE_PENDING_REPO:+$DRIVE_PENDING_REPO}#$DRIVE_PENDING"
+$DONE_PENDING && [[ -z "$DRIVE_PENDING_REPO" ]] && printf '    The record names no repository, so #%s is ambiguous on a fork — the same number\n    exists in both. Query %s, and re-record it as `owner/repo#%s`.\n' "$DRIVE_PENDING" "${_RREPO:-the parent}" "$DRIVE_PENDING"
 # Silent otherwise: clearance matches but the tree moved, and every SHA check still passes.
 # Two different states reach n/a and they need different remedies. A marker with no
 # cleared_base line is fixed by re-clearing. A marker that HAS one while BASE_REF is empty

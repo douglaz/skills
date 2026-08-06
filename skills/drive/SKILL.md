@@ -357,10 +357,12 @@ instant records a commit the panel never saw. The guarded snippet in
 A fresh clone has narrative but no clearance. That is correct: clearance is a claim about
 a panel run in *this* checkout. Re-run the panel.
 
-**`Pending: metadata PR #N` stays committed**, because it is the one fact that must reach
-a fresh clone: it is how a reader learns DONE is conditional on a PR. A record reading
-`DONE` with a `Pending:` PR means "DONE once #N merges" — query it. `references/phases.md`
-§ LAND covers the ordering.
+**`Pending: metadata PR owner/repo#N` stays committed**, because it is the one fact that
+must reach a fresh clone: it is how a reader learns DONE is conditional on a PR. A record
+reading `DONE` with a `Pending:` PR means "DONE once that PR merges" — query it. Qualify it
+with the repository: a bare `#N` is ambiguous on a fork, where the same number names a
+different PR in the parent and in the fork. `references/phases.md` § LAND covers the
+ordering.
 
 **`Scope:` is the one canonical definition and every phase reads it.** `drive-status`
 counts the whole repository — it cannot know your scope — so its bead numbers and its

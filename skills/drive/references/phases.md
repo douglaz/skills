@@ -546,7 +546,12 @@ and silently carry the previous bead's closure into its diff. Instead:
   the next bead's branch, where it rides that PR through the panel and the configured bots.
 - **The scope is empty** → open one small metadata PR (bead closure + final `DRIVE.md`)
   and land it through the same gates. Write it as `**Phase:** DONE · **Pending:** metadata
-  PR #N` so a resumed session queries `#N` instead of stopping at a DONE that never landed.
+  PR owner/repo#N` so a resumed session queries that PR instead of stopping at a DONE that
+  never landed. **Qualify it with the repository**, do not write a bare `#N`: on a fork the
+  metadata PR may live in the parent or in the fork and the same number is a different PR
+  in each, so a bare number sends a resumed clone to read an unrelated PR's state as this
+  drive's. `drive-status` still parses the bare form for records already written, and
+  reports `pending_pr_repo: null` for them so the ambiguity is visible rather than assumed.
   `N` does not exist until the PR is open, so amend it in afterwards — the first pushed
   head is never the one that merges. Give the PR body a machine-readable marker line, one
   per bead it closes — `bead-closure: <bead-id>` — because ordinary work PR bodies carry
@@ -571,10 +576,23 @@ and silently carry the previous bead's closure into its diff. Instead:
     # `-R` opens an unrelated same-numbered PR. The url carries the repository.
     _PRS=$(gh pr list -R "$UP" --state all --limit 1000 --json number,state,headRefName,title,body,url) \
       || { echo "cannot query closure PRs in $UP — do not resume work from partial results"; exit 1; }
+    # 1000 is a CAP, not "all of them". In a repo with more newer PRs than that, the older
+    # closure or work PR this recovery exists to find falls outside the snapshot, both
+    # filters come back empty, and the instructions below declare the bead not started —
+    # rebuilding work that already merged. A saturated page is the only case where anything
+    # can be hidden, so pay for the targeted search only then.
     CLOSURE_PRS+=("$_PRS")
+    if [ "$(printf '%s' "$_PRS" | jq 'length')" -ge 1000 ]; then
+      _MORE=$(gh pr list -R "$UP" --state all --limit 1000 --search "$BEAD_ID in:body" \
+                --json number,state,headRefName,title,body,url) \
+        || { echo "closure search in $UP failed — do not resume work from partial results"; exit 1; }
+      CLOSURE_PRS+=("$_MORE")
+    fi
   done
+  # unique_by(.url): the saturation fallback above can return a PR the first page already
+  # had, and a hit reported twice reads as two separate closures.
   printf '%s\n' "${CLOSURE_PRS[@]}" \
-    | jq -s --arg id "$BEAD_ID" 'add | .[] | select($id != "" and ((.body // "") | ascii_downcase
+    | jq -s --arg id "$BEAD_ID" 'add | unique_by(.url) | .[] | select($id != "" and ((.body // "") | ascii_downcase
         | test("(^|\\r|\\n)[[:space:]]*bead-closure:[[:space:]]*" + ($id|ascii_downcase|gsub("\\.";"\\.")) + "[[:space:]]*(\\r|\\n|$)")))'
   # SAME shell, same snapshot: the bead's work PRs, MERGED **or still OPEN**. Consulted
   # whenever the marker query above is empty — see below. MERGED-only hid the third resume
@@ -585,7 +603,7 @@ and silently carry the previous bead's closure into its diff. Instead:
   # Re-fetched in a separate block, a fetch that failed here while the marker query
   # succeeded would silently read as "nothing merged", the exact collapse this closes.
   printf '%s\n' "${CLOSURE_PRS[@]}" \
-    | jq -s --arg id "$BEAD_ID" 'add | .[] | select(.state=="MERGED" or .state=="OPEN")
+    | jq -s --arg id "$BEAD_ID" 'add | unique_by(.url) | .[] | select(.state=="MERGED" or .state=="OPEN")
         | select($id != "" and ((.body // "") | ascii_downcase
           | test("(^|[^a-z0-9._-])" + ($id|ascii_downcase|gsub("\\.";"\\.")) + "([^a-z0-9._-]|$)")))'
   ```

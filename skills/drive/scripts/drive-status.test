@@ -195,6 +195,16 @@ check "DONE-on-branch then cleared derives LAND" LAND
 new_repo; record '**Phase:** DONE · **Pending:** metadata PR #7'
 G checkout -q master; G merge -q feat 2>/dev/null || true; G push -q origin master
 check "landed DONE with a pending closure PR" WAITING_FOR_MERGE
+check_field "a bare pending number names no repository" pending_pr_repo null
+
+# `#N` alone cannot say WHERE, and on a fork the same number is a different PR in the
+# parent and in the fork. The qualified form carries the repository into the fresh clone,
+# which is the one thing a checkout cannot derive.
+new_repo; record '**Phase:** DONE · **Pending:** metadata PR upstream/repo#7'
+G checkout -q master; G merge -q feat 2>/dev/null || true; G push -q origin master
+check_field "a qualified pending record keeps its repository" pending_pr_repo upstream/repo
+check_field "a qualified pending record still yields the number" pending_pr 7
+check "a qualified pending record is still WAITING_FOR_MERGE" WAITING_FOR_MERGE
 
 # A PR retargeted after clearance expands the diff the panel reviewed without moving HEAD.
 # Written directly, not appended: the parser takes the FIRST cleared_base line, so

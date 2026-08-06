@@ -407,10 +407,24 @@ _q() { while IFS= read -r -d "" f; do printf '%q\n' "$f"; done; true; }
 # missing from a sparse checkout and for a present-but-dangling symlink — neither of which
 # was deleted — and the prompt below tells the reviewer not to open anything in DELETED.
 # That is a clean verdict over part of the artifact nobody read.
+# Deletion is a property of the FINAL state, not of any one view. A path deleted in a
+# committed commit and RECREATED in the index or worktree appears in the committed diff's
+# D-list while its replacement is live — and since EXISTING subtracts DELETED, the live
+# file was dropped from the review list and the prompt below told the reviewer not to open
+# it. That is the same clean-verdict-over-unread-content this block exists to prevent, one
+# level in. So subtract what git says is live NOW: index entries plus untracked files,
+# minus any whose worktree copy is gone (an unstaged `rm` leaves the entry in the index).
+_LIVE=$( { git ls-files -z --cached
+           git ls-files -z --others --exclude-standard
+         } | _q | sort -u)
+_GONE=$(git ls-files -z --deleted | _q | sort -u)
+[ -n "$_GONE" ] && _LIVE=$(printf '%s\n' "$_LIVE" \
+                           | { grep -vxF -f <(printf '%s\n' "$_GONE") || true; })
 DELETED=$( { git diff -z --no-renames --diff-filter=D --name-only "$DIFF_BASE...HEAD"
              git diff -z --no-renames --diff-filter=D --name-only
              git diff -z --no-renames --diff-filter=D --name-only --cached
-           } | _q | sort -u)
+           } | _q | sort -u \
+           | { [ -n "$_LIVE" ] && { grep -vxF -f <(printf '%s\n' "$_LIVE") || true; } || cat; })
 EXISTING=$(changed_z | _q | sort -u \
            | { [ -n "$DELETED" ] && grep -vxF -f <(printf '%s\n' "$DELETED") || cat; })
 

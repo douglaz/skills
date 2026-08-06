@@ -442,6 +442,42 @@ TRIGGER_EPOCHS=""
 T_LAST_LOOSE=""
 START_EPOCHS=""
 READY_EPOCHS=""
+
+# The `eyes` reaction is read HERE, before the coverage machinery below, because it is two
+# facts and only one of them was ever used. It says a round is running NOW (the active-round
+# check further down), and it says a round STARTED at that timestamp — which the coverage
+# gap test needs and never had. Without it: a round adds `eyes`, `@codex review` posts while
+# that round runs, the old round submits the newest wrapper, and since the reaction is
+# neither at-or-after that wrapper nor in START_EPOCHS, the gap looks empty and the wrapper
+# is credited to the request while the requested round is still pending.
+# No deadlock from pinning one old timestamp: a start only blocks while it sits between the
+# last wrapper and the request, so the first wrapper to land after it clears it forever.
+EYES_AT=""
+EYES_EPOCH=""
+if [[ -n "$WRAPPER_AT" ]]; then
+  # Pipe to jq rather than `--jq`, like every other query here: it keeps the raw response
+  # inspectable and lets the fixture stub answer without reimplementing gh's filtering.
+  # --paginate like every other endpoint here, and fail CLOSED: a failed query or an
+  # unparseable timestamp is doubt, and doubt is not clearance. Previously both were
+  # indistinguishable from "no eyes reaction", which cleared.
+  if REACTIONS=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/reactions" 2>/dev/null); then
+    require_json "reactions" "$REACTIONS"
+    # Same three-way split as the timeline check: no reaction, an undatable one, and a
+    # dated one are different states. `max // ""` merged the first two, so a malformed
+    # `eyes` — the signal that a round is RUNNING — read as "no round running" and cleared.
+    EYES_AT=$(printf '%s' "$REACTIONS" | jq -r '
+      [.[][] | select(.user.login=="chatgpt-codex-connector[bot]") | select(.content=="eyes")] as $e
+      | if ($e | length) == 0 then ""
+        elif any($e[]; ((.created_at // "") | length) == 0) then "malformed"
+        else ([$e[].created_at] | max) end') \
+      || { echo "BLOCKED: cannot read reactions" >&2; exit 3; }
+    # Only a DATED reaction can anchor a gap. An undatable one still blocks, via the
+    # active-round check below, which treats it as a round running right now.
+    [[ -n "$EYES_AT" && "$EYES_AT" != "malformed" ]] && EYES_EPOCH=$(iso_to_epoch "$EYES_AT") || true
+  else
+    echo "BLOCKED: reactions query failed" >&2; exit 3
+  fi
+fi
 if [[ -n "$WRAPPER_AT" ]] && [[ -n "${ALL_COMMENTS:-}" ]]; then
   _W=$(iso_to_epoch "$WRAPPER_AT")
   # EVERY trigger, not `last`. Taking only the final one meant an undated trigger followed
@@ -593,6 +629,9 @@ if [[ -n "$WRAPPER_AT" ]]; then
     # as the requested one. Undated events already block in the loop below, so skipping
     # them here loses nothing.
     START_EPOCHS="$TRIGGER_EPOCHS"
+    # A dated `eyes` is a round start like any other — see the hoisted read above.
+    [[ -n "$EYES_EPOCH" ]] \
+      && START_EPOCHS="${START_EPOCHS}${START_EPOCHS:+$'\n'}${EYES_EPOCH}"
     READY_EPOCHS=""
     if [[ -n "$REVIEW_SURFACE_EVENTS" ]]; then
       while IFS=$'\t' read -r _event _ts; do
@@ -669,36 +708,19 @@ fi
 # — which is the whole shape of this script.
 ROUND_ACTIVE=false
 if [[ -n "$WRAPPER_AT" ]]; then
-  # Pipe to jq rather than `--jq`, like every other query here: it keeps the raw response
-  # inspectable and lets the fixture stub answer without reimplementing gh's filtering.
-  # --paginate like every other endpoint here, and fail CLOSED: a failed query or an
-  # unparseable timestamp is doubt, and doubt is not clearance. Previously both were
-  # indistinguishable from "no eyes reaction", which cleared.
-  if REACTIONS=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/reactions" 2>/dev/null); then
-    require_json "reactions" "$REACTIONS"
-    # Same three-way split as the timeline check: no reaction, an undatable one, and a
-    # dated one are different states. `max // ""` merged the first two, so a malformed
-    # `eyes` — the signal that a round is RUNNING — read as "no round running" and cleared.
-    EYES_AT=$(printf '%s' "$REACTIONS" | jq -r '
-      [.[][] | select(.user.login=="chatgpt-codex-connector[bot]") | select(.content=="eyes")] as $e
-      | if ($e | length) == 0 then ""
-        elif any($e[]; ((.created_at // "") | length) == 0) then "malformed"
-        else ([$e[].created_at] | max) end') \
-      || { echo "BLOCKED: cannot read reactions" >&2; exit 3; }
-    # An unparseable WRAPPER_AT blocks whether or not a reaction exists: it is the only
-    # reference point the active-round detector has, so without it the detector cannot run
-    # at all, and a check that cannot run has not passed.
-    W=$(iso_to_epoch "$WRAPPER_AT")
-    if [[ -z "$W" ]]; then
-      ROUND_ACTIVE=true
-    elif [[ -n "$EYES_AT" ]]; then
-      E=$(iso_to_epoch "$EYES_AT")
-      # `>=` for the same one-second-precision reason as the retarget check above.
-      if [[ -n "$E" ]]; then (( E >= W )) && ROUND_ACTIVE=true
-      else ROUND_ACTIVE=true; fi   # cannot compare -> assume a round is running
-    fi
-  else
-    echo "BLOCKED: reactions query failed" >&2; exit 3
+  # EYES_AT and EYES_EPOCH come from the hoisted read above — the reaction had to be known
+  # before the coverage machinery, which also treats a dated one as a round start. This is
+  # the other half: the same reaction, asked whether a round is running RIGHT NOW.
+  # An unparseable WRAPPER_AT blocks whether or not a reaction exists: it is the only
+  # reference point the active-round detector has, so without it the detector cannot run
+  # at all, and a check that cannot run has not passed.
+  W=$(iso_to_epoch "$WRAPPER_AT")
+  if [[ -z "$W" ]]; then
+    ROUND_ACTIVE=true
+  elif [[ -n "$EYES_AT" ]]; then
+    # `>=` for the same one-second-precision reason as the retarget check above.
+    if [[ -n "$EYES_EPOCH" ]]; then (( EYES_EPOCH >= W )) && ROUND_ACTIVE=true
+    else ROUND_ACTIVE=true; fi   # cannot compare -> assume a round is running
   fi
 fi
 

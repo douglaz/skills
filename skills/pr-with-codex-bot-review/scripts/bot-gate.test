@@ -763,6 +763,27 @@ threads 0 > "$FIX/threads.json"
 printf '[[{"event":"ready_for_review","created_at":"%s"}]]' "$OLD_UTC" > "$FIX/timeline.json"
 check "an undatable wrapper blocks the first-ready fallback" 1
 
+# An `eyes` reaction is TWO facts: a round is running now, and a round STARTED then. Only
+# the first was ever used, so a round could add `eyes`, `@codex review` post while it ran,
+# and that older round submit the newest wrapper — leaving the reaction neither at-or-after
+# the newest wrapper (so the active-round check clears) nor in the gap set (so coverage
+# credits the wrapper to the request). The requested round can still be pending.
+new_fix
+wrappers_at "$TIP:$OLD_UTC" "$TIP:$NEW2_UTC" > "$FIX/reviews.json"
+threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":"%s"}]]' "$MID_UTC" > "$FIX/reactions.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$NEW_UTC" > "$FIX/issues.json"
+check "an eyes-started round in the gap blocks a request" 1
+
+# ...and it must not deadlock: the reaction is never re-added, so once a wrapper lands after
+# it the gap no longer contains it and the next request clears normally.
+new_fix
+wrappers_at "$TIP:$NEW2_UTC" "$TIP:$NEW4_UTC" > "$FIX/reviews.json"
+threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":"%s"}]]' "$MID_UTC" > "$FIX/reactions.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$NEW3_UTC" > "$FIX/issues.json"
+check "an eyes older than the covering wrapper clears" 0
+
 # THE READY OVERLAP: a request starts a round, the PR is marked ready while it runs, and
 # the old round submits after the ready. The pre-wrapper ready used to be exempt from
 # coverage wholesale, so the request's wrapper cleared the gate while the ready-started
