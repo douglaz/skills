@@ -245,6 +245,14 @@ A phase closes on evidence or it does not close.
   before the first mutation — and got each of those wrong once, in review, across six
   copies of itself.
 
+  That sync proves *your* write landed. It does not tell you what else it overwrote: a
+  flush re-exports **every** bead from the gitignored `.beads/beads.db` over the tracked
+  JSONL, so any body the cache holds a stale copy of is reverted, silently, at exit 0.
+  Hand-editing `.beads/issues.jsonl` is what makes the cache stale — do not; use
+  `br update -d/--notes`. Then `git diff .beads/issues.jsonl` before committing and read
+  the field-level changes. Detail and recovery:
+  [orchestrating-with-rb-lite](../orchestrating-with-rb-lite/SKILL.md) step 11.
+
 
 The rules above are what closes a *phase*. The fuller set on not lying about *edits* —
 `sed -i` succeeding on zero matches, `&` silently doubling a replacement — lives in the

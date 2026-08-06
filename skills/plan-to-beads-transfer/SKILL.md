@@ -88,6 +88,18 @@ Stop and report plan gaps when any of these are still fuzzy:
     mutation is still in the shared DB, so this sync either writes it or fails loudly. A
     re-run whose graph already matches the plan syncs cleanly and writes nothing; that is
     a no-op, not a failure.
+
+    **A flush also writes the cache over the file.** The sync proves your mutation
+    persisted; it does not tell you what else it overwrote. Every `br` write re-exports
+    *all* beads from the gitignored `.beads/beads.db`, so a body the cache holds a stale
+    copy of is reverted — silently, exit 0. Transferring a plan means writing long
+    specification bodies, and pasting one into `.beads/issues.jsonl` by hand is precisely
+    what makes the cache stale: a hand edit does not advance `updated_at`, so the two
+    become indistinguishable by timestamp. Write every body through `br update -d/--notes`,
+    and `git diff .beads/issues.jsonl` before committing — ids on only one side, or a
+    `description` you did not touch, is the tell. Recovery, and why `br sync --import-only`
+    cannot do it, is in
+    [orchestrating-with-rb-lite](../orchestrating-with-rb-lite/SKILL.md) step 11.
 11. If the repo workflow supports it, run `br lint` after major rewrites to catch missing sections.
 
 ## Quality bar

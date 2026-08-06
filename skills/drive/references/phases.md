@@ -720,6 +720,16 @@ br sync --flush-only || { echo "closure not persisted — auto-flush was swallow
 `||`, not `;`: a semicolon discards the exit status of the command before it, so the pair
 would report success on a closure that never happened.
 
+That proves the *closure* landed; it says nothing about what else the same flush wrote.
+Every `br` write re-exports **all** beads from the gitignored `.beads/beads.db` over the
+tracked JSONL, so any body the cache holds a stale copy of is reverted — silently, exit 0,
+and once committed it reads as an ordinary bead-state sync. So `git diff
+.beads/issues.jsonl` and read the field-level changes before staging: ids on only one side,
+or a `description` this phase did not write, is the tell. Never hand-edit that file (a hand
+edit does not advance `updated_at`, which is what makes the cache stale and undetectable);
+write bead text with `br update -d/--notes`. Recovery is in
+[orchestrating-with-rb-lite](../../orchestrating-with-rb-lite/SKILL.md) step 11.
+
 A flush
 over a graph that was already committed and unchanged legitimately reports nothing, so a
 blanket "must be non-empty" would fail a healthy preflight.

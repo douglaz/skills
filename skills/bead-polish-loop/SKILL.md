@@ -132,6 +132,19 @@ run `second-model-bead-audit` by default after the graph meets these gates.
    so this either writes it or fails loudly. A round that applied no changes syncs cleanly
    and reports nothing — a healthy convergence signal, not a failed flush.
 
+   **But a flush writes the cache over the file.** The sync proves your mutation
+   persisted; it does not tell you what else it overwrote. Every `br` write re-exports
+   *all* beads from the gitignored `.beads/beads.db`, so a body the cache holds a stale
+   copy of is reverted — silently, exit 0. Hand-editing `.beads/issues.jsonl` is what makes
+   the cache stale (a hand edit does not advance `updated_at`, so the two are
+   indistinguishable by timestamp), and this skill rewrites long bead bodies for a living,
+   which is exactly when opening the file is tempting. Write bead text with
+   `br update -d/--notes`, and `git diff .beads/issues.jsonl` before committing: a full
+   re-serialization with every id on both sides is normal, ids on only one side or a
+   `description` you did not touch is the tell. Recovery — and why `br sync --import-only`
+   cannot do it — is in
+   [orchestrating-with-rb-lite](../orchestrating-with-rb-lite/SKILL.md) step 11.
+
 6. Write a round summary:
    - beads added, rewritten, merged, closed, or reprioritized
    - findings ledger entries closed this round

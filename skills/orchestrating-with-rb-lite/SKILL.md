@@ -761,13 +761,62 @@ implement → review loop for each bead.
 
     Verify it landed with a checked *explicit* sync: it propagates a real exit code, which
     the automatic flush after `br update` does not — that one swallows its error. The
-    mutation is already in the shared DB, so the sync either writes it out or fails loudly,
-    and nothing needs to inspect the file:
+    mutation is already in the shared DB, so the sync either writes it out or fails loudly:
 
     ```bash
     br update <bead-id> -s closed || { echo "br update failed"; exit 1; }
     br sync --flush-only || { echo "not persisted"; exit 1; }
     ```
+
+    **That sync proves the closure reached the file. It says nothing about what else the
+    same write overwrote — so inspect the file anyway.** Every `br` write flushes the whole
+    gitignored `.beads/beads.db` cache over the tracked `.beads/issues.jsonl`, so a write to
+    **one** bead rewrites **all** of them from the cache, and any body the cache holds a
+    stale copy of is reverted. Observed on `br 0.2.19`: closing a single bead silently
+    reverted ~40 KB of specification text across three *other* beads and deleted a fourth
+    outright. Exit 0, success message, nothing failed. This step is the last write of every
+    bead, which is how the drain routes you into it every time.
+
+    Hand-editing `.beads/issues.jsonl` is what makes the cache stale — and the task
+    template below half-invites it: it tells the *implementer* to treat `.beads/` as an
+    "orchestration/state" directory rather than product code, which the **operator** can
+    read as "this is just state, edit it freely." It is not. A hand edit does not advance
+    `updated_at`, so cache and file hold different bodies under identical timestamps and
+    nothing can tell them apart. **Write bead text through `br update -d/--notes`; never
+    through the file.** If a body is long enough that editing the file is tempting, that is
+    exactly the body worth losing least.
+
+    The advertised guard does not cover this. `br sync --help` documents a *"Stale DB
+    Guard: refuses to export if JSONL has issues missing from DB"* — an **id**-level check,
+    so same-id-different-body is unguarded by design, and that is the case that loses the
+    text. In the observed run the id-level case did not fire either: a bead present in the
+    JSONL and absent from the DB was dropped by the auto-flush, which is the guard's
+    literal precondition.
+
+    So field-diff before committing any `br` write:
+
+    ```bash
+    git diff .beads/issues.jsonl
+    ```
+
+    Parse the `+`/`-` lines as JSON, key by `id`, and assert the only changed fields are the
+    ones you meant to change. A full-file re-serialization with every id on both sides is
+    normal; ids on only one side, or a `description` you did not touch, is the tell.
+
+    If it has already diverged, **rebuild the cache** — `issues.jsonl` is tracked truth and
+    `beads.db` is a gitignored cache, so the file wins. `br sync --import-only` alone cannot
+    repair it: it compares `updated_at`, and equal timestamps with different bodies report
+    `Skipped: N (up-to-date)` forever.
+
+    ```bash
+    cp .beads/beads.db /tmp/beads.db.bak
+    rm -f .beads/beads.db .beads/beads.db-wal .beads/beads.db-shm
+    br sync --import-only     # "Imported from JSONL (via automatic recovery)"
+    ```
+
+    Then verify the restored bodies against the file before any further `br` write. This is
+    **not** the pre-0.1.45 corruption bug in "Tool dependencies": no `ISSUE_NOT_FOUND`, no
+    branch reset involved, and every command reported success.
 
     Closing on the feature branch before the merge is **not** a safe shortcut, however
     transactional it looks — the beads DB is shared across branches with no git
@@ -956,6 +1005,9 @@ phrases like "X happens when Y", not only test function names.>
   otherwise interfere with the surrounding orchestration.
 - Treat `.rb-lite/`, `.ralph-burning/`, `.git/ralph-burning-live/`, and
   `.beads/` as orchestration/state directories, not product code to review.
+  That is a *reviewing* scope rule, not an editing licence — nobody, implementer
+  or operator, hand-edits `.beads/issues.jsonl`; bead text is written with
+  `br update -d/--notes` or it gets silently reverted by the next flush (step 11).
   This does NOT forbid ordinary git usage: **`git add` any new SOURCE file you
   create** so it appears in the reviewed diff (`git diff <base>` omits untracked
   files — an unstaged new module reads to reviewers as "missing, won't compile").

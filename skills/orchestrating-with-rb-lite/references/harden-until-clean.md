@@ -216,11 +216,23 @@ extra round trip.
 Then flush and commit — `br` never touches git, that part is yours:
 
 ```bash
-br sync --flush-only
+br sync --flush-only || { echo "findings not persisted"; exit 1; }
+git diff .beads/issues.jsonl          # READ THIS — see below
 git add .beads/issues.jsonl
 git commit -m "chore(beads): record review findings (iteration <N>, codex+fable)"
 git push
 ```
+
+Do not stage that file unread. The flush re-exports **every** bead from the
+gitignored `.beads/beads.db` cache over the tracked JSONL, so a body the cache
+holds a stale copy of is reverted here — silently, at exit 0, and once committed
+the loss looks like an ordinary bead-state sync. Minting findings as beads is
+when bodies are longest, so this iteration is when the loss costs most. Check the
+field-level changes: a full re-serialization with every id on both sides is
+normal; ids on only one side, or a `description` this iteration did not write, is
+the tell. Never hand-edit the JSONL — that is what makes the cache stale, since a
+hand edit does not advance `updated_at`. Recovery is in
+[SKILL.md](../SKILL.md) step 11.
 
 If the iteration ran degraded, say which reviewer was missing in that commit
 message. Months later it explains why iteration N looks thin.
