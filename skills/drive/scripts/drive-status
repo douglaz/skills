@@ -252,8 +252,15 @@ fi
 # The repository and branch are one identity. Before a fork PR exists, `_RREPO` is the
 # parent, so using the fork's origin/HEAD pairs the parent's fetch URL with the fork's
 # branch name and can fetch the wrong target or no target at all.
+# `! $_PR_PROBE_SKIPPED` on BOTH forge blocks, not just the one a reviewer cited. The
+# forge answers "what is this repo's default branch", which is only the MERGE TARGET when a
+# PR probe actually ran and found (or established the absence of) a PR. Unprobed — detached
+# HEAD, or no gh — the default branch is a stand-in for a target nobody asked about, and a
+# PR aimed at a release or stacked branch clears against the wrong base. This is the third
+# recurrence of that idea (origin/HEAD in pass 29, the fork base in pass 33), so it is
+# guarded uniformly here rather than one site at a time.
 if [[ -z "$DEFAULT_BRANCH" && -n "${_RREPO:-}" ]] && ! $_PR_BASE_UNKNOWN && ! $_PR_AMBIGUOUS \
-   && ! $_PR_PROBE_FAILED && $_GITHUB_REMOTE && command -v gh >/dev/null 2>&1; then
+   && ! $_PR_PROBE_FAILED && ! $_PR_PROBE_SKIPPED && $_GITHUB_REMOTE && command -v gh >/dev/null 2>&1; then
   DEFAULT_BRANCH=$(gh repo view "$_RREPO" --json defaultBranchRef \
     -q .defaultBranchRef.name 2>/dev/null || echo "")
   [[ -n "$DEFAULT_BRANCH" ]] && BASE_ORIGIN="forge"
@@ -276,7 +283,7 @@ fi
 # `main`, and BASE_FRESH would then validate the WRONG base — deriving LAND even after the
 # real default branch advanced, which is the unreviewed-squash case this all exists to stop.
 if [[ -z "$DEFAULT_BRANCH" ]] && ! $_PR_BASE_UNKNOWN && ! $_PR_AMBIGUOUS && ! $_PR_PROBE_FAILED \
-   && $_GITHUB_REMOTE && command -v gh >/dev/null 2>&1; then
+   && ! $_PR_PROBE_SKIPPED && $_GITHUB_REMOTE && command -v gh >/dev/null 2>&1; then
   if [[ -n "${_RREPO:-}" ]]; then
     DEFAULT_BRANCH=$(gh repo view "$_RREPO" --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || echo "")
   else

@@ -206,6 +206,17 @@ committed and you are about to launch the final panel:
 DS=<the drive-status path resolved in Phase 0>
 STATE_DIR=$(dirname "$(git rev-parse --git-path drive/state)")
 mkdir -p "$STATE_DIR"
+# CLEAN BEFORE PINNING, not merely clean before clearing. Precondition 1 below already says
+# to panel the committed tree, but it is only CHECKED after the panel — and by then the
+# evidence can be gone. A dirty tree here means the panel reviews HEAD-plus-uncommitted
+# while panel_tip names HEAD alone; revert or stash those edits and every post-panel check
+# passes, because the tip still matches and the tree is now clean. Clearance would then
+# record "the panel read this commit" about a tree the panel never saw. Checking here makes
+# that unrepresentable instead of undetectable.
+# Two checks, because a FAILED `git status` also prints nothing: a corrupt index would read
+# as a clean tree, in the clearing direction.
+_ST=$(git status --porcelain) || { echo "cannot read the worktree — do NOT start the panel"; exit 1; }
+[ -z "$_ST" ] || { echo "tree dirty — commit first, do NOT start the panel"; exit 1; }
 # Pin what the panel is about to read. GitHub allows retargeting a PR at any moment,
 # including while a 15-minute panel runs, and a retarget moves the reviewed surface
 # without moving HEAD — so every SHA the clearance records would still match.

@@ -381,6 +381,15 @@ new_repo; G remote set-head origin master; add_code; record '**Phase:** HARDEN';
 G checkout -q --detach
 check_field "an unprobed checkout does not trust origin/HEAD" base_fresh null
 
+# ...and it must not trust the FORGE either. With origin/HEAD absent, resolution falls past
+# that block to the forge lookup, whose `else` branch asks a bare `gh repo view` for this
+# repo's default branch — authoritative-looking, but no PR probe ran to say the PR even
+# targets it. Third recurrence of the skipped-probe idea, so the whole ladder is guarded.
+new_repo; add_code; record '**Phase:** HARDEN'; clear_at
+G checkout -q --detach
+check_field "an unprobed checkout does not trust the forge" base_fresh null
+check "an unprobed forge lookup refuses LAND" HARDEN
+
 # An unreadable branch diff is unknown, not empty. In a shallow or grafted clone BASE_REF
 # and HEAD can share no merge base: the diff fails, the substitution swallowed it, and a
 # branch carrying committed code classified as `none` and fell through to a planning phase.
