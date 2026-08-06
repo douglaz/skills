@@ -20,7 +20,7 @@ description: >-
   test with rb-lite and then independently RUNS it, since the panel only reads
   the test's source). Do NOT use for cross-project orchestration, open-ended
   planning, or tiny one-shot edits.
-compatibility: Requires `rb-lite` on `PATH` or `nix run --refresh github:douglaz/rb-lite -- ...` (use `--refresh` at least once per session so Nix does not reuse an hour-stale cached revision). rb-lite itself has no default implementer, so pass `--implementer` with one preset or a comma-separated cycle, or use `--implement-cmd`; this skill defaults to `--implementer claude,codex` unless the user pins another choice. `codex` and `claude` must be installed and authenticated; the default Claude reviewer needs `jq`, and normal timeout-enabled runs need a compatible `timeout`, either from the host shell for source installs or from the Nix wrapper for Nix installs. `npx` plus Gemini credentials enable the third default reviewer but are not required for the panel to proceed. Backlog-drain mode also requires `br` (>= 0.1.45), `gh`, and the repo's normal local verification tools; harden-until-clean mode additionally needs `codex` and `claude` for the outer review panel.
+compatibility: Requires `rb-lite` on `PATH` or `nix run --refresh github:douglaz/rb-lite -- ...` (use `--refresh` at least once per session so Nix does not reuse an hour-stale cached revision). rb-lite itself has no default implementer, so pass `--implementer` with one preset or a comma-separated cycle, or use `--implement-cmd`; this skill defaults to `--implementer claude,codex` unless the user pins another choice. `codex` and `claude` must be installed and authenticated; the default Claude reviewer needs `jq`, and normal timeout-enabled runs need a compatible `timeout`, either from the host shell for source installs or from the Nix wrapper for Nix installs. This skill's reviewer panel is codex + claude only, set by writing `.rb-lite-reviewers` before the run; rb-lite's built-in default additionally runs Gemini through `npx`, which this skill does not use. Backlog-drain mode also requires `br` (>= 0.1.45), `gh`, and the repo's normal local verification tools; harden-until-clean mode additionally needs `codex` and `claude` for the outer review panel.
 ---
 
 Use `rb-lite` as the default lightweight implement → review loop for
@@ -35,8 +35,8 @@ generates it from a review panel and feeds the same drain.
 `rb-lite` is a Bash CLI that loops a chosen implementer preset
 (`--implementer claude,codex`, a comma-separated cycle, or a single
 `codex`/`claude`; there is no default) until the git diff stabilizes, then
-runs the reviewer panel in parallel (default: codex, claude+`jq`, and
-opportunistic Gemini), feeds P0/P1/P2 findings back to the implementer for
+runs the reviewer panel in parallel (codex and claude+`jq`, set via
+`.rb-lite-reviewers`), feeds P0/P1/P2 findings back to the implementer for
 another round, and stops when reviewers go clean, the implementer refuses to
 keep changing things, or iteration limits (`--max-rounds` / `--max-iters`) are
 hit. With a comma-separated list, round N uses
@@ -95,52 +95,29 @@ session can drop the flag.
 If neither path works, stop and tell the user to install `rb-lite` (e.g.
 `nix profile install github:douglaz/rb-lite`) or expose it on PATH.
 
-The default reviewer panel runs three reviewers concurrently:
+**This skill's panel is two reviewers: `codex` and `claude`.** rb-lite's own built-in
+default is three — it adds a Gemini reviewer invoked through `npx -y @google/gemini-cli`
+— and that command lives inside the rb-lite binary, so the only way to change it is to
+write `.rb-lite-reviewers` in the repo root before running. Take the file from
+"Customizing the panel"; it pins both models explicitly.
 
-- `codex review --base "$BASE"`
-- `claude -p ... --output-format json | jq ...`
-- `npx -y @google/gemini-cli --policy "$RUN_DIR/gemini-policy.toml" ...` — **unpinned**,
-  and this line is a description of what the rb-lite binary runs, not something this
-  skill can change. See the pin step below, which is how you actually control it.
+Dropping Gemini is the point, not a side effect. `npx -y` installs and executes whatever
+the registry serves at that moment, in a checkout with credentials present and (in
+rb-lite's default line) `--approval-mode yolo`. Pinning a version narrows that door;
+removing the reviewer closes it, and removes the `npx` dependency altogether. Two
+reviewers with different failure modes is also what the outer `multi-reviewer-loop` runs,
+and the reason is the same — a third opportunistic voice that fails open when credentials
+are missing was never carrying much of the panel's weight.
 
-`codex` and `claude` must be on PATH for the default panel to behave as
-intended and must also be authenticated. The default Claude reviewer needs
-`jq`, and normal rb-lite runs need a `timeout` binary that supports
-`--kill-after` because both implementer and reviewer timeouts are enabled by
-default. If rb-lite is resolved through `nix run --refresh
-github:douglaz/rb-lite --` or a Nix-profile wrapper, do not reject the setup
-just because the host shell
-cannot find `jq` or GNU `timeout`; the upstream wrapper supplies those to the
-rb-lite process. For source/path installs, check the host shell. Gemini is
-opportunistic: if `npx` or Gemini credentials are missing, that reviewer fails
-and the panel can still proceed with the remaining successful reviewers. Writing `.rb-lite-reviewers` before running is how you change any of it — including the
-Gemini pin below, which is not optional.
+`codex` and `claude` must be on PATH and authenticated. The Claude reviewer needs `jq`,
+and normal rb-lite runs need a `timeout` binary supporting `--kill-after` because both
+implementer and reviewer timeouts are enabled by default. If rb-lite is resolved through
+`nix run --refresh github:douglaz/rb-lite --` or a Nix-profile wrapper, do not reject the
+setup just because the host shell cannot find `jq` or GNU `timeout`; the upstream wrapper
+supplies those to the rb-lite process. For source/path installs, check the host shell.
 
-**Pin Gemini by writing `.rb-lite-reviewers` before EVERY run — there is no other way.**
-rb-lite's built-in default reviewer command lives inside the rb-lite binary; a version
-written into the bullet above changes nothing, and an earlier revision of this skill did
-exactly that and left the default path unpinned. Materialize the file (the full pinned
-panel is under "Customizing the panel") or accept that a default run installs whatever
-the registry serves.
-
-Why it matters: `npx -y` installs and runs whatever is published at that moment, so an
-unpinned `@google/gemini-cli` means a compromised upstream release executes here with the
-repo checked out, credentials present, and `--approval-mode yolo`. A range like
-`@^0.53.1` would still auto-take patch releases, which is the same path through a
-narrower door.
-
-The alternative, if you would rather not carry the file: require an rb-lite whose own
-default is pinned, and verify that before running rather than assuming it.
-
-The cost is staleness: upstream ships roughly weekly, so this pin ages. Bump it
-deliberately rather than dropping it — `npm view @google/gemini-cli version` for
-the current release, then change it in the `.rb-lite-reviewers` panel, which is the
-only place that executes. A reviewer a few versions behind is a much smaller
-problem than one that installs anything.
-
-An exact pin is not a lockfile: it closes the auto-upgrade path, not every
-supply-chain path. If you want more than that, vendor the CLI or install it with
-an integrity hash instead of reaching for `npx` at all.
+If you skip the file, you get rb-lite's built-in three-reviewer default, unpinned Gemini
+included. That is a choice, not a default this skill endorses — make it deliberately.
 
 Backlog-drain mode additionally needs `br` for bead selection/state and `gh`
 for PR creation/checks/merge. Require **`br` ≥ 0.1.45**: older builds corrupt
@@ -249,8 +226,7 @@ ready bead if the queue is not empty, and the exact reason the loop stopped.
    rb-lite invocation, stop unless the user explicitly accepts disabling both
    subprocess timeouts and you pass
    `--implement-timeout '' --reviewer-timeout ''` on every invocation. Check
-   `command -v npx` too; missing Gemini support is allowed, but report that the
-   default panel may run as codex+claude only. rb-lite has **no default
+   rb-lite has **no default
    implementer**: pass `--implementer` with a single preset or a comma-separated
    cycle (or a raw `--implement-cmd`). Default to `--implementer claude,codex`
    unless the user pins one — round 1 runs claude, and each review round with
@@ -999,7 +975,7 @@ been clean for several rounds.
   and the change is over-built. That's the cue to run a skeptical pass.
 - **Add a skeptical reviewer for counter-pressure.** Every default reviewer hunts
   *what's wrong*, which is to say *what to add*. None hunt *what's over-built*. For
-  anything past a small bead, add a fourth reviewer to `.rb-lite-reviewers` that
+  anything past a small bead, add a third reviewer to `.rb-lite-reviewers` that
   runs the inverted lens, so the panel pushes back against scope creep instead of
   only feeding it (see "Customizing the panel").
 - **Periodic skeptical audit.** When the fractal tail shows up, or before merging
@@ -1066,23 +1042,23 @@ failure.
 
 ## Customizing the panel
 
-The default panel is `codex review` + `claude -p ... | jq ...` + Gemini via
-`npx` in parallel. To override, drop a `.rb-lite-reviewers` file in the repo
-root before running, with one shell command per line:
+rb-lite's built-in panel is `codex review` + `claude -p ... | jq ...` + Gemini via `npx`.
+This skill runs **two** reviewers instead. Drop a `.rb-lite-reviewers` file in the repo
+root before running, one shell command per line — this is the canonical panel, and both
+models are pinned rather than left to whatever each CLI defaults to:
 
 ```bash
 # .rb-lite-reviewers
-codex review --base "$BASE"
-set -o pipefail; claude -p "Review the diff vs $BASE. Before asserting the diff violates or overstates an invariant, or any claim about behavior in code the diff does not show, verify it by reading that code and cite file:line, else mark it a QUESTION not a finding. Tag findings P0/P1/P2/P3. Output 'No findings.' if clean." --permission-mode acceptEdits --output-format json --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch,Task,TaskOutput,TaskStop,Monitor" | jq -er 'if .is_error then error(.result // "claude reviewer returned is_error") else (.result // empty) end'
-if [[ -e node_modules/@google/gemini-cli || -L node_modules/@google/gemini-cli || -e node_modules/.bin/gemini || -L node_modules/.bin/gemini ]]; then printf "%s\n" "rb-lite: refusing to run Gemini reviewer because this repository has a local Gemini CLI package/bin that npx could prefer; customize this reviewer only if intentional" >&2; exit 1; fi; npx -y @google/gemini-cli@0.53.1 --policy "$RUN_DIR/gemini-policy.toml" --approval-mode yolo -p "Review the diff vs $BASE. Before asserting the diff violates or overstates an invariant, or any claim about behavior in code the diff does not show, verify it by reading that code and cite file:line, else mark it a QUESTION not a finding. Tag findings P0/P1/P2/P3. Output 'No findings.' if clean."
+codex review --base "$BASE" -c 'model="gpt-5.6-sol"'
+set -o pipefail; claude -p "Review the diff vs $BASE. Before asserting the diff violates or overstates an invariant, or any claim about behavior in code the diff does not show, verify it by reading that code and cite file:line, else mark it a QUESTION not a finding. Tag findings P0/P1/P2/P3. Output 'No findings.' if clean." --model opus --permission-mode acceptEdits --output-format json --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch,Task,TaskOutput,TaskStop,Monitor" | jq -er 'if .is_error then error(.result // "claude reviewer returned is_error") else (.result // empty) end'
 # Skeptical reviewer: hunts over-specification instead of bugs, so the panel has counter-pressure against scope creep
-set -o pipefail; claude -p "Review the diff vs $BASE for OVER-SPECIFICATION, not bugs. Flag any mechanism, handling, config, or abstraction that is NOT required for correctness, security, or data-safety and could be cut, simplified, or deferred. For each, give: what it is, why it isn't strictly required (what already covers the case), and a recommendation. Tag each finding 'P2: CUT', 'P2: SIMPLIFY', or 'P2: DEFER'. Do not flag missing behavior or bugs; another reviewer owns that. Output 'No findings.' if the diff is already minimal for its goal." --permission-mode acceptEdits --output-format json --allowedTools "Bash,Read,Glob,Grep" | jq -er 'if .is_error then error(.result // "skeptic reviewer returned is_error") else (.result // empty) end'
+set -o pipefail; claude -p "Review the diff vs $BASE for OVER-SPECIFICATION, not bugs. Flag any mechanism, handling, config, or abstraction that is NOT required for correctness, security, or data-safety and could be cut, simplified, or deferred. For each, give: what it is, why it isn't strictly required (what already covers the case), and a recommendation. Tag each finding 'P2: CUT', 'P2: SIMPLIFY', or 'P2: DEFER'. Do not flag missing behavior or bugs; another reviewer owns that. Output 'No findings.' if the diff is already minimal for its goal." --model opus --permission-mode acceptEdits --output-format json --allowedTools "Bash,Read,Glob,Grep" | jq -er 'if .is_error then error(.result // "skeptic reviewer returned is_error") else (.result // empty) end'
 (my-linter --json || true) | wrap-as-p-tags
 ```
 
-The skeptical reviewer is the practical form of "add a fourth reviewer for
+The skeptical reviewer is the practical form of "add a third reviewer for
 counter-pressure" above: its `CUT` / `SIMPLIFY` / `DEFER` findings tell the
-implementer to *remove* surface, balancing the three default reviewers that only
+implementer to *remove* surface, balancing the two panel reviewers that only
 ever push to add. Worth adding for any non-trivial bead; skip it for a tiny,
 already-bounded one.
 
@@ -1092,8 +1068,8 @@ behavior in code the diff does not show — verify it by reading that code and c
 `file:line`; if you cannot, mark it a QUESTION, not a finding."* Reviewers see only
 the diff, so a confidently-wrong claim about an invariant guaranteed in an
 unchanged file will otherwise get an implementer to corrupt a correct comment, then
-echo through later rounds. The default **claude + gemini** reviewers carry this
-rule; the default **`codex review`** one cannot — `codex review` rejects a custom
+echo through later rounds. The **claude** reviewer carries this
+rule; **`codex review`** cannot — `codex review` rejects a custom
 `[PROMPT]` together with `--base` (they are mutually exclusive), so codex stays
 diff-blind to out-of-diff invariants. Lean on the implementer guard (do not weaken
 invariant comments without code proof) and the landed-diff comment-truth check as
@@ -1230,8 +1206,9 @@ Inside `<run-dir>/`:
 - `review-round-N-K.md` — per-reviewer markdown the implementer reads
   on the next round (with status header and stderr-tail for failed
   reviewers).
-- `gemini-policy.toml` — generated allow-all policy used by the default Gemini
-  reviewer.
+- `gemini-policy.toml` — only appears if you ran rb-lite's built-in default panel
+  rather than the two-reviewer `.rb-lite-reviewers` above; it is that panel's Gemini
+  policy file.
 
 When something looks off, read these in order: `log.txt` → the latest
 `review-round-*.md` files → the relevant `*.stderr`.

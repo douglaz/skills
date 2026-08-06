@@ -464,8 +464,6 @@ directories created by `--migrate-existing`.
   and for `second-model-bead-audit` unconditionally — it never uses rb-lite, so nothing
   can supply `timeout` on its behalf — and for normal `orchestrating-with-rb-lite` runs
   when using a source/path rb-lite install; Nix-wrapped rb-lite supplies GNU coreutils
-- `npx` plus Gemini credentials to enable the optional third default
-  `orchestrating-with-rb-lite` reviewer
 - `rb-lite` on `PATH`, or `nix run --refresh github:douglaz/rb-lite -- ...`
   (the `--refresh` avoids running an hour-stale cached revision), for
   `orchestrating-with-rb-lite`
