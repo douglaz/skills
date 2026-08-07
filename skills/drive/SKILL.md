@@ -259,8 +259,10 @@ A phase closes on evidence or it does not close.
   # accidental whole-file deletion reads exactly like a clean removal.
   for f in <every file you removed lines from>; do
     git show "HEAD:$f" >"$_chk" 2>/dev/null || { echo "$f is missing from HEAD entirely"; exit 1; }
-    _n=$(grep -Fo -- "<a distinctive phrase you deleted>" "$_chk" | wc -l)
-    # COUNT the OCCURRENCES, not the matching lines (`grep -c` reports lines, so two
+    _n=$(grep -Fo -- "<a distinctive phrase you deleted>" "$_chk" | wc -l || true)
+    # `|| true` because grep exits 1 on no match, and under `pipefail` that aborts the
+  # whole check at exactly the case it must report: a COMPLETE removal, count 0.
+  # COUNT the OCCURRENCES, not the matching lines (`grep -c` reports lines, so two
     # hits on one line count as one), and not absence: removing one of several
     # identical lines legitimately leaves the phrase behind, and demanding zero
     # rejects that correct commit.

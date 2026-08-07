@@ -151,7 +151,9 @@ for f in <every file you removed lines from>; do
   # and read as a clean removal. Whole-file deletions belong in the absence loop
   # below, never here.
   git show "HEAD:$f" >"$_chk" 2>/dev/null || { echo "$f is missing from HEAD entirely"; exit 1; }
-  _n=$(grep -Fo -- "<a distinctive phrase you deleted>" "$_chk" | wc -l)
+  _n=$(grep -Fo -- "<a distinctive phrase you deleted>" "$_chk" | wc -l || true)
+  # `|| true` because grep exits 1 on no match, and under `pipefail` that aborts the
+  # whole check at exactly the case it must report: a COMPLETE removal, count 0.
   # COUNT the OCCURRENCES, not the matching lines (`grep -c` reports lines, so two
   # hits on one line count as one), and not absence: removing one of several
   # identical lines legitimately leaves the phrase behind, and demanding zero
