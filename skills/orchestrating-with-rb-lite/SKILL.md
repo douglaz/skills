@@ -840,8 +840,15 @@ implement → review loop for each bead.
     report `Skipped: N (up-to-date)` forever, so the stale DB has to go first.
 
     ```bash
-    cp "$BEADS_DB" /tmp/beads.db.bak
+    cp "$BEADS_DB" /tmp/beads.db.bak || { echo "cannot back up the cache — stop"; exit 1; }
     rm -f "$BEADS_DB" "$BEADS_DB-wal" "$BEADS_DB-shm"
+    # The removal must have WORKED. `rm -f` reports nothing on a permissions failure, and
+    # a surviving cache makes the import below skip every equal-timestamp record and
+    # report success — after which the flush writes the same stale bodies back over the
+    # file you just restored.
+    for _db in "$BEADS_DB" "$BEADS_DB-wal" "$BEADS_DB-shm"; do
+      [ -e "$_db" ] && { echo "$_db still exists — do NOT import against a stale cache"; exit 1; }
+    done
     # Checked, for the same reason as case (b): the stale cache is already deleted, so an
     # import failing on an unreadable JSONL leaves an EMPTY one — and the next `br` write
     # flushes that over the file whose hand-edits this case exists to preserve.
@@ -877,8 +884,15 @@ implement → review loop for each bead.
     fi
 
     # REBUILD: identical for both sources. Do not skip this on the staged path.
-    cp "$BEADS_DB" /tmp/beads.db.bak
+    cp "$BEADS_DB" /tmp/beads.db.bak || { echo "cannot back up the cache — stop"; exit 1; }
     rm -f "$BEADS_DB" "$BEADS_DB-wal" "$BEADS_DB-shm"
+    # The removal must have WORKED. `rm -f` reports nothing on a permissions failure, and
+    # a surviving cache makes the import below skip every equal-timestamp record and
+    # report success — after which the flush writes the same stale bodies back over the
+    # file you just restored.
+    for _db in "$BEADS_DB" "$BEADS_DB-wal" "$BEADS_DB-shm"; do
+      [ -e "$_db" ] && { echo "$_db still exists — do NOT import against a stale cache"; exit 1; }
+    done
     # CHECK BOTH. The stale database is already deleted at this point, so an import that
     # fails on an unreadable or invalid JSONL leaves an empty cache — and the flush below
     # would then write THAT over the file you just restored, destroying the recovery with
