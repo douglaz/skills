@@ -559,8 +559,12 @@ Otherwise:
    `git restore <file>` / `git checkout -- <file>` to undo the mutation restores the
    *pre-fix* version and discards the fix along with it. The green run happened before that
    revert and nothing re-runs after it, so a later source-only pass can still report
-   `CLEAN` over a tree missing the fix. Mutate in a scratch copy, keep a patch of the fix,
-   or re-run the suite green after reverting — one of the three, every time.
+   `CLEAN` over a tree missing the fix. **Mutate in a scratch copy, or save a patch of the
+   fix first — those two only.** A green re-run is not a third option: when the fix and its
+   new test live in the same file, restoring that file removes both, and the pre-existing
+   suite then passes precisely because the test that would have caught the loss is gone
+   too. If you must verify by re-running, diff the restored tree against the saved fix
+   rather than trusting the green.
 
    **Isolate the run if the code under test touches anything live.** A fix on a
    money, data-loss or infrastructure path may be validated by a test that drives a
