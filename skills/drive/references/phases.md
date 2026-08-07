@@ -157,8 +157,19 @@ Two non-negotiables:
    ```bash
    <gate-cmd> > /tmp/gate.log 2>&1; echo "EXIT=$?"
    ```
-2. **Make it fail first.** Point the new test at the unfixed code and watch it go red.
-   A test that could never have failed proves nothing.
+2. **Make it fail first — once per property, on the right assertion.** Point the new test
+   at the unfixed code and watch it go red. A test that could never have failed proves
+   nothing. Two refinements that decide whether the red run means anything:
+   - **Read the failure.** It must name the assertion pinning the behavior you broke. An
+     initialization error, a panic, or an unrelated assertion reddens without the test
+     ever reaching the behavior, and taking that as proof certifies something nothing
+     tests.
+   - **One mutation per property.** A gate claiming two independent properties needs two;
+     reddening the first leaves the second untested while looking verified.
+   - Break the **production behavior**, never the test's expected value or its setup —
+     those redden any assertion, including one that never runs. And for a live gate
+     (real DB, running service, money), isolate first: a defective build can perform the
+     bad operation before an assertion notices. See `testing-with-rb-lite`.
 
 **Exit gate:** the gate ran, printed green, and you quoted the command and exit code.
 
