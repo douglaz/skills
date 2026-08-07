@@ -26,10 +26,16 @@ merely plausible.
 
 ## Preflight
 
-- Confirm `br` and `bv` are on `PATH`. If either is missing, stop and say so.
-- Record whether `codex`, `claude`, and `jq` are available for the final reviewer
-  panel. Missing panel tools do not block polishing, but they determine whether
-  the eventual audit can be full, degraded, or blocked.
+- Confirm `br`, `bv`, **and `jq`** are on `PATH`. If any is missing, stop and say so.
+  `jq` is not a panel tool here: every `br` write can silently revert other beads
+  (step 5), and both the damage check and the recovery resolve the graph's real path
+  through `br where --json | jq`. Without it you can still mutate the graph and then
+  cannot tell whether you destroyed anything — the one ordering that must not be
+  possible. If `br where --json` cannot be parsed on this host, do not write to the
+  graph at all.
+- Record whether `codex` and `claude` are available for the final reviewer panel.
+  Missing panel tools do not block polishing, but they determine whether the eventual
+  audit can be full, degraded, or blocked.
 - Re-read `AGENTS.md`, `README.md`, and the relevant plan/spec before editing the graph.
 - If there are no meaningful beads yet, redirect to `plan-to-beads-transfer`.
 - If polishing keeps surfacing architecture questions, step back into plan space instead of repeatedly fixing downstream symptoms.

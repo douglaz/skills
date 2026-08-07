@@ -22,7 +22,12 @@ Turn plan-space intent into bead-space executable memory without losing anything
 
 ## Preflight
 
-- Confirm `br` and `bv` are on `PATH`. If either is missing, stop and say so.
+- Confirm `br`, `bv`, **and `jq`** are on `PATH`. If any is missing, stop and say so.
+  `jq` is load-bearing, not optional: every `br` write can silently revert other beads
+  (step 10), and both the damage check and the recovery resolve the graph's real path
+  through `br where --json | jq`. Without it a transfer can write a whole graph and then
+  be unable to tell whether it destroyed one — the ordering that must not be possible.
+  If `br where --json` cannot be parsed on this host, do not write to the graph.
 - Re-read `AGENTS.md`, `README.md`, and every relevant plan/spec file before mutating the graph.
 - If the session was compacted, or the plan changed materially since the last pass, reread before editing.
 - Refuse the transfer if core workflows, boundaries, constraints, failure modes, sequencing, or verification are still unstable. Report plan gaps instead of encoding guesses into beads.
