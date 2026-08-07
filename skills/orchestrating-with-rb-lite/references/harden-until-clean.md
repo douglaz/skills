@@ -46,6 +46,11 @@ loop:
 - You know both refs: the *work branch* being hardened and the *review base*
   (usually the default branch). Ask once if either is unclear — the loop runs
   many subcommands and a silent misconfiguration is expensive.
+- **`jq` is on the HOST `PATH`.** Not a backlog-drain-only prerequisite: section 3 runs
+  `br create` and flushes before anything resolves the graph's path, and that resolution
+  is `br where --json | jq` in *your* shell — the Nix wrapper supplies jq to rb-lite, not
+  to you. Without it this loop mutates the graph and only then fails at the command that
+  would have located the damage. Check before section 3, not after.
 - `br` is **≥ 0.1.45**. Older versions corrupt their DB after branch resets:
   `br update`/`br close` start returning `ISSUE_NOT_FOUND` while `br show` and
   `br list` keep working, which hides the problem until you have lost bead state.
