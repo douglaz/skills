@@ -217,8 +217,9 @@ Then flush and commit — `br` never touches git, that part is yours:
 
 ```bash
 br sync --flush-only || { echo "findings not persisted"; exit 1; }
-git diff .beads/issues.jsonl          # READ THIS — see below
-git add .beads/issues.jsonl
+BEADS_JSONL=$(br where --json | jq -er .jsonl_path) || { echo "cannot resolve the beads JSONL"; exit 1; }
+git diff "$BEADS_JSONL"               # READ THIS — see below
+git add "$BEADS_JSONL"
 git commit -m "chore(beads): record review findings (iteration <N>, codex+fable)"
 git push
 ```

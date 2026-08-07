@@ -723,9 +723,18 @@ would report success on a closure that never happened.
 That proves the *closure* landed; it says nothing about what else the same flush wrote.
 Every `br` write re-exports **all** beads from the gitignored `.beads/beads.db` over the
 tracked JSONL, so any body the cache holds a stale copy of is reverted — silently, exit 0,
-and once committed it reads as an ordinary bead-state sync. So `git diff
-.beads/issues.jsonl` and read the field-level changes before staging: ids on only one side,
-or a `description` this phase did not write, is the tell. Never hand-edit that file (a hand
+and once committed it reads as an ordinary bead-state sync. So field-diff the tracked JSONL
+and read the field-level changes before staging — resolving its path first, since
+`.beads/issues.jsonl` is only the default and a hardcoded path diffs nothing on a
+`.beads.jsonl` layout:
+
+```bash
+BEADS_JSONL=$(br where --json | jq -er .jsonl_path) || { echo "cannot resolve the JSONL"; exit 1; }
+git diff "$BEADS_JSONL"
+```
+
+Ids on only one side, or a `description` this phase did not write, is the tell. Never
+hand-edit that file (a hand
 edit does not advance `updated_at`, which is what makes the cache stale and undetectable);
 write bead text with `br update -d/--notes`. Recovery is in
 [orchestrating-with-rb-lite](../../orchestrating-with-rb-lite/SKILL.md) step 11.

@@ -806,31 +806,49 @@ implement → review loop for each bead.
     Recovery depends on **which of the two has the good text**, and getting that backwards
     cements the loss. Establish it before running anything:
 
+    **Resolve the real paths first — `.beads/issues.jsonl` is a default, not a guarantee.**
+    `.beads.jsonl` and `<name>.beads.jsonl` layouts are supported and this repo's own
+    `drive-status` recognizes them (`_BEAD_RE`). A recovery that hardcodes the default
+    restores and deletes paths that do not exist, while the commands after it keep using
+    the *actual* stale cache and damaged file — so it reports success and leaves the loss
+    in place. Ask the tool, exactly as `second-model-bead-audit` already does:
+
+    ```bash
+    BEADS_JSONL=$(br where --json | jq -er '.jsonl_path') \
+      || { echo "cannot resolve the beads JSONL path — do NOT run the recipe blind"; exit 1; }
+    BEADS_DB=$(br where --json | jq -r '.db_path // empty')
+    # Read `br where --json` yourself for the DB field name your version emits; if it
+    # reports none, the cache sits beside the JSONL. Never assume `.beads/beads.db`.
+    [ -n "$BEADS_DB" ] || BEADS_DB="$(dirname "$BEADS_JSONL")/beads.db"
+    ```
+
+    Use `$BEADS_JSONL` and `$BEADS_DB` for every step below — the field-diff above included.
+
     **(a) The cache is stale and the file is still good** — you have hand-edited the JSONL
     and no flush has happened yet. Rebuild the cache from the file. `br sync --import-only`
     alone cannot do it: it compares `updated_at`, and equal timestamps with different bodies
     report `Skipped: N (up-to-date)` forever, so the stale DB has to go first.
 
     ```bash
-    cp .beads/beads.db /tmp/beads.db.bak
-    rm -f .beads/beads.db .beads/beads.db-wal .beads/beads.db-shm
+    cp "$BEADS_DB" /tmp/beads.db.bak
+    rm -f "$BEADS_DB" "$BEADS_DB-wal" "$BEADS_DB-shm"
     br sync --import-only     # "Imported from JSONL (via automatic recovery)"
     ```
 
     **(b) The flush already ran and the diff above shows the damage** — then the working
-    copy of `issues.jsonl` **is** the damaged artifact, not the truth. Importing it here
-    would copy the loss into a fresh database and a later commit would cement it. **Restore
-    the file from git first, then re-apply every mutation you actually wanted, and only
-    then rebuild the cache:**
+    copy of the JSONL **is** the damaged artifact, not the truth. Importing it here would
+    copy the loss into a fresh database and a later commit would cement it. **Restore the
+    file from git first, then re-apply every mutation you actually wanted, and only then
+    rebuild the cache:**
 
     ```bash
-    git checkout HEAD -- .beads/issues.jsonl   # the last good committed state
-    cp .beads/beads.db /tmp/beads.db.bak
-    rm -f .beads/beads.db .beads/beads.db-wal .beads/beads.db-shm
+    git checkout HEAD -- "$BEADS_JSONL"        # the last good committed state
+    cp "$BEADS_DB" /tmp/beads.db.bak
+    rm -f "$BEADS_DB" "$BEADS_DB-wal" "$BEADS_DB-shm"
     br sync --import-only
     br update <bead-id> -s closed              # redo the intended write(s), through the CLI
     br sync --flush-only || { echo "not persisted"; exit 1; }
-    git diff .beads/issues.jsonl               # confirm ONLY the intended fields moved
+    git diff "$BEADS_JSONL"                    # confirm ONLY the intended fields moved
     ```
 
     **Enumerate the intended delta before you delete anything.** The single `br update`

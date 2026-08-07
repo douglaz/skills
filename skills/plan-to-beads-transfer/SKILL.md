@@ -96,7 +96,9 @@ Stop and report plan gaps when any of these are still fuzzy:
     specification bodies, and pasting one into `.beads/issues.jsonl` by hand is precisely
     what makes the cache stale: a hand edit does not advance `updated_at`, so the two
     become indistinguishable by timestamp. Write every body through `br update -d/--notes`,
-    and `git diff .beads/issues.jsonl` before committing — ids on only one side, or a
+    and field-diff the tracked JSONL before committing (resolve it with
+    `br where --json | jq -r .jsonl_path`; `.beads/` is only the default layout, and a
+    hardcoded path diffs nothing on the others) — ids on only one side, or a
     `description` you did not touch, is the tell. Recovery, and why `br sync --import-only`
     cannot do it, is in
     [orchestrating-with-rb-lite](../orchestrating-with-rb-lite/SKILL.md) step 11 — but note

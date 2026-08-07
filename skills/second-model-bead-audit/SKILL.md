@@ -155,7 +155,8 @@ recorded acceptance of the reduced review coverage.
    # diff, so do not also demand that the JSONL changed here.
    # A flush writes the whole gitignored beads.db cache over the tracked issues.jsonl, so
    # any bead body hand-edited into the file (which does not advance updated_at) is
-   # silently reverted here — exit 0, no warning. `git diff .beads/issues.jsonl` after
+   # silently reverted here — exit 0, no warning. `git diff "$(br where --json | jq -r
+   # .jsonl_path)"` after
    # this and check the field-level changes before capturing a baseline: an audit over a
    # truncated graph reviews text the reviewers will never see. See
    # ../orchestrating-with-rb-lite/SKILL.md step 11 for recovery.

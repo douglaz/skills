@@ -249,8 +249,12 @@ A phase closes on evidence or it does not close.
   flush re-exports **every** bead from the gitignored `.beads/beads.db` over the tracked
   JSONL, so any body the cache holds a stale copy of is reverted, silently, at exit 0.
   Hand-editing `.beads/issues.jsonl` is what makes the cache stale — do not; use
-  `br update -d/--notes`. Then `git diff .beads/issues.jsonl` before committing and read
-  the field-level changes. Detail and recovery:
+  `br update -d/--notes`. Then field-diff the tracked JSONL before committing and read the
+  changes — resolving its path rather than assuming it, with
+  `br where --json | jq -r .jsonl_path`. `.beads/issues.jsonl` is only the default:
+  `.beads.jsonl` and `<name>.beads.jsonl` are supported too, and a hardcoded path diffs
+  nothing on those — a false all-clear in the direction that loses text. Detail and
+  recovery:
   [orchestrating-with-rb-lite](../orchestrating-with-rb-lite/SKILL.md) step 11.
 
 
