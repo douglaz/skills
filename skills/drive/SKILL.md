@@ -250,7 +250,7 @@ A phase closes on evidence or it does not close.
     # grep exits on an early match and git show takes SIGPIPE — verified — which reads
     # as "no match" and inverts both checks below.
     git show "HEAD:$f" >"$_chk" 2>/dev/null || { echo "$f did not land"; exit 1; }
-    grep -q "<a distinctive phrase from that file's change>" "$_chk" \
+    grep -Fq -- "<a distinctive phrase from that file's change>" "$_chk" \
       || { echo "$f did not land"; exit 1; }
   done
   # Removal-only edits have no new phrase to find, and any surviving phrase passes even if
@@ -259,7 +259,11 @@ A phase closes on evidence or it does not close.
   # accidental whole-file deletion reads exactly like a clean removal.
   for f in <every file you removed lines from>; do
     git show "HEAD:$f" >"$_chk" 2>/dev/null || { echo "$f is missing from HEAD entirely"; exit 1; }
-    grep -q "<a distinctive phrase you deleted>" "$_chk" && { echo "$f still contains text this change removed"; exit 1; }
+    _n=$(grep -Fc -- "<a distinctive phrase you deleted>" "$_chk" || true)
+    # COUNT, not absence: removing one of several identical lines legitimately leaves
+    # the phrase behind, and demanding zero rejects that correct commit.
+    [ "${_n:-0}" -eq <occurrences expected AFTER the removal> ] \
+      || { echo "$f: expected <n> occurrence(s) of the removed text, found ${_n:-0}"; exit 1; }
   done
   # Deletions are verified by ABSENCE — `git show HEAD:<path>` fails by design on a
   # deleted path, so folding them into the loops above fails every correct deletion:
