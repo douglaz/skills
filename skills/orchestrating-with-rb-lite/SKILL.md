@@ -346,10 +346,11 @@ ready bead if the queue is not empty, and the exact reason the loop stopped.
     commit it yourself; (b) check `log.txt` for `K of M reviewers succeeded` —
     a `clean` resting on 1-of-3 (e.g. a dead/unauthenticated reviewer) is one
     opinion, not a panel consensus; (c) re-run the repo's own gates on the
-    landed diff (tests, goldens/digests, fmt/clippy); (d) invert one
-    load-bearing behavior the diff introduces and confirm a gate can actually go
-    red, since re-running an already-green suite cannot tell you whether the
-    behavior is pinned at all; (e) for high-stakes work, add a separate
+    landed diff (tests, goldens/digests, fmt/clippy); (d) invert **each**
+    load-bearing behavior the diff introduces — one at a time — and confirm the
+    assertion that pins *that* behavior goes red, since re-running an
+    already-green suite cannot tell you whether any of them is pinned at all;
+    (e) for high-stakes work, add a separate
     adversarial result-review (e.g. `codex exec` over the committed diff). See
     "Verify the landed diff" below.
 
@@ -418,7 +419,11 @@ dogfooding made concrete:
   already passed cannot tell you whether the loop shipped a behavior no test
   pins. For each load-bearing behavior the diff *introduces* — a new invariant,
   an ordering, a clock or lock choice — **invert it in the working tree, confirm
-  a test FAILS, then revert.** If nothing fails, the loop wrote code the panel
+  a test FAILS, then revert.** Read the failure: it has to be *the assertion that
+  pins that behavior*, not merely something going red. A behavior mutation can
+  trip an initialization error, a panic, or an unrelated assertion long before
+  the intended check runs, and taking that as proof of coverage certifies a
+  behavior nothing tests. If nothing fails, the loop wrote code the panel
   described and the suite ignores. Observed: a nine-round run ended `clean` with
   every gate green — `fmt`, `clippy -D warnings`, 685 workspace tests, three
   demos, a 16/16 adversarial suite, and CI on a dedicated runner — and swapping a
