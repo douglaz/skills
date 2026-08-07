@@ -407,6 +407,15 @@ For each pass `N` from `1` to `MAX_PASSES`:
    for _p in "$CODEX_PID" "$FABLE_PID"; do
      kill "$_p" 2>/dev/null || true        # never `pkill -f`; already-exited is fine
    done
+   # Bounded escalation. Signalling the `timeout` wrapper from outside forwards TERM but does
+   # NOT start its --kill-after timer, so a reviewer that ignores TERM leaves wrapper and
+   # child alive and the waits below block until the original 1500s deadline — which is
+   # exactly the hung-reviewer case this hatch exists for. Give it a few seconds, then KILL
+   # the process group.
+   sleep 5
+   for _p in "$CODEX_PID" "$FABLE_PID"; do
+     kill -0 "$_p" 2>/dev/null && kill -KILL -- "-$_p" 2>/dev/null || true
+   done
    CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?   # reaping is what closes the window
    FABLE_RC=0; wait "$FABLE_PID" || FABLE_RC=$?
    ```

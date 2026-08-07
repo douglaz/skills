@@ -134,6 +134,10 @@ CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?
 FABLE_RC=0; wait "$FABLE_PID" || FABLE_RC=$?
 ```
 
+The group-kill in the escape hatch needs each reviewer to be its own process-group
+leader — `set -m` before the two launches, or `setsid` on each — otherwise `kill -- -$PID`
+has no group to signal. Without that, the hatch degrades to the plain TERM above.
+
 **Do not drop the `timeout`.** Either reviewer can hang indefinitely — no output, no
 exit, no error. Measured: an unbounded consistency pass ran **6h20m and wrote zero
 bytes** while comparable calls finished in 5-15 minutes; nothing reaped it, and the
@@ -161,6 +165,15 @@ the exact PIDs captured at launch, then reap them**, and accept the lost pass:
 # Bash-capable process against the tree you are about to change, and unreaped besides.
 for _p in "$CODEX_PID" "$FABLE_PID"; do
   kill "$_p" 2>/dev/null || true        # never `pkill -f`; already-exited is fine
+done
+# Bounded escalation. Signalling the `timeout` wrapper from outside forwards TERM but does
+# NOT start its --kill-after timer, so a reviewer that ignores TERM leaves wrapper and
+# child alive and the waits below block until the original 1500s deadline — which is
+# exactly the hung-reviewer case this hatch exists for. Give it a few seconds, then KILL
+# the process group.
+sleep 5
+for _p in "$CODEX_PID" "$FABLE_PID"; do
+  kill -0 "$_p" 2>/dev/null && kill -KILL -- "-$_p" 2>/dev/null || true
 done
 CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?   # reaping is what closes the window
 FABLE_RC=0; wait "$FABLE_PID" || FABLE_RC=$?
