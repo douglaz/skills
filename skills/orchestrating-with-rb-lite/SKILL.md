@@ -214,9 +214,12 @@ ready bead if the queue is not empty, and the exact reason the loop stopped.
   on a single surviving reviewer (check `log.txt` for the `K of M reviewers
   succeeded` line and the `review-round-*.md` status headers). Before trusting a
   run, **independently re-run the repo's own gates** (tests, goldens/digests,
-  fmt/clippy) on the landed diff; for high-stakes work add a **separate
-  adversarial result-review** (e.g. `codex exec` over the committed diff) — the
-  panel's `clean` is one input, not the gate. See "Verify the landed diff."
+  fmt/clippy) on the landed diff — and, because those gates were already green
+  before the run, **invert each load-bearing behavior it introduces and confirm
+  the assertion pinning that behavior goes red**; for high-stakes work add a
+  **separate adversarial result-review** (e.g. `codex exec` over the committed
+  diff) — the panel's `clean` is one input, not the gate. See "Verify the landed
+  diff."
 - In backlog-drain mode, one bead equals one branch and one **work** PR. Do not batch
   unrelated beads into one rb-lite run. The final closure/metadata PR (step 11) is not a
   second work PR and is not covered by this rule — it carries bookkeeping only.
@@ -490,6 +493,17 @@ implement → review loop for each bead.
 
    Treat real failures as part of the bead. Treat pre-existing flakiness as
    a separate bead; don't hand-tune the branch to hide a flaky CI failure.
+
+   **These gates were already green before the bead, so passing them proves
+   nothing about it.** For **each** load-bearing behavior the bead introduces —
+   a new invariant, an ordering, a clock or lock choice — invert it in the
+   working tree, one at a time, and confirm the assertion that pins *that*
+   behavior goes red; then revert. Read the failure rather than just observing
+   one: a mutation that trips an initialization error or an unrelated assertion
+   proves nothing, and a mutation that changes no test outcome means the drain
+   shipped a behavior nothing covers. Step 8 commits and pushes immediately
+   after this, so this is the last point at which that is cheap to find out.
+   Full rationale in "Verify the landed diff".
 
 8. **Commit, push, PR.** Add only intentional source/docs/config changes and
    any bead-state sync files the repo expects. Do not commit `.rb-lite/` run
