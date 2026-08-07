@@ -803,10 +803,13 @@ implement → review loop for each bead.
     ones you meant to change. A full-file re-serialization with every id on both sides is
     normal; ids on only one side, or a `description` you did not touch, is the tell.
 
-    If it has already diverged, **rebuild the cache** — `issues.jsonl` is tracked truth and
-    `beads.db` is a gitignored cache, so the file wins. `br sync --import-only` alone cannot
-    repair it: it compares `updated_at`, and equal timestamps with different bodies report
-    `Skipped: N (up-to-date)` forever.
+    Recovery depends on **which of the two has the good text**, and getting that backwards
+    cements the loss. Establish it before running anything:
+
+    **(a) The cache is stale and the file is still good** — you have hand-edited the JSONL
+    and no flush has happened yet. Rebuild the cache from the file. `br sync --import-only`
+    alone cannot do it: it compares `updated_at`, and equal timestamps with different bodies
+    report `Skipped: N (up-to-date)` forever, so the stale DB has to go first.
 
     ```bash
     cp .beads/beads.db /tmp/beads.db.bak
@@ -814,9 +817,30 @@ implement → review loop for each bead.
     br sync --import-only     # "Imported from JSONL (via automatic recovery)"
     ```
 
-    Then verify the restored bodies against the file before any further `br` write. This is
-    **not** the pre-0.1.45 corruption bug in "Tool dependencies": no `ISSUE_NOT_FOUND`, no
-    branch reset involved, and every command reported success.
+    **(b) The flush already ran and the diff above shows the damage** — then the working
+    copy of `issues.jsonl` **is** the damaged artifact, not the truth. Importing it here
+    would copy the loss into a fresh database and a later commit would cement it. **Restore
+    the file from git first, then re-apply the mutation you actually wanted, and only then
+    rebuild the cache:**
+
+    ```bash
+    git checkout HEAD -- .beads/issues.jsonl   # the last good committed state
+    cp .beads/beads.db /tmp/beads.db.bak
+    rm -f .beads/beads.db .beads/beads.db-wal .beads/beads.db-shm
+    br sync --import-only
+    br update <bead-id> -s closed              # redo the intended write, through the CLI
+    br sync --flush-only || { echo "not persisted"; exit 1; }
+    git diff .beads/issues.jsonl               # confirm ONLY that field moved
+    ```
+
+    Git is the whole recovery here, which is why the field-diff has to happen **before** you
+    stage anything: an uncommitted hand-edit that a flush overwrote is simply gone — no
+    cache holds it and no commit holds it. That is the sharpest reason never to write bead
+    text through the file.
+
+    Either way, verify the restored bodies before the next `br` write. This is **not** the
+    pre-0.1.45 corruption bug in "Tool dependencies": no `ISSUE_NOT_FOUND`, no branch reset
+    involved, and every command reported success.
 
     Closing on the feature branch before the merge is **not** a safe shortcut, however
     transactional it looks — the beads DB is shared across branches with no git
