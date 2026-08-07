@@ -244,7 +244,11 @@ substring assertions, assertion-weakening to force green, fake setup, false PASS
 hang, editing the code under test, and a gate never observed red — as hard constraints in
 the task file, then checks for each in the result. A test that falsely reports PASS is
 worse than no test, and the last trap is the one that catches the rest: break the
-production behavior, one mutation per property, and watch the pinning assertion fail.
+production behavior, one mutation per property, and watch the pinning assertion fail —
+in a **disposable environment** when the gate touches anything live. A deliberately
+defective build can perform the harmful operation against a real database, service or
+balance before the assertion notices; if it cannot be isolated, say the red run could
+not be done safely rather than doing it.
 
 ### orchestrating-with-rb-lite
 

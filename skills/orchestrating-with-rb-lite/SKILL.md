@@ -517,6 +517,14 @@ implement → review loop for each bead.
    proves nothing, and a mutation that changes no test outcome means the drain
    shipped a behavior nothing covers.
 
+   **Protect the accepted diff before you invert anything.** rb-lite leaves its
+   changes UNCOMMITTED until step 8, so the obvious way to undo a mutation —
+   `git restore <file>` / `git checkout -- <file>` — discards rb-lite's accepted
+   implementation in that file along with your inversion. The gates ran before the
+   mutation and nothing re-runs after the revert, so step 8 would commit and push
+   a tree missing part of the work. Commit or stash the accepted diff first, or
+   mutate in a scratch copy, and re-run the gate green after reverting.
+
    **A mutation that stays green STOPS the drain — it is not a note to carry into
    step 8.** Diagnosing an uncovered behavior and then committing anyway ships
    exactly what the check was added to catch, and step 8 pushes immediately, so
@@ -528,9 +536,14 @@ implement → review loop for each bead.
    before you touched it, and step 9's SHA guard assumes local `HEAD` is the tree
    the panel read — which it no longer is. Red/green proves the test detects the
    behavior; it says nothing about the test's cleanup, isolation, or fixtures.
-   Either run the panel again over the amended tree, or carry the repair as
-   explicitly-unreviewed work and say so in the PR body. Do not let it ride out on
-   a clean verdict that predates it. If you cannot pin it — the
+   Neither obvious continuation is allowed here, which is the real problem: a second
+   rb-lite run breaks the one-bead/one-run invariant, and carrying it forward reaches
+   step 9's SHA guard, which asserts local `HEAD` is the tree rb-lite reviewed. So take
+   the third path — **stop the drain and track the repair as its own work**, on its own
+   branch with its own review. If the repair is small enough to belong to this bead, a
+   separate reviewer pass over the amended tree is the only in-band option; say which you
+   chose. Do not let it ride out on a clean verdict that predates it, and do not pretend
+   a second rb-lite run is permitted. If you cannot pin it — the
    behavior is not reachable from a test, or the fix is out of the bead's scope —
    say so and stop; that is a finding about the bead, not a formality to wave
    through. Full rationale in "Verify the landed diff".

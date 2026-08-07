@@ -412,6 +412,9 @@ For each P-badge finding:
   the same ones the testing skills enforce:
   - **Read the failure.** It must name the assertion pinning the behavior you inverted,
     not an unrelated panic or an initialization error.
+  - **Then restore the fix and watch it go GREEN.** The red run alone is satisfied by a
+    test that always fails or that its own cleanup broke, and a manual or live gate the
+    ordinary CI suite never executes would carry that all the way to merge.
   - **One mutation per property.** A regression test answering a finding that had two
     parts needs two — reddening the first leaves the second untested while looking
     verified.
