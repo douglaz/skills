@@ -395,14 +395,20 @@ For each pass `N` from `1` to `MAX_PASSES`:
    clean` with the content absent from the file and from `HEAD`. Backgrounding
    both reviewers is exactly what puts this loop in the hazard window: codex's
    findings are readable while Fable is still running, and acting on them there
-   is how the work disappears. If you must edit sooner, kill that reviewer by the
-   PID you captured at launch and **then reap it** — `kill` only *sends* SIGTERM
+   is how the work disappears. If you must edit sooner, kill **both** reviewers by the
+   PIDs you captured at launch and **then reap them** — `kill` only *sends* SIGTERM
    and returns immediately, so the wrapper and the reviewer are still shutting
    down when it comes back, and an edit right after is still inside the window:
 
    ```bash
-   kill "$CODEX_PID" 2>/dev/null || true          # never `pkill -f`; already-exited is fine
+   # BOTH reviewers, not just codex. The hatch abandons the pass, and this section's own
+   # rule is that every reviewer has exited before you edit — leaving Fable alive holds a
+   # Bash-capable process against the tree you are about to change, and unreaped besides.
+   for _p in "$CODEX_PID" "$FABLE_PID"; do
+     kill "$_p" 2>/dev/null || true        # never `pkill -f`; already-exited is fine
+   done
    CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?   # reaping is what closes the window
+   FABLE_RC=0; wait "$FABLE_PID" || FABLE_RC=$?
    ```
 
    Both `||`s are load-bearing under `set -e`, and they guard different moments.

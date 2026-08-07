@@ -152,12 +152,18 @@ non-zero exit.
 
 **An edit made to a tracked file while `codex review` is in flight is silently
 destroyed.** Both reviewers must have exited — `wait` returned for each PID —
-before you change a single file. If you must edit sooner, kill the reviewer **by
-the exact PID captured at launch, then reap it**, and accept the lost pass:
+before you change a single file. If you must edit sooner, kill **both** reviewers **by
+the exact PIDs captured at launch, then reap them**, and accept the lost pass:
 
 ```bash
-kill "$CODEX_PID" 2>/dev/null || true   # already exited is fine, and not fatal
-CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?   # kill only SENDS; this waits for it
+# BOTH reviewers, not just codex. The hatch abandons the pass, and this section's own
+# rule is that every reviewer has exited before you edit — leaving Fable alive holds a
+# Bash-capable process against the tree you are about to change, and unreaped besides.
+for _p in "$CODEX_PID" "$FABLE_PID"; do
+  kill "$_p" 2>/dev/null || true        # never `pkill -f`; already-exited is fine
+done
+CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?   # reaping is what closes the window
+FABLE_RC=0; wait "$FABLE_PID" || FABLE_RC=$?
 ```
 
 The `wait` is not decoration. `kill` returns as soon as SIGTERM is delivered, so
