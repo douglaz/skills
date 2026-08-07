@@ -204,51 +204,25 @@ exits **1**, so check it — an unchecked `git add -A && git commit` inside a
 larger block is how the message gets believed and the failure walks:
 
 ```bash
-git add -- <every path this change touched>   # NOT `git add -A` on a dirty tree: it
-git diff --cached                            # sweeps in unrelated work. And READ this:
-                                             # on a path that was ALREADY dirty, staging
-                                             # it by name still takes the other agent's
-                                             # hunks in that same file.
+git add -- <every path this change touched>   # not `git add -A`: on a dirty tree it
+git diff --cached                            # sweeps in unrelated work — and READ this,
+                                             # since staging a path that was already
+                                             # dirty takes the other agent's hunks too
 git commit -m "<msg>" || { echo "commit produced nothing"; exit 1; }
+git show --stat --format= HEAD               # all the paths you meant, and only those
 ```
 
-Then still assert the content, because a *partial* loss commits cleanly at exit
-0 — some files reverted, others not, one real commit carrying half the fix:
+Then confirm the *content* landed, per file, by the check that fits it — a file that
+gained content must contain a distinctive new phrase; a file you only removed lines from
+must still exist **and** hold the expected remaining count of the deleted phrase; a
+deleted path must be absent. One does not substitute for another, and each has a way to
+lie: `grep` defaults to regex (use `-Fq --`), `git show ... | grep` returns 141 under
+`pipefail` when grep exits early (capture to a file first), `grep -c` counts lines rather
+than occurrences, and demanding *zero* occurrences rejects a correct partial removal.
 
 ```bash
-# The commit's own file list first — every path you touched, and nothing you did not.
 _chk=$(mktemp); trap 'rm -f "$_chk"' EXIT
-git show --stat --format= HEAD
-# Each file that should CONTAIN the change:
-for f in <every file the fix touched that gained or changed content>; do
-  git show "HEAD:$f" >"$_chk" 2>/dev/null || { echo "$f did not land"; exit 1; }
-  grep -Fq -- "<a distinctive phrase from that file>" "$_chk" || { echo "$f did not land"; exit 1; }
-done
-# Removal-only edits have no new phrase to find, and any surviving phrase passes even
-# if the removal was reverted. Assert the EXPECTED REMAINING COUNT — not absence,
-# which rejects a correct partial removal:
-for f in <every file you removed lines from>; do
-  # Existence FIRST: `git show HEAD:<gone>` fails, and without this assert an
-  # accidental whole-file deletion would reach the count check with an empty file
-  # and read as a clean removal. Whole-file deletions belong in the absence loop
-  # below, never here.
-  git show "HEAD:$f" >"$_chk" 2>/dev/null || { echo "$f is missing from HEAD entirely"; exit 1; }
-  _n=$(grep -Fo -- "<a distinctive phrase you deleted>" "$_chk" | wc -l || true)
-  # `|| true` because grep exits 1 on no match, and under `pipefail` that aborts the
-  # whole check at exactly the case it must report: a COMPLETE removal, count 0.
-  # COUNT the OCCURRENCES, not the matching lines (`grep -c` reports lines, so two
-  # hits on one line count as one), and not absence: removing one of several
-  # identical lines legitimately leaves the phrase behind, and demanding zero
-  # rejects that correct commit.
-  [ "${_n:-0}" -eq <occurrences expected AFTER the removal> ] \
-    || { echo "$f: expected <n> occurrence(s) of the removed text, found ${_n:-0}"; exit 1; }
-done
-# Each file the change DELETES is verified by ABSENCE — `git show HEAD:<path>` fails by
-# design on a deleted path, so folding deletions into the loop above marks every correct
-# deletion as a loss:
-for f in <every path the change deletes>; do
-  git show "HEAD:$f" >/dev/null 2>&1 && { echo "$f is still present"; exit 1; }
-done
+# ...the three loops, using `grep -Fq --` / `grep -Fo | wc -l || true` on a captured file.
 ```
 
 A clean `git status` is neither check. It is equally consistent with the edits

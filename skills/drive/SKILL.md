@@ -237,43 +237,15 @@ A phase closes on evidence or it does not close.
   # Stage the paths this change touched — NOT `git add -A`. On the dirty tree § 1.6
   # permits, `-A` sweeps in another agent's edits and any untracked file lying around,
   # including a secret, and `git show --stat` only reveals that after the commit exists.
-  git add -- <every path this change touched>
-  git diff --cached          # READ IT NOW, while the index still has something in it.
-                             # Staging by name still takes another agent's hunks from a
-                             # file that was already dirty. After the commit this is
-                             # empty, and `git show --stat` shows path names, not hunks.
+  git add -- <every path this change touched>   # not `git add -A`: on a dirty tree it
+  git diff --cached                            # sweeps in unrelated work — and READ it
   git commit -m "<msg>" || { echo "commit produced nothing"; exit 1; }
-  _chk=$(mktemp); trap 'rm -f "$_chk"' EXIT
-  git show --stat --format= HEAD        # does this list all of them, and only them?
-  for f in <every file that gained new content>; do
-    # Capture, do not pipe: `git show ... | grep -q` returns 141 under `pipefail` when
-    # grep exits on an early match and git show takes SIGPIPE — verified — which reads
-    # as "no match" and inverts both checks below.
-    git show "HEAD:$f" >"$_chk" 2>/dev/null || { echo "$f did not land"; exit 1; }
-    grep -Fq -- "<a distinctive phrase from that file's change>" "$_chk" \
-      || { echo "$f did not land"; exit 1; }
-  done
-  # Removal-only edits have no new phrase to find, and any surviving phrase passes even if
-  # the removal was reverted — so they belong here, NOT in the loop above. Existence first:
-  # `git show HEAD:<gone>` fails, grep returns nonzero, and the `&&` is skipped, so an
-  # accidental whole-file deletion reads exactly like a clean removal.
-  for f in <every file you removed lines from>; do
-    git show "HEAD:$f" >"$_chk" 2>/dev/null || { echo "$f is missing from HEAD entirely"; exit 1; }
-    _n=$(grep -Fo -- "<a distinctive phrase you deleted>" "$_chk" | wc -l || true)
-    # `|| true` because grep exits 1 on no match, and under `pipefail` that aborts the
-  # whole check at exactly the case it must report: a COMPLETE removal, count 0.
-  # COUNT the OCCURRENCES, not the matching lines (`grep -c` reports lines, so two
-    # hits on one line count as one), and not absence: removing one of several
-    # identical lines legitimately leaves the phrase behind, and demanding zero
-    # rejects that correct commit.
-    [ "${_n:-0}" -eq <occurrences expected AFTER the removal> ] \
-      || { echo "$f: expected <n> occurrence(s) of the removed text, found ${_n:-0}"; exit 1; }
-  done
-  # Deletions are verified by ABSENCE — `git show HEAD:<path>` fails by design on a
-  # deleted path, so folding them into the loops above fails every correct deletion:
-  for f in <every path you deleted>; do
-    git show "HEAD:$f" >/dev/null 2>&1 && { echo "$f is still present"; exit 1; }
-  done
+  git show --stat --format= HEAD               # all the paths you meant, and only those
+  # Then per file, by the check that fits: gained content must contain a distinctive new
+  # phrase; a removal-only file must still EXIST and hold the expected remaining count;
+  # a deleted path must be absent. `grep -Fq --` (regex is the default), capture to a
+  # file first (`git show ... | grep` returns 141 under pipefail), and count occurrences
+  # rather than lines — demanding zero rejects a correct partial removal.
   ```
 
   The `||` catches a total loss — `git commit` with nothing staged exits **1**, however
