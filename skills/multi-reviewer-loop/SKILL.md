@@ -730,147 +730,48 @@ finding precisely enough for someone else to act on, which by itself kills the v
   the same work with one rule — *use the CLI, never edit the file* — landed clean and the
   database still parsed. Name the tool, forbid the file, and require a read-back.
 - **Snapshot first — and non-destructively.** The implementer has write access, and
-  § 1.6 explicitly permits running on a dirty tree, so plain `git` is *not* your undo:
-  `git checkout .`, `git stash`, and `git reset --hard` would each discard the user's
-  pre-existing unstaged work along with the delegated edit, which § 1.6 forbids. Capture
-  the tree first, **in two layers**, and check that the capture *commands* succeeded
-  before granting write access:
+  § 1.6 explicitly permits a dirty tree, so plain `git` is *not* your undo: `git checkout
+  .`, `git stash` and `git reset --hard` each discard the user's pre-existing work along
+  with the delegated edit, which § 1.6 forbids.
 
-  ```bash
-  git diff --cached --binary --no-textconv >"$REVIEW_DIR/pre-delegation.staged.patch" \
-    || { echo "snapshot failed"; exit 1; }
-  git diff          --binary --no-textconv >"$REVIEW_DIR/pre-delegation.unstaged.patch" \
-    || { echo "snapshot failed"; exit 1; }
-  git status --porcelain -z >"$REVIEW_DIR/pre-delegation.status" \
-    || { echo "snapshot failed"; exit 1; }
-  # Every pre-existing UNTRACKED path in the delegated scope, copied — neither patch can
-  # restore one, so without this the "non-destructive" guarantee is simply false for them.
-  # Portable, and one path at a time. `cp --parents` is GNU-only — BSD/macOS `cp` rejects
-  # it outright, and this skill supports macOS explicitly (the `gtimeout` fallback exists
-  # for it) — so the GNU form would make every delegation with an untracked path exit
-  # `snapshot failed` there. `cp -pR` is portable; the parent dirs are built by hand.
-  for f in <each pre-existing untracked path in scope>; do
-    # Clear the destination first, for the same reason the restore does: on a second
-    # delegation of the same path, `cp -pR` treats the existing backup as a target
-    # DIRECTORY and nests inside it, so the rollback later restores the stale outer copy.
-    rm -rf -- "$REVIEW_DIR/untracked/$f"
-    mkdir -p "$REVIEW_DIR/untracked/$(dirname "$f")" || { echo "snapshot failed"; exit 1; }
-    cp -pR "$f" "$REVIEW_DIR/untracked/$f"           || { echo "snapshot failed"; exit 1; }
-  done
-  ```
+  Capture **three** things before granting access, and require the capture *commands* to
+  succeed — never their output to be non-empty, since on a clean tree an empty patch is
+  the correct answer:
 
-  **Refuse the paths this snapshot cannot represent.** The capture is exactly three things:
-  a staged diff, an unstaged diff, and a byte copy of untracked files. Any tree state that
-  does not round-trip through those is **out of scope for delegation** — take the path out
-  and say you did. That is the rule; the list below is the cases known to hit it, not a
-  boundary that ends there. Growing the capture to cover each new one is a road that ends
-  at `git stash`, and `git stash` does not work here (below).
+  - `git diff --cached --binary --no-textconv` and `git diff --binary --no-textconv`,
+    as **two** patches. One combined `git diff HEAD` flattens the layers, so an `MM` path
+    comes back ` M` and a later commit carries hunks the user left out. Both flags matter:
+    without `--binary` a modified binary records only "Binary files differ" and will not
+    apply; `--no-textconv` because the conversion is not what is on disk.
+  - `git status --porcelain -z`, NUL-delimited. Porcelain quotes paths that need it, so a
+    `cut`-based parse hands back a literal `"caf\303\251.py"` that does not exist. This
+    is also what restores **intent-to-add** entries (` A `) afterwards: § 1.5's `git add
+    -N` runs only before the first pass, so a file demoted to `??` during a rollback drops
+    out of every later `codex review --base`.
+  - a **byte copy of every pre-existing untracked path in scope** — no patch contains
+    them. Clear each destination before copying and again before restoring: `cp -pR` into
+    an existing directory nests rather than replaces, and exits 0 either way.
 
-  - **Unmerged paths** (`UU`, `AA`, …). `git diff --cached` exits 0 emitting only
-    `* Unmerged path …`, and the unstaged diff carries at most the combined working-tree
-    content — the stage-1/2/3 index entries are gone, so replaying cannot rebuild the
-    conflict. Do not delegate a path mid-merge.
-  - **Contents inside a dirty submodule.** The top-level diffs record the gitlink's
-    `-dirty` marker, not the modified bytes, so restoring the gitlink does not restore the
-    user's edit inside it.
-  - **Paths with ANY byte-transforming `.gitattributes` entry** — `filter`, `text`, `eol`,
-    `working-tree-encoding`. `--no-textconv` bypasses none of them: `git diff` snapshots
-    the *converted* representation, so what replays is not what was there. Measured — a
-    clean filter dropping `LOCAL:` lines produced a zero-byte unstaged patch on a file
-    `git status` called modified, and a mixed CRLF/LF file came back entirely CRLF from a
-    patch that applied without error. Use `git check-attr --all -- <path>` and read the
-    whole list; checking `filter` alone was the first version of this rule and it missed
-    the other three.
-  - **Files marked `assume-unchanged`.** Worst of the set, because all three captures
-    *succeed* while recording nothing: git has been told the file is not changing, so the
-    diffs are empty and porcelain is silent — and the revert then replaces the user's
-    bytes with `HEAD`. A silent total loss with no failing command anywhere. `git ls-files
-    -v` flags them with a lowercase status letter.
-  - **Either endpoint of a staged rename.** Porcelain `-z` emits both paths; reverting only
-    the destination leaves the source staged as deleted and the replay then fails, because
-    the source no longer exists in the index. The two endpoints are one unit — delegate
-    both or neither.
+  **Refuse the paths this cannot represent.** The capture is a staged diff, an unstaged
+  diff and a byte copy; any state that does not round-trip through those three is out of
+  scope for delegation — take the path out and say so. Known cases: unmerged paths,
+  contents inside a dirty submodule, anything with a byte-transforming `.gitattributes`
+  entry (`git check-attr --all` — `filter`, `text`, `eol`, `working-tree-encoding`), and
+  files marked `assume-unchanged`, where all three captures *succeed while recording
+  nothing* and the revert then replaces the bytes with `HEAD`. That list is the cases
+  known to hit the rule, not the boundary.
 
-  `git status --porcelain` names both. Take them out of the delegated scope and say you
-  did — a snapshot that silently cannot restore a path is worse than one that refuses it.
-
-  **And no, `git stash create` cannot replace this.** It is the obvious simplification —
-  one command, and git's own code handles binaries, textconv, index stages and submodules
-  correctly — but it *fails outright* on the tree this skill's own preflight builds:
+  **`git stash create` cannot replace any of this**, though it handles every case above
+  correctly. It fails on the tree § 1.5 builds:
 
   ```console
   $ git stash create
   error: Entry 'café.py' not uptodate. Cannot merge.
-  Cannot save the current worktree state
   ```
 
-  § 1.5 runs `git add -N` on untracked source files so codex can see them, and `stash`
-  refuses an intent-to-add entry. So the two-patch capture is not a hand-rolled version of
-  something git already does; it is what is left once the mandatory preflight rules the
-  built-in out. Anyone proposing the swap should reproduce the error above first.
-
-  **Two patches, not one.** A single `git diff HEAD` flattens staged and unstaged into one
-  HEAD-to-worktree delta, so restoring a path that was `MM` brings it back as ` M` — the
-  user's staging selection is gone, and a later `git commit` then carries hunks they had
-  deliberately left out.
-
-  **`--binary --no-textconv` on both.** Without `--binary` a modified binary records only
-  `Binary files a/x and b/x differ` — a patch with no payload, which `git apply` then
-  refuses (measured: *"cannot apply binary patch to 'blob.bin' without full index line"*).
-  And `--binary` does not switch off a configured `textconv` diff driver, which emits
-  *transformed* text that will not apply against the raw file either. Both flags, or the
-  revert is one-way for exactly the files you cannot retype.
-
-  **Empty is a legitimate snapshot.** On a clean tree — the ordinary PR-review case — both
-  patches are empty because the branch's commits are already recoverable from git. Require
-  the commands to *succeed*, never the patches to be non-empty; a non-empty check would
-  refuse to delegate on exactly the tidiest repositories.
-
-  To roll back, revert only the paths you delegated and re-apply each layer's hunks for
-  those paths — staged first, then unstaged — and leave every other path alone. **Then
-  restore the untracked backups**, which no patch and no `git restore` touches:
-
-  ```bash
-  for f in <each untracked path you delegated>; do
-    # REMOVE the destination first. `cp -pR src dest` with dest an existing DIRECTORY
-    # copies into it — you get `d/d/f.txt` while the overwritten `d/f.txt` stays put, and
-    # cp exits 0, so the rollback reports success having restored nothing. Verified.
-    rm -rf -- "$f"
-    mkdir -p "$(dirname "$f")" && cp -pR "$REVIEW_DIR/untracked/$f" "$f" \
-      || { echo "could not restore $f — its bytes are in $REVIEW_DIR/untracked"; exit 1; }
-  done
-  ```
-
-  `rm -rf` is safe *only* because `$f` is one of the paths you enumerated as delegated and
-  backed up seconds earlier. Do not generalise the loop to a glob.
-
-  Taking the backup and never copying it back is the failure worth naming: the bytes
-  survive in the review directory, the rollback reports success, and the user's file is
-  still damaged.
-
-  **Then restore intent-to-add from the status file.** § 1.5 runs `git add -N` on untracked
-  source files so codex can see them; such a file has an empty staged patch and its whole
-  content in the unstaged one, so replaying patches alone brings it back as an ordinary
-  `??`. That is not cosmetic: `git add -N` is prescribed only *before the first pass*, so a
-  file demoted here silently drops out of every later `codex review --base` and half the
-  panel stops seeing it. Intent-to-add shows in porcelain as `" A "` — a **leading space**,
-  then `A` — not `"A "`, which is an ordinary staged addition you must not touch:
-
-  ```bash
-  # -z, and NUL-delimited reads. Porcelain v1 QUOTES any path needing it — `café.py`
-  # arrives as the literal `"caf\303\251.py"` under the default core.quotePath — so a
-  # `cut`-based parse hands `git add -N` a path that does not exist and the file stays
-  # `??`, which is the exact failure this step exists to prevent.
-  while IFS= read -r -d '' entry; do
-    [ "${entry:0:3}" = " A " ] && git add -N -- "${entry:3}"
-  done < "$REVIEW_DIR/pre-delegation.status"
-  ```
-
-  Neither diff captures **untracked** files at all — which is why the capture copies every
-  pre-existing untracked path in the delegated scope. That is not optional: an implementer
-  with write access can overwrite or delete one, and no patch can bring it back. If a path
-  cannot be copied, take it out of the delegated scope rather than documenting a data-loss
-  hole underneath a promise of non-destructive rollback.
+  `git add -N` makes stash refuse outright. Anyone proposing the swap should reproduce
+  that first — and it is also why growing the capture toward stash-parity is a road that
+  ends where stash already is.
 
 This is not `rb-lite`. That loop hands over the whole task and reviews the result; this
 hands over *only the edit* for findings you have already verified.
