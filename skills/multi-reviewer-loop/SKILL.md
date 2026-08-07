@@ -737,9 +737,9 @@ finding precisely enough for someone else to act on, which by itself kills the v
   before granting write access:
 
   ```bash
-  git diff --cached >"$REVIEW_DIR/pre-delegation.staged.patch"   || { echo "snapshot failed"; exit 1; }
-  git diff         >"$REVIEW_DIR/pre-delegation.unstaged.patch" || { echo "snapshot failed"; exit 1; }
-  git status --porcelain >"$REVIEW_DIR/pre-delegation.status"    || { echo "snapshot failed"; exit 1; }
+  git diff --cached --binary >"$REVIEW_DIR/pre-delegation.staged.patch"   || { echo "snapshot failed"; exit 1; }
+  git diff          --binary >"$REVIEW_DIR/pre-delegation.unstaged.patch" || { echo "snapshot failed"; exit 1; }
+  git status --porcelain     >"$REVIEW_DIR/pre-delegation.status"         || { echo "snapshot failed"; exit 1; }
   ```
 
   **Two patches, not one.** A single `git diff HEAD` flattens staged and unstaged into one
@@ -747,15 +747,34 @@ finding precisely enough for someone else to act on, which by itself kills the v
   user's staging selection is gone, and a later `git commit` then carries hunks they had
   deliberately left out.
 
+  **`--binary` on both.** Without it a modified binary records only `Binary files a/x and
+  b/x differ` — a patch with no payload, which `git apply` then refuses. Revert that path
+  and the user's original bytes are unrecoverable, from a snapshot that looked like it
+  worked.
+
   **Empty is a legitimate snapshot.** On a clean tree — the ordinary PR-review case — both
   patches are empty because the branch's commits are already recoverable from git. Require
   the commands to *succeed*, never the patches to be non-empty; a non-empty check would
   refuse to delegate on exactly the tidiest repositories.
 
   To roll back, revert only the paths you delegated and re-apply each layer's hunks for
-  those paths — staged first, then unstaged — and leave every other path alone. Neither
-  diff captures **untracked** files, so copy any that matter into `$REVIEW_DIR` first, or
-  accept that they sit outside the snapshot and say which you did.
+  those paths — staged first, then unstaged — and leave every other path alone.
+
+  **Then restore intent-to-add from the status file.** § 1.5 runs `git add -N` on untracked
+  source files so codex can see them; such a file has an empty staged patch and its whole
+  content in the unstaged one, so replaying patches alone brings it back as an ordinary
+  `??`. That is not cosmetic: `git add -N` is prescribed only *before the first pass*, so a
+  file demoted here silently drops out of every later `codex review --base` and half the
+  panel stops seeing it. Intent-to-add shows in porcelain as `" A "` — a **leading space**,
+  then `A` — not `"A "`, which is an ordinary staged addition you must not touch:
+
+  ```bash
+  grep '^ A ' "$REVIEW_DIR/pre-delegation.status" | cut -c4- \
+    | while IFS= read -r f; do git add -N -- "$f"; done
+  ```
+
+  Neither diff captures **untracked** files at all, so copy any that matter into
+  `$REVIEW_DIR` first, or accept that they sit outside the snapshot and say which you did.
 
 This is not `rb-lite`. That loop hands over the whole task and reviews the result; this
 hands over *only the edit* for findings you have already verified.
