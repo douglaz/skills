@@ -165,8 +165,8 @@ run `second-model-bead-audit` by default after the graph meets these gates.
    cannot do it — is in
    [orchestrating-with-rb-lite](../orchestrating-with-rb-lite/SKILL.md) step 11, with one
    caveat: its replay step assumes a SINGLE mutation, the drain's case. A polish round
-   batches several rewrites, so enumerate the complete intended delta (the round summary
-   in step 6 is that list) before the `git checkout HEAD --`, or the restore discards this
+   batches several rewrites, so enumerate the complete intended delta (the step 4 replay manifest, NOT
+   the step 6 round summary — the summary records decisions, not commands, ids or order) before the `git checkout HEAD --`, or the restore discards this
    round's legitimate work along with the damage.
 
 6. Write a round summary:

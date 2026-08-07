@@ -194,6 +194,12 @@ your intended changes and the loss becomes *undetectable*. Run `git status --por
 case (a) in [orchestrating-with-rb-lite](../SKILL.md) step 11. After the first flush the choice
 is gone.
 
+**Start a replay manifest before minting.** Section 3 runs one `br create` per finding,
+each auto-flushing, and the damage check comes after all of them. If it fires, step 11's
+recovery deletes the cache and requires every intended mutation replayed — so record the
+`br` commands with their generated ids and field values as you go. Without it, restoring
+the good JSONL discards the whole iteration's legitimate bead additions.
+
 ## 3. Mint one bead per real finding
 
 ```bash

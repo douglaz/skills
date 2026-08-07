@@ -76,6 +76,13 @@ Stop and report plan gaps when any of these are still fuzzy:
    - use tasks for independently claimable work packets
    - use subtasks only when they sharpen sequencing instead of hiding it
    - when one plan concept fans out into multiple deliverables, choose a canonical root bead that carries the full why/constraints/test story and let dependents carry the local details they need
+**Start the replay manifest before step 4, and keep it current.** Steps 4 and 7 write
+beads and auto-flush, so by step 9 the damage may already be done; recovery discards the
+working JSONL before you could read the generated ids back off it. One line per intended
+`br` command, complete enough to re-run verbatim, appended as each id is assigned. The
+coverage matrix maps plan elements to beads — it does not preserve ids, field values, or
+order.
+
 4. Create or update actual beads only with `br`.
 5. Write each material bead so it is self-contained. Use [references/bead-description-template.md](references/bead-description-template.md), and elaborate beyond the source plan whenever that removes ambiguity.
 6. Preserve important intent, not just surface tasks:
@@ -90,11 +97,7 @@ Stop and report plan gaps when any of these are still fuzzy:
    - plan -> beads: every important plan element lands somewhere
    - beads -> plan: every bead has clear backing in the plan or an explicitly approved delta
    - if the audit feels suspiciously short or self-satisfied, assume coverage is incomplete and rerun more exhaustively
-9. Before the first `br` write, record the exact list of intended mutations — the `br`
-   commands with their ids and field values, in order. The coverage matrix maps plan
-   elements to beads; it does not preserve generated ids or field values, and recovery
-   discards the working JSONL before you could recover them from it.
-9a. Split, merge, rewrite, or close beads until the graph can stand on its own as executable memory.
+9. Split, merge, rewrite, or close beads until the graph can stand on its own as executable memory.
 10. Flush with an **explicit** `br sync --flush-only` and require it to succeed:
 
     ```bash
