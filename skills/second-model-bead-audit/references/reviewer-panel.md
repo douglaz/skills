@@ -158,6 +158,12 @@ BEADS_JSONL=$(br where --json | jq -er '.jsonl_path') \
 # clean-looking diff and flush the damage.
 git status --porcelain -- "$BEADS_JSONL" || { echo "cannot read the worktree — do NOT flush" >&2; exit 1; }
 git diff HEAD -- "$BEADS_JSONL"          || { echo "cannot diff the JSONL — do NOT flush" >&2; exit 1; }
+# Keep a copy of what the worktree held BEFORE the flush. Neither git ref works as the
+# post-flush baseline: if the index holds an earlier damaged export and the worktree holds
+# the good recovery, HEAD-vs-worktree looks fine beforehand, the flush replaces the good
+# copy with the indexed damage, and a worktree-vs-index diff afterwards is EMPTY because
+# both now hold it. Only the pre-flush bytes can show that.
+cp "$BEADS_JSONL" "$AUDIT_DIR/preflush.jsonl" || { echo "cannot preserve the pre-flush graph" >&2; exit 1; }
 : "${BEADS_DIFF_REVIEWED:?read the two commands above, then set this to how you resolved it}"
 br sync --flush-only || { echo "flush failed — do not audit an unwritten graph" >&2; exit 1; }
 
@@ -180,6 +186,10 @@ exists to catch. If you must automate it, make the continuation conditional on a
 recorded acknowledgement rather than on the diff having been printed.
 
 ```bash
+# Compare against the PRE-FLUSH bytes, not against the index. This is the only baseline
+# that can show a flush replacing a good worktree copy with an indexed damaged one.
+diff -u "$AUDIT_DIR/preflush.jsonl" "$BEADS_JSONL" \
+  || : "${BEADS_POSTFLUSH_REVIEWED:?the flush changed the graph — read that diff, then set this}"
 cp "$BEADS_JSONL" "$GRAPH_JSONL"
 GRAPH_FINGERPRINT=$(fingerprint_file "$GRAPH_JSONL") || {
   echo "Could not fingerprint initial graph snapshot" >&2

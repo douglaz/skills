@@ -251,7 +251,13 @@ exists to catch. Prose underneath a `git add` cannot stop a shell.
 # The split above is a real gate, not a suggestion: an automated runner executing block
 # after block reaches `git add` regardless of what the diff showed. Require the reviewer
 # to record what they saw before anything is staged.
-: "${BEADS_DIFF_REVIEWED:?read the diff above, then set this to what you found}"
+# Bind the acknowledgement to THIS pass. The loop runs in one shell, so a value set in
+# iteration 1 would satisfy every later iteration and let an unreviewed diff stage,
+# commit and push — the gate passing on the strength of a decision about a different
+# graph. Unset it before the diff, and record the pass it belongs to.
+unset BEADS_DIFF_REVIEWED
+# ...print and read the diff, then:
+: "${BEADS_DIFF_REVIEWED:?read THIS pass's diff, then set it to \"pass $ITERATION: <what you found>\"}"
 git add -- "$BEADS_JSONL"
 git commit -m "chore(beads): record review findings (iteration <N>, codex+fable)"
 git push
