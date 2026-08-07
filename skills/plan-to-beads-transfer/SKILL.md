@@ -126,8 +126,10 @@ order.
     its replay step assumes a SINGLE mutation, the drain's case. A transfer has a whole
     graph in flight, so enumerate the complete intended delta (the replay manifest you started before step 4 —
     NOT the coverage matrix, which maps plan elements to beads and preserves no ids, field
-    values or ordering) before the `git checkout HEAD --`, or the restore discards every bead this
-    transfer wrote along with the damage.
+    values or ordering) before restoring — and restore from the source you established holds the good bodies,
+    which is not automatically `HEAD`: if the index holds the last good export and HEAD
+    an older one, `git checkout HEAD --` overwrites the good staged copy too. Step 11
+    requires that choice explicitly; make it there rather than assuming.
 11. If the repo workflow supports it, run `br lint` after major rewrites to catch missing sections.
 
 ## Quality bar

@@ -831,9 +831,13 @@ implement → review loop for each bead.
     surviving cache makes the import skip equal-timestamp records and report success);
     **check the import and the replay before any flush** (the stale DB is already deleted,
     so a failed import leaves an empty one and the flush writes *that* over what you just
-    restored); and **replay the complete intended delta**, not one command — the drain's
-    case is a single closure, but `plan-to-beads-transfer` and `bead-polish-loop` batch, so
-    `git checkout HEAD --` there discards their legitimate work along with the damage.
+    restored); and **rebuild the cache BEFORE replaying anything** — restore, delete and
+    re-import the DB, and only then replay. Restoring the file and replaying straight away
+    lets the first `br` command auto-flush the *still-stale* cache over what you just
+    restored, destroying the recovery with the recovery. And **replay the complete intended
+    delta**, not one command: the drain's case is a single closure, but
+    `plan-to-beads-transfer` and `bead-polish-loop` batch, so restoring from git there
+    discards their legitimate work unless the whole manifest is replayed.
 
     **A round summary is not a replay manifest.** It records what you decided, not the
     generated ids, the exact field values, or the order they were written in — and recovery
