@@ -993,6 +993,60 @@ new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"
 thumbs "$FAR_UTC" > "$FIX/reactions.json"
 check "a 👍 alongside a real wrapper still clears" 0
 
+# An `eyes` at or after the `+1` means a round is running RIGHT NOW — and then waiting is
+# exactly right, the opposite of what exit 4 tells the caller. ROUND_ACTIVE cannot catch
+# this: it is gated on WRAPPER_AT, empty on every path that reaches exit 4, so it is false
+# by construction rather than by evidence.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"+1","created_at":"%s"},{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":"%s"}]]' \
+  "$FAR_UTC" "2099-06-01T00:00:00Z" > "$FIX/reactions.json"
+check "an eyes AFTER the 👍 blocks exit 4" 1
+
+# ...but an eyes BEFORE it is the round that produced the 👍, so exit 4 still stands.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"+1","created_at":"%s"},{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":"2098-06-01T00:00:00Z"}]]' \
+  "$FAR_UTC" > "$FIX/reactions.json"
+check "an eyes BEFORE the 👍 keeps exit 4" 4
+
+# An eyes that exists but cannot be placed in time is a round that MAY be running. This
+# branch fires only on positive evidence, so "I cannot tell" withdraws the claim.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"+1","created_at":"%s"},{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":null}]]' \
+  "$FAR_UTC" > "$FIX/reactions.json"
+check "an undatable eyes withdraws exit 4" 1
+
+# The boundary itself, in a repo whose commit date is PINNED, so the comparison is exact
+# rather than "far future vs the year 2000". These three cases pin the `>=` — dropping it
+# to `>` reddens the middle one — and none of them needs `date` at all.
+#
+# What they do NOT pin, stated because a green suite reads like coverage: the gate's choice
+# of `%ct` over `%cI` for the tip date. `%cI` renders in the commit's own offset, so a
+# non-UTC committer yields `...-07:00`, which the BSD arm of iso_to_epoch cannot parse —
+# but `date -u -d` on GNU accepts both forms, so reverting it stays green here (verified by
+# mutation, including under TZ=America/Los_Angeles). That choice is held by review, not by
+# this file. A test that cannot fail against the defect it names is not covering it.
+(
+  PINNED="2050-06-01T12:00:00Z"
+  git init -q "$WORK/repo2"; cd "$WORK/repo2"
+  GIT_COMMITTER_DATE="$PINNED" GIT_AUTHOR_DATE="$PINNED" \
+    git -c user.email=t@t -c user.name=t commit -q --allow-empty -m pinned
+  TIP=$(git rev-parse HEAD)
+
+  new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+  printf '%s' "$TIP" > "$FIX/prhead.txt"
+  thumbs "2050-06-01T11:59:59Z" > "$FIX/reactions.json"
+  check "👍 one second BEFORE the tip is exit 1" 1
+
+  thumbs "$PINNED" > "$FIX/reactions.json"
+  check "👍 exactly AT the tip is exit 4 (>=)" 4
+
+  thumbs "2050-06-01T12:00:01Z" > "$FIX/reactions.json"
+  check "👍 one second AFTER the tip is exit 4" 4
+  printf '%s %s\n' "$PASS" "$FAIL" > "$WORK/subshell-tally"
+)
+read -r PASS FAIL < "$WORK/subshell-tally"
+cd "$WORK/repo"
+
 new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 thumbs "$FAR_UTC" > "$FIX/reactions.json"
 J=$(PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 --json 2>/dev/null)

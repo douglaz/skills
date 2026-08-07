@@ -573,20 +573,31 @@ condition:
 
      **Exit 4 refuses the merge exactly as 1 does** — any caller doing `bot-gate <PR> &&
      gh pr merge` is unaffected. It exists for a caller that *loops*: exit 1 usually means
-     wait, exit 4 means waiting cannot help, because the signal that would attribute the
-     round is the one that is missing. It fires only when every other conjunct already
-     holds and the bot's `+1` post-dates the tip's commit — per the bot's own about-box,
-     *"if Codex has suggestions, it will comment; otherwise it will react with 👍"*, so a
-     👍 is a completed round, attached to the PR and never to a commit. A 👍 older than the
-     tip provably belongs to an earlier tree and leaves a plain exit 1. See § 8b.
+     wait, exit 4 means waiting **may** not help, because the signal that would attribute
+     the round is the one that is missing. It fires only when every other conjunct already
+     holds, the bot's `+1` post-dates the tip's commit, and no `eyes` reaction is at or
+     after that `+1`. Per the bot's own about-box — *"if Codex has suggestions, it will
+     comment; otherwise it will react with 👍"* — a 👍 is a completed round, attached to
+     the PR and never to a commit. A 👍 older than the tip provably belongs to an earlier
+     tree and leaves a plain exit 1. See § 8b.
 
-     Two honesty notes about that path. It is derived from the bot's **documented
-     contract**, not from an observation here — this repo's own 19-round sample on PR #16
-     saw the `+1` fire zero times, so the exit-4 branch has never been exercised against
-     live traffic. And a reactions query that fails on this path leaves the plain exit 1
-     rather than escalating to 3: the reaction can only make an already-blocking answer
-     *more specific*, so refusing a decidable PR because a warning could not be refined
-     would be the wrong trade.
+     **Try `@codex review` before treating exit 4 as an outage.** Three honesty notes:
+
+     - **The bound is a lower one, and it admits a false positive.** The honest boundary is
+       when the tip became the PR head, and nothing reports that — GitHub's timeline
+       carries `head_ref_force_pushed` but not an ordinary push, the same gap the
+       round-start list already documents. So: commit locally, the bot thumbs the *old*
+       remote head, then you push. The 👍 survives (one reaction per user per item, so the
+       bot cannot refresh or remove it) and satisfies the comparison though nothing read
+       this tip. It is kept because the failure is one-directional — it can only turn a
+       block into a differently-worded block — and § 8b's first instruction, confirm a real
+       incident on the status page, is exactly what disproves it.
+     - **It has never met live traffic.** Derived from the bot's documented contract, not
+       from an observation here: this repo's own 19-round sample on PR #16 saw the `+1` fire
+       zero times.
+     - **A failed reactions read leaves the plain exit 1**, not 3. The reaction can only
+       make an already-blocking answer *more specific*, so refusing a decidable PR because a
+       warning could not be refined would be the wrong trade.
 
      `--no-coderabbit` is gone, and rejected as an unknown option with exit 2 rather than
      accepted and ignored. It existed to assert a fact no query could establish — whether
@@ -856,9 +867,12 @@ did.
 | Gate says | Means | Do |
 |---|---|---|
 | `BLOCKED`, wrapper 0, no other signal | the bot has not reviewed this tip | wait, or `@codex review` |
-| `BLOCKED_UNATTRIBUTED` (exit 4) | a round *completed* — its 👍 post-dates the tip — but nothing says which tree it read | waiting cannot fix this; go on |
+| `BLOCKED_UNATTRIBUTED` (exit 4) | a round *completed* — its 👍 post-dates the tip — but nothing says which tree it read | `@codex review` first; if no wrapper comes, go on |
 
 Exit 4 is still a refusal. It changes what you do next, never whether the gate approved.
+And it is not proof of an outage: the 👍 is sticky and bounded only by the tip's local
+commit time, so it can also be an *older* head thumbed after you committed (§ 7). That is
+precisely why the next step is to confirm the incident rather than assume it.
 
 **Second, confirm it is actually an incident**, not a quiet bot. Check
 <https://www.githubstatus.com> and say what you saw. "The wrapper is missing" is not

@@ -855,7 +855,8 @@ PR_HEAD_FINAL=$(gh pr view "$PR" -R "$REPO" --json headRefOid -q .headRefOid 2>/
 # tree it read. Both states below present identically as a missing wrapper:
 #
 #   (a) the bot has not reviewed this tip          -> waiting is the right move
-#   (b) a round completed but nothing attributes it -> waiting cannot help
+#   (b) a round completed but nothing attributes it -> waiting MAY not help (see the
+#                                                     residual below); force a wrapper first
 #
 # Only (a) is a reason to keep polling. During a forge incident the API keeps answering
 # 200 while new review wrappers stop appearing, so a caller looping until a wrapper shows
@@ -877,8 +878,36 @@ if [[ "$WRAPPER_TIP" -eq 0 ]]; then
   # the commit provably belongs to an earlier tree and leaves a plain BLOCK. Committer
   # date, not author date — a rebase or amend rewrites the former and preserves the
   # latter, and it is the rewritten commit that got pushed.
-  _TIP_AT=$(git show -s --format=%cI "$TIP" 2>/dev/null) || _TIP_AT=""
-  _TIP_EPOCH=$(iso_to_epoch "$_TIP_AT") || _TIP_EPOCH=""
+  #
+  # DOCUMENTED RESIDUAL — this is a LOWER bound, not the real one. The honest boundary is
+  # when the tip became the PR head, and nothing reliably reports that: GitHub's PR
+  # timeline carries `head_ref_force_pushed` but not an ordinary push, the same gap the
+  # round-start list already documents. So this admits one false positive: commit locally
+  # at T0, the bot thumbs the OLD remote head at T1 > T0, push the tip at T2. The `+1`
+  # survives — GitHub allows one reaction per user per item, so the bot cannot refresh or
+  # remove it — and satisfies the comparison though no round has read this tip.
+  #
+  # Kept anyway, because the failure is bounded and one-directional: it can only turn a
+  # BLOCK into a *differently-worded* BLOCK. The cost is a caller that stops polling early
+  # and consults § 8b, whose first instruction is to confirm an incident on the status page
+  # — which is exactly what disproves this case. Tightening it would need a boundary the
+  # forge does not expose, and inventing one would be the over-claim ADR 0004 exists to
+  # prevent. The report below says "may" for this reason; do not strengthen that wording
+  # without a real head-change timestamp behind it.
+  #
+  # `%ct` (Unix seconds), NOT `%cI`. `%cI` renders in the COMMIT's own stored offset: `Z`
+  # when the committer was on UTC, but `2050-06-01T05:00:00-07:00` when they were not — and
+  # the BSD arm of iso_to_epoch matches only the literal-Z pattern, so that second form is
+  # unparseable there. The result would be a branch that works on GNU userland, works on a
+  # macOS clone whose commits happen to be UTC, and silently degrades to plain BLOCKED on a
+  # macOS clone whose commits are not, with no error to notice. `%ct` has no rendering and
+  # no parse step, so none of that applies.
+  #
+  # Not caught by bot-gate.test on GNU userland: `date -u -d` accepts BOTH forms, so the
+  # reversion stays green here. The suite pins the COMPARISON (see its boundary cases); this
+  # choice is pinned by review only.
+  _TIP_EPOCH=$(git show -s --format=%ct "$TIP" 2>/dev/null) || _TIP_EPOCH=""
+  [[ "$_TIP_EPOCH" =~ ^[0-9]+$ ]] || _TIP_EPOCH=""
   if _REACT=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/reactions" 2>/dev/null) \
      && printf '%s' "$_REACT" | jq -e . >/dev/null 2>&1; then
     # Undated reactions are dropped rather than treated as "now": an undatable signal
@@ -890,6 +919,31 @@ if [[ "$WRAPPER_TIP" -eq 0 ]]; then
     if [[ -n "$_THUMBS_AT" && -n "$_TIP_EPOCH" ]]; then
       _THUMBS_EPOCH=$(iso_to_epoch "$_THUMBS_AT") || _THUMBS_EPOCH=""
       [[ -n "$_THUMBS_EPOCH" ]] && (( _THUMBS_EPOCH >= _TIP_EPOCH )) && THUMBS_UNATTRIBUTED=true
+    fi
+    # An `eyes` at or after the `+1` says a round is running NOW, and then waiting is
+    # exactly the right move — which is the opposite of what exit 4 tells the caller.
+    # ROUND_ACTIVE cannot catch this: it is gated on WRAPPER_AT, which is empty on every
+    # path that reaches here, so it is false by construction rather than by evidence. This
+    # read is the only place the two reactions are visible together.
+    #
+    # Same three-way split the hoisted reactions block uses: no reaction, an undatable one,
+    # and a dated one are different states. An `eyes` that exists but cannot be placed in
+    # time is a round that may be running, so it withdraws the exit-4 claim too — this
+    # branch only ever fires on positive evidence, and "I cannot tell" is not that.
+    _EYES2=$(printf '%s' "$_REACT" | jq -r --arg bot "$BOT_LOGIN" '
+      [.[][] | select(.user.login==$bot) | select(.content=="eyes")] as $e
+      | if ($e | length) == 0 then ""
+        elif any($e[]; ((.created_at // "") | length) == 0) then "malformed"
+        else ([$e[].created_at] | max) end' 2>/dev/null) || _EYES2="malformed"
+    if $THUMBS_UNATTRIBUTED && [[ -n "$_EYES2" ]]; then
+      if [[ "$_EYES2" == "malformed" ]]; then
+        THUMBS_UNATTRIBUTED=false
+      else
+        _EYES2_EPOCH=$(iso_to_epoch "$_EYES2") || _EYES2_EPOCH=""
+        if [[ -z "$_EYES2_EPOCH" ]]; then THUMBS_UNATTRIBUTED=false
+        elif (( _EYES2_EPOCH >= _THUMBS_EPOCH )); then THUMBS_UNATTRIBUTED=false
+        fi
+      fi
     fi
   fi
 fi
@@ -941,7 +995,7 @@ else
   printf '\nverdict: %s\n' "$VERDICT"
   [[ "$VERDICT" == "NO_PENDING_EVIDENCE" ]] && printf '  = %s\n' "$CLAIM"
   if $THUMBS_UNATTRIBUTED; then
-    printf '  ⚠ a codex round COMPLETED after this tip was committed — its 👍 says it found\n    nothing — but no wrapper names the tip, so nothing says which tree that round read.\n    Waiting will not resolve this: the signal that would attribute it is the one that is\n    missing. `@codex review` to force a fresh wrapper, or follow the degraded-forge\n    procedure in SKILL.md and record what you substituted.\n'
+    printf '  ⚠ a codex round COMPLETED after this tip was committed — its 👍 says it found\n    nothing — but no wrapper names the tip, so nothing says which tree that round read,\n    and waiting MAY not fix it: the signal that would attribute the round is the missing\n    one. Caveat: the 👍 is sticky and only bounded by the local commit time, so it can\n    also be an older head thumbed after you committed. `@codex review` to force a fresh\n    wrapper — do that first. If it does not come, confirm a real incident on the status\n    page and follow the degraded-forge procedure in SKILL.md, recording what you\n    substituted.\n'
   elif [[ "$WRAPPER_TIP" -eq 0 ]]; then
     printf '  ⚠ no review from the codex bot names this tip, so nothing proves WHICH tree it read.\n    Push or `@codex review` to get one, or accept the round explicitly and say so.\n'
   fi
