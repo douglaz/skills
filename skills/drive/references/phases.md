@@ -37,9 +37,10 @@ Treat that as the default for anything non-trivial.
    have carried it prints `nothing to commit, working tree clean` with the content
    gone from the file and from `HEAD`. On re-commit take both checks that message
    hides: require `git commit` to exit 0 (it exits **1** on an empty commit, however
-   reassuring the wording), then assert the content with
-   `git show HEAD:<file> | grep -c '<phrase>'` — a partial loss commits cleanly. A
-   clean `git status` is neither check. See
+   reassuring the wording), then assert the content of **every** file you changed with
+   `git show "HEAD:$f" | grep -q '<a phrase from that file>'` — a partial loss commits
+   cleanly, and checking one path only proves that path survived. A clean `git status`
+   is neither check. See
    [multi-reviewer-loop/references/reviewer-panel.md](../../multi-reviewer-loop/references/reviewer-panel.md).
 5. For plan-shaped work, `plan-eng-review` / `plan-ceo-review` add a product lens.
 

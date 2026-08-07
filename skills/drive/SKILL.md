@@ -235,13 +235,21 @@ A phase closes on evidence or it does not close.
 
   ```bash
   git add -A && git commit -m "<msg>" || { echo "commit produced nothing"; exit 1; }
-  git show HEAD:<file> | grep -c "<distinctive phrase from the change>"   # must be >0
+  # EVERY file the change touched, not a representative one.
+  git show --stat --format= HEAD          # does this list all of them?
+  for f in <every file you edited>; do
+    git show "HEAD:$f" | grep -q "<a distinctive phrase from that file's change>" \
+      || { echo "$f did not land"; exit 1; }
+  done
   ```
 
   The `||` catches a total loss — `git commit` with nothing staged exits **1**, however
-  reassuring its message reads. The `grep` catches a partial one, which commits cleanly
-  at exit 0 with half the change in it. Gates that passed *before* the loss are not
-  evidence either; the work was real when they ran. See
+  reassuring its message reads. The loop catches a partial one, which commits cleanly at
+  exit 0. **Check every file, not one.** Grepping a single path proves only that path
+  survived: if another file was reverted while your sample was left intact, the commit
+  exits 0 and the grep passes, and the guard reports success for exactly the loss it was
+  written to catch. Gates that passed *before* the loss are not evidence either; the work
+  was real when they ran. See
   [multi-reviewer-loop/references/reviewer-panel.md](../multi-reviewer-loop/references/reviewer-panel.md).
 - **`br` is not exempt — but know which failure you are guarding.** An *explicit*
   `br sync --flush-only` propagates a real exit code, so just require it to succeed. The

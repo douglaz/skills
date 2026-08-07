@@ -48,7 +48,9 @@ partial loss commits cleanly at exit 0:
 
 ```
 git add -A && git commit -m "<msg>" || { echo "commit produced nothing"; exit 1; }
-git show HEAD:<file> | grep -c "<distinctive phrase>"
+for f in <every file you changed>; do
+  git show "HEAD:$f" | grep -q "<a distinctive phrase from that file>" || { echo "$f did not land"; exit 1; }
+done
 ```
 
 A clean `git status` is neither check.

@@ -129,7 +129,9 @@ message hides:
 
 ```bash
 git add -A && git commit -m "<msg>" || { echo "commit produced nothing"; exit 1; }
-git show HEAD:path/to/file | grep -c "<distinctive phrase from the change>"   # must be >0
+for f in <every file the run changed>; do
+  git show "HEAD:$f" | grep -q "<a distinctive phrase from that file>" || { echo "$f did not land"; exit 1; }
+done
 ```
 
 `git commit` with nothing staged exits **1**, so the `||` catches a total loss however

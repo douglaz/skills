@@ -153,9 +153,18 @@ non-zero exit.
 **An edit made to a tracked file while `codex review` is in flight is silently
 destroyed.** Both reviewers must have exited — `wait` returned for each PID —
 before you change a single file. If you must edit sooner, kill the reviewer **by
-the exact PID captured at launch** — `kill "$CODEX_PID"` — and accept the lost
-pass. Not `pkill -f "codex review"`: that matches your own shell and other
-sessions' reviewers running the same command, per the rule below.
+the exact PID captured at launch, then reap it**, and accept the lost pass:
+
+```bash
+kill "$CODEX_PID"
+wait "$CODEX_PID"     # kill only SENDS the signal; this is what waits for it
+```
+
+The `wait` is not decoration. `kill` returns as soon as SIGTERM is delivered, so
+the `timeout` wrapper and the reviewer beneath it are still tearing down when it
+does — and an edit made in that gap is inside the very window the kill was meant
+to close. Not `pkill -f "codex review"` either: that matches your own shell and
+other sessions' reviewers running the same command, per the rule below.
 
 This loop is the most exposed skill in the repo to it: § 2 backgrounds both
 reviewers *by design*, and § 3 is entirely about editing. An agent that starts on
@@ -187,7 +196,9 @@ Then still assert the content, because a *partial* loss commits cleanly at exit
 0 — some files reverted, others not, one real commit carrying half the fix:
 
 ```bash
-git show HEAD:path/to/file | grep -c "<distinctive phrase from the fix>"   # must be >0
+for f in <every file the fix touched>; do
+  git show "HEAD:$f" | grep -q "<a distinctive phrase from that file>" || { echo "$f did not land"; exit 1; }
+done
 ```
 
 A clean `git status` is neither check. It is equally consistent with the edits

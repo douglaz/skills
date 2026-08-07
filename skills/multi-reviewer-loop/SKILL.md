@@ -396,9 +396,17 @@ For each pass `N` from `1` to `MAX_PASSES`:
    both reviewers is exactly what puts this loop in the hazard window: codex's
    findings are readable while Fable is still running, and acting on them there
    is how the work disappears. If you must edit sooner, kill that reviewer by the
-   PID you captured at launch (`kill "$CODEX_PID"` — never `pkill -f`, which
-   matches your own shell) and accept the lost pass. Full detail, the commit-time
-   assertion, and the probe that gives a false all-clear are in
+   PID you captured at launch and **then reap it** — `kill` only *sends* SIGTERM
+   and returns immediately, so the wrapper and the reviewer are still shutting
+   down when it comes back, and an edit right after is still inside the window:
+
+   ```bash
+   kill "$CODEX_PID"          # never `pkill -f` — it matches your own shell
+   wait "$CODEX_PID"          # THIS is what makes the window closed
+   ```
+
+   Then accept the lost pass. Full detail, the commit-time assertion, and the
+   probe that gives a false all-clear are in
    [references/reviewer-panel.md](references/reviewer-panel.md).
 
 2. Unwrap the Claude reviewer's JSON into a plain findings file with `jq`, and
