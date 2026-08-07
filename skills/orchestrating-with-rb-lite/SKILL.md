@@ -793,10 +793,21 @@ implement → review loop for each bead.
     JSONL and absent from the DB was dropped by the auto-flush, which is the guard's
     literal precondition.
 
-    So field-diff before committing any `br` write:
+    So field-diff before committing any `br` write — **resolving the path first**, because
+    `.beads/issues.jsonl` is only the default layout and a hardcoded path diffs *nothing*
+    on a `.beads.jsonl` or `<name>.beads.jsonl` repo. An empty diff then reads as "no
+    collateral damage" and you never enter recovery at all, which is the failure this whole
+    step exists to prevent:
 
     ```bash
-    git diff .beads/issues.jsonl
+    BEADS_JSONL=$(br where --json | jq -er '.jsonl_path') \
+      || { echo "cannot resolve the beads JSONL path — do NOT judge the flush blind"; exit 1; }
+    BEADS_DB=$(br where --json | jq -r '.db_path // empty')
+    # Read `br where --json` yourself for the DB field name your version emits; if it
+    # reports none, the cache sits beside the JSONL. Never assume `.beads/beads.db`.
+    [ -n "$BEADS_DB" ] || BEADS_DB="$(dirname "$BEADS_JSONL")/beads.db"
+
+    git diff "$BEADS_JSONL"
     ```
 
     Parse the `+`/`-` lines as JSON, key by `id`, and assert the only changed fields are the
@@ -806,23 +817,12 @@ implement → review loop for each bead.
     Recovery depends on **which of the two has the good text**, and getting that backwards
     cements the loss. Establish it before running anything:
 
-    **Resolve the real paths first — `.beads/issues.jsonl` is a default, not a guarantee.**
-    `.beads.jsonl` and `<name>.beads.jsonl` layouts are supported and this repo's own
-    `drive-status` recognizes them (`_BEAD_RE`). A recovery that hardcodes the default
-    restores and deletes paths that do not exist, while the commands after it keep using
-    the *actual* stale cache and damaged file — so it reports success and leaves the loss
-    in place. Ask the tool, exactly as `second-model-bead-audit` already does:
-
-    ```bash
-    BEADS_JSONL=$(br where --json | jq -er '.jsonl_path') \
-      || { echo "cannot resolve the beads JSONL path — do NOT run the recipe blind"; exit 1; }
-    BEADS_DB=$(br where --json | jq -r '.db_path // empty')
-    # Read `br where --json` yourself for the DB field name your version emits; if it
-    # reports none, the cache sits beside the JSONL. Never assume `.beads/beads.db`.
-    [ -n "$BEADS_DB" ] || BEADS_DB="$(dirname "$BEADS_JSONL")/beads.db"
-    ```
-
-    Use `$BEADS_JSONL` and `$BEADS_DB` for every step below — the field-diff above included.
+    `$BEADS_JSONL` and `$BEADS_DB` from the detection step above carry through every command
+    below. A recovery that hardcodes the default restores and deletes paths that do not
+    exist while the commands after it keep using the *actual* stale cache and damaged file —
+    reporting success and leaving the loss in place. `drive-status`'s own `_BEAD_RE`
+    recognizes all three layouts; `second-model-bead-audit` already asks `br where` rather
+    than assuming.
 
     **(a) The cache is stale and the file is still good** — you have hand-edited the JSONL
     and no flush has happened yet. Rebuild the cache from the file. `br sync --import-only`

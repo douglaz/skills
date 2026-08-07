@@ -138,8 +138,20 @@ for src in "${SOURCE_FILES[@]}"; do
   printf '%s\t%s\n' "$live_fp" "$src" >>"$SOURCE_STATE_BEFORE"
 done
 
-br sync --flush-only
+br sync --flush-only || { echo "flush failed — do not audit an unwritten graph" >&2; exit 1; }
 BEADS_JSONL=$(br where --json | jq -er '.jsonl_path')
+
+# STOP HERE AND READ THIS DIFF before snapshotting. The flush just re-exported EVERY bead
+# from the gitignored cache over the tracked JSONL, so any body the cache held a stale copy
+# of was silently reverted — exit 0, no warning. Snapshot now and the panel audits the
+# truncated graph, which is the one failure an audit cannot catch by reading: the text it
+# would have objected to is already gone. Field-diff it, key the +/- lines by `id`, and
+# assert only the fields you meant to change moved. Ids on one side only, or a
+# `description` this session did not write, is the tell. Recovery:
+# ../../orchestrating-with-rb-lite/SKILL.md step 11.
+git diff -- "$BEADS_JSONL"
+# Do not continue past this line until you have read that output.
+
 cp "$BEADS_JSONL" "$GRAPH_JSONL"
 GRAPH_FINGERPRINT=$(fingerprint_file "$GRAPH_JSONL") || {
   echo "Could not fingerprint initial graph snapshot" >&2
