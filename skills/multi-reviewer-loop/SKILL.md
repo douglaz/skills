@@ -700,10 +700,28 @@ finding precisely enough for someone else to act on, which by itself kills the v
 
 - **You adjudicate.** Verify each finding against source first. Never hand over a finding
   you have not checked — you would be outsourcing the judgment, not the typing.
-- **The implementer edits**, in a fresh context, with a prompt that carries: verify before
-  fixing (findings are hypotheses, and one may be wrong); after each fix sweep the whole
-  artifact for the same claim **by concept, not by phrase**; read back every passage you
-  splice into; add no new mechanism; plus your environment and scope guards.
+- **The implementer edits**, in a fresh context. A fresh context is also an *ignorant*
+  one: everything it must not do has to be in the prompt, because none of it is in the
+  air. Carry all of:
+  - **The scope, named.** The exact paths it may touch and the tools it may use. An
+    implementer told only "fix these findings" will range further than you meant, and
+    you cannot review what you did not bound.
+  - **Verify before fixing.** Findings are hypotheses; one may be wrong. Say so, or a
+    fresh agent will treat your list as a work order.
+  - **Sweep by concept, not by phrase.** After each fix, search the whole artifact for
+    the same claim stated differently.
+  - **Read back every passage you splice into** — the whole sentence and its
+    neighbours, not the replaced span.
+  - **Use the harness edit tool, not `sed -i` or `str.replace`**, which report success
+    on zero matches. If an edit must be scripted, assert the target exists before
+    replacing, then grep the file for both the new text and the *absence* of the old.
+    This is the repo's standing edit contract (`agents-md`), and it does not travel to
+    a fresh context on its own.
+  - **Add no *unrequested* mechanism** — not "nothing new". A verified finding may
+    genuinely require a lock, a validation, or a transaction; what is forbidden is
+    anything beyond the finding. Scope conflicts come back to you to adjudicate, not
+    resolved by the implementer.
+  - Plus your environment guards.
 - **Tool-managed state is delegable too — through the tool, never the file.** A ticket
   tracker or database whose on-disk form is a single JSONL line per record is corrupted by
   hand-editing, so the instinct is to keep those findings yourself. Measured: that instinct
@@ -711,7 +729,23 @@ finding precisely enough for someone else to act on, which by itself kills the v
   in a double-quoted update and silently blanked three field names in a record. Delegating
   the same work with one rule — *use the CLI, never edit the file* — landed clean and the
   database still parsed. Name the tool, forbid the file, and require a read-back.
-- **Snapshot first.** The implementer has write access; `git` is the undo.
+- **Snapshot first — and non-destructively.** The implementer has write access, and
+  § 1.6 explicitly permits running on a dirty tree, so plain `git` is *not* your undo:
+  `git checkout .`, `git stash`, and `git reset --hard` would each discard the user's
+  pre-existing unstaged work along with the delegated edit, which § 1.6 forbids. Capture
+  the tree as a patch first, and confirm the capture is non-empty **before** granting
+  write access — a snapshot you never verified is not a rollback plan:
+
+  ```bash
+  SNAP="$REVIEW_DIR/pre-delegation.patch"
+  git diff HEAD >"$SNAP"                                  # tracked: staged + unstaged
+  git status --porcelain >"$REVIEW_DIR/pre-delegation.status"
+  ```
+
+  To roll back, revert only the paths you delegated and re-apply that patch's hunks for
+  them; leave every other path alone. `git diff HEAD` does not capture **untracked**
+  files, so copy any that matter into `$REVIEW_DIR` first or accept that they are outside
+  the snapshot — and say which you did.
 
 This is not `rb-lite`. That loop hands over the whole task and reviews the result; this
 hands over *only the edit* for findings you have already verified.
