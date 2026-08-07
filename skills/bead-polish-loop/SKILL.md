@@ -40,6 +40,23 @@ merely plausible.
 - If there are no meaningful beads yet, redirect to `plan-to-beads-transfer`.
 - If polishing keeps surfacing architecture questions, step back into plan space instead of repeatedly fixing downstream symptoms.
 
+
+**Before the first `br` write, check the JSONL for divergence.** Any `br` mutation
+auto-flushes the cache over the tracked file, so an unstaged hand-edit is erased by your
+very first `br update` — and because neither the index nor `HEAD` holds it, every later
+diff shows only your intended changes and the loss is undetectable, let alone recoverable.
+The window is open from the moment the session starts:
+
+```bash
+BEADS_JSONL=$(br where --json | jq -er '.jsonl_path') \
+  || { echo "cannot resolve the beads JSONL path"; exit 1; }
+git status --porcelain -- "$BEADS_JSONL"
+```
+
+Not empty? Resolve it now — see recovery case (a) in
+[orchestrating-with-rb-lite](../orchestrating-with-rb-lite/SKILL.md) step 11 — before
+writing anything. After the first flush the choice is gone.
+
 ## Session shape
 
 - Expect 2-3 serious polish passes per session before context quality drops.

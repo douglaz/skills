@@ -138,8 +138,14 @@ for src in "${SOURCE_FILES[@]}"; do
   printf '%s\t%s\n' "$live_fp" "$src" >>"$SOURCE_STATE_BEFORE"
 done
 
+# RESOLVE AND INSPECT BEFORE FLUSHING. The flush writes the cache over the tracked file,
+# so an unstaged hand-edit is destroyed HERE — and the diff below then compares the file
+# against an index that already matches it, comes back empty, and the audit snapshots the
+# truncated graph having "checked". The check has to precede the write it guards.
+BEADS_JSONL=$(br where --json | jq -er '.jsonl_path') \
+  || { echo "cannot resolve the beads JSONL path" >&2; exit 1; }
+git status --porcelain -- "$BEADS_JSONL"   # not empty? resolve it before flushing
 br sync --flush-only || { echo "flush failed — do not audit an unwritten graph" >&2; exit 1; }
-BEADS_JSONL=$(br where --json | jq -er '.jsonl_path')
 
 # STOP HERE AND READ THIS DIFF before snapshotting. The flush just re-exported EVERY bead
 # from the gitignored cache over the tracked JSONL, so any body the cache held a stale copy
