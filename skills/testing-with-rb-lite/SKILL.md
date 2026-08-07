@@ -185,8 +185,15 @@ forbidden, and check for each when you review the result. They are the reason
    If your run reveals a real bug in the code under test, that's the gate
    working — stop and report it.
 
-   **Then run it once more with the thing it detects deliberately broken, and
-   watch it FAIL.** Break the **production behavior** in your own scratch copy —
+   **Then run it again with the thing it detects deliberately broken, and watch it
+   FAIL — once per property the gate claims.** A gate asserting two independent
+   properties needs two mutations; reddening the first leaves the second completely
+   untested while looking verified. And for a LIVE gate, isolate first: a defective
+   build can perform the bad operation against a real database, service, or balance
+   before any assertion notices, and a scratch copy of the source isolates none of
+   those. Use a disposable environment, or a non-destructive mutation, or report that
+   the red run could not be done safely. Break the **production behavior** in your own
+   scratch copy —
    invert the invariant in the code under test, or run against the known-defective
    build — never the test's expected value and never its setup. Those turn any
    assertion red, including one that never reaches the behavior, so a gate with
@@ -213,11 +220,13 @@ When you finish, report:
 3. **The independent run you did and its real result** — the actual markers you
    checked (the PASS line, the exact assertion values), not the exit code. This
    is the sentence the whole skill exists to let you write truthfully.
-4. **The red run** — which *production behavior* you broke to make the gate fail,
-   and the failure it printed. Name the behavior, not just "I made it fail": a red
-   run from a corrupted expected value or a skipped setup proves nothing. A PASS
-   with no matching FAIL is half the evidence, so report both, or say plainly that
-   you never saw the gate fail.
+4. **The red runs — one per property the gate claims.** For each: which *production
+   behavior* you broke, and the failure it printed. Name the behavior, not just "I made
+   it fail" — a red run from a corrupted expected value or a skipped setup proves
+   nothing, and one mutation does not cover a gate asserting two properties. Say where
+   each ran, too: a live gate's red run belongs in a disposable environment. A PASS with
+   no matching FAIL is half the evidence, so report both, or say plainly that you never
+   saw the gate fail and why.
 5. Any false-PASS trap you caught and corrected (in the test or in your own
    runner).
 6. The test artifact path and where it landed (branch/PR).
@@ -255,12 +264,19 @@ ordering, exact-assertion helpers, and failure diagnostics verbatim>.
   checks that marker, not a trailing exit code.
 - Do NOT modify the code under test to make the test pass. If the code has a bug,
   report it — do not hide it.
-- Prove the gate can fail: after it passes, break the PRODUCTION BEHAVIOR it
-  detects (invert the invariant in the code under test, or run against the
-  known-defective build) — never the expected value and never the setup, which go
-  red without the gate ever reaching the behavior. Show the FAIL and its message,
-  confirm it names the assertion that pins the behavior, then revert. A gate never
-  observed red is not evidence.
+- Prove the gate can fail — ONE MUTATION PER PROPERTY. After it passes, break each
+  PRODUCTION BEHAVIOR it claims to detect, one at a time (invert that invariant in
+  the code under test, or run against the known-defective build) — never the expected
+  value and never the setup, which go red without the gate ever reaching the behavior.
+  Show each FAIL and its message, confirm it names the assertion pinning THAT property,
+  then revert. A gate asserting two properties that has only been reddened on the first
+  is untested for the second. A gate never observed red is not evidence at all.
+- **Isolate the red run.** For a live gate — a real database, a running gateway, money
+  movement, a data-loss path — a deliberately defective build can PERFORM the bad
+  operation before any assertion notices. A scratch copy of the source does not isolate
+  a database, a service, or funds. Run the mutation against a disposable environment, or
+  pick a non-destructive mutation, or say plainly that the red run could not be done
+  safely — never run a known-broken build against anything real.
 
 ## RUN IT and report the real output
 Actually run the test (<the exact runner command / how to bring up the

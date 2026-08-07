@@ -404,7 +404,12 @@ For each P-badge finding:
   code referenced. If the bot misread the diff, write a follow-up comment with
   evidence rather than capitulating.
 - **If accepted, fix it AND add a regression test that pins the new behavior.** The
-  test serves as a counter-claim if the bot raises the same concern next round.
+  test serves as a counter-claim if the bot raises the same concern next round — but
+  only if it can fail. **Invert the fix and watch that test go red before you push**,
+  then revert the inversion. A test written for "the bot found X" that also passes
+  against X is not a counter-claim, it is a green check that proves nothing, and the
+  bot cannot tell the difference on the next round. Read the failure too: it has to
+  name the assertion pinning the behavior, not an unrelated panic.
 - **Cite the finding in the commit message.** Future readers (and the next bot
   review) need to know which feedback this commit addressed. Use a phrase like
   "Addresses codex-review #194 P1 (first round)" — round number matters when the bot

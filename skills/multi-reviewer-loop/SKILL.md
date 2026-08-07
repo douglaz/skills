@@ -552,7 +552,8 @@ Otherwise:
    Mutate the **code**, never the test's expected value — flipping the oracle
    turns any assertion red, including one that never reaches the behavior at all,
    so it proves nothing. Check that the failure names the assertion you meant to
-   pin.
+   pin, and run **one mutation per property** the test claims: reddening the first
+   of two leaves the second untested while looking verified.
 
    Keep the trigger narrow — a coverage finding, or a test you touched — not
    every fix. It is one edit, one targeted test run, one revert. It earns its
