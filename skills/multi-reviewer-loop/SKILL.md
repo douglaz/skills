@@ -767,6 +767,21 @@ finding precisely enough for someone else to act on, which by itself kills the v
   `git status --porcelain` names both. Take them out of the delegated scope and say you
   did — a snapshot that silently cannot restore a path is worse than one that refuses it.
 
+  **And no, `git stash create` cannot replace this.** It is the obvious simplification —
+  one command, and git's own code handles binaries, textconv, index stages and submodules
+  correctly — but it *fails outright* on the tree this skill's own preflight builds:
+
+  ```console
+  $ git stash create
+  error: Entry 'café.py' not uptodate. Cannot merge.
+  Cannot save the current worktree state
+  ```
+
+  § 1.5 runs `git add -N` on untracked source files so codex can see them, and `stash`
+  refuses an intent-to-add entry. So the two-patch capture is not a hand-rolled version of
+  something git already does; it is what is left once the mandatory preflight rules the
+  built-in out. Anyone proposing the swap should reproduce the error above first.
+
   **Two patches, not one.** A single `git diff HEAD` flattens staged and unstaged into one
   HEAD-to-worktree delta, so restoring a path that was `MM` brings it back as ` M` — the
   user's staging selection is gone, and a later `git commit` then carries hunks they had
