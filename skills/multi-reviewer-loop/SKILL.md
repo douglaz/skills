@@ -750,13 +750,21 @@ finding precisely enough for someone else to act on, which by itself kills the v
   # for it) — so the GNU form would make every delegation with an untracked path exit
   # `snapshot failed` there. `cp -pR` is portable; the parent dirs are built by hand.
   for f in <each pre-existing untracked path in scope>; do
+    # Clear the destination first, for the same reason the restore does: on a second
+    # delegation of the same path, `cp -pR` treats the existing backup as a target
+    # DIRECTORY and nests inside it, so the rollback later restores the stale outer copy.
+    rm -rf -- "$REVIEW_DIR/untracked/$f"
     mkdir -p "$REVIEW_DIR/untracked/$(dirname "$f")" || { echo "snapshot failed"; exit 1; }
     cp -pR "$f" "$REVIEW_DIR/untracked/$f"           || { echo "snapshot failed"; exit 1; }
   done
   ```
 
-  **Refuse the paths this snapshot cannot represent.** Two tree states survive neither
-  patch, and both are cheaper to exclude than to reconstruct:
+  **Refuse the paths this snapshot cannot represent.** The capture is exactly three things:
+  a staged diff, an unstaged diff, and a byte copy of untracked files. Any tree state that
+  does not round-trip through those is **out of scope for delegation** — take the path out
+  and say you did. That is the rule; the list below is the cases known to hit it, not a
+  boundary that ends there. Growing the capture to cover each new one is a road that ends
+  at `git stash`, and `git stash` does not work here (below).
 
   - **Unmerged paths** (`UU`, `AA`, …). `git diff --cached` exits 0 emitting only
     `* Unmerged path …`, and the unstaged diff carries at most the combined working-tree
@@ -765,6 +773,16 @@ finding precisely enough for someone else to act on, which by itself kills the v
   - **Contents inside a dirty submodule.** The top-level diffs record the gitlink's
     `-dirty` marker, not the modified bytes, so restoring the gitlink does not restore the
     user's edit inside it.
+  - **Paths with an active `.gitattributes` clean filter.** `--no-textconv` does not
+    bypass it: `git diff` snapshots the *cleaned* representation, so worktree-only bytes
+    the filter strips are absent from the patch. Measured — a filter dropping `LOCAL:`
+    lines produced a zero-byte unstaged patch on a file `git status` called modified, and
+    the rollback discarded that line permanently. `git check-attr filter -- <path>` names
+    them.
+  - **Either endpoint of a staged rename.** Porcelain `-z` emits both paths; reverting only
+    the destination leaves the source staged as deleted and the replay then fails, because
+    the source no longer exists in the index. The two endpoints are one unit — delegate
+    both or neither.
 
   `git status --porcelain` names both. Take them out of the delegated scope and say you
   did — a snapshot that silently cannot restore a path is worse than one that refuses it.
