@@ -773,6 +773,21 @@ implement → review loop for each bead.
     br sync --flush-only || { echo "not persisted"; exit 1; }
     ```
 
+    **Check for divergence BEFORE the first `br` write, not at commit time.** `br update`
+    auto-flushes, so a hand-edit sitting unstaged in the JSONL is destroyed by the very
+    first mutation — and neither the index nor `HEAD` holds it, so the post-write diff then
+    shows only your intended change and there is nothing left to recover. The window is
+    open from the moment the session starts:
+
+    ```bash
+    BEADS_JSONL=$(br where --json | jq -er '.jsonl_path') \
+      || { echo "cannot resolve the beads JSONL path"; exit 1; }
+    git status --porcelain -- "$BEADS_JSONL"   # any unstaged/uncommitted bead text?
+    ```
+
+    If that is not empty, resolve it **now** — recovery case (a) below — before running any
+    `br` command. After the first flush the choice is gone.
+
     **That sync proves the closure reached the file. It says nothing about what else the
     same write overwrote — so inspect the file anyway.** Every `br` write flushes the whole
     gitignored `.beads/beads.db` cache over the tracked `.beads/issues.jsonl`, so a write to
@@ -874,14 +889,26 @@ implement → review loop for each bead.
     the staged path restores the text and leaves the stale database authoritative, and the
     next `br` write overwrites the recovery:
 
+    **A staged copy is not evidence the index is good.** An earlier flush may have been
+    staged before anyone noticed, in which case the index holds the damage and `HEAD` holds
+    the truth. Presence tells you a choice exists; only reading tells you which side to
+    take. Inspect both, decide explicitly, and record why:
+
     ```bash
-    # SOURCE: index when it holds the good copy, HEAD otherwise.
-    if git diff --cached --quiet -- "$BEADS_JSONL"; then
-      git checkout HEAD -- "$BEADS_JSONL"      # nothing staged: last good committed state
-    else
-      echo "good copy is STAGED — restoring from the index, not HEAD"
-      git checkout -- "$BEADS_JSONL"           # index -> worktree, keeps the staged truth
-    fi
+    git diff --cached -- "$BEADS_JSONL"   # index vs HEAD — is the staged copy the good one?
+    git diff -- "$BEADS_JSONL"            # worktree vs index — what the flush just did
+    ```
+
+    ```bash
+    # SOURCE: set this from what the two diffs above showed. Do NOT infer it from the mere
+    # presence of a staged version, and do not leave it unset — the default is a refusal,
+    # because guessing here restores the damaged side and the rebuild then preserves it.
+    GOOD=            # HEAD | index
+    case "$GOOD" in
+      HEAD)  git checkout HEAD -- "$BEADS_JSONL" ;;   # last good COMMITTED state
+      index) git checkout -- "$BEADS_JSONL"      ;;   # index -> worktree
+      *)     echo "read both diffs and set GOOD=HEAD or GOOD=index first"; exit 1 ;;
+    esac
 
     # REBUILD: identical for both sources. Do not skip this on the staged path.
     cp "$BEADS_DB" /tmp/beads.db.bak || { echo "cannot back up the cache — stop"; exit 1; }
