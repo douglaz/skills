@@ -408,8 +408,18 @@ For each P-badge finding:
   only if it can fail. **Invert the fix and watch that test go red before you push**,
   then revert the inversion. A test written for "the bot found X" that also passes
   against X is not a counter-claim, it is a green check that proves nothing, and the
-  bot cannot tell the difference on the next round. Read the failure too: it has to
-  name the assertion pinning the behavior, not an unrelated panic.
+  bot cannot tell the difference on the next round. Three conditions on that red run,
+  the same ones the testing skills enforce:
+  - **Read the failure.** It must name the assertion pinning the behavior you inverted,
+    not an unrelated panic or an initialization error.
+  - **One mutation per property.** A regression test answering a finding that had two
+    parts needs two — reddening the first leaves the second untested while looking
+    verified.
+  - **Isolate it if the test touches anything live.** A regression test for a
+    money-path or data-loss finding may drive a real database, service, or balance, and
+    the inverted build can perform the harmful operation before the assertion notices.
+    Disposable environment, non-destructive mutation, or say plainly that the red run
+    could not be done safely — never a broken build against live state.
 - **Cite the finding in the commit message.** Future readers (and the next bot
   review) need to know which feedback this commit addressed. Use a phrase like
   "Addresses codex-review #194 P1 (first round)" — round number matters when the bot
