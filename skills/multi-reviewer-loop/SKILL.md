@@ -751,6 +751,9 @@ finding precisely enough for someone else to act on, which by itself kills the v
   - a **byte copy of every pre-existing untracked path in scope** — no patch contains
     them. Clear each destination before copying and again before restoring: `cp -pR` into
     an existing directory nests rather than replaces, and exits 0 either way.
+  - an **explicit existence list**: which delegated paths exist right now. Porcelain says
+    nothing about a clean tracked file, so status-absence is *not* an existence test —
+    treating it as one deletes exactly the files that were fine.
 
   **Refuse the paths this cannot represent.** The capture is a staged diff, an unstaged
   diff and a byte copy; any state that does not round-trip through those three is out of
@@ -758,22 +761,30 @@ finding precisely enough for someone else to act on, which by itself kills the v
   endpoint of a **staged rename**, which are one unit (reverting the destination leaves the
   source staged as deleted and the replay then fails); contents inside a dirty submodule;
   anything with a byte-transforming `.gitattributes` entry (`git check-attr --all` —
-  `filter`, `text`, `eol`, `working-tree-encoding`); and files marked `assume-unchanged`,
+  `filter`, `text`, `eol`, `working-tree-encoding`); text files under `core.autocrlf=true`,
+  which normalizes worktree bytes with **no** attribute for `check-attr` to report
+  (measured: a mixed CRLF/LF file replayed as all-CRLF from a patch that applied cleanly);
+  and files marked `assume-unchanged`,
   where all three captures *succeed while recording nothing* and the revert then replaces
   the bytes with `HEAD`. That list is the cases known to hit the rule, not the boundary.
 
   **To roll back**, undo only the delegated paths and rebuild them from the capture, in
   this order — anything else reaches for the destructive commands forbidden above:
 
-  1. **delete the delegated paths the implementer created** — anything absent from the
-     status snapshot. Reverting tracked paths and replaying patches removes nothing, so a
-     rejected new file otherwise survives the rollback and turns up in the next pass
+  1. **delete the delegated paths the implementer created** — those absent from the
+     *existence list*, never those merely absent from porcelain status. A clean tracked
+     file has no status entry, so the status test would delete a file that was fine
   2. revert **only** the remaining delegated paths; leave every other path untouched
-  3. re-apply the **staged** patch with `git apply --index`, then the **unstaged** one.
-     Not `--cached`: it updates the index "without touching the working tree", so the
-     worktree stays at `HEAD` and the unstaged patch then fails against it — measured,
-     `error: patch failed`, after the original was already reverted. `--index` restores
-     `MM` correctly
+  3. re-apply the **staged** patch with `git apply --index --include=<each delegated
+     path>`, then the **unstaged** one the same way. Not `--cached`: it updates the index
+     "without touching the working tree", so the worktree stays at `HEAD` and the unstaged
+     patch fails against it — measured, `error: patch failed`, after the original was
+     already reverted. And `--include` because the capture covers the whole tree while
+     step 2 deliberately left unrelated hunks applied; replaying those re-applies what is
+     already there and the patch aborts with `patch does not apply` before any delegated
+     path is restored. **Skip an empty patch file** (or pass `--allow-empty`): an
+     unstaged-only edit leaves the staged layer empty and `git apply` exits 128 on it —
+     after the revert, so the layer holding the user's work is never applied
   4. restore each untracked backup, clearing its destination first
   5. re-run `git add -N` for every path the status snapshot recorded as `" A "` — a leading
      space, then `A`; `"A "` is an ordinary staged addition and must not be re-added
