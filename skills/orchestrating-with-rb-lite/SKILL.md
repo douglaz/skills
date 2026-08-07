@@ -142,8 +142,13 @@ supplies those to the rb-lite process. For source/path installs, check the host 
 If you skip the file, you get rb-lite's built-in three-reviewer default, unpinned Gemini
 included. That is a choice, not a default this skill endorses — make it deliberately.
 
-Backlog-drain mode additionally needs `br` for bead selection/state and `gh`
-for PR creation/checks/merge. Require **`br` ≥ 0.1.45**: older builds corrupt
+Backlog-drain mode additionally needs `br` for bead selection/state, `gh`
+for PR creation/checks/merge, and **`jq` in the HOST shell**. That last one is not
+covered by the Nix-wrapper exemption above: the wrapper supplies `jq` to rb-lite, not
+to you, and step 11's collateral-damage check and its whole recovery resolve the graph's
+real path through `br where --json | jq`. Without host `jq` a drain can run `br update`
+and flush — silently reverting unrelated bead bodies — and only then fail at the command
+that would have located the damage. Check it before the first bead, not after. Require **`br` ≥ 0.1.45**: older builds corrupt
 their DB after branch resets, so `br update`/`br close` start returning
 `ISSUE_NOT_FOUND` while `br show`/`br list` keep working — which hides the
 failure until bead state is already lost. Both drain modes reset branches after
@@ -802,10 +807,15 @@ implement → review loop for each bead.
     ```bash
     BEADS_JSONL=$(br where --json | jq -er '.jsonl_path') \
       || { echo "cannot resolve the beads JSONL path — do NOT judge the flush blind"; exit 1; }
+    # Read `br where --json` yourself and use whatever DB field YOUR version emits — the
+    # name below is a guess at the schema, not a contract.
     BEADS_DB=$(br where --json | jq -r '.db_path // empty')
-    # Read `br where --json` yourself for the DB field name your version emits; if it
-    # reports none, the cache sits beside the JSONL. Never assume `.beads/beads.db`.
-    [ -n "$BEADS_DB" ] || BEADS_DB="$(dirname "$BEADS_JSONL")/beads.db"
+    # Do NOT fall back to a derived path. `dirname` of a FLAT `.beads.jsonl` is the repo
+    # root, so the guess lands on `<repo>/beads.db` while the real cache sits under
+    # `.beads/` — recovery would then back up and delete the wrong file and re-import
+    # against the untouched stale database, preserving exactly the loss it is undoing.
+    [ -n "$BEADS_DB" ] || { echo "br where reports no database path — locate it yourself
+      and set BEADS_DB explicitly; do NOT guess, and do NOT run the recipe without it"; exit 1; }
 
     git diff "$BEADS_JSONL"
     ```
@@ -840,6 +850,20 @@ implement → review loop for each bead.
     copy the loss into a fresh database and a later commit would cement it. **Restore the
     file from git first, then re-apply every mutation you actually wanted, and only then
     rebuild the cache:**
+
+    **If the good copy is STAGED, do not reach for `HEAD`.** A body edit staged before an
+    unrelated flush leaves the truth in the *index*, and the field-diff above compares the
+    damaged worktree against exactly that. `git checkout HEAD --` overwrites worktree AND
+    index with the older commit, destroying the only recoverable source — the one thing
+    replaying mutations cannot rebuild. Check first, and restore from the index when it
+    holds the good copy:
+
+    ```bash
+    git diff --cached --quiet -- "$BEADS_JSONL" || echo "GOOD COPY IS STAGED — use the index"
+    git checkout -- "$BEADS_JSONL"             # index -> worktree, keeps the staged truth
+    ```
+
+    Only when the index has nothing newer does the committed state apply:
 
     ```bash
     git checkout HEAD -- "$BEADS_JSONL"        # the last good committed state

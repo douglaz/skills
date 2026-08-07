@@ -150,8 +150,16 @@ BEADS_JSONL=$(br where --json | jq -er '.jsonl_path')
 # `description` this session did not write, is the tell. Recovery:
 # ../../orchestrating-with-rb-lite/SKILL.md step 11.
 git diff -- "$BEADS_JSONL"
-# Do not continue past this line until you have read that output.
+```
 
+**Stop the block here.** The line above is a real gate, not a comment: run the snapshot
+block only up to this point, read the diff, and continue *in a second invocation* once you
+have. A comment does not pause a shell — pasted as one block, the diff scrolls past and the
+copy below snapshots whatever the flush produced, which is the entire failure this check
+exists to catch. If you must automate it, make the continuation conditional on an explicit
+recorded acknowledgement rather than on the diff having been printed.
+
+```bash
 cp "$BEADS_JSONL" "$GRAPH_JSONL"
 GRAPH_FINGERPRINT=$(fingerprint_file "$GRAPH_JSONL") || {
   echo "Could not fingerprint initial graph snapshot" >&2
