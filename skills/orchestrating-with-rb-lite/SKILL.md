@@ -423,7 +423,15 @@ dogfooding made concrete:
   pins. For each load-bearing behavior the diff *introduces* — a new invariant,
   an ordering, a clock or lock choice — **invert it in the working tree, confirm
   a test FAILS, then revert.** Read the failure: it has to be *the assertion that
-  pins that behavior*, not merely something going red. A behavior mutation can
+  pins that behavior*, not merely something going red.
+
+  **Isolate the run if the gate touches anything live.** A feature's regression gate
+  can drive a real database, a running service, or real funds, and an inverted
+  behavior may PERFORM the harmful operation before any assertion notices — the
+  mutation is not a dry run. Use a disposable environment, pick a non-destructive
+  mutation, or say plainly that the check could not be done safely. Never run a
+  deliberately broken build against live state; this applies here and in the
+  backlog drain's step 7, not only where the deliverable is a test. A behavior mutation can
   trip an initialization error, a panic, or an unrelated assertion long before
   the intended check runs, and taking that as proof of coverage certifies a
   behavior nothing tests. If nothing fails, the loop wrote code the panel
