@@ -738,8 +738,15 @@ finding precisely enough for someone else to act on, which by itself kills the v
   succeed — never their output to be non-empty, since on a clean tree an empty patch is
   the correct answer:
 
-  - `git diff --cached --binary --no-textconv` and `git diff --binary --no-textconv`,
-    as **two** patches. One combined `git diff HEAD` flattens the layers, so an `MM` path
+  - `git diff --cached --binary --no-textconv --no-ext-diff -- <the delegated paths>` and
+    `git diff --binary --no-textconv --no-ext-diff -- <the delegated paths>`, as **two**
+    patches. `--no-ext-diff` because a configured `diff.external` helper is not disabled by
+    `--no-textconv`: measured on git 2.43, a helper emitting `bogus` gave an exit-0 capture
+    of non-patch output that could restore nothing. And `-- <paths>` at *capture* time, so
+    the replay needs no filtering: `git apply --include` takes a **pattern**, and both a
+    bare directory and a literal `a[1].txt` silently match no hunks while exiting 0 — after
+    step 2 has already reverted those paths, which turns a rollback into a loss that reports
+    success. One combined `git diff HEAD` flattens the layers, so an `MM` path
     comes back ` M` and a later commit carries hunks the user left out. Both flags matter:
     without `--binary` a modified binary records only "Binary files differ" and will not
     apply; `--no-textconv` because the conversion is not what is on disk.
@@ -775,14 +782,16 @@ finding precisely enough for someone else to act on, which by itself kills the v
      *existence list*, never those merely absent from porcelain status. A clean tracked
      file has no status entry, so the status test would delete a file that was fine
   2. revert **only** the remaining delegated paths; leave every other path untouched
-  3. re-apply the **staged** patch with `git apply --index --include=<each delegated
-     path>`, then the **unstaged** one the same way. Not `--cached`: it updates the index
+  3. re-apply the **staged** patch with `git apply --index`, then the **unstaged** one.
+     No `--include` is needed or wanted — the patches were already restricted by pathspec
+     at capture time, which is the only way to scope them without pattern semantics. Not
+     `--cached`: it updates the index
      "without touching the working tree", so the worktree stays at `HEAD` and the unstaged
      patch fails against it — measured, `error: patch failed`, after the original was
-     already reverted. And `--include` because the capture covers the whole tree while
-     step 2 deliberately left unrelated hunks applied; replaying those re-applies what is
-     already there and the patch aborts with `patch does not apply` before any delegated
-     path is restored. **Skip an empty patch file** (or pass `--allow-empty`): an
+     already reverted. Path-restricted capture is also what keeps the replay from touching
+     unrelated hunks that step 2 deliberately left applied — replaying those would abort
+     the whole patch with `patch does not apply` before any delegated path is restored.
+     **Skip an empty patch file** (or pass `--allow-empty`): an
      unstaged-only edit leaves the staged layer empty and `git apply` exits 128 on it —
      after the revert, so the layer holding the user's work is never applied
   4. restore each untracked backup, clearing its destination first
