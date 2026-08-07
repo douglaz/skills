@@ -144,10 +144,18 @@ done
 # truncated graph having "checked". The check has to precede the write it guards.
 BEADS_JSONL=$(br where --json | jq -er '.jsonl_path') \
   || { echo "cannot resolve the beads JSONL path" >&2; exit 1; }
-# ABORT on divergence — printing it is not enough. The next line flushes the cache over
-# this file, and run as one block the status scrolls past and the only good copy is gone.
-[ -z "$(git status --porcelain -- "$BEADS_JSONL")" ] \
-  || { echo "JSONL diverges from git — resolve it BEFORE flushing (recovery case (a))" >&2; exit 1; }
+# INSPECT before flushing — the next line writes the cache over this file, so anything in
+# the worktree that the cache does not know about is gone afterwards, with no diff left to
+# show it. Do NOT gate on a clean file: the normal `bead-polish-loop` handoff arrives with
+# the round's intended `br` edits uncommitted, so demanding cleanliness would block the
+# audit after every non-noop round.
+#
+# The question is not "is it dirty" but "is any of this dirt something the cache will
+# destroy" — i.e. hand-edited bead text, which never advances `updated_at`. Read the diff
+# and continue only once you can say which it is.
+git status --porcelain -- "$BEADS_JSONL"
+git diff -- "$BEADS_JSONL"
+: "${BEADS_DIFF_REVIEWED:?read the two commands above, then set this to how you resolved it}"
 br sync --flush-only || { echo "flush failed — do not audit an unwritten graph" >&2; exit 1; }
 
 # STOP HERE AND READ THIS DIFF before snapshotting. The flush just re-exported EVERY bead

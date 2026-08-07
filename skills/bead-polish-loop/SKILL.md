@@ -45,7 +45,7 @@ merely plausible.
 auto-flushes the cache over the tracked file, so an unstaged hand-edit is erased by your
 first write — and since neither the index nor `HEAD` holds it, every later diff shows only
 your intended changes and the loss becomes *undetectable*. Run `git status --porcelain --
-"$(br where --json | jq -r .jsonl_path)"`; if it is not empty, resolve it first — recovery
+"$(br where --json | jq -er .jsonl_path)"`; if it is not empty, resolve it first — recovery
 case (a) in [orchestrating-with-rb-lite](../orchestrating-with-rb-lite/SKILL.md) step 11. After the first flush the choice
 is gone.
 
@@ -155,7 +155,7 @@ run `second-model-bead-audit` by default after the graph meets these gates.
    indistinguishable by timestamp), and this skill rewrites long bead bodies for a living,
    which is exactly when opening the file is tempting. Write bead text with
    `br update -d/--notes`, and field-diff the tracked JSONL before committing (resolve it
-   with `br where --json | jq -r .jsonl_path`; the `.beads/` layout is only the default,
+   with `br where --json | jq -er .jsonl_path`; the `.beads/` layout is only the default,
    and a hardcoded path diffs nothing on the others): a full
    re-serialization with every id on both sides is normal, ids on only one side or a
    `description` you did not touch is the tell. Recovery — and why `br sync --import-only`

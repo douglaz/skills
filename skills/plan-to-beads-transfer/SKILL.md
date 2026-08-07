@@ -37,7 +37,7 @@ Turn plan-space intent into bead-space executable memory without losing anything
 auto-flushes the cache over the tracked file, so an unstaged hand-edit is erased by your
 first write — and since neither the index nor `HEAD` holds it, every later diff shows only
 your intended changes and the loss becomes *undetectable*. Run `git status --porcelain --
-"$(br where --json | jq -r .jsonl_path)"`; if it is not empty, resolve it first — recovery
+"$(br where --json | jq -er .jsonl_path)"`; if it is not empty, resolve it first — recovery
 case (a) in [orchestrating-with-rb-lite](../orchestrating-with-rb-lite/SKILL.md) step 11. After the first flush the choice
 is gone.
 
@@ -111,7 +111,7 @@ Stop and report plan gaps when any of these are still fuzzy:
     what makes the cache stale: a hand edit does not advance `updated_at`, so the two
     become indistinguishable by timestamp. Write every body through `br update -d/--notes`,
     and field-diff the tracked JSONL before committing (resolve it with
-    `br where --json | jq -r .jsonl_path`; `.beads/` is only the default layout, and a
+    `br where --json | jq -er .jsonl_path`; `.beads/` is only the default layout, and a
     hardcoded path diffs nothing on the others) — ids on only one side, or a
     `description` you did not touch, is the tell. Recovery, and why `br sync --import-only`
     cannot do it, is in

@@ -190,7 +190,7 @@ it still chooses how far to read, so run the grep yourself. Classes that repeat:
 auto-flushes the cache over the tracked file, so an unstaged hand-edit is erased by your
 first write — and since neither the index nor `HEAD` holds it, every later diff shows only
 your intended changes and the loss becomes *undetectable*. Run `git status --porcelain --
-"$(br where --json | jq -r .jsonl_path)"`; if it is not empty, resolve it first — recovery
+"$(br where --json | jq -er .jsonl_path)"`; if it is not empty, resolve it first — recovery
 case (a) in [orchestrating-with-rb-lite](../SKILL.md) step 11. After the first flush the choice
 is gone.
 
