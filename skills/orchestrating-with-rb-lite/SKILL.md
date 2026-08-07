@@ -858,15 +858,21 @@ implement → review loop for each bead.
     replaying mutations cannot rebuild. Check first, and restore from the index when it
     holds the good copy:
 
-    ```bash
-    git diff --cached --quiet -- "$BEADS_JSONL" || echo "GOOD COPY IS STAGED — use the index"
-    git checkout -- "$BEADS_JSONL"             # index -> worktree, keeps the staged truth
-    ```
-
-    Only when the index has nothing newer does the committed state apply:
+    Only the restore SOURCE is conditional. Everything after it — deleting the cache,
+    re-importing, replaying the intended mutations, verifying — has to run either way, or
+    the staged path restores the text and leaves the stale database authoritative, and the
+    next `br` write overwrites the recovery:
 
     ```bash
-    git checkout HEAD -- "$BEADS_JSONL"        # the last good committed state
+    # SOURCE: index when it holds the good copy, HEAD otherwise.
+    if git diff --cached --quiet -- "$BEADS_JSONL"; then
+      git checkout HEAD -- "$BEADS_JSONL"      # nothing staged: last good committed state
+    else
+      echo "good copy is STAGED — restoring from the index, not HEAD"
+      git checkout -- "$BEADS_JSONL"           # index -> worktree, keeps the staged truth
+    fi
+
+    # REBUILD: identical for both sources. Do not skip this on the staged path.
     cp "$BEADS_DB" /tmp/beads.db.bak
     rm -f "$BEADS_DB" "$BEADS_DB-wal" "$BEADS_DB-shm"
     br sync --import-only
