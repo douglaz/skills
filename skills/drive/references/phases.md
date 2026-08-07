@@ -713,6 +713,12 @@ And verify the closure actually happened. `br close` exits 0 even when the flush
 writes the JSONL failed, because the error is caught and logged at debug level:
 
 ```bash
+# DIVERGENCE CHECK FIRST: `br close` auto-flushes, so an unstaged hand-edit in the JSONL is
+# destroyed by this very command and neither the index nor HEAD holds it — the diff below
+# would then be empty and the loss undetectable.
+BEADS_JSONL=$(br where --json | jq -er .jsonl_path) || { echo "cannot resolve the JSONL"; exit 1; }
+[ -z "$(git status --porcelain -- "$BEADS_JSONL")" ] \
+  || { echo "JSONL diverges from git — resolve it BEFORE closing"; exit 1; }
 br close <id> || { echo "br close failed"; exit 1; }
 br sync --flush-only || { echo "closure not persisted — auto-flush was swallowed"; exit 1; }
 ```

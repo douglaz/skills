@@ -769,6 +769,11 @@ implement → review loop for each bead.
     mutation is already in the shared DB, so the sync either writes it out or fails loudly:
 
     ```bash
+    # DIVERGENCE CHECK FIRST — `br update` auto-flushes, so an unstaged hand-edit in the
+    # JSONL is destroyed by this very command, and neither the index nor HEAD holds it.
+    BEADS_JSONL=$(br where --json | jq -er '.jsonl_path') || { echo "cannot resolve the JSONL"; exit 1; }
+    [ -z "$(git status --porcelain -- "$BEADS_JSONL")" ] \
+      || { echo "JSONL diverges from git — resolve it BEFORE writing (recovery case (a))"; exit 1; }
     br update <bead-id> -s closed || { echo "br update failed"; exit 1; }
     br sync --flush-only || { echo "not persisted"; exit 1; }
     ```

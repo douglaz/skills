@@ -144,7 +144,10 @@ done
 # truncated graph having "checked". The check has to precede the write it guards.
 BEADS_JSONL=$(br where --json | jq -er '.jsonl_path') \
   || { echo "cannot resolve the beads JSONL path" >&2; exit 1; }
-git status --porcelain -- "$BEADS_JSONL"   # not empty? resolve it before flushing
+# ABORT on divergence — printing it is not enough. The next line flushes the cache over
+# this file, and run as one block the status scrolls past and the only good copy is gone.
+[ -z "$(git status --porcelain -- "$BEADS_JSONL")" ] \
+  || { echo "JSONL diverges from git — resolve it BEFORE flushing (recovery case (a))" >&2; exit 1; }
 br sync --flush-only || { echo "flush failed — do not audit an unwritten graph" >&2; exit 1; }
 
 # STOP HERE AND READ THIS DIFF before snapshotting. The flush just re-exported EVERY bead

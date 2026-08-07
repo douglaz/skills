@@ -153,13 +153,15 @@ recorded acceptance of the reduced review coverage.
    # An explicit sync propagates a real exit code, so require success. (Only the automatic
    # post-mutation flush swallows its error.) An unchanged graph legitimately reports no
    # diff, so do not also demand that the JSONL changed here.
-   # A flush writes the whole gitignored beads.db cache over the tracked issues.jsonl, so
-   # any bead body hand-edited into the file (which does not advance updated_at) is
-   # silently reverted here — exit 0, no warning. `git diff "$(br where --json | jq -r
-   # .jsonl_path)"` after
-   # this and check the field-level changes before capturing a baseline: an audit over a
-   # truncated graph reviews text the reviewers will never see. See
-   # ../orchestrating-with-rb-lite/SKILL.md step 11 for recovery.
+   # A flush writes the whole gitignored beads.db cache over the tracked JSONL, so any bead
+   # body hand-edited into the file (which does not advance updated_at) is silently
+   # reverted — exit 0, no warning — and an audit over a truncated graph reviews text the
+   # reviewers will never see. Check BEFORE flushing: afterwards the file matches the index
+   # again, so the diff comes back empty and the loss is undetectable. Recovery is in
+   # ../orchestrating-with-rb-lite/SKILL.md step 11.
+   BEADS_JSONL=$(br where --json | jq -er .jsonl_path) || { echo "cannot resolve the JSONL"; exit 1; }
+   [ -z "$(git status --porcelain -- "$BEADS_JSONL")" ] \
+     || { echo "JSONL diverges from git — resolve it BEFORE flushing"; exit 1; }
    br sync --flush-only || { echo "flush failed"; exit 1; }
    br list --limit 0 --json -a
    bv --robot-triage
