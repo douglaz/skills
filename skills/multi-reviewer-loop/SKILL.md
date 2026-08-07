@@ -807,10 +807,17 @@ finding precisely enough for someone else to act on, which by itself kills the v
 
   ```bash
   for f in <each untracked path you delegated>; do
+    # REMOVE the destination first. `cp -pR src dest` with dest an existing DIRECTORY
+    # copies into it — you get `d/d/f.txt` while the overwritten `d/f.txt` stays put, and
+    # cp exits 0, so the rollback reports success having restored nothing. Verified.
+    rm -rf -- "$f"
     mkdir -p "$(dirname "$f")" && cp -pR "$REVIEW_DIR/untracked/$f" "$f" \
       || { echo "could not restore $f — its bytes are in $REVIEW_DIR/untracked"; exit 1; }
   done
   ```
+
+  `rm -rf` is safe *only* because `$f` is one of the paths you enumerated as delegated and
+  backed up seconds earlier. Do not generalise the loop to a glob.
 
   Taking the backup and never copying it back is the failure worth naming: the bytes
   survive in the review directory, the rollback reports success, and the user's file is
