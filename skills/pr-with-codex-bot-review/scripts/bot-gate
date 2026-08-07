@@ -844,6 +844,56 @@ PR_HEAD_FINAL=$(gh pr view "$PR" -R "$REPO" --json headRefOid -q .headRefOid 2>/
 [[ "$PR_HEAD_FINAL" == "$TIP" ]] \
   || { echo "BLOCKED: PR head moved from ${TIP:0:10} to ${PR_HEAD_FINAL:0:10} while signals were collected" >&2; exit 3; }
 
+# ── Unattributed round evidence: "not reviewed" vs "cannot be told whether it reviewed" ──
+#
+# Read ONLY when no wrapper names the tip, which is exactly when the reactions block above
+# did not run, so this costs an extra request on no other path.
+#
+# The codex bot's own about-box states the contract: "If Codex has suggestions, it will
+# comment; otherwise it will react with 👍." A `+1` is therefore a COMPLETED round that
+# found nothing — and it is attached to the PR, not to a commit, so it can never say WHICH
+# tree it read. Both states below present identically as a missing wrapper:
+#
+#   (a) the bot has not reviewed this tip          -> waiting is the right move
+#   (b) a round completed but nothing attributes it -> waiting cannot help
+#
+# Only (a) is a reason to keep polling. During a forge incident the API keeps answering
+# 200 while new review wrappers stop appearing, so a caller looping until a wrapper shows
+# up waits forever on a condition that cannot be met — not because the bot disapproves,
+# but because the forge is not saying. That caller needs to be told which block it has.
+#
+# This NEVER clears anything. It refines an already-blocking verdict into a more specific
+# one, so exit 4 is a strictly-non-zero peer of exit 1, and every other conjunct must
+# already hold before it applies — an unresolved thread or an in-flight round is
+# actionable, and must not be dressed up as an attribution problem.
+#
+# A failed or unparseable query therefore leaves the plain BLOCK standing instead of
+# exiting 3. Escalating "I could not read a reaction" into an infrastructure error would
+# refuse a decidable PR over a signal that can only ever make the answer more specific,
+# never more permissive.
+THUMBS_UNATTRIBUTED=false
+if [[ "$WRAPPER_TIP" -eq 0 ]]; then
+  # The tip's own commit date bounds what the reaction could be about: a `+1` older than
+  # the commit provably belongs to an earlier tree and leaves a plain BLOCK. Committer
+  # date, not author date — a rebase or amend rewrites the former and preserves the
+  # latter, and it is the rewritten commit that got pushed.
+  _TIP_AT=$(git show -s --format=%cI "$TIP" 2>/dev/null) || _TIP_AT=""
+  _TIP_EPOCH=$(iso_to_epoch "$_TIP_AT") || _TIP_EPOCH=""
+  if _REACT=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/reactions" 2>/dev/null) \
+     && printf '%s' "$_REACT" | jq -e . >/dev/null 2>&1; then
+    # Undated reactions are dropped rather than treated as "now": an undatable signal
+    # cannot be shown to post-date the tip, and this branch only ever fires on evidence.
+    _THUMBS_AT=$(printf '%s' "$_REACT" | jq -r --arg bot "$BOT_LOGIN" '
+      [.[][] | select(.user.login==$bot) | select(.content=="+1")
+       | select(((.created_at // "") | length) > 0) | .created_at] | max // ""' 2>/dev/null) \
+      || _THUMBS_AT=""
+    if [[ -n "$_THUMBS_AT" && -n "$_TIP_EPOCH" ]]; then
+      _THUMBS_EPOCH=$(iso_to_epoch "$_THUMBS_AT") || _THUMBS_EPOCH=""
+      [[ -n "$_THUMBS_EPOCH" ]] && (( _THUMBS_EPOCH >= _TIP_EPOCH )) && THUMBS_UNATTRIBUTED=true
+    fi
+  fi
+fi
+
 # WRAPPER_AT is required alongside the count: it is the reference point the active-round
 # check needs, so a wrapper without one means that check never ran, and a check that did
 # not run has not passed.
@@ -852,6 +902,10 @@ if [[ "$WRAPPER_TIP" -gt 0 ]] && [[ -n "$WRAPPER_AT" ]] && [[ "$PENDING_ON_TIP" 
    && ! $RERUN_REQUESTED && ! $ROUND_ACTIVE \
    && ! $RETARGETED_AFTER_REVIEW && [[ "$UNRESOLVED" -eq 0 ]]; then
   VERDICT="NO_PENDING_EVIDENCE"
+elif [[ "$WRAPPER_TIP" -eq 0 ]] && $THUMBS_UNATTRIBUTED && [[ "$PENDING_ON_TIP" -eq 0 ]] \
+   && ! $RERUN_REQUESTED && ! $ROUND_ACTIVE \
+   && ! $RETARGETED_AFTER_REVIEW && [[ "$UNRESOLVED" -eq 0 ]]; then
+  VERDICT="BLOCKED_UNATTRIBUTED"
 fi
 OBSERVED_TO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
@@ -871,10 +925,12 @@ if $JSON; then
         --argjson w "$WRAPPER_TIP" --argjson u "$UNRESOLVED" --argjson pending "$PENDING_ON_TIP" \
         --arg from "$OBSERVED_FROM" --arg to "$OBSERVED_TO" --arg claim "$CLAIM" \
         --arg cr_skipped "$CR_SKIPPED" --arg round_active "$ROUND_ACTIVE" --arg retargeted "$RETARGETED_AFTER_REVIEW" --arg rerun "$RERUN_REQUESTED" --arg skiplist "$CR_SKIPLIST" \
+        --arg unattributed "$THUMBS_UNATTRIBUTED" \
     '{tip:$tip,verdict:$v,claim:(if $claim=="" then null else $claim end),observed_from:$from,observed_to:$to,
       wrapper_on_tip:$w,unresolved_bot_threads:$u,
       coderabbit:$cr,coderabbit_skipped:($cr_skipped=="true"),round_active:($round_active=="true"),retargeted_after_review:($retargeted=="true"),
       rerun_requested:($rerun=="true"),pending_review_on_tip:($pending > 0),
+      unattributed_round:($unattributed=="true"),
       coderabbit_skipped_files:($skiplist|split("\n")|map(select(length>0)))}'
 else
   printf 'tip              %s\n' "${TIP:0:10}"
@@ -884,7 +940,11 @@ else
   printf 'observed         %s .. %s\n' "$OBSERVED_FROM" "$OBSERVED_TO"
   printf '\nverdict: %s\n' "$VERDICT"
   [[ "$VERDICT" == "NO_PENDING_EVIDENCE" ]] && printf '  = %s\n' "$CLAIM"
-  [[ "$WRAPPER_TIP" -eq 0 ]] && printf '  ⚠ no review from the codex bot names this tip, so nothing proves WHICH tree it read.\n    Push or `@codex review` to get one, or accept the round explicitly and say so.\n'
+  if $THUMBS_UNATTRIBUTED; then
+    printf '  ⚠ a codex round COMPLETED after this tip was committed — its 👍 says it found\n    nothing — but no wrapper names the tip, so nothing says which tree that round read.\n    Waiting will not resolve this: the signal that would attribute it is the one that is\n    missing. `@codex review` to force a fresh wrapper, or follow the degraded-forge\n    procedure in SKILL.md and record what you substituted.\n'
+  elif [[ "$WRAPPER_TIP" -eq 0 ]]; then
+    printf '  ⚠ no review from the codex bot names this tip, so nothing proves WHICH tree it read.\n    Push or `@codex review` to get one, or accept the round explicitly and say so.\n'
+  fi
   [[ "$UNRESOLVED" -gt 0 ]] && printf '  ⚠ %s UNRESOLVED bot thread(s). Fix each, or answer it with evidence and resolve the\n    thread — resolving is how you record that it was dispositioned.\n' "$UNRESOLVED"
   [[ "$CR_STATE" == "query-failed" ]] && printf '  · CodeRabbit status could not be queried.\n'
   $RERUN_REQUESTED && printf '  ⚠ an `@codex review` request is not provably answered — either it is newer than the\n    wrapper, or no completed round separates it from an earlier round-start, so the\n    wrapper after it may belong to a round that was already running. Wait, or\n    `@codex review` once more and wait for that wrapper.\n'
@@ -901,5 +961,15 @@ fi
 # the verdict — "I could not find out" is not "not done". It no longer can, so failing to
 # read it is missing REPORT data, not doubt about the answer, and exiting 3 would refuse a
 # decidable PR because a warning could not be printed. Exit follows the verdict.
-[[ "$VERDICT" == "NO_PENDING_EVIDENCE" ]] && exit 0
-exit 1
+# Explicit dispatch, not `[[ ... ]] && exit N` chained twice. That form only reaches the
+# fallthrough because this script runs without `set -e`; adding a second link would make
+# the final exit status depend on which test failed rather than on the verdict.
+#
+# Exit 4 is BLOCKED_UNATTRIBUTED — still non-zero, still refuses the merge, and any caller
+# doing `bot-gate <pr> && gh pr merge` is unaffected. It exists so a caller that LOOPS can
+# tell a block that waiting will fix from one that it cannot.
+case "$VERDICT" in
+  NO_PENDING_EVIDENCE)  exit 0 ;;
+  BLOCKED_UNATTRIBUTED) exit 4 ;;
+  *)                    exit 1 ;;
+esac
