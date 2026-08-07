@@ -67,4 +67,14 @@ done.
 watch it go red against the unfixed code first. A test asserting behaviour that
 was already correct is indistinguishable from a test asserting nothing.
 
+Three things decide whether that red run means anything. Break the **production
+behaviour**, never the test's expected value or its setup — those redden any
+assertion, including one that never reaches the behaviour. **Read the failure**: it
+must name the assertion pinning what you broke, not an unrelated panic. And run **one
+mutation per property** the test claims, since reddening the first of two leaves the
+second untested while looking verified. If the test drives anything live — a real
+database, a running service, real money — do the red run in a disposable environment
+or not at all: a deliberately broken build can perform the harmful operation before
+any assertion notices.
+
 Gate for this repo: `{{GATE}}`

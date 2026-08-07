@@ -555,6 +555,12 @@ Otherwise:
    pin, and run **one mutation per property** the test claims: reddening the first
    of two leaves the second untested while looking verified.
 
+   **Isolate the run if the code under test touches anything live.** A fix on a
+   money, data-loss or infrastructure path may be validated by a test that drives a
+   real database, service or balance, and the inverted build can perform the harmful
+   operation before the assertion notices — the mutation is not a dry run. Disposable
+   environment, non-destructive mutation, or say the red run could not be done safely.
+
    Keep the trigger narrow — a coverage finding, or a test you touched — not
    every fix. It is one edit, one targeted test run, one revert. It earns its
    cost exactly where reading cannot help: a mapping, an ordering, a clock or
