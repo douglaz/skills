@@ -171,7 +171,11 @@ Two non-negotiables:
      (real DB, running service, money), isolate first: a defective build can perform the
      bad operation before an assertion notices. See `testing-with-rb-lite`.
 
-**Exit gate:** the gate ran, printed green, and you quoted the command and exit code.
+**Exit gate:** the gate ran and printed green, **and** you observed a matching assertion
+FAIL for every property it claims — quote both: the green command with its exit code, and
+each red run with the behavior you inverted and the assertion that reported it. Green alone
+does not close PROVE. A gate never observed red is an untested instrument, and this is the
+phase whose entire job is to establish that the instrument works.
 
 ---
 
