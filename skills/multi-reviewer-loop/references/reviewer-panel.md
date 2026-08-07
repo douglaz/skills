@@ -109,13 +109,13 @@ RC_TIMEOUT=1500   # 25 min; a normal pass is 5-15
 TO=$(command -v timeout || command -v gtimeout) \
   || { echo "no GNU timeout (nor gtimeout) — bound the pass another way; see below"; exit 1; }
 
-"$TO" --kill-after=60 "$RC_TIMEOUT" \
+setsid "$TO" --kill-after=60 "$RC_TIMEOUT" \
   codex review --base "$DIFF_BASE" \
   -c 'model="gpt-5.6-sol"' -c 'model_reasoning_effort="xhigh"' \
   </dev/null >"$CODEX_OUT" 2>"$CODEX_ERR" &
 CODEX_PID=$!
 
-"$TO" --kill-after=60 "$RC_TIMEOUT" \
+setsid "$TO" --kill-after=60 "$RC_TIMEOUT" \
   claude -p "$(cat "$FABLE_PROMPT_FILE")" \
   --model fable \
   --effort high \
@@ -134,9 +134,13 @@ CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?
 FABLE_RC=0; wait "$FABLE_PID" || FABLE_RC=$?
 ```
 
-The group-kill in the escape hatch needs each reviewer to be its own process-group
-leader — `set -m` before the two launches, or `setsid` on each — otherwise `kill -- -$PID`
-has no group to signal. Without that, the hatch degrades to the plain TERM above.
+**`setsid` on each launch is load-bearing**, not decoration. It makes each reviewer its own
+process-group leader, which is what lets the escape hatch below signal the *group*. Without
+it the backgrounded processes inherit this shell's group, `kill -- -$PID` targets a group
+that does not exist, the failure is swallowed by the hatch's `|| true`, and a TERM-ignoring
+reviewer keeps the `wait` blocked until the full 1500-second timeout — the exact case the
+hatch exists for. (`set -m` before the launches is the alternative; this shell is
+non-interactive, so job control is off by default.)
 
 **Do not drop the `timeout`.** Either reviewer can hang indefinitely — no output, no
 exit, no error. Measured: an unbounded consistency pass ran **6h20m and wrote zero
@@ -587,7 +591,7 @@ files:
 ```bash
 TO=$(command -v timeout || command -v gtimeout) \
   || { echo "no GNU timeout — see the panel invocation above"; exit 1; }
-"$TO" --kill-after=60 1500 \
+setsid "$TO" --kill-after=60 1500 \
   claude -p "$(cat "$REVIEW_DIR/fable-consistency-prompt.txt")" \
   --model fable --effort high --output-format json \
   --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
