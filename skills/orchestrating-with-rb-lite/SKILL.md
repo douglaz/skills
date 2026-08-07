@@ -357,6 +357,12 @@ ready bead if the queue is not empty, and the exact reason the loop stopped.
     adversarial result-review (e.g. `codex exec` over the committed diff). See
     "Verify the landed diff" below.
 
+    **A mutation that stays green stops this workflow too**, exactly as it stops the
+    backlog drain. Standalone use reaches step 11 straight from here with the diff
+    already committed at (a), so without a stop the uncovered behavior ships and the
+    run reports success. Repair the test, observe both runs, and re-review the repair
+    — or report the run as incomplete and name the unpinned behavior.
+
 11. **Report concisely.** Tell the user what shipped, what didn't, where
     artifacts are, and whether anything needs manual follow-up. Don't
     paste the full review files — they're on disk.
@@ -516,7 +522,15 @@ implement → review loop for each bead.
    exactly what the check was added to catch, and step 8 pushes immediately, so
    there is no later point that is cheaper. Add or repair the test that pins the
    behavior, observe its red run against the inverted code AND its green run
-   against the correct code, and only then continue. If you cannot pin it — the
+   against the correct code, and only then continue.
+
+   **That repair was never reviewed.** rb-lite returned its verdict on the tree
+   before you touched it, and step 9's SHA guard assumes local `HEAD` is the tree
+   the panel read — which it no longer is. Red/green proves the test detects the
+   behavior; it says nothing about the test's cleanup, isolation, or fixtures.
+   Either run the panel again over the amended tree, or carry the repair as
+   explicitly-unreviewed work and say so in the PR body. Do not let it ride out on
+   a clean verdict that predates it. If you cannot pin it — the
    behavior is not reachable from a test, or the fix is out of the bead's scope —
    say so and stop; that is a finding about the bead, not a formality to wave
    through. Full rationale in "Verify the landed diff".
