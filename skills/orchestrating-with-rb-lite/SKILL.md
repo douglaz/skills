@@ -523,7 +523,10 @@ implement → review loop for each bead.
    implementation in that file along with your inversion. The gates ran before the
    mutation and nothing re-runs after the revert, so step 8 would commit and push
    a tree missing part of the work. Commit or stash the accepted diff first, or
-   mutate in a scratch copy, and re-run the gate green after reverting.
+   mutate in a scratch copy — not "revert and re-run green". When the accepted fix and a
+   regression test sit in the same file, the file-level restore removes both and the suite
+   then passes *because* the test that would expose the loss is gone. Verify by diffing the
+   restored tree against the preserved diff, not by trusting a green run.
 
    **A mutation that stays green STOPS the drain — it is not a note to carry into
    step 8.** Diagnosing an uncovered behavior and then committing anyway ships

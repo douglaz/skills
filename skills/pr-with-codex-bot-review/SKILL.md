@@ -412,6 +412,11 @@ For each P-badge finding:
   the same ones the testing skills enforce:
   - **Read the failure.** It must name the assertion pinning the behavior you inverted,
     not an unrelated panic or an initialization error.
+  - **Preserve the fix before inverting it.** Your fix and its regression test are
+    uncommitted and often in the same file, so a file-level `git restore` to undo the
+    mutation discards both — and the green re-run then passes *because* the test that
+    would expose the loss went with it, after which you amend and push the pre-fix tree.
+    Save the patch or mutate in a scratch copy, and verify the restored tree against it.
   - **Then restore the fix and watch it go GREEN.** The red run alone is satisfied by a
     test that always fails or that its own cleanup broke, and a manual or live gate the
     ordinary CI suite never executes would carry that all the way to merge.
