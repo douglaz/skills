@@ -765,11 +765,17 @@ finding precisely enough for someone else to act on, which by itself kills the v
   **To roll back**, undo only the delegated paths and rebuild them from the capture, in
   this order — anything else reaches for the destructive commands forbidden above:
 
-  1. revert **only** the paths you delegated; leave every other path untouched
-  2. re-apply the **staged** patch for those paths, then the **unstaged** one — that order
-     is what restores the layers rather than flattening them
-  3. restore each untracked backup, clearing its destination first
-  4. re-run `git add -N` for every path the status snapshot recorded as `" A "` — a leading
+  1. **delete the delegated paths the implementer created** — anything absent from the
+     status snapshot. Reverting tracked paths and replaying patches removes nothing, so a
+     rejected new file otherwise survives the rollback and turns up in the next pass
+  2. revert **only** the remaining delegated paths; leave every other path untouched
+  3. re-apply the **staged** patch with `git apply --index`, then the **unstaged** one.
+     Not `--cached`: it updates the index "without touching the working tree", so the
+     worktree stays at `HEAD` and the unstaged patch then fails against it — measured,
+     `error: patch failed`, after the original was already reverted. `--index` restores
+     `MM` correctly
+  4. restore each untracked backup, clearing its destination first
+  5. re-run `git add -N` for every path the status snapshot recorded as `" A "` — a leading
      space, then `A`; `"A "` is an ordinary staged addition and must not be re-added
 
   **`git stash create` cannot replace any of this.** It fails outright on the tree § 1.5
