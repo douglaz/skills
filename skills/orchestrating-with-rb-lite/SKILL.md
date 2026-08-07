@@ -842,7 +842,11 @@ implement → review loop for each bead.
     ```bash
     cp "$BEADS_DB" /tmp/beads.db.bak
     rm -f "$BEADS_DB" "$BEADS_DB-wal" "$BEADS_DB-shm"
-    br sync --import-only     # "Imported from JSONL (via automatic recovery)"
+    # Checked, for the same reason as case (b): the stale cache is already deleted, so an
+    # import failing on an unreadable JSONL leaves an EMPTY one — and the next `br` write
+    # flushes that over the file whose hand-edits this case exists to preserve.
+    br sync --import-only || { echo "import failed — do NOT run any br command that
+      flushes; the JSONL is your only copy, and /tmp/beads.db.bak is the old cache"; exit 1; }
     ```
 
     **(b) The flush already ran and the diff above shows the damage** — then the working
