@@ -239,14 +239,18 @@ A phase closes on evidence or it does not close.
   # including a secret, and `git show --stat` only reveals that after the commit exists.
   git add -- <every path this change touched>
   git commit -m "<msg>" || { echo "commit produced nothing"; exit 1; }
+  git diff --cached --stat                # BEFORE committing: only your hunks, only your paths?
   git show --stat --format= HEAD          # does this list all of them, and only them?
-  for f in <every file you edited>; do
+  for f in <every file that gained new content>; do
     git show "HEAD:$f" | grep -q "<a distinctive phrase from that file's change>" \
       || { echo "$f did not land"; exit 1; }
   done
   # Removal-only edits have no new phrase to find, and any surviving phrase passes even if
-  # the removal was reverted. Assert the removed text is GONE:
+  # the removal was reverted — so they belong here, NOT in the loop above. Existence first:
+  # `git show HEAD:<gone>` fails, grep returns nonzero, and the `&&` is skipped, so an
+  # accidental whole-file deletion reads exactly like a clean removal.
   for f in <every file you removed lines from>; do
+    git show "HEAD:$f" >/dev/null 2>&1 || { echo "$f is missing from HEAD entirely"; exit 1; }
     git show "HEAD:$f" | grep -q "<a distinctive phrase you deleted>" \
       && { echo "$f still contains text this change removed"; exit 1; }
   done

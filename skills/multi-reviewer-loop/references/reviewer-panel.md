@@ -204,8 +204,12 @@ exits **1**, so check it — an unchecked `git add -A && git commit` inside a
 larger block is how the message gets believed and the failure walks:
 
 ```bash
-git add -- <every path this change touched>   # NOT `git add -A` on a dirty tree: it sweeps
-git commit -m "<msg>" || { echo "commit produced nothing"; exit 1; }   # in unrelated work
+git add -- <every path this change touched>   # NOT `git add -A` on a dirty tree: it
+git diff --cached                            # sweeps in unrelated work. And READ this:
+                                             # on a path that was ALREADY dirty, staging
+                                             # it by name still takes the other agent's
+                                             # hunks in that same file.
+git commit -m "<msg>" || { echo "commit produced nothing"; exit 1; }
 ```
 
 Then still assert the content, because a *partial* loss commits cleanly at exit
@@ -221,6 +225,9 @@ done
 # Removal-only edits have no new phrase to find, and any surviving phrase passes even if
 # the removal was reverted. Assert the removed text is GONE:
 for f in <every file you removed lines from>; do
+  # Existence FIRST. `git show HEAD:<gone>` fails, so grep returns nonzero and the `&&`
+  # is skipped — an accidental whole-file deletion reads identically to a clean removal.
+  git show "HEAD:$f" >/dev/null 2>&1 || { echo "$f is missing from HEAD entirely"; exit 1; }
   git show "HEAD:$f" | grep -q "<a distinctive phrase you deleted>" \
     && { echo "$f still contains text this change removed"; exit 1; }
 done
