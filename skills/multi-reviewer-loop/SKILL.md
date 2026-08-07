@@ -745,12 +745,14 @@ finding precisely enough for someone else to act on, which by itself kills the v
     || { echo "snapshot failed"; exit 1; }
   # Every pre-existing UNTRACKED path in the delegated scope, copied — neither patch can
   # restore one, so without this the "non-destructive" guarantee is simply false for them.
-  # mkdir FIRST: `cp --parents` requires an existing destination and otherwise fails with
-  # "with --parents, the destination must be a directory" — which, guarded like this, would
-  # block every delegation that has an untracked path in scope.
-  mkdir -p "$REVIEW_DIR/untracked" || { echo "snapshot failed"; exit 1; }
-  cp -a --parents <each pre-existing untracked path in scope> "$REVIEW_DIR/untracked/" \
-    || { echo "snapshot failed"; exit 1; }
+  # Portable, and one path at a time. `cp --parents` is GNU-only — BSD/macOS `cp` rejects
+  # it outright, and this skill supports macOS explicitly (the `gtimeout` fallback exists
+  # for it) — so the GNU form would make every delegation with an untracked path exit
+  # `snapshot failed` there. `cp -pR` is portable; the parent dirs are built by hand.
+  for f in <each pre-existing untracked path in scope>; do
+    mkdir -p "$REVIEW_DIR/untracked/$(dirname "$f")" || { echo "snapshot failed"; exit 1; }
+    cp -pR "$f" "$REVIEW_DIR/untracked/$f"           || { echo "snapshot failed"; exit 1; }
+  done
   ```
 
   **Refuse the paths this snapshot cannot represent.** Two tree states survive neither
@@ -800,7 +802,19 @@ finding precisely enough for someone else to act on, which by itself kills the v
   refuse to delegate on exactly the tidiest repositories.
 
   To roll back, revert only the paths you delegated and re-apply each layer's hunks for
-  those paths — staged first, then unstaged — and leave every other path alone.
+  those paths — staged first, then unstaged — and leave every other path alone. **Then
+  restore the untracked backups**, which no patch and no `git restore` touches:
+
+  ```bash
+  for f in <each untracked path you delegated>; do
+    mkdir -p "$(dirname "$f")" && cp -pR "$REVIEW_DIR/untracked/$f" "$f" \
+      || { echo "could not restore $f — its bytes are in $REVIEW_DIR/untracked"; exit 1; }
+  done
+  ```
+
+  Taking the backup and never copying it back is the failure worth naming: the bytes
+  survive in the review directory, the rollback reports success, and the user's file is
+  still damaged.
 
   **Then restore intent-to-add from the status file.** § 1.5 runs `git add -N` on untracked
   source files so codex can see them; such a file has an empty staged patch and its whole
