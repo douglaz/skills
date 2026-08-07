@@ -773,12 +773,19 @@ finding precisely enough for someone else to act on, which by itself kills the v
   - **Contents inside a dirty submodule.** The top-level diffs record the gitlink's
     `-dirty` marker, not the modified bytes, so restoring the gitlink does not restore the
     user's edit inside it.
-  - **Paths with an active `.gitattributes` clean filter.** `--no-textconv` does not
-    bypass it: `git diff` snapshots the *cleaned* representation, so worktree-only bytes
-    the filter strips are absent from the patch. Measured — a filter dropping `LOCAL:`
-    lines produced a zero-byte unstaged patch on a file `git status` called modified, and
-    the rollback discarded that line permanently. `git check-attr filter -- <path>` names
-    them.
+  - **Paths with ANY byte-transforming `.gitattributes` entry** — `filter`, `text`, `eol`,
+    `working-tree-encoding`. `--no-textconv` bypasses none of them: `git diff` snapshots
+    the *converted* representation, so what replays is not what was there. Measured — a
+    clean filter dropping `LOCAL:` lines produced a zero-byte unstaged patch on a file
+    `git status` called modified, and a mixed CRLF/LF file came back entirely CRLF from a
+    patch that applied without error. Use `git check-attr --all -- <path>` and read the
+    whole list; checking `filter` alone was the first version of this rule and it missed
+    the other three.
+  - **Files marked `assume-unchanged`.** Worst of the set, because all three captures
+    *succeed* while recording nothing: git has been told the file is not changing, so the
+    diffs are empty and porcelain is silent — and the revert then replaces the user's
+    bytes with `HEAD`. A silent total loss with no failing command anywhere. `git ls-files
+    -v` flags them with a lowercase status letter.
   - **Either endpoint of a staged rename.** Porcelain `-z` emits both paths; reverting only
     the destination leaves the source staged as deleted and the replay then fails, because
     the source no longer exists in the index. The two endpoints are one unit — delegate
