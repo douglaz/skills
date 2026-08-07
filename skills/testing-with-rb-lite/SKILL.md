@@ -125,12 +125,21 @@ forbidden, and check for each when you review the result. They are the reason
 - **A gate that has never been red.** Every trap above is a way a test passes
   without proving anything; this is the one check that catches the whole family
   at once, including the ones not on this list. Before you accept a green run,
-  break the thing the test exists to detect — invert the invariant, skip the
-  setup step, corrupt the value — and confirm the gate FAILS, then revert. A gate
-  that has only ever been observed green is an untested instrument, and reading
-  its source cannot tell you whether it can fail: rb-lite's panel reads that
-  source and this is precisely what it cannot establish. Report the red run
-  alongside the green one; a PASS with no matching FAIL is half the evidence.
+  break **the production behavior the test exists to detect** — invert the
+  invariant in the code under test, or run the gate against the known-defective
+  build — and confirm the gate FAILS, then revert. A gate that has only ever been
+  observed green is an untested instrument, and reading its source cannot tell you
+  whether it can fail: rb-lite's panel reads that source and this is precisely what
+  it cannot establish. Report the red run alongside the green one; a PASS with no
+  matching FAIL is half the evidence.
+
+  **Break the behavior, never the oracle.** Corrupting the test's own expected
+  value, or skipping its setup, turns any assertion red — including one that never
+  reaches the target behavior at all. A gate with fake setup or a stale binary
+  (the two traps above) will happily fail that way while still being blind to the
+  regression you shipped, so the red run would prove exactly nothing. The mutation
+  has to be one a real regression could make, and the assertion that fails has to
+  be the one that pins the behavior.
 
 ## Workflow
 
@@ -177,12 +186,17 @@ forbidden, and check for each when you review the result. They are the reason
    working — stop and report it.
 
    **Then run it once more with the thing it detects deliberately broken, and
-   watch it FAIL.** Invert the invariant, skip the setup step, or corrupt the
-   asserted value in your own scratch copy; confirm the gate goes red for the
-   right reason (read the failure message, not just the exit code); revert. Green
-   proves the test runs. Only the red run proves it can tell the difference — and
-   it is the one piece of evidence rb-lite's panel structurally cannot supply,
-   since the panel reads the test's source and never executes it.
+   watch it FAIL.** Break the **production behavior** in your own scratch copy —
+   invert the invariant in the code under test, or run against the known-defective
+   build — never the test's expected value and never its setup. Those turn any
+   assertion red, including one that never reaches the behavior, so a gate with
+   fake setup or a stale binary passes this check while staying blind to the real
+   regression. Confirm the gate goes red **for the right reason** (read the failure
+   message and check it names the assertion that pins the behavior, not just the
+   exit code), then revert. Green proves the test runs. Only the red run proves it
+   can tell the difference — and it is the one piece of evidence rb-lite's panel
+   structurally cannot supply, since the panel reads the test's source and never
+   executes it.
 
 7. **Land the exact verified artifact.** Commit the test *as you verified it*
    (don't apply last-minute cosmetic edits to a money gate without re-verifying —
@@ -199,9 +213,11 @@ When you finish, report:
 3. **The independent run you did and its real result** — the actual markers you
    checked (the PASS line, the exact assertion values), not the exit code. This
    is the sentence the whole skill exists to let you write truthfully.
-4. **The red run** — what you broke to make the gate fail, and the failure it
-   printed. A PASS with no matching FAIL is half the evidence: report both, or
-   say plainly that you never saw the gate fail.
+4. **The red run** — which *production behavior* you broke to make the gate fail,
+   and the failure it printed. Name the behavior, not just "I made it fail": a red
+   run from a corrupted expected value or a skipped setup proves nothing. A PASS
+   with no matching FAIL is half the evidence, so report both, or say plainly that
+   you never saw the gate fail.
 5. Any false-PASS trap you caught and corrected (in the test or in your own
    runner).
 6. The test artifact path and where it landed (branch/PR).
@@ -239,9 +255,12 @@ ordering, exact-assertion helpers, and failure diagnostics verbatim>.
   checks that marker, not a trailing exit code.
 - Do NOT modify the code under test to make the test pass. If the code has a bug,
   report it — do not hide it.
-- Prove the gate can fail: after it passes, break the exact thing it detects
-  (invert the invariant / skip the setup / corrupt the asserted value), show the
-  FAIL and its message, then revert. A gate never observed red is not evidence.
+- Prove the gate can fail: after it passes, break the PRODUCTION BEHAVIOR it
+  detects (invert the invariant in the code under test, or run against the
+  known-defective build) — never the expected value and never the setup, which go
+  red without the gate ever reaching the behavior. Show the FAIL and its message,
+  confirm it names the assertion that pins the behavior, then revert. A gate never
+  observed red is not evidence.
 
 ## RUN IT and report the real output
 Actually run the test (<the exact runner command / how to bring up the

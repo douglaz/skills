@@ -549,6 +549,11 @@ Otherwise:
    one validation step that separates a test that *pins* a behavior from one that
    merely *exercises* it.
 
+   Mutate the **code**, never the test's expected value — flipping the oracle
+   turns any assertion red, including one that never reaches the behavior at all,
+   so it proves nothing. Check that the failure names the assertion you meant to
+   pin.
+
    Keep the trigger narrow — a coverage finding, or a test you touched — not
    every fix. It is one edit, one targeted test run, one revert. It earns its
    cost exactly where reading cannot help: a mapping, an ordering, a clock or
