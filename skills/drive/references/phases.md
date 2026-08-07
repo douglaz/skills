@@ -40,10 +40,14 @@ Treat that as the default for anything non-trivial.
    reassuring the wording), then assert **every** path you changed, by the right check for
    each — a partial loss commits cleanly, and checking one path only proves that path
    survived. Three cases, and one does not substitute for another:
-   - **gained content** — `git show "HEAD:$f" >"$_chk"` then `grep -q '<new phrase>' "$_chk"`
-   - **removal-only, file retained** — same capture, then grep must NOT match; a spec edit
-     that only deletes text has no new phrase, and grepping surviving text passes even when
-     the removal was reverted
+   - **gained content** — `git show "HEAD:$f" >"$_chk"` then
+     `grep -Fq -- '<new phrase>' "$_chk"`. `-F` because `grep` defaults to basic regex, so
+     a phrase containing `[`, `.` or `*` will not match itself; `--` because one starting
+     with `-` parses as an option.
+   - **removal-only, file retained** — same capture, then compare the EXPECTED REMAINING
+     COUNT: `grep -Fo -- '<deleted phrase>' "$_chk" | wc -l`. Not absence, which rejects a
+     correct commit that removed one of several identical lines; and not `grep -c`, which
+     counts matching *lines* rather than occurrences.
    - **whole file deleted** — `git show "HEAD:$f"` must FAIL; running it through the
      positive check rejects a correct commit
 

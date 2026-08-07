@@ -217,22 +217,27 @@ Then still assert the content, because a *partial* loss commits cleanly at exit
 
 ```bash
 # The commit's own file list first — every path you touched, and nothing you did not.
-_chk=$(mktemp)
+_chk=$(mktemp); trap 'rm -f "$_chk"' EXIT
 git show --stat --format= HEAD
 # Each file that should CONTAIN the change:
 for f in <every file the fix touched that gained or changed content>; do
   git show "HEAD:$f" >"$_chk" 2>/dev/null || { echo "$f did not land"; exit 1; }
   grep -Fq -- "<a distinctive phrase from that file>" "$_chk" || { echo "$f did not land"; exit 1; }
 done
-# Removal-only edits have no new phrase to find, and any surviving phrase passes even if
-# the removal was reverted. Assert the removed text is GONE:
+# Removal-only edits have no new phrase to find, and any surviving phrase passes even
+# if the removal was reverted. Assert the EXPECTED REMAINING COUNT — not absence,
+# which rejects a correct partial removal:
 for f in <every file you removed lines from>; do
-  # Existence FIRST. `git show HEAD:<gone>` fails, so grep returns nonzero and the `&&`
-  # is skipped — an accidental whole-file deletion reads identically to a clean removal.
+  # Existence FIRST: `git show HEAD:<gone>` fails, and without this assert an
+  # accidental whole-file deletion would reach the count check with an empty file
+  # and read as a clean removal. Whole-file deletions belong in the absence loop
+  # below, never here.
   git show "HEAD:$f" >"$_chk" 2>/dev/null || { echo "$f is missing from HEAD entirely"; exit 1; }
-  _n=$(grep -Fc -- "<a distinctive phrase you deleted>" "$_chk" || true)
-  # COUNT, not absence: removing one of several identical lines legitimately leaves
-  # the phrase behind, and demanding zero rejects that correct commit.
+  _n=$(grep -Fo -- "<a distinctive phrase you deleted>" "$_chk" | wc -l)
+  # COUNT the OCCURRENCES, not the matching lines (`grep -c` reports lines, so two
+  # hits on one line count as one), and not absence: removing one of several
+  # identical lines legitimately leaves the phrase behind, and demanding zero
+  # rejects that correct commit.
   [ "${_n:-0}" -eq <occurrences expected AFTER the removal> ] \
     || { echo "$f: expected <n> occurrence(s) of the removed text, found ${_n:-0}"; exit 1; }
 done

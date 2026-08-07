@@ -243,7 +243,7 @@ A phase closes on evidence or it does not close.
                              # file that was already dirty. After the commit this is
                              # empty, and `git show --stat` shows path names, not hunks.
   git commit -m "<msg>" || { echo "commit produced nothing"; exit 1; }
-  _chk=$(mktemp)
+  _chk=$(mktemp); trap 'rm -f "$_chk"' EXIT
   git show --stat --format= HEAD        # does this list all of them, and only them?
   for f in <every file that gained new content>; do
     # Capture, do not pipe: `git show ... | grep -q` returns 141 under `pipefail` when
@@ -259,9 +259,11 @@ A phase closes on evidence or it does not close.
   # accidental whole-file deletion reads exactly like a clean removal.
   for f in <every file you removed lines from>; do
     git show "HEAD:$f" >"$_chk" 2>/dev/null || { echo "$f is missing from HEAD entirely"; exit 1; }
-    _n=$(grep -Fc -- "<a distinctive phrase you deleted>" "$_chk" || true)
-    # COUNT, not absence: removing one of several identical lines legitimately leaves
-    # the phrase behind, and demanding zero rejects that correct commit.
+    _n=$(grep -Fo -- "<a distinctive phrase you deleted>" "$_chk" | wc -l)
+    # COUNT the OCCURRENCES, not the matching lines (`grep -c` reports lines, so two
+    # hits on one line count as one), and not absence: removing one of several
+    # identical lines legitimately leaves the phrase behind, and demanding zero
+    # rejects that correct commit.
     [ "${_n:-0}" -eq <occurrences expected AFTER the removal> ] \
       || { echo "$f: expected <n> occurrence(s) of the removed text, found ${_n:-0}"; exit 1; }
   done
