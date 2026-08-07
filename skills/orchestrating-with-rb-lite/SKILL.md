@@ -509,9 +509,17 @@ implement → review loop for each bead.
    behavior goes red; then revert. Read the failure rather than just observing
    one: a mutation that trips an initialization error or an unrelated assertion
    proves nothing, and a mutation that changes no test outcome means the drain
-   shipped a behavior nothing covers. Step 8 commits and pushes immediately
-   after this, so this is the last point at which that is cheap to find out.
-   Full rationale in "Verify the landed diff".
+   shipped a behavior nothing covers.
+
+   **A mutation that stays green STOPS the drain — it is not a note to carry into
+   step 8.** Diagnosing an uncovered behavior and then committing anyway ships
+   exactly what the check was added to catch, and step 8 pushes immediately, so
+   there is no later point that is cheaper. Add or repair the test that pins the
+   behavior, observe its red run against the inverted code AND its green run
+   against the correct code, and only then continue. If you cannot pin it — the
+   behavior is not reachable from a test, or the fix is out of the bead's scope —
+   say so and stop; that is a finding about the bead, not a formality to wave
+   through. Full rationale in "Verify the landed diff".
 
 8. **Commit, push, PR.** Add only intentional source/docs/config changes and
    any bead-state sync files the repo expects. Do not commit `.rb-lite/` run
