@@ -567,6 +567,13 @@ Otherwise:
    lock choice, whose absence changes no test outcome. **If the mutation changes
    nothing, you have not verified the fix — you have found a second finding.**
 
+   **And it blocks `CLEAN`.** Neither reviewer executes the test, so the panel cannot
+   see this and § 5's verdict would otherwise be computed from their silence: the loop
+   would report `CLEAN` and offer to ship a test unable to detect the behavior it claims
+   to pin. Repair it and observe both runs — red against the inverted code, green against
+   the correct code — or report the pass as **not** clean and say which test is unpinned.
+   A verdict the panel is structurally blind to is one you have to enforce yourself.
+
 6. **Launch the next pass before you write the summary.** Not after — before. Go back to
    § 2 with `N+1`, start the reviewers, and only then write up what this pass did.
 
