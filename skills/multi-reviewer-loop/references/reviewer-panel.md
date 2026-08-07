@@ -103,19 +103,29 @@ returns non-zero when `FOCUS` is unset, which aborts the whole group under
 Both reviewers start together and neither sees the other's output.
 
 ```bash
+# Job control ON, before the launches. It puts each backgrounded reviewer in its OWN
+# process group, which is what lets the escape hatch below signal the group rather than
+# one pid. Verified: with `set -m` the child's PGID equals its PID and `kill -- -$PID`
+# succeeds; without it the child inherits this shell's group and the same kill fails with
+# "No such process" — swallowed by the hatch's `|| true`, so it looks like it escalated.
+#
+# `set -m`, NOT `setsid`: this skill supports macOS (that is what the `gtimeout` fallback
+# is for) and `setsid` is util-linux, absent there — prefixing the launches with it would
+# exit 127 before either reviewer starts, on a machine meeting every documented dependency.
+set -m
 RC_TIMEOUT=1500   # 25 min; a normal pass is 5-15
 # Homebrew coreutils installs GNU timeout as `gtimeout`; hardcoding `timeout` makes both
 # reviewers exit command-not-found on macOS and the loop can never reach clean.
 TO=$(command -v timeout || command -v gtimeout) \
   || { echo "no GNU timeout (nor gtimeout) — bound the pass another way; see below"; exit 1; }
 
-setsid "$TO" --kill-after=60 "$RC_TIMEOUT" \
+"$TO" --kill-after=60 "$RC_TIMEOUT" \
   codex review --base "$DIFF_BASE" \
   -c 'model="gpt-5.6-sol"' -c 'model_reasoning_effort="xhigh"' \
   </dev/null >"$CODEX_OUT" 2>"$CODEX_ERR" &
 CODEX_PID=$!
 
-setsid "$TO" --kill-after=60 "$RC_TIMEOUT" \
+"$TO" --kill-after=60 "$RC_TIMEOUT" \
   claude -p "$(cat "$FABLE_PROMPT_FILE")" \
   --model fable \
   --effort high \
@@ -134,13 +144,10 @@ CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?
 FABLE_RC=0; wait "$FABLE_PID" || FABLE_RC=$?
 ```
 
-**`setsid` on each launch is load-bearing**, not decoration. It makes each reviewer its own
-process-group leader, which is what lets the escape hatch below signal the *group*. Without
-it the backgrounded processes inherit this shell's group, `kill -- -$PID` targets a group
-that does not exist, the failure is swallowed by the hatch's `|| true`, and a TERM-ignoring
-reviewer keeps the `wait` blocked until the full 1500-second timeout — the exact case the
-hatch exists for. (`set -m` before the launches is the alternative; this shell is
-non-interactive, so job control is off by default.)
+**The `set -m` above is load-bearing**, not decoration: it is what makes the escape hatch's
+group-kill able to reach anything. Without it a TERM-ignoring reviewer keeps the `wait`
+blocked for the full 1500 seconds — the exact case the hatch exists for — and the failed
+group-kill is swallowed by its `|| true`, so it looks like it worked.
 
 **Do not drop the `timeout`.** Either reviewer can hang indefinitely — no output, no
 exit, no error. Measured: an unbounded consistency pass ran **6h20m and wrote zero
@@ -591,7 +598,7 @@ files:
 ```bash
 TO=$(command -v timeout || command -v gtimeout) \
   || { echo "no GNU timeout — see the panel invocation above"; exit 1; }
-setsid "$TO" --kill-after=60 1500 \
+"$TO" --kill-after=60 1500 \
   claude -p "$(cat "$REVIEW_DIR/fable-consistency-prompt.txt")" \
   --model fable --effort high --output-format json \
   --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
