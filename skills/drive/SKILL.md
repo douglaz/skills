@@ -234,15 +234,24 @@ A phase closes on evidence or it does not close.
   while a review process is in flight, and take both checks the message hides:
 
   ```bash
-  git add -A && git commit -m "<msg>" || { echo "commit produced nothing"; exit 1; }
-  # EVERY file the change touched, not a representative one.
+  # Stage the paths this change touched — NOT `git add -A`. On the dirty tree § 1.6
+  # permits, `-A` sweeps in another agent's edits and any untracked file lying around,
+  # including a secret, and `git show --stat` only reveals that after the commit exists.
+  git add -- <every path this change touched>
+  git commit -m "<msg>" || { echo "commit produced nothing"; exit 1; }
   git show --stat --format= HEAD          # does this list all of them, and only them?
   for f in <every file you edited>; do
     git show "HEAD:$f" | grep -q "<a distinctive phrase from that file's change>" \
       || { echo "$f did not land"; exit 1; }
   done
+  # Removal-only edits have no new phrase to find, and any surviving phrase passes even if
+  # the removal was reverted. Assert the removed text is GONE:
+  for f in <every file you removed lines from>; do
+    git show "HEAD:$f" | grep -q "<a distinctive phrase you deleted>" \
+      && { echo "$f still contains text this change removed"; exit 1; }
+  done
   # Deletions are verified by ABSENCE — `git show HEAD:<path>` fails by design on a
-  # deleted path, so folding them into the loop above fails every correct deletion:
+  # deleted path, so folding them into the loops above fails every correct deletion:
   for f in <every path you deleted>; do
     git show "HEAD:$f" >/dev/null 2>&1 && { echo "$f is still present"; exit 1; }
   done

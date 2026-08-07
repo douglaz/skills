@@ -156,7 +156,7 @@ before you change a single file. If you must edit sooner, kill the reviewer **by
 the exact PID captured at launch, then reap it**, and accept the lost pass:
 
 ```bash
-kill "$CODEX_PID"
+kill "$CODEX_PID" 2>/dev/null || true   # already exited is fine, and not fatal
 CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?   # kill only SENDS; this waits for it
 ```
 
@@ -165,10 +165,12 @@ the `timeout` wrapper and the reviewer beneath it are still tearing down when it
 does — and an edit made in that gap is inside the very window the kill was meant
 to close.
 
-The `|| CODEX_RC=$?` is not decoration either, and it is the same rule as the
-`wait`s under "Running the panel": a TERM-killed process makes `wait` return
-**143**, so under `set -e` a bare `wait` exits the shell *at that line* — before
-the edit this hatch exists for, and with Fable still running unreaped.
+Neither `||` is decoration, and they guard different moments. `kill` fails when
+codex exited on its own between your decision and the signal — a race you cannot
+exclude — so an unguarded `kill` exits the shell before the `wait` ever runs. And
+`wait` on a TERM-killed process returns **143**, so an unguarded `wait` exits it
+before the edit this hatch exists for. Either way Fable is left running unreaped.
+Same rule as the `wait`s under "Running the panel".
 
 Not `pkill -f "codex review"` either: that matches your own shell and other
 sessions' reviewers running the same command, per the rule below.
@@ -196,7 +198,8 @@ exits **1**, so check it — an unchecked `git add -A && git commit` inside a
 larger block is how the message gets believed and the failure walks:
 
 ```bash
-git add -A && git commit -m "<msg>" || { echo "commit produced nothing"; exit 1; }
+git add -- <every path this change touched>   # NOT `git add -A` on a dirty tree: it sweeps
+git commit -m "<msg>" || { echo "commit produced nothing"; exit 1; }   # in unrelated work
 ```
 
 Then still assert the content, because a *partial* loss commits cleanly at exit
@@ -208,6 +211,12 @@ git show --stat --format= HEAD
 # Each file that should CONTAIN the change:
 for f in <every file the fix touched that gained or changed content>; do
   git show "HEAD:$f" | grep -q "<a distinctive phrase from that file>" || { echo "$f did not land"; exit 1; }
+done
+# Removal-only edits have no new phrase to find, and any surviving phrase passes even if
+# the removal was reverted. Assert the removed text is GONE:
+for f in <every file you removed lines from>; do
+  git show "HEAD:$f" | grep -q "<a distinctive phrase you deleted>" \
+    && { echo "$f still contains text this change removed"; exit 1; }
 done
 # Each file the change DELETES is verified by ABSENCE — `git show HEAD:<path>` fails by
 # design on a deleted path, so folding deletions into the loop above marks every correct

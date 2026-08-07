@@ -47,12 +47,19 @@ commit), and for anything you care about also look inside the commit, since a
 partial loss commits cleanly at exit 0:
 
 ```
-git add -A && git commit -m "<msg>" || { echo "commit produced nothing"; exit 1; }
+git add -- <every path this change touched>   # NOT `git add -A` on a dirty tree: it sweeps
+git commit -m "<msg>" || { echo "commit produced nothing"; exit 1; }   # in unrelated work
 # The commit's own file list first — every path you touched, and nothing you did not.
 git show --stat --format= HEAD
 # Each file that should CONTAIN the change:
 for f in <every file you changed that gained or changed content>; do
   git show "HEAD:$f" | grep -q "<a distinctive phrase from that file>" || { echo "$f did not land"; exit 1; }
+done
+# Removal-only edits have no new phrase to find, and any surviving phrase passes even if
+# the removal was reverted. Assert the removed text is GONE:
+for f in <every file you removed lines from>; do
+  git show "HEAD:$f" | grep -q "<a distinctive phrase you deleted>" \
+    && { echo "$f still contains text this change removed"; exit 1; }
 done
 # Each file the change DELETES is verified by ABSENCE — `git show HEAD:<path>` fails by
 # design on a deleted path, so folding deletions into the loop above marks every correct

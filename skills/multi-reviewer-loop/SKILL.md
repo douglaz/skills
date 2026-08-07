@@ -401,14 +401,17 @@ For each pass `N` from `1` to `MAX_PASSES`:
    down when it comes back, and an edit right after is still inside the window:
 
    ```bash
-   kill "$CODEX_PID"                        # never `pkill -f` — it matches your own shell
+   kill "$CODEX_PID" 2>/dev/null || true          # never `pkill -f`; already-exited is fine
    CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?   # reaping is what closes the window
    ```
 
-   `|| CODEX_RC=$?`, for the same reason § 2's own `wait`s use it: a TERM-killed
-   process makes `wait` return **143**, and under `set -e` a bare `wait` exits the
-   shell right there — before you reach the edit this hatch exists for, and with
-   Fable still unreaped in the background.
+   Both `||`s are load-bearing under `set -e`, and they guard different moments.
+   `kill` fails if codex exited on its own between your decision and the signal —
+   a race you cannot exclude — so an unguarded `kill` exits the shell before the
+   `wait`. And `wait` on a TERM-killed process returns **143**, so an unguarded
+   `wait` exits it before the edit this hatch exists for. Either way Fable is left
+   running unreaped. § 2's own `wait`s carry the same `|| VAR=$?` for the same
+   reason.
 
    Then accept the lost pass. Full detail, the commit-time assertion, and the
    probe that gives a false all-clear are in
