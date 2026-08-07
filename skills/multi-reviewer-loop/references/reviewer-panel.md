@@ -157,14 +157,21 @@ the exact PID captured at launch, then reap it**, and accept the lost pass:
 
 ```bash
 kill "$CODEX_PID"
-wait "$CODEX_PID"     # kill only SENDS the signal; this is what waits for it
+CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?   # kill only SENDS; this waits for it
 ```
 
 The `wait` is not decoration. `kill` returns as soon as SIGTERM is delivered, so
 the `timeout` wrapper and the reviewer beneath it are still tearing down when it
 does — and an edit made in that gap is inside the very window the kill was meant
-to close. Not `pkill -f "codex review"` either: that matches your own shell and
-other sessions' reviewers running the same command, per the rule below.
+to close.
+
+The `|| CODEX_RC=$?` is not decoration either, and it is the same rule as the
+`wait`s under "Running the panel": a TERM-killed process makes `wait` return
+**143**, so under `set -e` a bare `wait` exits the shell *at that line* — before
+the edit this hatch exists for, and with Fable still running unreaped.
+
+Not `pkill -f "codex review"` either: that matches your own shell and other
+sessions' reviewers running the same command, per the rule below.
 
 This loop is the most exposed skill in the repo to it: § 2 backgrounds both
 reviewers *by design*, and § 3 is entirely about editing. An agent that starts on
@@ -196,8 +203,17 @@ Then still assert the content, because a *partial* loss commits cleanly at exit
 0 — some files reverted, others not, one real commit carrying half the fix:
 
 ```bash
-for f in <every file the fix touched>; do
+# The commit's own file list first — every path you touched, and nothing you did not.
+git show --stat --format= HEAD
+# Each file that should CONTAIN the change:
+for f in <every file the fix touched that gained or changed content>; do
   git show "HEAD:$f" | grep -q "<a distinctive phrase from that file>" || { echo "$f did not land"; exit 1; }
+done
+# Each file the change DELETES is verified by ABSENCE — `git show HEAD:<path>` fails by
+# design on a deleted path, so folding deletions into the loop above marks every correct
+# deletion as a loss:
+for f in <every path the change deletes>; do
+  git show "HEAD:$f" >/dev/null 2>&1 && { echo "$f is still present"; exit 1; }
 done
 ```
 

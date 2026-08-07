@@ -236,10 +236,15 @@ A phase closes on evidence or it does not close.
   ```bash
   git add -A && git commit -m "<msg>" || { echo "commit produced nothing"; exit 1; }
   # EVERY file the change touched, not a representative one.
-  git show --stat --format= HEAD          # does this list all of them?
+  git show --stat --format= HEAD          # does this list all of them, and only them?
   for f in <every file you edited>; do
     git show "HEAD:$f" | grep -q "<a distinctive phrase from that file's change>" \
       || { echo "$f did not land"; exit 1; }
+  done
+  # Deletions are verified by ABSENCE — `git show HEAD:<path>` fails by design on a
+  # deleted path, so folding them into the loop above fails every correct deletion:
+  for f in <every path you deleted>; do
+    git show "HEAD:$f" >/dev/null 2>&1 && { echo "$f is still present"; exit 1; }
   done
   ```
 

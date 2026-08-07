@@ -129,8 +129,17 @@ message hides:
 
 ```bash
 git add -A && git commit -m "<msg>" || { echo "commit produced nothing"; exit 1; }
-for f in <every file the run changed>; do
+# The commit's own file list first — every path you touched, and nothing you did not.
+git show --stat --format= HEAD
+# Each file that should CONTAIN the change:
+for f in <every file the run changed that gained or changed content>; do
   git show "HEAD:$f" | grep -q "<a distinctive phrase from that file>" || { echo "$f did not land"; exit 1; }
+done
+# Each file the change DELETES is verified by ABSENCE — `git show HEAD:<path>` fails by
+# design on a deleted path, so folding deletions into the loop above marks every correct
+# deletion as a loss:
+for f in <every path the change deletes>; do
+  git show "HEAD:$f" >/dev/null 2>&1 && { echo "$f is still present"; exit 1; }
 done
 ```
 

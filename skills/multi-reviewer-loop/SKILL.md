@@ -401,9 +401,14 @@ For each pass `N` from `1` to `MAX_PASSES`:
    down when it comes back, and an edit right after is still inside the window:
 
    ```bash
-   kill "$CODEX_PID"          # never `pkill -f` — it matches your own shell
-   wait "$CODEX_PID"          # THIS is what makes the window closed
+   kill "$CODEX_PID"                        # never `pkill -f` — it matches your own shell
+   CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?   # reaping is what closes the window
    ```
+
+   `|| CODEX_RC=$?`, for the same reason § 2's own `wait`s use it: a TERM-killed
+   process makes `wait` return **143**, and under `set -e` a bare `wait` exits the
+   shell right there — before you reach the edit this hatch exists for, and with
+   Fable still unreaped in the background.
 
    Then accept the lost pass. Full detail, the commit-time assertion, and the
    probe that gives a false all-clear are in
