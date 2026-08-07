@@ -737,9 +737,17 @@ finding precisely enough for someone else to act on, which by itself kills the v
   before granting write access:
 
   ```bash
-  git diff --cached --binary >"$REVIEW_DIR/pre-delegation.staged.patch"   || { echo "snapshot failed"; exit 1; }
-  git diff          --binary >"$REVIEW_DIR/pre-delegation.unstaged.patch" || { echo "snapshot failed"; exit 1; }
-  git status --porcelain     >"$REVIEW_DIR/pre-delegation.status"         || { echo "snapshot failed"; exit 1; }
+  git diff --cached --binary --no-textconv >"$REVIEW_DIR/pre-delegation.staged.patch" \
+    || { echo "snapshot failed"; exit 1; }
+  git diff          --binary --no-textconv >"$REVIEW_DIR/pre-delegation.unstaged.patch" \
+    || { echo "snapshot failed"; exit 1; }
+  git status --porcelain -z >"$REVIEW_DIR/pre-delegation.status" \
+    || { echo "snapshot failed"; exit 1; }
+  # Every pre-existing UNTRACKED path in the delegated scope, copied — neither patch can
+  # restore one, so without this the "non-destructive" guarantee is simply false for them.
+  # If you cannot copy them, do not delegate those paths.
+  cp -a --parents <each pre-existing untracked path in scope> "$REVIEW_DIR/untracked/" \
+    || { echo "snapshot failed"; exit 1; }
   ```
 
   **Two patches, not one.** A single `git diff HEAD` flattens staged and unstaged into one
@@ -747,10 +755,12 @@ finding precisely enough for someone else to act on, which by itself kills the v
   user's staging selection is gone, and a later `git commit` then carries hunks they had
   deliberately left out.
 
-  **`--binary` on both.** Without it a modified binary records only `Binary files a/x and
-  b/x differ` — a patch with no payload, which `git apply` then refuses. Revert that path
-  and the user's original bytes are unrecoverable, from a snapshot that looked like it
-  worked.
+  **`--binary --no-textconv` on both.** Without `--binary` a modified binary records only
+  `Binary files a/x and b/x differ` — a patch with no payload, which `git apply` then
+  refuses (measured: *"cannot apply binary patch to 'blob.bin' without full index line"*).
+  And `--binary` does not switch off a configured `textconv` diff driver, which emits
+  *transformed* text that will not apply against the raw file either. Both flags, or the
+  revert is one-way for exactly the files you cannot retype.
 
   **Empty is a legitimate snapshot.** On a clean tree — the ordinary PR-review case — both
   patches are empty because the branch's commits are already recoverable from git. Require
@@ -769,12 +779,20 @@ finding precisely enough for someone else to act on, which by itself kills the v
   then `A` — not `"A "`, which is an ordinary staged addition you must not touch:
 
   ```bash
-  grep '^ A ' "$REVIEW_DIR/pre-delegation.status" | cut -c4- \
-    | while IFS= read -r f; do git add -N -- "$f"; done
+  # -z, and NUL-delimited reads. Porcelain v1 QUOTES any path needing it — `café.py`
+  # arrives as the literal `"caf\303\251.py"` under the default core.quotePath — so a
+  # `cut`-based parse hands `git add -N` a path that does not exist and the file stays
+  # `??`, which is the exact failure this step exists to prevent.
+  while IFS= read -r -d '' entry; do
+    [ "${entry:0:3}" = " A " ] && git add -N -- "${entry:3}"
+  done < "$REVIEW_DIR/pre-delegation.status"
   ```
 
-  Neither diff captures **untracked** files at all, so copy any that matter into
-  `$REVIEW_DIR` first, or accept that they sit outside the snapshot and say which you did.
+  Neither diff captures **untracked** files at all — which is why the capture copies every
+  pre-existing untracked path in the delegated scope. That is not optional: an implementer
+  with write access can overwrite or delete one, and no patch can bring it back. If a path
+  cannot be copied, take it out of the delegated scope rather than documenting a data-loss
+  hole underneath a promise of non-destructive rollback.
 
 This is not `rb-lite`. That loop hands over the whole task and reviews the result; this
 hands over *only the edit* for findings you have already verified.
