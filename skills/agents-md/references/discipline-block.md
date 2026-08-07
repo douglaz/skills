@@ -56,9 +56,11 @@ git show --stat --format= HEAD               # all the paths you meant, and only
 ```
 
 Then confirm the *content* landed, per file, by the check that fits it — a file that
-gained content must contain a distinctive new phrase; a file you only removed lines from
-must still exist **and** hold the expected remaining count of the deleted phrase; a
-deleted path must be absent. One does not substitute for another, and each has a way to
+gained content must contain a distinctive new phrase; a file you removed lines from must
+still exist **and** hold the expected remaining count of the deleted phrase; a deleted path
+must be absent. A file that BOTH gained and lost content needs both of the first two — the
+added phrase passing says nothing about whether the removal survived. One does not
+substitute for another, and each has a way to
 lie: `grep` defaults to regex (use `-Fq --`), `git show ... | grep` returns 141 under
 `pipefail` when grep exits early (capture to a file first), `grep -c` counts lines rather
 than occurrences, and demanding *zero* occurrences rejects a correct partial removal.

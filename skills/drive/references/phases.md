@@ -44,8 +44,11 @@ Treat that as the default for anything non-trivial.
      `grep -Fq -- '<new phrase>' "$_chk"`. `-F` because `grep` defaults to basic regex, so
      a phrase containing `[`, `.` or `*` will not match itself; `--` because one starting
      with `-` parses as an option.
-   - **removal-only, file retained** — same capture, then compare the EXPECTED REMAINING
-     COUNT: `grep -Fo -- '<deleted phrase>' "$_chk" | wc -l`. Not absence, which rejects a
+   - **removals, file retained** (whether or not it also gained content — a file with both
+     needs this check AND the one above) — same capture, then compare the EXPECTED REMAINING
+     COUNT: `grep -Fo -- '<deleted phrase>' "$_chk" | wc -l || true`. The `|| true` because
+     grep exits 1 on no match and `pipefail` would abort at the complete-removal case this
+     check exists to confirm. Not absence, which rejects a
      correct commit that removed one of several identical lines; and not `grep -c`, which
      counts matching *lines* rather than occurrences.
    - **whole file deleted** — `git show "HEAD:$f"` must FAIL; running it through the

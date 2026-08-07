@@ -237,13 +237,16 @@ A phase closes on evidence or it does not close.
   # Stage the paths this change touched — NOT `git add -A`. On the dirty tree § 1.6
   # permits, `-A` sweeps in another agent's edits and any untracked file lying around,
   # including a secret, and `git show --stat` only reveals that after the commit exists.
-  git add -- <every path this change touched>   # not `git add -A`: on a dirty tree it
-  git diff --cached                            # sweeps in unrelated work — and READ it
+  git add -- <every path this change touched>   # NOT `git add -A`: on a dirty tree that
+                                               # stages unrelated work. Even by name, a path
+                                               # already dirty brings the other agent's hunks.
+  git diff --cached                            # read-only review of what you just staged
   git commit -m "<msg>" || { echo "commit produced nothing"; exit 1; }
   git show --stat --format= HEAD               # all the paths you meant, and only those
   # Then per file, by the check that fits: gained content must contain a distinctive new
-  # phrase; a removal-only file must still EXIST and hold the expected remaining count;
-  # a deleted path must be absent. `grep -Fq --` (regex is the default), capture to a
+  # phrase; a file with removals must still EXIST and hold the expected remaining count;
+  # a deleted path must be absent. A file with BOTH needs both checks — the added phrase
+  # passing says nothing about whether the removal survived. `grep -Fq --` (regex is the default), capture to a
   # file first (`git show ... | grep` returns 141 under pipefail), and count occurrences
   # rather than lines — demanding zero rejects a correct partial removal.
   ```
