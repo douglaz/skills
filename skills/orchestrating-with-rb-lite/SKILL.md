@@ -773,182 +773,62 @@ implement → review loop for each bead.
     br sync --flush-only || { echo "not persisted"; exit 1; }
     ```
 
-    **Check for divergence BEFORE the first `br` write, not at commit time.** `br update`
-    auto-flushes, so a hand-edit sitting unstaged in the JSONL is destroyed by the very
-    first mutation — and neither the index nor `HEAD` holds it, so the post-write diff then
-    shows only your intended change and there is nothing left to recover. The window is
-    open from the moment the session starts:
-
-    ```bash
-    BEADS_JSONL=$(br where --json | jq -er '.jsonl_path') \
-      || { echo "cannot resolve the beads JSONL path"; exit 1; }
-    git status --porcelain -- "$BEADS_JSONL"   # any unstaged/uncommitted bead text?
-    ```
-
-    If that is not empty, resolve it **now** — recovery case (a) below — before running any
-    `br` command. After the first flush the choice is gone.
+    **Check for divergence BEFORE the first `br` write.** `br update` auto-flushes, so a
+    hand-edit sitting unstaged in the JSONL is destroyed by the very first mutation — and
+    since neither the index nor `HEAD` holds it, every later diff shows only your intended
+    change, which makes the loss *undetectable*, not merely unrecoverable. Resolve the real
+    path (`br where --json | jq -er .jsonl_path`; `.beads/issues.jsonl` is only the default
+    layout, and a hardcoded path diffs nothing on a `.beads.jsonl` repo — a false
+    all-clear) and run `git status --porcelain` on it before any `br` command.
 
     **That sync proves the closure reached the file. It says nothing about what else the
-    same write overwrote — so inspect the file anyway.** Every `br` write flushes the whole
-    gitignored `.beads/beads.db` cache over the tracked `.beads/issues.jsonl`, so a write to
-    **one** bead rewrites **all** of them from the cache, and any body the cache holds a
-    stale copy of is reverted. Observed on `br 0.2.19`: closing a single bead silently
-    reverted ~40 KB of specification text across three *other* beads and deleted a fourth
-    outright. Exit 0, success message, nothing failed. This step is the last write of every
+    same write overwrote.** Every `br` write flushes the whole gitignored cache over the
+    tracked JSONL, so a write to **one** bead rewrites **all** of them, and any body the
+    cache holds a stale copy of is reverted. Observed on `br 0.2.19`: closing a single bead
+    silently reverted ~40 KB of specification text across three *other* beads and deleted a
+    fourth. Exit 0, success message, nothing failed. This step is the last write of every
     bead, which is how the drain routes you into it every time.
 
-    Hand-editing `.beads/issues.jsonl` is what makes the cache stale — and the task
-    template below half-invites it: it tells the *implementer* to treat `.beads/` as an
-    "orchestration/state" directory rather than product code, which the **operator** can
-    read as "this is just state, edit it freely." It is not. A hand edit does not advance
+    Hand-editing the JSONL is what makes the cache stale — a hand edit does not advance
     `updated_at`, so cache and file hold different bodies under identical timestamps and
-    nothing can tell them apart. **Write bead text through `br update -d/--notes`; never
-    through the file.** If a body is long enough that editing the file is tempting, that is
-    exactly the body worth losing least.
+    nothing can tell them apart. **Write bead text through `br update -d/--notes`, never
+    the file.** The task template's ".beads/ is orchestration state" line is a *reviewing*
+    scope rule, not an editing licence. And the advertised guard does not help: `br sync
+    --help`'s "Stale DB Guard" is an **id**-level check, so same-id-different-body — the
+    case that loses text — is unguarded by design.
 
-    The advertised guard does not cover this. `br sync --help` documents a *"Stale DB
-    Guard: refuses to export if JSONL has issues missing from DB"* — an **id**-level check,
-    so same-id-different-body is unguarded by design, and that is the case that loses the
-    text. In the observed run the id-level case did not fire either: a bead present in the
-    JSONL and absent from the DB was dropped by the auto-flush, which is the guard's
-    literal precondition.
+    So field-diff the resolved path before committing any `br` write. A full-file
+    re-serialization with every id on both sides is normal; ids on only one side, or a
+    `description` you did not touch, is the tell.
 
-    So field-diff before committing any `br` write — **resolving the path first**, because
-    `.beads/issues.jsonl` is only the default layout and a hardcoded path diffs *nothing*
-    on a `.beads.jsonl` or `<name>.beads.jsonl` repo. An empty diff then reads as "no
-    collateral damage" and you never enter recovery at all, which is the failure this whole
-    step exists to prevent:
+    **Recovery depends on which side holds the good text, and guessing cements the loss.**
 
-    ```bash
-    BEADS_JSONL=$(br where --json | jq -er '.jsonl_path') \
-      || { echo "cannot resolve the beads JSONL path — do NOT judge the flush blind"; exit 1; }
-    # Read `br where --json` yourself and use whatever DB field YOUR version emits — the
-    # name below is a guess at the schema, not a contract.
-    BEADS_DB=$(br where --json | jq -r '.db_path // empty')
-    # Do NOT fall back to a derived path. `dirname` of a FLAT `.beads.jsonl` is the repo
-    # root, so the guess lands on `<repo>/beads.db` while the real cache sits under
-    # `.beads/` — recovery would then back up and delete the wrong file and re-import
-    # against the untouched stale database, preserving exactly the loss it is undoing.
-    [ -n "$BEADS_DB" ] || { echo "br where reports no database path — locate it yourself
-      and set BEADS_DB explicitly; do NOT guess, and do NOT run the recipe without it"; exit 1; }
+    - **(a) cache stale, file still good** — rebuild the cache from the file.
+      `br sync --import-only` alone cannot do it: it compares `updated_at`, so equal
+      timestamps with different bodies report `Skipped: N (up-to-date)` forever. The stale
+      DB has to go first.
+    - **(b) the flush already ran and the diff shows damage** — the working copy *is* the
+      damaged artifact. Restore it from git first, then replay every mutation you meant,
+      then rebuild. Read `git diff --cached` and `git diff` and decide explicitly which of
+      the index or `HEAD` holds the good bodies; a staged copy only proves a choice exists,
+      and an earlier flush may have been staged before anyone noticed.
 
-    git diff "$BEADS_JSONL"
-    ```
+    Four things the recipe must do in both cases, each learned by getting it wrong: back up
+    the cache and **check the copy succeeded**; **verify the DB and its `-wal`/`-shm`
+    siblings are actually gone** (`rm -f` is silent on a permissions failure, and a
+    surviving cache makes the import skip equal-timestamp records and report success);
+    **check the import and the replay before any flush** (the stale DB is already deleted,
+    so a failed import leaves an empty one and the flush writes *that* over what you just
+    restored); and **replay the complete intended delta**, not one command — the drain's
+    case is a single closure, but `plan-to-beads-transfer` and `bead-polish-loop` batch, so
+    `git checkout HEAD --` there discards their legitimate work along with the damage.
 
-    Parse the `+`/`-` lines as JSON, key by `id`, and assert the only changed fields are the
-    ones you meant to change. A full-file re-serialization with every id on both sides is
-    normal; ids on only one side, or a `description` you did not touch, is the tell.
+    Git is the whole recovery, which is why the field-diff must happen **before** you stage
+    anything: an uncommitted hand-edit that a flush overwrote is simply gone. That is the
+    sharpest reason never to write bead text through the file.
 
-    Recovery depends on **which of the two has the good text**, and getting that backwards
-    cements the loss. Establish it before running anything:
-
-    `$BEADS_JSONL` and `$BEADS_DB` from the detection step above carry through every command
-    below. A recovery that hardcodes the default restores and deletes paths that do not
-    exist while the commands after it keep using the *actual* stale cache and damaged file —
-    reporting success and leaving the loss in place. `drive-status`'s own `_BEAD_RE`
-    recognizes all three layouts; `second-model-bead-audit` already asks `br where` rather
-    than assuming.
-
-    **(a) The cache is stale and the file is still good** — you have hand-edited the JSONL
-    and no flush has happened yet. Rebuild the cache from the file. `br sync --import-only`
-    alone cannot do it: it compares `updated_at`, and equal timestamps with different bodies
-    report `Skipped: N (up-to-date)` forever, so the stale DB has to go first.
-
-    ```bash
-    cp "$BEADS_DB" /tmp/beads.db.bak || { echo "cannot back up the cache — stop"; exit 1; }
-    rm -f "$BEADS_DB" "$BEADS_DB-wal" "$BEADS_DB-shm"
-    # The removal must have WORKED. `rm -f` reports nothing on a permissions failure, and
-    # a surviving cache makes the import below skip every equal-timestamp record and
-    # report success — after which the flush writes the same stale bodies back over the
-    # file you just restored.
-    for _db in "$BEADS_DB" "$BEADS_DB-wal" "$BEADS_DB-shm"; do
-      [ -e "$_db" ] && { echo "$_db still exists — do NOT import against a stale cache"; exit 1; }
-    done
-    # Checked, for the same reason as case (b): the stale cache is already deleted, so an
-    # import failing on an unreadable JSONL leaves an EMPTY one — and the next `br` write
-    # flushes that over the file whose hand-edits this case exists to preserve.
-    br sync --import-only || { echo "import failed — do NOT run any br command that
-      flushes; the JSONL is your only copy, and /tmp/beads.db.bak is the old cache"; exit 1; }
-    ```
-
-    **(b) The flush already ran and the diff above shows the damage** — then the working
-    copy of the JSONL **is** the damaged artifact, not the truth. Importing it here would
-    copy the loss into a fresh database and a later commit would cement it. **Restore the
-    file from git first, then re-apply every mutation you actually wanted, and only then
-    rebuild the cache:**
-
-    **If the good copy is STAGED, do not reach for `HEAD`.** A body edit staged before an
-    unrelated flush leaves the truth in the *index*, and the field-diff above compares the
-    damaged worktree against exactly that. `git checkout HEAD --` overwrites worktree AND
-    index with the older commit, destroying the only recoverable source — the one thing
-    replaying mutations cannot rebuild. Check first, and restore from the index when it
-    holds the good copy:
-
-    Only the restore SOURCE is conditional. Everything after it — deleting the cache,
-    re-importing, replaying the intended mutations, verifying — has to run either way, or
-    the staged path restores the text and leaves the stale database authoritative, and the
-    next `br` write overwrites the recovery:
-
-    **A staged copy is not evidence the index is good.** An earlier flush may have been
-    staged before anyone noticed, in which case the index holds the damage and `HEAD` holds
-    the truth. Presence tells you a choice exists; only reading tells you which side to
-    take. Inspect both, decide explicitly, and record why:
-
-    ```bash
-    git diff --cached -- "$BEADS_JSONL"   # index vs HEAD — is the staged copy the good one?
-    git diff -- "$BEADS_JSONL"            # worktree vs index — what the flush just did
-    ```
-
-    ```bash
-    # SOURCE: set this from what the two diffs above showed. Do NOT infer it from the mere
-    # presence of a staged version, and do not leave it unset — the default is a refusal,
-    # because guessing here restores the damaged side and the rebuild then preserves it.
-    GOOD=            # HEAD | index
-    case "$GOOD" in
-      HEAD)  git checkout HEAD -- "$BEADS_JSONL" ;;   # last good COMMITTED state
-      index) git checkout -- "$BEADS_JSONL"      ;;   # index -> worktree
-      *)     echo "read both diffs and set GOOD=HEAD or GOOD=index first"; exit 1 ;;
-    esac
-
-    # REBUILD: identical for both sources. Do not skip this on the staged path.
-    cp "$BEADS_DB" /tmp/beads.db.bak || { echo "cannot back up the cache — stop"; exit 1; }
-    rm -f "$BEADS_DB" "$BEADS_DB-wal" "$BEADS_DB-shm"
-    # The removal must have WORKED. `rm -f` reports nothing on a permissions failure, and
-    # a surviving cache makes the import below skip every equal-timestamp record and
-    # report success — after which the flush writes the same stale bodies back over the
-    # file you just restored.
-    for _db in "$BEADS_DB" "$BEADS_DB-wal" "$BEADS_DB-shm"; do
-      [ -e "$_db" ] && { echo "$_db still exists — do NOT import against a stale cache"; exit 1; }
-    done
-    # CHECK BOTH. The stale database is already deleted at this point, so an import that
-    # fails on an unreadable or invalid JSONL leaves an empty cache — and the flush below
-    # would then write THAT over the file you just restored, destroying the recovery with
-    # the recovery. Same for a failed replay: exit before any flush.
-    br sync --import-only || { echo "import failed — do NOT flush; the JSONL is your only
-      copy right now"; exit 1; }
-    br update <bead-id> -s closed || { echo "replay failed — do NOT flush"; exit 1; }
-    br sync --flush-only || { echo "not persisted"; exit 1; }
-    git diff "$BEADS_JSONL"                    # confirm ONLY the intended fields moved
-    ```
-
-    **Enumerate the intended delta before you delete anything.** The single `br update`
-    above is the *drain's* case, where the round's whole intent is one closure. Callers
-    that batch — `plan-to-beads-transfer` writing a graph, `bead-polish-loop` rewriting
-    several bodies in a round — have many deliberate mutations in flight, and
-    `git checkout HEAD --` discards all of them along with the damage. Before the checkout,
-    write down the complete field-level delta you meant to produce (the round summary those
-    skills already require is exactly that list), then replay it through `br` afterwards.
-    Recovering by restoring git and replaying one command is only safe when one command is
-    all you did.
-
-    Git is the whole recovery here, which is why the field-diff has to happen **before** you
-    stage anything: an uncommitted hand-edit that a flush overwrote is simply gone — no
-    cache holds it and no commit holds it. That is the sharpest reason never to write bead
-    text through the file.
-
-    Either way, verify the restored bodies before the next `br` write. This is **not** the
-    pre-0.1.45 corruption bug in "Tool dependencies": no `ISSUE_NOT_FOUND`, no branch reset
-    involved, and every command reported success.
+    This is **not** the pre-0.1.45 corruption bug in "Tool dependencies": no
+    `ISSUE_NOT_FOUND`, no branch reset, and every command reported success.
 
     Closing on the feature branch before the merge is **not** a safe shortcut, however
     transactional it looks — the beads DB is shared across branches with no git
