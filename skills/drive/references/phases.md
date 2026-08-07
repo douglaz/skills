@@ -129,8 +129,12 @@ comparable beads); confirm by re-reading the goal. Hard brake at 2× budget or r
   A long iteration is not a dead run, and `TaskList` can glitch empty. Never
   `pkill -f` (it self-matches your own shell and hits other sessions) — kill by exact PID.
 
-**Exit gate:** rb-lite exits clean **and** you independently ran the gate to a real exit
-code. The panel reads code; it does not run it.
+**Exit gate:** rb-lite exits clean, you independently ran the gate to a real exit code,
+**and** every load-bearing behavior the bead introduced has been inverted with a matching
+assertion observed to fail. The panel reads code; it does not run it — and a suite that was
+already green before the bead proves nothing about the bead. Most beads never reach PROVE
+(that phase is for test-shaped deliverables and money/data/infra work), so if this evidence
+is not required here it is required nowhere.
 
 ---
 
