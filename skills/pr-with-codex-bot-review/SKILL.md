@@ -8,11 +8,14 @@ description: >-
   codex bot's actual behavior — auto-fires on substantive code PRs, often silent on
   docs-only PRs, line-level findings live in PR review comments not the review body —
   re-triggering with `@codex review`, addressing findings via amend + force-push, knowing
-  when to merge despite bot silence, and the squash-merge + branch-reset pattern. Use
-  this skill whenever the user asks to open a PR, "ship this", "merge it", "let the bot
-  review", "land the change", or right after substantial code work that's ready for
-  review. Also when the user asks why the bot "isn't reviewing" or how to interpret what
-  it left behind.
+  when to merge despite bot silence, and the squash-merge + branch-reset pattern. THE
+  MERGE DECISION IS MADE BY THE BUNDLED `scripts/bot-gate`, NOT BY JUDGMENT — run it and
+  quote its output; the manual reaction-and-comment procedure it replaced is gone, and
+  was wrong three different ways before it was. Use this skill whenever the user asks to
+  open a PR, "ship this", "merge it", "let the bot review", "land the change", or right
+  after substantial code work that's ready for review. Also when the user asks why the
+  bot "isn't reviewing", how to interpret what it left behind, or what to do when GitHub
+  itself is degraded and no review can be attributed to the tree being merged.
 argument-hint: "[pr-number-or-branch]"
 allowed-tools:
   - Bash
@@ -26,6 +29,22 @@ allowed-tools:
 
 Drive a PR through CI and the `chatgpt-codex-connector` review bot to a clean merge,
 without bouncing off the bot's quirks.
+
+> **If you are recalling this procedure rather than reading it now, stop and re-read the
+> on-disk `SKILL.md` first.** The merge decision moved out of prose and into
+> **`scripts/bot-gate`**. A copy of this skill loaded earlier in a session — or carried
+> through a context summarisation — may still describe the manual procedure it replaced:
+> `gh api .../reactions`, `gh api .../pulls/N/comments`, judge by hand. Following that
+> from memory is not "a slightly older doc". `bot-gate`'s own header records that this
+> logic *"was written three times as prose and was wrong three different ways"* — an
+> unenforcing version, an unsatisfiable version, and one that broke past 100 comments —
+> so remembered prose is one of three known-wrong gates. This has already cost a real
+> merge: a PR landed on a `+1` and a human-pasted approval while the only wrapper the API
+> held named the **parent** of the merged head. The gate would have blocked it; it was
+> never run.
+>
+> The countermeasure is in § 8: a merge report must **quote `bot-gate`'s output**. An
+> agent that skipped the gate cannot produce that quote, which is the point.
 
 ## When this applies
 
@@ -540,8 +559,45 @@ condition:
      reaches zero — § 6 tells you to *answer* a misread finding, and both it and your
      reply stay anchored), then it broke past 100 comments (`--paginate` with `--jq`
      emits one result per page). Shell embedded in documentation cannot be run, so none
-     of those were caught by reading. Exit codes: 0 no pending evidence (NOT clearance — see above), 1 blocked, 2 usage, 3 cannot
-     determine — and "cannot determine" is never clearance.
+     of those were caught by reading.
+
+     Exit codes:
+
+     | Code | Verdict | Means |
+     |---|---|---|
+     | 0 | `NO_PENDING_EVIDENCE` | not clearance — see above |
+     | 1 | `BLOCKED` | a conjunct is unmet; usually **wait** |
+     | 2 | — | usage error |
+     | 3 | — | cannot determine, and that is never clearance |
+     | 4 | `BLOCKED_UNATTRIBUTED` | a round finished; nothing says which tree it read |
+
+     **Exit 4 refuses the merge exactly as 1 does** — any caller doing `bot-gate <PR> &&
+     gh pr merge` is unaffected. It exists for a caller that *loops*: exit 1 usually means
+     wait, exit 4 means waiting **may** not help, because the signal that would attribute
+     the round is the one that is missing. It fires only when every other conjunct already
+     holds, the bot's `+1` post-dates the tip's commit, and no `eyes` reaction is at or
+     after that `+1`. Per the bot's own about-box — *"if Codex has suggestions, it will
+     comment; otherwise it will react with 👍"* — a 👍 is a completed round, attached to
+     the PR and never to a commit. A 👍 older than the tip provably belongs to an earlier
+     tree and leaves a plain exit 1. See § 8b.
+
+     **Try `@codex review` before treating exit 4 as an outage.** Three honesty notes:
+
+     - **The bound is a lower one, and it admits a false positive.** The honest boundary is
+       when the tip became the PR head, and nothing reports that — GitHub's timeline
+       carries `head_ref_force_pushed` but not an ordinary push, the same gap the
+       round-start list already documents. So: commit locally, the bot thumbs the *old*
+       remote head, then you push. The 👍 survives (one reaction per user per item, so the
+       bot cannot refresh or remove it) and satisfies the comparison though nothing read
+       this tip. It is kept because the failure is one-directional — it can only turn a
+       block into a differently-worded block — and § 8b's first instruction, confirm a real
+       incident on the status page, is exactly what disproves it.
+     - **It has never met live traffic.** Derived from the bot's documented contract, not
+       from an observation here: this repo's own 19-round sample on PR #16 saw the `+1` fire
+       zero times.
+     - **A failed reactions read leaves the plain exit 1**, not 3. The reaction can only
+       make an already-blocking answer *more specific*, so refusing a decidable PR because a
+       warning could not be refined would be the wrong trade.
 
      `--no-coderabbit` is gone, and rejected as an unknown option with exit 2 rather than
      accepted and ignored. It existed to assert a fact no query could establish — whether
@@ -723,6 +779,10 @@ while [ "$_n" -lt 60 ]; do
 done
 [ "$_ST" = "MERGED" ] || { echo "PR still not merged (state=$_ST) — do NOT proceed"; exit 1; }
 
+# Keep $GATE_JSON: the merge report has to QUOTE it (see below). Do not re-run the gate to
+# produce the quote — the PR is merged by now, so a fresh run describes a different world.
+printf '%s\n' "$GATE_JSON" > "${TMPDIR:-/tmp}/merge-evidence-<N>.json"
+
 # Re-fetch after the merge: the ref above predates the squash commit. Reset from where the
 # merge actually landed — `origin` is your fork and may not contain it at all. Fetch before
 # checkout, because in a single-branch fork clone neither a local `$BASE` nor `origin/$BASE`
@@ -772,6 +832,77 @@ matters; discard only after looking, because `git checkout -- .` is not recovera
 
 `checkout -B` rather than `pull` because squash-merge rewrites history — the branch is
 repointed at the merge target, not merged with it.
+
+### 8a. The merge report must quote the gate
+
+Whatever you report after merging — to the user, in a `DRIVE.md` entry, in a comment —
+**quote `bot-gate`'s actual output**: the `verdict`, the `tip`, and the observation window.
+
+```text
+merged <N> at <REVIEWED_TIP>
+gate: NO_PENDING_EVIDENCE  (observed 2026-08-06T20:43:04Z .. 2026-08-06T20:43:08Z)
+```
+
+This is not paperwork. It is the only part of the procedure an agent that **skipped the
+gate cannot fake without lying outright** — every other step leaves an artifact the agent
+could plausibly reconstruct after the fact, and "I checked the reactions and it looked
+fine" is exactly the report that preceded the merge described at the top of this file. If
+you cannot produce the quote, you did not run the gate, and the merge is unevidenced
+regardless of how it turned out.
+
+Report the verdict you actually got. `BLOCKED_UNATTRIBUTED` merged under § 8b is a
+legitimate outcome to report; laundering it into `NO_PENDING_EVIDENCE` is not.
+
+### 8b. When the forge itself is degraded
+
+`bot-gate`'s first condition is *a wrapper exists whose reviewed commit equals the tip*.
+During a GitHub incident that condition can be **unsatisfiable no matter how long you
+wait** — not because the bot disapproves, but because the forge is not answering. Observed:
+the checks rollup showed only CodeRabbit while two CI jobs never appeared at all, and the
+review wrapper for the merged head never became visible, though one naming its *parent*
+did.
+
+**First, tell the two apart.** Waiting is the right move for one and useless for the other:
+
+| Gate says | Means | Do |
+|---|---|---|
+| `BLOCKED`, wrapper 0, no other signal | the bot has not reviewed this tip | wait, or `@codex review` |
+| `BLOCKED_UNATTRIBUTED` (exit 4) | a round *completed* — its 👍 post-dates the tip — but nothing says which tree it read | `@codex review` first; if no wrapper comes, go on |
+
+Exit 4 is still a refusal. It changes what you do next, never whether the gate approved.
+And it is not proof of an outage: the 👍 is sticky and bounded only by the tip's local
+commit time, so it can also be an *older* head thumbed after you committed (§ 7). That is
+precisely why the next step is to confirm the incident rather than assume it.
+
+**Second, confirm it is actually an incident**, not a quiet bot. Check
+<https://www.githubstatus.com> and say what you saw. "The wrapper is missing" is not
+evidence of an outage; a degraded component on the status page, or CI jobs absent from a
+rollup that should list them, is.
+
+**Locally-run CI can substitute — with what it substitutes recorded.** Running the repo's
+own gates yourself is strictly stronger evidence than a green check mark, because you
+watched it. What makes it admissible is the record, and it must pin the tree:
+
+- the **exact commands**, each with its real exit code (never piped through `tail`/`grep`)
+- the **head SHA they ran against**, and that it equals the SHA you are merging — a local
+  run on an earlier head proves nothing about the tree that lands
+- **which jobs the forge would have run that you did not**, named
+
+Local CI substitutes for **CI**. It does not substitute for the **review**, which is a
+different claim: no local command tells you what a reviewer would have said.
+
+**A human-relayed bot verdict is admissible only for the part you can check.** A pasted
+*"Reviewed commit: `<sha>`"* is a claim about a message you cannot see — but the SHA in it
+is verifiable against your local head, and a mismatch settles it immediately. So:
+cross-check the SHA and say you did; treat the relay as evidence about **which tree** was
+read, and the human as the party attesting that it was read at all. A relay with no SHA,
+or one whose SHA does not match, advances nothing.
+
+**Record it as a degraded merge.** Write down, in the report § 8a asks for: the gate's real
+verdict and exit code, what you ran locally with which SHA, what the status page said, and
+who attested to what. The failure this section exists to prevent is not merging during an
+outage — that is sometimes correct — it is **improvising a merge policy during one and
+leaving no trace of the trade you made.**
 
 ## Iteration patterns observed
 

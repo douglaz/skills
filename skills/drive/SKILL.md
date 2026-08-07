@@ -112,6 +112,13 @@ If none resolve, you are running from a checkout rather than an install: run
 `<skill-dir>/scripts/drive-status` explicitly. If you cannot locate it, say so — do not
 infer the phase by hand.
 
+**If you are recalling this skill rather than reading it now, re-read the on-disk copy
+before following it.** A copy loaded earlier in a session, or carried through a context
+summarisation, may predate a script that replaced prose — this skill and
+`pr-with-codex-bot-review` both moved load-bearing logic out of their text and into
+`scripts/`, and remembered prose is then a version that was retired for being wrong. The
+tell is a procedure you can recite in full without having opened a file this turn.
+
 It prints repo, branch, cleanliness, gate command, bead counts, PR state, spec files, the
 cleared SHA, and an inferred phase. `scripts/drive-status.test` covers the derivation —
 one case per real defect, against scratch repos and a stubbed `gh`, each shown to go red against a

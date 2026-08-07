@@ -925,6 +925,137 @@ PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 --settle-seconds 0 >/dev/null 2>&1
 [[ $? == 2 ]] && { PASS=$((PASS+1)); echo "  ok   --settle-seconds is rejected, not ignored  (exit 2)"; } \
               || { FAIL=$((FAIL+1)); echo "  FAIL --settle-seconds is rejected, not ignored"; }
 
+# ── BLOCKED_UNATTRIBUTED (exit 4) ─────────────────────────────────────────────────────
+#
+# "The bot has not reviewed this tip" and "a round finished but nothing says which tree it
+# read" both present as a missing wrapper, and only the first is a reason to keep waiting.
+# A caller that loops until a wrapper appears waits forever on the second — which is what a
+# forge incident produces: the API keeps answering 200 while wrappers stop appearing.
+#
+# The +1 is what separates them. Per the bot's own about-box, it reacts 👍 only when it has
+# no suggestions, so a 👍 is a COMPLETED round — attached to the PR, never to a commit.
+#
+# A far-future literal, not $NOW_UTC: the fixture repo's commit is created after NOW_UTC is
+# sampled, so "now" can land a second BEFORE the tip and this fixture would pass or fail on
+# the clock. Fixed constants keep it deterministic on any machine.
+FAR_UTC="2099-01-01T00:00:00Z"
+thumbs() { printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"+1","created_at":"%s"}]]' "$1"; }
+
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+thumbs "$FAR_UTC" > "$FIX/reactions.json"
+check "a 👍 after the tip, no wrapper, is exit 4" 4
+
+# The timestamp bound is the whole claim. A 👍 that PREDATES the tip's commit provably
+# belongs to an earlier tree, so it distinguishes nothing and must leave the plain block.
+# Without this the check would fire on any PR the bot ever thumbed, at any tip.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+thumbs "$OLD_UTC" > "$FIX/reactions.json"
+check "a 👍 older than the tip stays exit 1" 1
+
+# An undated 👍 cannot be shown to post-date the tip. This branch fires only on evidence,
+# so an undatable reaction is dropped rather than read as "now" — the direction that would
+# claim attribution nobody established.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"+1","created_at":null}]]' > "$FIX/reactions.json"
+check "an undated 👍 stays exit 1" 1
+
+# Exit 4 is strictly more specific than exit 1, never more permissive: every OTHER conjunct
+# must already hold. An unresolved thread is actionable and says nothing about attribution,
+# so dressing it up as an attribution problem would send the caller to the degraded-forge
+# procedure instead of to the thread it has to answer.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 3 > "$FIX/threads.json"
+thumbs "$FAR_UTC" > "$FIX/reactions.json"
+check "unresolved threads outrank the 👍 (exit 1)" 1
+
+# Same for a round still in flight: waiting IS the right move there, which is precisely
+# what exit 4 tells the caller not to do. A PENDING review is excluded from the wrapper
+# count, so WRAPPER_TIP is 0 here and only the conjunct ordering keeps this out of exit 4.
+new_fix; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]","type":"Bot"},"state":"PENDING","commit_id":"%s","body":"draft"}]]' "$TIP" > "$FIX/reviews.json"
+thumbs "$FAR_UTC" > "$FIX/reactions.json"
+check "a pending review outranks the 👍 (exit 1)" 1
+
+# A failed reactions read must NOT escalate to exit 3 on this path. The reaction can only
+# ever make an already-blocking answer more specific, so refusing the whole PR because a
+# warning could not be refined would turn a decidable block into an infrastructure error.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo 'x' > "$FIX/reactionsfail"
+check "a reactions failure with no wrapper is exit 1, not 3" 1
+
+# ...and an unparseable body takes the same path, for the same reason.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf 'not json at all' > "$FIX/reactions.json"
+check "an unparseable reactions body with no wrapper is exit 1" 1
+
+# The clearing path is untouched: with a wrapper naming the tip, a 👍 is irrelevant and the
+# gate still clears. The new read is scoped to WRAPPER_TIP -eq 0, so it costs nothing here.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+thumbs "$FAR_UTC" > "$FIX/reactions.json"
+check "a 👍 alongside a real wrapper still clears" 0
+
+# An `eyes` at or after the `+1` means a round is running RIGHT NOW — and then waiting is
+# exactly right, the opposite of what exit 4 tells the caller. ROUND_ACTIVE cannot catch
+# this: it is gated on WRAPPER_AT, empty on every path that reaches exit 4, so it is false
+# by construction rather than by evidence.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"+1","created_at":"%s"},{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":"%s"}]]' \
+  "$FAR_UTC" "2099-06-01T00:00:00Z" > "$FIX/reactions.json"
+check "an eyes AFTER the 👍 blocks exit 4" 1
+
+# ...but an eyes BEFORE it is the round that produced the 👍, so exit 4 still stands.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"+1","created_at":"%s"},{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":"2098-06-01T00:00:00Z"}]]' \
+  "$FAR_UTC" > "$FIX/reactions.json"
+check "an eyes BEFORE the 👍 keeps exit 4" 4
+
+# An eyes that exists but cannot be placed in time is a round that MAY be running. This
+# branch fires only on positive evidence, so "I cannot tell" withdraws the claim.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"+1","created_at":"%s"},{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":null}]]' \
+  "$FAR_UTC" > "$FIX/reactions.json"
+check "an undatable eyes withdraws exit 4" 1
+
+# The boundary itself, in a repo whose commit date is PINNED, so the comparison is exact
+# rather than "far future vs the year 2000". These three cases pin the `>=` — dropping it
+# to `>` reddens the middle one — and none of them needs `date` at all.
+#
+# What they do NOT pin, stated because a green suite reads like coverage: the gate's choice
+# of `%ct` over `%cI` for the tip date. `%cI` renders in the commit's own offset, so a
+# non-UTC committer yields `...-07:00`, which the BSD arm of iso_to_epoch cannot parse —
+# but `date -u -d` on GNU accepts both forms, so reverting it stays green here (verified by
+# mutation, including under TZ=America/Los_Angeles). That choice is held by review, not by
+# this file. A test that cannot fail against the defect it names is not covering it.
+(
+  PINNED="2050-06-01T12:00:00Z"
+  git init -q "$WORK/repo2"; cd "$WORK/repo2"
+  GIT_COMMITTER_DATE="$PINNED" GIT_AUTHOR_DATE="$PINNED" \
+    git -c user.email=t@t -c user.name=t commit -q --allow-empty -m pinned
+  TIP=$(git rev-parse HEAD)
+
+  new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+  printf '%s' "$TIP" > "$FIX/prhead.txt"
+  thumbs "2050-06-01T11:59:59Z" > "$FIX/reactions.json"
+  check "👍 one second BEFORE the tip is exit 1" 1
+
+  thumbs "$PINNED" > "$FIX/reactions.json"
+  check "👍 exactly AT the tip is exit 4 (>=)" 4
+
+  thumbs "2050-06-01T12:00:01Z" > "$FIX/reactions.json"
+  check "👍 one second AFTER the tip is exit 4" 4
+  printf '%s %s\n' "$PASS" "$FAIL" > "$WORK/subshell-tally"
+)
+read -r PASS FAIL < "$WORK/subshell-tally"
+cd "$WORK/repo"
+
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+thumbs "$FAR_UTC" > "$FIX/reactions.json"
+J=$(PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 --json 2>/dev/null)
+if printf '%s' "$J" | jq -e '(.verdict=="BLOCKED_UNATTRIBUTED") and (.unattributed_round==true) and (.claim==null)' >/dev/null 2>&1; then
+  PASS=$((PASS+1)); echo "  ok   JSON names the unattributed verdict        (exit 4)"
+else
+  FAIL=$((FAIL+1)); echo "  FAIL JSON names the unattributed verdict"
+fi
+
 echo
 echo "passed $PASS, failed $FAIL"
 [[ "$FAIL" -eq 0 ]]

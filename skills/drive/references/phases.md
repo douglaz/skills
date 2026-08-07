@@ -435,9 +435,16 @@ Collect across pages and take `last`: the endpoint returns reviews oldest-first,
 several rounds a bare stream prints one SHA per round with no indication which is current.
 (`--slurp` cannot combine with `--jq`, hence the pipe.)
 
-If the codex bot reacted `+1` with no wrapper, you have no SHA anchor — it leaves no
-wrapper on a clean round, so nothing proves which tree it read. `@codex review` to get one,
-or accept that round explicitly and record why.
+If the codex bot reacted `+1` with no wrapper, you have no SHA anchor — nothing proves
+which tree that round read. `bot-gate` reports this as its own verdict,
+`BLOCKED_UNATTRIBUTED` at **exit 4**: still a refusal, but one saying that more waiting
+may not fix it, because the missing signal is the one that would attribute the round. Do
+not sit in a poll loop on exit 4. `@codex review` to force a fresh wrapper — try that
+first, since exit 4 also fires when a sticky older 👍 merely post-dates your local commit.
+If no wrapper follows, confirm a real incident and use the degraded-forge procedure in
+`pr-with-codex-bot-review` § 8b, recording what you substituted. A plain exit 1 with no
+wrapper is the other case — the bot has not reviewed this tip — and there, waiting is
+exactly right.
 
 CodeRabbit's status is a **PR-level signal**, not per-commit: it lands on whatever head
 exists when the bot posts it, so a green on the tip is not evidence about the tip. ADR 0004

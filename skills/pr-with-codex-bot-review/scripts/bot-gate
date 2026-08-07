@@ -844,6 +844,110 @@ PR_HEAD_FINAL=$(gh pr view "$PR" -R "$REPO" --json headRefOid -q .headRefOid 2>/
 [[ "$PR_HEAD_FINAL" == "$TIP" ]] \
   || { echo "BLOCKED: PR head moved from ${TIP:0:10} to ${PR_HEAD_FINAL:0:10} while signals were collected" >&2; exit 3; }
 
+# ── Unattributed round evidence: "not reviewed" vs "cannot be told whether it reviewed" ──
+#
+# Read ONLY when no wrapper names the tip, which is exactly when the reactions block above
+# did not run, so this costs an extra request on no other path.
+#
+# The codex bot's own about-box states the contract: "If Codex has suggestions, it will
+# comment; otherwise it will react with 👍." A `+1` is therefore a COMPLETED round that
+# found nothing — and it is attached to the PR, not to a commit, so it can never say WHICH
+# tree it read. Both states below present identically as a missing wrapper:
+#
+#   (a) the bot has not reviewed this tip          -> waiting is the right move
+#   (b) a round completed but nothing attributes it -> waiting MAY not help (see the
+#                                                     residual below); force a wrapper first
+#
+# Only (a) is a reason to keep polling. During a forge incident the API keeps answering
+# 200 while new review wrappers stop appearing, so a caller looping until a wrapper shows
+# up waits forever on a condition that cannot be met — not because the bot disapproves,
+# but because the forge is not saying. That caller needs to be told which block it has.
+#
+# This NEVER clears anything. It refines an already-blocking verdict into a more specific
+# one, so exit 4 is a strictly-non-zero peer of exit 1, and every other conjunct must
+# already hold before it applies — an unresolved thread or an in-flight round is
+# actionable, and must not be dressed up as an attribution problem.
+#
+# A failed or unparseable query therefore leaves the plain BLOCK standing instead of
+# exiting 3. Escalating "I could not read a reaction" into an infrastructure error would
+# refuse a decidable PR over a signal that can only ever make the answer more specific,
+# never more permissive.
+THUMBS_UNATTRIBUTED=false
+if [[ "$WRAPPER_TIP" -eq 0 ]]; then
+  # The tip's own commit date bounds what the reaction could be about: a `+1` older than
+  # the commit provably belongs to an earlier tree and leaves a plain BLOCK. Committer
+  # date, not author date — a rebase or amend rewrites the former and preserves the
+  # latter, and it is the rewritten commit that got pushed.
+  #
+  # DOCUMENTED RESIDUAL — this is a LOWER bound, not the real one. The honest boundary is
+  # when the tip became the PR head, and nothing reliably reports that: GitHub's PR
+  # timeline carries `head_ref_force_pushed` but not an ordinary push, the same gap the
+  # round-start list already documents. So this admits one false positive: commit locally
+  # at T0, the bot thumbs the OLD remote head at T1 > T0, push the tip at T2. The `+1`
+  # survives — GitHub allows one reaction per user per item, so the bot cannot refresh or
+  # remove it — and satisfies the comparison though no round has read this tip.
+  #
+  # Kept anyway, because the failure is bounded and one-directional: it can only turn a
+  # BLOCK into a *differently-worded* BLOCK. The cost is a caller that stops polling early
+  # and consults § 8b, whose first instruction is to confirm an incident on the status page
+  # — which is exactly what disproves this case. Tightening it would need a boundary the
+  # forge does not expose, and inventing one would be the over-claim ADR 0004 exists to
+  # prevent. The report below says "may" for this reason; do not strengthen that wording
+  # without a real head-change timestamp behind it.
+  #
+  # `%ct` (Unix seconds), NOT `%cI`. `%cI` renders in the COMMIT's own stored offset: `Z`
+  # when the committer was on UTC, but `2050-06-01T05:00:00-07:00` when they were not — and
+  # the BSD arm of iso_to_epoch matches only the literal-Z pattern, so that second form is
+  # unparseable there. The result would be a branch that works on GNU userland, works on a
+  # macOS clone whose commits happen to be UTC, and silently degrades to plain BLOCKED on a
+  # macOS clone whose commits are not, with no error to notice. `%ct` has no rendering and
+  # no parse step, so none of that applies.
+  #
+  # Not caught by bot-gate.test on GNU userland: `date -u -d` accepts BOTH forms, so the
+  # reversion stays green here. The suite pins the COMPARISON (see its boundary cases); this
+  # choice is pinned by review only.
+  _TIP_EPOCH=$(git show -s --format=%ct "$TIP" 2>/dev/null) || _TIP_EPOCH=""
+  [[ "$_TIP_EPOCH" =~ ^[0-9]+$ ]] || _TIP_EPOCH=""
+  if _REACT=$(gh api --paginate --slurp "repos/$REPO/issues/$PR/reactions" 2>/dev/null) \
+     && printf '%s' "$_REACT" | jq -e . >/dev/null 2>&1; then
+    # Undated reactions are dropped rather than treated as "now": an undatable signal
+    # cannot be shown to post-date the tip, and this branch only ever fires on evidence.
+    _THUMBS_AT=$(printf '%s' "$_REACT" | jq -r --arg bot "$BOT_LOGIN" '
+      [.[][] | select(.user.login==$bot) | select(.content=="+1")
+       | select(((.created_at // "") | length) > 0) | .created_at] | max // ""' 2>/dev/null) \
+      || _THUMBS_AT=""
+    if [[ -n "$_THUMBS_AT" && -n "$_TIP_EPOCH" ]]; then
+      _THUMBS_EPOCH=$(iso_to_epoch "$_THUMBS_AT") || _THUMBS_EPOCH=""
+      [[ -n "$_THUMBS_EPOCH" ]] && (( _THUMBS_EPOCH >= _TIP_EPOCH )) && THUMBS_UNATTRIBUTED=true
+    fi
+    # An `eyes` at or after the `+1` says a round is running NOW, and then waiting is
+    # exactly the right move — which is the opposite of what exit 4 tells the caller.
+    # ROUND_ACTIVE cannot catch this: it is gated on WRAPPER_AT, which is empty on every
+    # path that reaches here, so it is false by construction rather than by evidence. This
+    # read is the only place the two reactions are visible together.
+    #
+    # Same three-way split the hoisted reactions block uses: no reaction, an undatable one,
+    # and a dated one are different states. An `eyes` that exists but cannot be placed in
+    # time is a round that may be running, so it withdraws the exit-4 claim too — this
+    # branch only ever fires on positive evidence, and "I cannot tell" is not that.
+    _EYES2=$(printf '%s' "$_REACT" | jq -r --arg bot "$BOT_LOGIN" '
+      [.[][] | select(.user.login==$bot) | select(.content=="eyes")] as $e
+      | if ($e | length) == 0 then ""
+        elif any($e[]; ((.created_at // "") | length) == 0) then "malformed"
+        else ([$e[].created_at] | max) end' 2>/dev/null) || _EYES2="malformed"
+    if $THUMBS_UNATTRIBUTED && [[ -n "$_EYES2" ]]; then
+      if [[ "$_EYES2" == "malformed" ]]; then
+        THUMBS_UNATTRIBUTED=false
+      else
+        _EYES2_EPOCH=$(iso_to_epoch "$_EYES2") || _EYES2_EPOCH=""
+        if [[ -z "$_EYES2_EPOCH" ]]; then THUMBS_UNATTRIBUTED=false
+        elif (( _EYES2_EPOCH >= _THUMBS_EPOCH )); then THUMBS_UNATTRIBUTED=false
+        fi
+      fi
+    fi
+  fi
+fi
+
 # WRAPPER_AT is required alongside the count: it is the reference point the active-round
 # check needs, so a wrapper without one means that check never ran, and a check that did
 # not run has not passed.
@@ -852,6 +956,10 @@ if [[ "$WRAPPER_TIP" -gt 0 ]] && [[ -n "$WRAPPER_AT" ]] && [[ "$PENDING_ON_TIP" 
    && ! $RERUN_REQUESTED && ! $ROUND_ACTIVE \
    && ! $RETARGETED_AFTER_REVIEW && [[ "$UNRESOLVED" -eq 0 ]]; then
   VERDICT="NO_PENDING_EVIDENCE"
+elif [[ "$WRAPPER_TIP" -eq 0 ]] && $THUMBS_UNATTRIBUTED && [[ "$PENDING_ON_TIP" -eq 0 ]] \
+   && ! $RERUN_REQUESTED && ! $ROUND_ACTIVE \
+   && ! $RETARGETED_AFTER_REVIEW && [[ "$UNRESOLVED" -eq 0 ]]; then
+  VERDICT="BLOCKED_UNATTRIBUTED"
 fi
 OBSERVED_TO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
@@ -871,10 +979,12 @@ if $JSON; then
         --argjson w "$WRAPPER_TIP" --argjson u "$UNRESOLVED" --argjson pending "$PENDING_ON_TIP" \
         --arg from "$OBSERVED_FROM" --arg to "$OBSERVED_TO" --arg claim "$CLAIM" \
         --arg cr_skipped "$CR_SKIPPED" --arg round_active "$ROUND_ACTIVE" --arg retargeted "$RETARGETED_AFTER_REVIEW" --arg rerun "$RERUN_REQUESTED" --arg skiplist "$CR_SKIPLIST" \
+        --arg unattributed "$THUMBS_UNATTRIBUTED" \
     '{tip:$tip,verdict:$v,claim:(if $claim=="" then null else $claim end),observed_from:$from,observed_to:$to,
       wrapper_on_tip:$w,unresolved_bot_threads:$u,
       coderabbit:$cr,coderabbit_skipped:($cr_skipped=="true"),round_active:($round_active=="true"),retargeted_after_review:($retargeted=="true"),
       rerun_requested:($rerun=="true"),pending_review_on_tip:($pending > 0),
+      unattributed_round:($unattributed=="true"),
       coderabbit_skipped_files:($skiplist|split("\n")|map(select(length>0)))}'
 else
   printf 'tip              %s\n' "${TIP:0:10}"
@@ -884,7 +994,11 @@ else
   printf 'observed         %s .. %s\n' "$OBSERVED_FROM" "$OBSERVED_TO"
   printf '\nverdict: %s\n' "$VERDICT"
   [[ "$VERDICT" == "NO_PENDING_EVIDENCE" ]] && printf '  = %s\n' "$CLAIM"
-  [[ "$WRAPPER_TIP" -eq 0 ]] && printf '  ⚠ no review from the codex bot names this tip, so nothing proves WHICH tree it read.\n    Push or `@codex review` to get one, or accept the round explicitly and say so.\n'
+  if $THUMBS_UNATTRIBUTED; then
+    printf '  ⚠ a codex round COMPLETED after this tip was committed — its 👍 says it found\n    nothing — but no wrapper names the tip, so nothing says which tree that round read,\n    and waiting MAY not fix it: the signal that would attribute the round is the missing\n    one. Caveat: the 👍 is sticky and only bounded by the local commit time, so it can\n    also be an older head thumbed after you committed. `@codex review` to force a fresh\n    wrapper — do that first. If it does not come, confirm a real incident on the status\n    page and follow the degraded-forge procedure in SKILL.md, recording what you\n    substituted.\n'
+  elif [[ "$WRAPPER_TIP" -eq 0 ]]; then
+    printf '  ⚠ no review from the codex bot names this tip, so nothing proves WHICH tree it read.\n    Push or `@codex review` to get one, or accept the round explicitly and say so.\n'
+  fi
   [[ "$UNRESOLVED" -gt 0 ]] && printf '  ⚠ %s UNRESOLVED bot thread(s). Fix each, or answer it with evidence and resolve the\n    thread — resolving is how you record that it was dispositioned.\n' "$UNRESOLVED"
   [[ "$CR_STATE" == "query-failed" ]] && printf '  · CodeRabbit status could not be queried.\n'
   $RERUN_REQUESTED && printf '  ⚠ an `@codex review` request is not provably answered — either it is newer than the\n    wrapper, or no completed round separates it from an earlier round-start, so the\n    wrapper after it may belong to a round that was already running. Wait, or\n    `@codex review` once more and wait for that wrapper.\n'
@@ -901,5 +1015,15 @@ fi
 # the verdict — "I could not find out" is not "not done". It no longer can, so failing to
 # read it is missing REPORT data, not doubt about the answer, and exiting 3 would refuse a
 # decidable PR because a warning could not be printed. Exit follows the verdict.
-[[ "$VERDICT" == "NO_PENDING_EVIDENCE" ]] && exit 0
-exit 1
+# Explicit dispatch, not `[[ ... ]] && exit N` chained twice. That form only reaches the
+# fallthrough because this script runs without `set -e`; adding a second link would make
+# the final exit status depend on which test failed rather than on the verdict.
+#
+# Exit 4 is BLOCKED_UNATTRIBUTED — still non-zero, still refuses the merge, and any caller
+# doing `bot-gate <pr> && gh pr merge` is unaffected. It exists so a caller that LOOPS can
+# tell a block that waiting will fix from one that it cannot.
+case "$VERDICT" in
+  NO_PENDING_EVIDENCE)  exit 0 ;;
+  BLOCKED_UNATTRIBUTED) exit 4 ;;
+  *)                    exit 1 ;;
+esac
