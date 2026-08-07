@@ -37,10 +37,19 @@ Treat that as the default for anything non-trivial.
    have carried it prints `nothing to commit, working tree clean` with the content
    gone from the file and from `HEAD`. On re-commit take both checks that message
    hides: require `git commit` to exit 0 (it exits **1** on an empty commit, however
-   reassuring the wording), then assert the content of **every** file you changed with
-   `git show "HEAD:$f" | grep -q '<a phrase from that file>'` — a partial loss commits
-   cleanly, and checking one path only proves that path survived. A clean `git status`
-   is neither check. See
+   reassuring the wording), then assert **every** path you changed, by the right check for
+   each — a partial loss commits cleanly, and checking one path only proves that path
+   survived. Three cases, and one does not substitute for another:
+   - **gained content** — `git show "HEAD:$f" >"$_chk"` then `grep -q '<new phrase>' "$_chk"`
+   - **removal-only, file retained** — same capture, then grep must NOT match; a spec edit
+     that only deletes text has no new phrase, and grepping surviving text passes even when
+     the removal was reverted
+   - **whole file deleted** — `git show "HEAD:$f"` must FAIL; running it through the
+     positive check rejects a correct commit
+
+   Capture to a file rather than piping: `git show ... | grep -q` returns 141 under
+   `pipefail` when grep exits early and git show takes SIGPIPE, which reads as "no match".
+   A clean `git status` is none of these checks. See
    [multi-reviewer-loop/references/reviewer-panel.md](../../multi-reviewer-loop/references/reviewer-panel.md).
 5. For plan-shaped work, `plan-eng-review` / `plan-ceo-review` add a product lens.
 

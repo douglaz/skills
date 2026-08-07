@@ -238,11 +238,19 @@ A phase closes on evidence or it does not close.
   # permits, `-A` sweeps in another agent's edits and any untracked file lying around,
   # including a secret, and `git show --stat` only reveals that after the commit exists.
   git add -- <every path this change touched>
+  git diff --cached          # READ IT NOW, while the index still has something in it.
+                             # Staging by name still takes another agent's hunks from a
+                             # file that was already dirty. After the commit this is
+                             # empty, and `git show --stat` shows path names, not hunks.
   git commit -m "<msg>" || { echo "commit produced nothing"; exit 1; }
-  git diff --cached --stat                # BEFORE committing: only your hunks, only your paths?
-  git show --stat --format= HEAD          # does this list all of them, and only them?
+  _chk=$(mktemp)
+  git show --stat --format= HEAD        # does this list all of them, and only them?
   for f in <every file that gained new content>; do
-    git show "HEAD:$f" | grep -q "<a distinctive phrase from that file's change>" \
+    # Capture, do not pipe: `git show ... | grep -q` returns 141 under `pipefail` when
+    # grep exits on an early match and git show takes SIGPIPE — verified — which reads
+    # as "no match" and inverts both checks below.
+    git show "HEAD:$f" >"$_chk" 2>/dev/null || { echo "$f did not land"; exit 1; }
+    grep -q "<a distinctive phrase from that file's change>" "$_chk" \
       || { echo "$f did not land"; exit 1; }
   done
   # Removal-only edits have no new phrase to find, and any surviving phrase passes even if
@@ -250,9 +258,8 @@ A phase closes on evidence or it does not close.
   # `git show HEAD:<gone>` fails, grep returns nonzero, and the `&&` is skipped, so an
   # accidental whole-file deletion reads exactly like a clean removal.
   for f in <every file you removed lines from>; do
-    git show "HEAD:$f" >/dev/null 2>&1 || { echo "$f is missing from HEAD entirely"; exit 1; }
-    git show "HEAD:$f" | grep -q "<a distinctive phrase you deleted>" \
-      && { echo "$f still contains text this change removed"; exit 1; }
+    git show "HEAD:$f" >"$_chk" 2>/dev/null || { echo "$f is missing from HEAD entirely"; exit 1; }
+    grep -q "<a distinctive phrase you deleted>" "$_chk" && { echo "$f still contains text this change removed"; exit 1; }
   done
   # Deletions are verified by ABSENCE — `git show HEAD:<path>` fails by design on a
   # deleted path, so folding them into the loops above fails every correct deletion:

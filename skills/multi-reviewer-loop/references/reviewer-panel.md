@@ -217,19 +217,20 @@ Then still assert the content, because a *partial* loss commits cleanly at exit
 
 ```bash
 # The commit's own file list first — every path you touched, and nothing you did not.
+_chk=$(mktemp)
 git show --stat --format= HEAD
 # Each file that should CONTAIN the change:
 for f in <every file the fix touched that gained or changed content>; do
-  git show "HEAD:$f" | grep -q "<a distinctive phrase from that file>" || { echo "$f did not land"; exit 1; }
+  git show "HEAD:$f" >"$_chk" 2>/dev/null || { echo "$f did not land"; exit 1; }
+  grep -q "<a distinctive phrase from that file>" "$_chk" || { echo "$f did not land"; exit 1; }
 done
 # Removal-only edits have no new phrase to find, and any surviving phrase passes even if
 # the removal was reverted. Assert the removed text is GONE:
 for f in <every file you removed lines from>; do
   # Existence FIRST. `git show HEAD:<gone>` fails, so grep returns nonzero and the `&&`
   # is skipped — an accidental whole-file deletion reads identically to a clean removal.
-  git show "HEAD:$f" >/dev/null 2>&1 || { echo "$f is missing from HEAD entirely"; exit 1; }
-  git show "HEAD:$f" | grep -q "<a distinctive phrase you deleted>" \
-    && { echo "$f still contains text this change removed"; exit 1; }
+  git show "HEAD:$f" >"$_chk" 2>/dev/null || { echo "$f is missing from HEAD entirely"; exit 1; }
+  grep -q "<a distinctive phrase you deleted>" "$_chk" && { echo "$f still contains text this change removed"; exit 1; }
 done
 # Each file the change DELETES is verified by ABSENCE — `git show HEAD:<path>` fails by
 # design on a deleted path, so folding deletions into the loop above marks every correct
