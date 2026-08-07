@@ -90,7 +90,11 @@ Stop and report plan gaps when any of these are still fuzzy:
    - plan -> beads: every important plan element lands somewhere
    - beads -> plan: every bead has clear backing in the plan or an explicitly approved delta
    - if the audit feels suspiciously short or self-satisfied, assume coverage is incomplete and rerun more exhaustively
-9. Split, merge, rewrite, or close beads until the graph can stand on its own as executable memory.
+9. Before the first `br` write, record the exact list of intended mutations — the `br`
+   commands with their ids and field values, in order. The coverage matrix maps plan
+   elements to beads; it does not preserve generated ids or field values, and recovery
+   discards the working JSONL before you could recover them from it.
+9a. Split, merge, rewrite, or close beads until the graph can stand on its own as executable memory.
 10. Flush with an **explicit** `br sync --flush-only` and require it to succeed:
 
     ```bash

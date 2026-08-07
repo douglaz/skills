@@ -153,8 +153,11 @@ BEADS_JSONL=$(br where --json | jq -er '.jsonl_path') \
 # The question is not "is it dirty" but "is any of this dirt something the cache will
 # destroy" — i.e. hand-edited bead text, which never advances `updated_at`. Read the diff
 # and continue only once you can say which it is.
-git status --porcelain -- "$BEADS_JSONL"
-git diff -- "$BEADS_JSONL"
+# Against HEAD, not the index: a damaged JSONL that is STAGED makes a worktree-vs-index
+# diff empty while HEAD still holds the good bodies, so the operator would acknowledge a
+# clean-looking diff and flush the damage.
+git status --porcelain -- "$BEADS_JSONL" || { echo "cannot read the worktree — do NOT flush" >&2; exit 1; }
+git diff HEAD -- "$BEADS_JSONL"          || { echo "cannot diff the JSONL — do NOT flush" >&2; exit 1; }
 : "${BEADS_DIFF_REVIEWED:?read the two commands above, then set this to how you resolved it}"
 br sync --flush-only || { echo "flush failed — do not audit an unwritten graph" >&2; exit 1; }
 

@@ -160,8 +160,14 @@ recorded acceptance of the reduced review coverage.
    # again, so the diff comes back empty and the loss is undetectable. Recovery is in
    # ../orchestrating-with-rb-lite/SKILL.md step 11.
    BEADS_JSONL=$(br where --json | jq -er .jsonl_path) || { echo "cannot resolve the JSONL"; exit 1; }
-   [ -z "$(git status --porcelain -- "$BEADS_JSONL")" ] \
-     || { echo "JSONL diverges from git — resolve it BEFORE flushing"; exit 1; }
+   # INSPECT, do not gate on cleanliness: the normal bead-polish-loop handoff arrives with
+   # the round's intended `br` edits uncommitted, so demanding a clean file would block the
+   # audit after every non-noop round. `git status` cannot tell an intended mutation from a
+   # hand edit — only reading the diff can. Compare against HEAD, not the index: a damaged
+   # JSONL that is staged makes a worktree-vs-index diff empty while HEAD still holds the
+   # good bodies.
+   git diff HEAD -- "$BEADS_JSONL" || { echo "cannot diff the JSONL — do NOT flush"; exit 1; }
+   : "${BEADS_DIFF_REVIEWED:?read the diff above, then set this to how you resolved it}"
    br sync --flush-only || { echo "flush failed"; exit 1; }
    br list --limit 0 --json -a
    bv --robot-triage

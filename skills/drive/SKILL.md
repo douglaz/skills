@@ -234,6 +234,16 @@ A phase closes on evidence or it does not close.
   closed bead is not a closed bead until an explicit sync has confirmed the write:
 
   ```bash
+  # Divergence check FIRST — `br close` auto-flushes the cache over the tracked JSONL, so
+  # an unstaged hand-edit is destroyed by this very command and neither the index nor HEAD
+  # holds it. Capture separately: `[ -z "$(git status ...)" ]` discards git's exit code, so
+  # a failed inspection would read as clean and let the write through.
+  BEADS_JSONL=$(br where --json | jq -er '.jsonl_path') \
+    || { echo "cannot resolve the beads JSONL — do NOT close"; exit 1; }
+  _st=$(git status --porcelain -- "$BEADS_JSONL") \
+    || { echo "cannot read the worktree — do NOT close"; exit 1; }
+  [ -z "$_st" ] || { git diff HEAD -- "$BEADS_JSONL"
+    echo "JSONL differs from HEAD — resolve that BEFORE closing"; exit 1; }
   br close <id> || { echo "br close failed"; exit 1; }
   br sync --flush-only || { echo "closure not persisted to the JSONL"; exit 1; }
   ```

@@ -134,7 +134,10 @@ run `second-model-bead-audit` by default after the graph meets these gates.
 - Merge tiny beads only when the merge sharpens execution instead of blurring it.
 - Reconcile priority with graph reality so critical blockers are obvious.
 
-4. Apply only justified changes with `br`.
+4. Write the replay manifest **before** applying anything — one line per intended `br`
+   command, verbatim and complete (ids, field values, order). Step 6's round summary is
+   written after the flush and records decisions, not the commands; recovery discards the
+   working JSONL before you could read them back off it. Then apply the changes with `br`.
 
 5. Flush with an **explicit** `br sync --flush-only` and require it to succeed:
 

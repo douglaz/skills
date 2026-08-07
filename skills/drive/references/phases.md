@@ -716,9 +716,16 @@ writes the JSONL failed, because the error is caught and logged at debug level:
 # DIVERGENCE CHECK FIRST: `br close` auto-flushes, so an unstaged hand-edit in the JSONL is
 # destroyed by this very command and neither the index nor HEAD holds it — the diff below
 # would then be empty and the loss undetectable.
-BEADS_JSONL=$(br where --json | jq -er .jsonl_path) || { echo "cannot resolve the JSONL"; exit 1; }
-[ -z "$(git status --porcelain -- "$BEADS_JSONL")" ] \
-  || { echo "JSONL diverges from git — resolve it BEFORE closing"; exit 1; }
+BEADS_JSONL=$(br where --json | jq -er '.jsonl_path') \
+  || { echo "cannot resolve the beads JSONL path — do NOT write"; exit 1; }
+# Capture separately: `[ -z "$(git status ...)" ]` discards git's exit code, so a FAILED
+# inspection reads as a clean tree and lets the write through — the guard failing open at
+# exactly the moment it matters. Compare against HEAD, not the index: a damaged JSONL that
+# is staged leaves a worktree-vs-index diff empty while HEAD holds the good bodies.
+_st=$(git status --porcelain -- "$BEADS_JSONL") \
+  || { echo "cannot read the worktree — do NOT write"; exit 1; }
+[ -z "$_st" ] || { git diff HEAD -- "$BEADS_JSONL"
+  echo "JSONL differs from HEAD — read that diff and resolve it BEFORE writing"; exit 1; }
 br close <id> || { echo "br close failed"; exit 1; }
 br sync --flush-only || { echo "closure not persisted — auto-flush was swallowed"; exit 1; }
 ```
