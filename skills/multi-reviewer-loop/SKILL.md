@@ -733,19 +733,29 @@ finding precisely enough for someone else to act on, which by itself kills the v
   § 1.6 explicitly permits running on a dirty tree, so plain `git` is *not* your undo:
   `git checkout .`, `git stash`, and `git reset --hard` would each discard the user's
   pre-existing unstaged work along with the delegated edit, which § 1.6 forbids. Capture
-  the tree as a patch first, and confirm the capture is non-empty **before** granting
-  write access — a snapshot you never verified is not a rollback plan:
+  the tree first, **in two layers**, and check that the capture *commands* succeeded
+  before granting write access:
 
   ```bash
-  SNAP="$REVIEW_DIR/pre-delegation.patch"
-  git diff HEAD >"$SNAP"                                  # tracked: staged + unstaged
-  git status --porcelain >"$REVIEW_DIR/pre-delegation.status"
+  git diff --cached >"$REVIEW_DIR/pre-delegation.staged.patch"   || { echo "snapshot failed"; exit 1; }
+  git diff         >"$REVIEW_DIR/pre-delegation.unstaged.patch" || { echo "snapshot failed"; exit 1; }
+  git status --porcelain >"$REVIEW_DIR/pre-delegation.status"    || { echo "snapshot failed"; exit 1; }
   ```
 
-  To roll back, revert only the paths you delegated and re-apply that patch's hunks for
-  them; leave every other path alone. `git diff HEAD` does not capture **untracked**
-  files, so copy any that matter into `$REVIEW_DIR` first or accept that they are outside
-  the snapshot — and say which you did.
+  **Two patches, not one.** A single `git diff HEAD` flattens staged and unstaged into one
+  HEAD-to-worktree delta, so restoring a path that was `MM` brings it back as ` M` — the
+  user's staging selection is gone, and a later `git commit` then carries hunks they had
+  deliberately left out.
+
+  **Empty is a legitimate snapshot.** On a clean tree — the ordinary PR-review case — both
+  patches are empty because the branch's commits are already recoverable from git. Require
+  the commands to *succeed*, never the patches to be non-empty; a non-empty check would
+  refuse to delegate on exactly the tidiest repositories.
+
+  To roll back, revert only the paths you delegated and re-apply each layer's hunks for
+  those paths — staged first, then unstaged — and leave every other path alone. Neither
+  diff captures **untracked** files, so copy any that matter into `$REVIEW_DIR` first, or
+  accept that they sit outside the snapshot and say which you did.
 
 This is not `rb-lite`. That loop hands over the whole task and reviews the result; this
 hands over *only the edit* for findings you have already verified.
