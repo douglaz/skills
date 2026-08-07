@@ -99,7 +99,11 @@ Stop and report plan gaps when any of these are still fuzzy:
     and `git diff .beads/issues.jsonl` before committing — ids on only one side, or a
     `description` you did not touch, is the tell. Recovery, and why `br sync --import-only`
     cannot do it, is in
-    [orchestrating-with-rb-lite](../orchestrating-with-rb-lite/SKILL.md) step 11.
+    [orchestrating-with-rb-lite](../orchestrating-with-rb-lite/SKILL.md) step 11 — but note
+    its replay step assumes a SINGLE mutation, the drain's case. A transfer has a whole
+    graph in flight, so enumerate the complete intended delta (your coverage matrix is
+    that list) before the `git checkout HEAD --`, or the restore discards every bead this
+    transfer wrote along with the damage.
 11. If the repo workflow supports it, run `br lint` after major rewrites to catch missing sections.
 
 ## Quality bar

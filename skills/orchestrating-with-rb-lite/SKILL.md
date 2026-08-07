@@ -820,18 +820,28 @@ implement → review loop for each bead.
     **(b) The flush already ran and the diff above shows the damage** — then the working
     copy of `issues.jsonl` **is** the damaged artifact, not the truth. Importing it here
     would copy the loss into a fresh database and a later commit would cement it. **Restore
-    the file from git first, then re-apply the mutation you actually wanted, and only then
-    rebuild the cache:**
+    the file from git first, then re-apply every mutation you actually wanted, and only
+    then rebuild the cache:**
 
     ```bash
     git checkout HEAD -- .beads/issues.jsonl   # the last good committed state
     cp .beads/beads.db /tmp/beads.db.bak
     rm -f .beads/beads.db .beads/beads.db-wal .beads/beads.db-shm
     br sync --import-only
-    br update <bead-id> -s closed              # redo the intended write, through the CLI
+    br update <bead-id> -s closed              # redo the intended write(s), through the CLI
     br sync --flush-only || { echo "not persisted"; exit 1; }
-    git diff .beads/issues.jsonl               # confirm ONLY that field moved
+    git diff .beads/issues.jsonl               # confirm ONLY the intended fields moved
     ```
+
+    **Enumerate the intended delta before you delete anything.** The single `br update`
+    above is the *drain's* case, where the round's whole intent is one closure. Callers
+    that batch — `plan-to-beads-transfer` writing a graph, `bead-polish-loop` rewriting
+    several bodies in a round — have many deliberate mutations in flight, and
+    `git checkout HEAD --` discards all of them along with the damage. Before the checkout,
+    write down the complete field-level delta you meant to produce (the round summary those
+    skills already require is exactly that list), then replay it through `br` afterwards.
+    Recovering by restoring git and replaying one command is only safe when one command is
+    all you did.
 
     Git is the whole recovery here, which is why the field-diff has to happen **before** you
     stage anything: an uncommitted hand-edit that a flush overwrote is simply gone — no
