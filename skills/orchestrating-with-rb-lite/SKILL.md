@@ -820,8 +820,9 @@ implement → review loop for each bead.
       timestamps with different bodies report `Skipped: N (up-to-date)` forever. The stale
       DB has to go first.
     - **(b) the flush already ran and the diff shows damage** — the working copy *is* the
-      damaged artifact. Restore it from git first, then replay every mutation you meant,
-      then rebuild. Read `git diff --cached` and `git diff` and decide explicitly which of
+      damaged artifact. Restore it from the good side, **rebuild the cache**, and only then
+      replay: replaying first lets the still-stale cache auto-flush over what you just
+      restored. Read `git diff --cached` and `git diff` and decide explicitly which of
       the index or `HEAD` holds the good bodies; a staged copy only proves a choice exists,
       and an earlier flush may have been staged before anyone noticed.
 
