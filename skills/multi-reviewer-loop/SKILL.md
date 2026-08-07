@@ -745,10 +745,27 @@ finding precisely enough for someone else to act on, which by itself kills the v
     || { echo "snapshot failed"; exit 1; }
   # Every pre-existing UNTRACKED path in the delegated scope, copied — neither patch can
   # restore one, so without this the "non-destructive" guarantee is simply false for them.
-  # If you cannot copy them, do not delegate those paths.
+  # mkdir FIRST: `cp --parents` requires an existing destination and otherwise fails with
+  # "with --parents, the destination must be a directory" — which, guarded like this, would
+  # block every delegation that has an untracked path in scope.
+  mkdir -p "$REVIEW_DIR/untracked" || { echo "snapshot failed"; exit 1; }
   cp -a --parents <each pre-existing untracked path in scope> "$REVIEW_DIR/untracked/" \
     || { echo "snapshot failed"; exit 1; }
   ```
+
+  **Refuse the paths this snapshot cannot represent.** Two tree states survive neither
+  patch, and both are cheaper to exclude than to reconstruct:
+
+  - **Unmerged paths** (`UU`, `AA`, …). `git diff --cached` exits 0 emitting only
+    `* Unmerged path …`, and the unstaged diff carries at most the combined working-tree
+    content — the stage-1/2/3 index entries are gone, so replaying cannot rebuild the
+    conflict. Do not delegate a path mid-merge.
+  - **Contents inside a dirty submodule.** The top-level diffs record the gitlink's
+    `-dirty` marker, not the modified bytes, so restoring the gitlink does not restore the
+    user's edit inside it.
+
+  `git status --porcelain` names both. Take them out of the delegated scope and say you
+  did — a snapshot that silently cannot restore a path is worse than one that refuses it.
 
   **Two patches, not one.** A single `git diff HEAD` flattens staged and unstaged into one
   HEAD-to-worktree delta, so restoring a path that was `MM` brings it back as ` M` — the
