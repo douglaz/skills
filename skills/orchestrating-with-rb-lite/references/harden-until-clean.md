@@ -218,7 +218,16 @@ Then flush and commit — `br` never touches git, that part is yours:
 ```bash
 br sync --flush-only || { echo "findings not persisted"; exit 1; }
 BEADS_JSONL=$(br where --json | jq -er .jsonl_path) || { echo "cannot resolve the beads JSONL"; exit 1; }
-git diff "$BEADS_JSONL"               # READ THIS — see below
+git diff "$BEADS_JSONL"
+```
+
+**Stop the block here and read that diff.** This is a real split, not a comment: run the
+lines above, read the output, and continue below only once you have. Pasted as one block —
+or run non-interactively, where the pager never pauses — the diff scrolls past and the very
+next line stages, commits and pushes the collateral damage, which is the loss this check
+exists to catch. Prose underneath a `git add` cannot stop a shell.
+
+```bash
 git add "$BEADS_JSONL"
 git commit -m "chore(beads): record review findings (iteration <N>, codex+fable)"
 git push

@@ -875,8 +875,13 @@ implement → review loop for each bead.
     # REBUILD: identical for both sources. Do not skip this on the staged path.
     cp "$BEADS_DB" /tmp/beads.db.bak
     rm -f "$BEADS_DB" "$BEADS_DB-wal" "$BEADS_DB-shm"
-    br sync --import-only
-    br update <bead-id> -s closed              # redo the intended write(s), through the CLI
+    # CHECK BOTH. The stale database is already deleted at this point, so an import that
+    # fails on an unreadable or invalid JSONL leaves an empty cache — and the flush below
+    # would then write THAT over the file you just restored, destroying the recovery with
+    # the recovery. Same for a failed replay: exit before any flush.
+    br sync --import-only || { echo "import failed — do NOT flush; the JSONL is your only
+      copy right now"; exit 1; }
+    br update <bead-id> -s closed || { echo "replay failed — do NOT flush"; exit 1; }
     br sync --flush-only || { echo "not persisted"; exit 1; }
     git diff "$BEADS_JSONL"                    # confirm ONLY the intended fields moved
     ```
