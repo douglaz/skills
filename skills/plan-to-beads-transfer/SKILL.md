@@ -124,8 +124,9 @@ order.
     cannot do it, is in
     [orchestrating-with-rb-lite](../orchestrating-with-rb-lite/SKILL.md) step 11 — but note
     its replay step assumes a SINGLE mutation, the drain's case. A transfer has a whole
-    graph in flight, so enumerate the complete intended delta (your coverage matrix is
-    that list) before the `git checkout HEAD --`, or the restore discards every bead this
+    graph in flight, so enumerate the complete intended delta (the replay manifest you started before step 4 —
+    NOT the coverage matrix, which maps plan elements to beads and preserves no ids, field
+    values or ordering) before the `git checkout HEAD --`, or the restore discards every bead this
     transfer wrote along with the damage.
 11. If the repo workflow supports it, run `br lint` after major rewrites to catch missing sections.
 
