@@ -152,35 +152,46 @@ non-zero exit.
 
 **An edit made to a tracked file while `codex review` is in flight is silently
 destroyed.** Both reviewers must have exited — `wait` returned for each PID —
-before you change a single file. If you must edit sooner, `pkill -f "codex
-review"` first and accept the lost pass.
+before you change a single file. If you must edit sooner, kill the reviewer **by
+the exact PID captured at launch** — `kill "$CODEX_PID"` — and accept the lost
+pass. Not `pkill -f "codex review"`: that matches your own shell and other
+sessions' reviewers running the same command, per the rule below.
 
 This loop is the most exposed skill in the repo to it: § 2 backgrounds both
 reviewers *by design*, and § 3 is entirely about editing. An agent that starts on
 codex's findings while Fable is still running is inside the hazard window with
 no warning.
 
-The loss does not present as a failure. It presents as a **successful commit**:
+What the loss looks like is a commit whose *message* reads like a no-op:
 
 ```console
 $ git add -A && git commit -m "fix the retry path"
 nothing to commit, working tree clean
 ```
 
-— which is indistinguishable from "already committed". `git status` is clean and
-the content is gone from both the working file and `HEAD`. Observed twice on a
-money-path branch, both times after the edits had been applied, verified on disk
-with `grep -c`, and compiled green (clippy clean, 867 tests passing). Gates that
-passed *before* the loss are not evidence.
+That text is indistinguishable from "already committed", `git status` is clean,
+and the content is gone from both the working file and `HEAD`. Observed twice on
+a money-path branch, both times after the edits had been applied, verified on
+disk with `grep -c`, and compiled green (clippy clean, 867 tests passing). Gates
+that passed *before* the loss are not evidence.
 
-So when you commit a fix, **assert the content landed, not the exit code**:
+**The prose lies; the exit code does not.** `git commit` with nothing staged
+exits **1**, so check it — an unchecked `git add -A && git commit` inside a
+larger block is how the message gets believed and the failure walks:
+
+```bash
+git add -A && git commit -m "<msg>" || { echo "commit produced nothing"; exit 1; }
+```
+
+Then still assert the content, because a *partial* loss commits cleanly at exit
+0 — some files reverted, others not, one real commit carrying half the fix:
 
 ```bash
 git show HEAD:path/to/file | grep -c "<distinctive phrase from the fix>"   # must be >0
 ```
 
-A clean `git status` is not that assertion — it is equally consistent with the
-edits having been reverted underneath you.
+A clean `git status` is neither check. It is equally consistent with the edits
+having been reverted underneath you.
 
 **If you re-test this, do not plant the marker first.** An edit made *before* the
 review starts survives: it disappears mid-run and comes back at the end. Only

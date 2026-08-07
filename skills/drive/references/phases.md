@@ -33,11 +33,13 @@ Treat that as the default for anything non-trivial.
    ```
 4. Apply findings, re-commit, re-review. Loop until a pass returns no P0/P1.
    **Apply nothing until the review process has exited.** An edit to a tracked file
-   while `codex review` is running is silently destroyed and the loss reads as a
-   *successful* commit — `nothing to commit, working tree clean`, with the content
-   gone from the file and from `HEAD`. On re-commit, assert the content landed
-   (`git show HEAD:<file> | grep -c '<phrase>'`), not the exit code; a clean `git
-   status` cannot tell the two apart. See
+   while `codex review` is running is silently destroyed, and the commit that should
+   have carried it prints `nothing to commit, working tree clean` with the content
+   gone from the file and from `HEAD`. On re-commit take both checks that message
+   hides: require `git commit` to exit 0 (it exits **1** on an empty commit, however
+   reassuring the wording), then assert the content with
+   `git show HEAD:<file> | grep -c '<phrase>'` — a partial loss commits cleanly. A
+   clean `git status` is neither check. See
    [multi-reviewer-loop/references/reviewer-panel.md](../../multi-reviewer-loop/references/reviewer-panel.md).
 5. For plan-shaped work, `plan-eng-review` / `plan-ceo-review` add a product lens.
 

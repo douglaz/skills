@@ -121,19 +121,22 @@ this runs under `drive`; without it half the panel reviews without them.
 
 **The same prohibition binds you.** An edit made to a tracked file while `codex review`
 is running is silently destroyed, and rb-lite runs `codex review` inside every review
-round — so for the length of a run the repo is not yours to touch. The loss does not
-surface as an error; it surfaces as `nothing to commit, working tree clean` on a commit
-you expected to carry work, with the content absent from the file *and* from `HEAD`.
-Wait for the run to exit before editing anything, and when you commit the accepted diff
-(step 10.5) assert the content landed rather than trusting the exit code:
+round — so for the length of a run the repo is not yours to touch. The loss surfaces as
+`nothing to commit, working tree clean` on a commit you expected to carry work, with the
+content absent from the file *and* from `HEAD`. Wait for the run to exit before editing
+anything, and when you commit the accepted diff (step 10.5), check both things that
+message hides:
 
 ```bash
+git add -A && git commit -m "<msg>" || { echo "commit produced nothing"; exit 1; }
 git show HEAD:path/to/file | grep -c "<distinctive phrase from the change>"   # must be >0
 ```
 
-A clean `git status` is not that assertion — it reads identically whether the work was
-committed or reverted underneath you. Detail, including the probe design that gives a
-false all-clear, is in
+`git commit` with nothing staged exits **1**, so the `||` catches a total loss however
+reassuring the message reads; the `grep` catches a partial one, which commits cleanly at
+exit 0 carrying only some of the change. A clean `git status` is neither check — it reads
+identically whether the work was committed or reverted underneath you. Detail, including
+the probe design that gives a false all-clear, is in
 [multi-reviewer-loop/references/reviewer-panel.md](../multi-reviewer-loop/references/reviewer-panel.md).
 
 "Customizing the panel" below shows the same two commands alongside OPTIONAL extras — a

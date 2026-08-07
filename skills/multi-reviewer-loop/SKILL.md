@@ -391,13 +391,14 @@ For each pass `N` from `1` to `MAX_PASSES`:
 
    **Do not edit the repo until both `wait`s have returned.** An edit made to a
    tracked file while `codex review` is in flight is silently destroyed, and the
-   loss presents as a *successful* commit (`nothing to commit, working tree
-   clean`) with the content absent from the file and from `HEAD`. Backgrounding
+   commit that should have carried it prints `nothing to commit, working tree
+   clean` with the content absent from the file and from `HEAD`. Backgrounding
    both reviewers is exactly what puts this loop in the hazard window: codex's
    findings are readable while Fable is still running, and acting on them there
-   is how the work disappears. If you must edit sooner, `pkill -f "codex review"`
-   first and accept the lost pass. Full detail, the commit-time assertion, and
-   the probe that gives a false all-clear are in
+   is how the work disappears. If you must edit sooner, kill that reviewer by the
+   PID you captured at launch (`kill "$CODEX_PID"` — never `pkill -f`, which
+   matches your own shell) and accept the lost pass. Full detail, the commit-time
+   assertion, and the probe that gives a false all-clear are in
    [references/reviewer-panel.md](references/reviewer-panel.md).
 
 2. Unwrap the Claude reviewer's JSON into a plain findings file with `jq`, and

@@ -231,14 +231,17 @@ A phase closes on evidence or it does not close.
   clean` is what you see both when the work is already committed and when it was
   destroyed underneath you — and an edit made while `codex review` is running *is*
   destroyed, silently, leaving nothing in the file or in `HEAD`. So never edit the repo
-  while a review process is in flight, and check the tree rather than the exit code:
+  while a review process is in flight, and take both checks the message hides:
 
   ```bash
+  git add -A && git commit -m "<msg>" || { echo "commit produced nothing"; exit 1; }
   git show HEAD:<file> | grep -c "<distinctive phrase from the change>"   # must be >0
   ```
 
-  Gates that passed *before* the loss are not evidence either; the work was real when
-  they ran. See
+  The `||` catches a total loss — `git commit` with nothing staged exits **1**, however
+  reassuring its message reads. The `grep` catches a partial one, which commits cleanly
+  at exit 0 with half the change in it. Gates that passed *before* the loss are not
+  evidence either; the work was real when they ran. See
   [multi-reviewer-loop/references/reviewer-panel.md](../multi-reviewer-loop/references/reviewer-panel.md).
 - **`br` is not exempt — but know which failure you are guarding.** An *explicit*
   `br sync --flush-only` propagates a real exit code, so just require it to succeed. The
