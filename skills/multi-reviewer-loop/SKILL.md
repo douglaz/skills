@@ -742,8 +742,11 @@ finding precisely enough for someone else to act on, which by itself kills the v
     `git diff --binary --no-textconv --no-ext-diff -- <the delegated paths>`, as **two**
     patches. `--no-ext-diff` because a configured `diff.external` helper is not disabled by
     `--no-textconv`: measured on git 2.43, a helper emitting `bogus` gave an exit-0 capture
-    of non-patch output that could restore nothing. And `-- <paths>` at *capture* time, so
-    the replay needs no filtering: `git apply --include` takes a **pattern**, and both a
+    of non-patch output that could restore nothing. And `-- :(literal)<path>` for each delegated path at
+    *capture* time — the `:(literal)` magic matters, because a bare pathspec still globs
+    and delegated `a[1].txt` alongside an unrelated dirty `a1.txt` captures both, which
+    then aborts the replay on the hunk step 2 left applied. With literal magic the replay
+    needs no filtering: `git apply --include` takes a **pattern**, and both a
     bare directory and a literal `a[1].txt` silently match no hunks while exiting 0 — after
     step 2 has already reverted those paths, which turns a rollback into a loss that reports
     success. One combined `git diff HEAD` flattens the layers, so an `MM` path
@@ -768,9 +771,11 @@ finding precisely enough for someone else to act on, which by itself kills the v
   endpoint of a **staged rename**, which are one unit (reverting the destination leaves the
   source staged as deleted and the replay then fails); contents inside a dirty submodule;
   anything with a byte-transforming `.gitattributes` entry (`git check-attr --all` —
-  `filter`, `text`, `eol`, `working-tree-encoding`); text files under `core.autocrlf=true`,
-  which normalizes worktree bytes with **no** attribute for `check-attr` to report
-  (measured: a mixed CRLF/LF file replayed as all-CRLF from a patch that applied cleanly);
+  `filter`, `text`, `eol`, `working-tree-encoding`); text files under `core.autocrlf`, in **either**
+  `true` or `input` — both convert, with no attribute for `check-attr` to report.
+  Measured: under `true` a mixed CRLF/LF file replayed as all-CRLF from a patch that
+  applied cleanly; under `input` a CRLF worktree against an LF index gave an empty patch
+  for a file `git status` called modified, and the rollback then rewrote it to LF;
   and files marked `assume-unchanged`,
   where all three captures *succeed while recording nothing* and the revert then replaces
   the bytes with `HEAD`. That list is the cases known to hit the rule, not the boundary.
