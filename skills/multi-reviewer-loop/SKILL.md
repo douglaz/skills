@@ -754,24 +754,38 @@ finding precisely enough for someone else to act on, which by itself kills the v
 
   **Refuse the paths this cannot represent.** The capture is a staged diff, an unstaged
   diff and a byte copy; any state that does not round-trip through those three is out of
-  scope for delegation — take the path out and say so. Known cases: unmerged paths,
-  contents inside a dirty submodule, anything with a byte-transforming `.gitattributes`
-  entry (`git check-attr --all` — `filter`, `text`, `eol`, `working-tree-encoding`), and
-  files marked `assume-unchanged`, where all three captures *succeed while recording
-  nothing* and the revert then replaces the bytes with `HEAD`. That list is the cases
-  known to hit the rule, not the boundary.
+  scope for delegation — take the path out and say so. Known cases: unmerged paths; either
+  endpoint of a **staged rename**, which are one unit (reverting the destination leaves the
+  source staged as deleted and the replay then fails); contents inside a dirty submodule;
+  anything with a byte-transforming `.gitattributes` entry (`git check-attr --all` —
+  `filter`, `text`, `eol`, `working-tree-encoding`); and files marked `assume-unchanged`,
+  where all three captures *succeed while recording nothing* and the revert then replaces
+  the bytes with `HEAD`. That list is the cases known to hit the rule, not the boundary.
 
-  **`git stash create` cannot replace any of this**, though it handles every case above
-  correctly. It fails on the tree § 1.5 builds:
+  **To roll back**, undo only the delegated paths and rebuild them from the capture, in
+  this order — anything else reaches for the destructive commands forbidden above:
+
+  1. revert **only** the paths you delegated; leave every other path untouched
+  2. re-apply the **staged** patch for those paths, then the **unstaged** one — that order
+     is what restores the layers rather than flattening them
+  3. restore each untracked backup, clearing its destination first
+  4. re-run `git add -N` for every path the status snapshot recorded as `" A "` — a leading
+     space, then `A`; `"A "` is an ordinary staged addition and must not be re-added
+
+  **`git stash create` cannot replace any of this.** It fails outright on the tree § 1.5
+  builds:
 
   ```console
   $ git stash create
   error: Entry 'café.py' not uptodate. Cannot merge.
   ```
 
-  `git add -N` makes stash refuse outright. Anyone proposing the swap should reproduce
-  that first — and it is also why growing the capture toward stash-parity is a road that
-  ends where stash already is.
+  `git add -N` makes stash refuse outright. And it would not be a drop-in even without
+  that: `stash create` takes no `-u`, so an untracked-only tree yields **no stash object at
+  all** (measured), and a conflicted index is rejected rather than saved. It handles the
+  *tracked-content* cases well — binaries, textconv, index layers — which is the useful
+  half of the comparison, not the whole of it. Anyone proposing the swap should reproduce
+  the error above first.
 
 This is not `rb-lite`. That loop hands over the whole task and reviews the result; this
 hands over *only the edit* for findings you have already verified.
