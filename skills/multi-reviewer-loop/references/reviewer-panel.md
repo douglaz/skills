@@ -103,6 +103,16 @@ returns non-zero when `FOCUS` is unset, which aborts the whole group under
 Both reviewers start together and neither sees the other's output.
 
 ```bash
+# Job control ON, before the launches. It puts each backgrounded reviewer in its OWN
+# process group, which is what lets the escape hatch below signal the group rather than
+# one pid. Verified: with `set -m` the child's PGID equals its PID and `kill -- -$PID`
+# succeeds; without it the child inherits this shell's group and the same kill fails with
+# "No such process" — swallowed by the hatch's `|| true`, so it looks like it escalated.
+#
+# `set -m`, NOT `setsid`: this skill supports macOS (that is what the `gtimeout` fallback
+# is for) and `setsid` is util-linux, absent there — prefixing the launches with it would
+# exit 127 before either reviewer starts, on a machine meeting every documented dependency.
+set -m
 RC_TIMEOUT=1500   # 25 min; a normal pass is 5-15
 # Homebrew coreutils installs GNU timeout as `gtimeout`; hardcoding `timeout` makes both
 # reviewers exit command-not-found on macOS and the loop can never reach clean.
@@ -134,6 +144,11 @@ CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?
 FABLE_RC=0; wait "$FABLE_PID" || FABLE_RC=$?
 ```
 
+**The `set -m` above is load-bearing**, not decoration: it is what makes the escape hatch's
+group-kill able to reach anything. Without it a TERM-ignoring reviewer keeps the `wait`
+blocked for the full 1500 seconds — the exact case the hatch exists for — and the failed
+group-kill is swallowed by its `|| true`, so it looks like it worked.
+
 **Do not drop the `timeout`.** Either reviewer can hang indefinitely — no output, no
 exit, no error. Measured: an unbounded consistency pass ran **6h20m and wrote zero
 bytes** while comparable calls finished in 5-15 minutes; nothing reaped it, and the
@@ -147,6 +162,115 @@ which is the very case that flag exists for. Counting only 124 lets the loop spe
 full timeout on the same hung reviewer. Record it, drop
 that reviewer from the pass, and mark the pass `DEGRADED` — the same as any other
 non-zero exit.
+
+### Do not touch the repo while `codex review` is running
+
+**An edit made to a tracked file while `codex review` is in flight is silently
+destroyed.** Both reviewers must have exited — `wait` returned for each PID —
+before you change a single file. If you must edit sooner, kill **both** reviewers **by
+the exact PIDs captured at launch, then reap them**, and accept the lost pass:
+
+```bash
+# BOTH reviewers, not just codex. The hatch abandons the pass, and this section's own
+# rule is that every reviewer has exited before you edit — leaving Fable alive holds a
+# Bash-capable process against the tree you are about to change, and unreaped besides.
+for _p in "$CODEX_PID" "$FABLE_PID"; do
+  kill "$_p" 2>/dev/null || true        # never `pkill -f`; already-exited is fine
+done
+# Bounded escalation. Signalling the `timeout` wrapper from outside forwards TERM but does
+# NOT start its --kill-after timer, so a reviewer that ignores TERM leaves wrapper and
+# child alive and the waits below block until the original 1500s deadline — which is
+# exactly the hung-reviewer case this hatch exists for. Give it a few seconds, then KILL
+# the process group.
+sleep 5
+for _p in "$CODEX_PID" "$FABLE_PID"; do
+  kill -0 "$_p" 2>/dev/null && kill -KILL -- "-$_p" 2>/dev/null || true
+done
+CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?   # reaping is what closes the window
+FABLE_RC=0; wait "$FABLE_PID" || FABLE_RC=$?
+```
+
+The `wait` is not decoration. `kill` returns as soon as SIGTERM is delivered, so
+the `timeout` wrapper and the reviewer beneath it are still tearing down when it
+does — and an edit made in that gap is inside the very window the kill was meant
+to close.
+
+Neither `||` is decoration, and they guard different moments. `kill` fails when
+codex exited on its own between your decision and the signal — a race you cannot
+exclude — so an unguarded `kill` exits the shell before the `wait` ever runs. And
+`wait` on a TERM-killed process returns **143**, so an unguarded `wait` exits it
+before the edit this hatch exists for. Either way Fable is left running unreaped.
+Same rule as the `wait`s under "Running the panel".
+
+Not `pkill -f "codex review"` either: that matches your own shell and other
+sessions' reviewers running the same command, per the rule below.
+
+This loop is the most exposed skill in the repo to it: § 2 backgrounds both
+reviewers *by design*, and § 3 is entirely about editing. An agent that starts on
+codex's findings while Fable is still running is inside the hazard window with
+no warning.
+
+What the loss looks like is a commit whose *message* reads like a no-op:
+
+```console
+$ git add -A && git commit -m "fix the retry path"
+nothing to commit, working tree clean
+```
+
+That text is indistinguishable from "already committed", `git status` is clean,
+and the content is gone from both the working file and `HEAD`. Observed twice on
+a money-path branch, both times after the edits had been applied, verified on
+disk with `grep -c`, and compiled green (clippy clean, 867 tests passing). Gates
+that passed *before* the loss are not evidence.
+
+**The prose lies; the exit code does not.** `git commit` with nothing staged
+exits **1**, so check it — an unchecked `git add -A && git commit` inside a
+larger block is how the message gets believed and the failure walks:
+
+```bash
+git add -- <every path this change touched>   # not `git add -A`: on a dirty tree it
+git diff --cached                            # sweeps in unrelated work — and READ this,
+                                             # since staging a path that was already
+                                             # dirty takes the other agent's hunks too
+git commit -m "<msg>" || { echo "commit produced nothing"; exit 1; }
+git show --stat --format= HEAD               # all the paths you meant, and only those
+```
+
+Then confirm the *content* landed, per file, by the check that fits it — a file that
+gained content must contain a distinctive new phrase; a file you removed lines from must
+still exist **and** hold the expected remaining count of the deleted phrase; a deleted path
+must be absent. A file that BOTH gained and lost content needs both of the first two — the
+added phrase passing says nothing about whether the removal survived. One does not
+substitute for another, and each has a way to
+lie: `grep` defaults to regex (use `-Fq --`), `git show ... | grep` returns 141 under
+`pipefail` when grep exits early (capture to a file first), `grep -c` counts lines rather
+than occurrences, and demanding *zero* occurrences rejects a correct partial removal.
+
+```bash
+_chk=$(mktemp); trap 'rm -f "$_chk"' EXIT
+# ...the three loops, using `grep -Fq --` / `grep -Fo | wc -l || true` on a captured file.
+```
+
+A clean `git status` is neither check. It is equally consistent with the edits
+having been reverted underneath you.
+
+**If you re-test this, do not plant the marker first.** An edit made *before* the
+review starts survives: it disappears mid-run and comes back at the end. Only
+edits made *during* the run are lost. A probe planted early returns a null result
+and would tell the next reader the tool is safe — a worse error than the original.
+Plant it with the review confirmed running (`ps -eo pid,args | grep '[c]odex
+review'`), then re-check on disk before the run ends:
+
+```
+planted mid-run                  count=1
+t=125s, still inside the review  count=0
+```
+
+The mechanism is not established. `git stash list`, `git reflog` and `git
+worktree list` show no trace, and codex's own 1.4 MB transcript contains only
+`git diff` and `git show` — no stash, checkout, reset, or worktree. "Restores a
+snapshot taken at start" fits every observation but was never confirmed at the
+implementation level. The rule above does not depend on which mechanism is right.
 
 ### When a pass looks stuck
 

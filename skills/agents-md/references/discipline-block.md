@@ -39,6 +39,39 @@ afterwards for both the new text and the absence of the old. Prose and markdown
 are where this bites hardest: nothing compiles a README, so a silently skipped
 edit survives and gets reported as done.
 
+The check does not stop at the file. `nothing to commit, working tree clean` reads
+exactly the same whether the work was already committed or was reverted underneath
+you by another process holding the tree — so never take that message as proof a
+commit happened. Take the exit code instead (`git commit` exits **1** on an empty
+commit), and for anything you care about also look inside the commit, since a
+partial loss commits cleanly at exit 0:
+
+```
+git add -- <every path this change touched>   # not `git add -A`: on a dirty tree it
+git diff --cached                            # sweeps in unrelated work — and READ this,
+                                             # since staging a path that was already
+                                             # dirty takes the other agent's hunks too
+git commit -m "<msg>" || { echo "commit produced nothing"; exit 1; }
+git show --stat --format= HEAD               # all the paths you meant, and only those
+```
+
+Then confirm the *content* landed, per file, by the check that fits it — a file that
+gained content must contain a distinctive new phrase; a file you removed lines from must
+still exist **and** hold the expected remaining count of the deleted phrase; a deleted path
+must be absent. A file that BOTH gained and lost content needs both of the first two — the
+added phrase passing says nothing about whether the removal survived. One does not
+substitute for another, and each has a way to
+lie: `grep` defaults to regex (use `-Fq --`), `git show ... | grep` returns 141 under
+`pipefail` when grep exits early (capture to a file first), `grep -c` counts lines rather
+than occurrences, and demanding *zero* occurrences rejects a correct partial removal.
+
+```bash
+_chk=$(mktemp); trap 'rm -f "$_chk"' EXIT
+# ...the three loops, using `grep -Fq --` / `grep -Fo | wc -l || true` on a captured file.
+```
+
+A clean `git status` is neither check.
+
 The same tools also corrupt without failing. In a `sed` replacement string `&`
 means "the whole match", so substituting a value containing `&&` — any shell
 command that chains, which is most of them — silently doubles it and reports

@@ -119,6 +119,47 @@ different trees — and any edit it made would bypass the implementer loop entir
 also told to read `AGENTS.md`, which is how a repo's own invariants reach the panel when
 this runs under `drive`; without it half the panel reviews without them.
 
+**The same prohibition binds you.** An edit made to a tracked file while `codex review`
+is running is silently destroyed, and rb-lite runs `codex review` inside every review
+round — so for the length of a run the repo is not yours to touch. The loss surfaces as
+`nothing to commit, working tree clean` on a commit you expected to carry work, with the
+content absent from the file *and* from `HEAD`. Wait for the run to exit before editing
+anything, and when you commit the accepted diff (step 10.5), check both things that
+message hides:
+
+```bash
+git add -- <every path this change touched>   # NOT `git add -A`: on a dirty tree that
+                                             # stages unrelated work. Even by name, a path
+                                             # already dirty brings the other agent's hunks.
+git diff --cached                            # read-only review of what you just staged;
+                                             # since staging a path that was already
+                                             # dirty takes the other agent's hunks too
+git commit -m "<msg>" || { echo "commit produced nothing"; exit 1; }
+git show --stat --format= HEAD               # all the paths you meant, and only those
+```
+
+Then confirm the *content* landed, per file, by the check that fits it — a file that
+gained content must contain a distinctive new phrase; a file you removed lines from must
+still exist **and** hold the expected remaining count of the deleted phrase; a deleted path
+must be absent. A file that BOTH gained and lost content needs both of the first two — the
+added phrase passing says nothing about whether the removal survived. One does not
+substitute for another, and each has a way to
+lie: `grep` defaults to regex (use `-Fq --`), `git show ... | grep` returns 141 under
+`pipefail` when grep exits early (capture to a file first), `grep -c` counts lines rather
+than occurrences, and demanding *zero* occurrences rejects a correct partial removal.
+
+```bash
+_chk=$(mktemp); trap 'rm -f "$_chk"' EXIT
+# ...the three loops, using `grep -Fq --` / `grep -Fo | wc -l || true` on a captured file.
+```
+
+`git commit` with nothing staged exits **1**, so the `||` catches a total loss however
+reassuring the message reads; the `grep` catches a partial one, which commits cleanly at
+exit 0 carrying only some of the change. A clean `git status` is neither check — it reads
+identically whether the work was committed or reverted underneath you. Detail, including
+the probe design that gives a false all-clear, is in
+[multi-reviewer-loop/references/reviewer-panel.md](../multi-reviewer-loop/references/reviewer-panel.md).
+
 "Customizing the panel" below shows the same two commands alongside OPTIONAL extras — a
 skeptical third reviewer and a `my-linter --json | wrap-as-p-tags` placeholder — which are
 illustrative, not prerequisites. Pasting that block wholesale puts a command-not-found

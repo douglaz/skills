@@ -358,6 +358,9 @@ For each pass `N` from `1` to `MAX_PASSES`:
    [references/reviewer-panel.md](references/reviewer-panel.md). The shape is:
 
    ```bash
+   set -m          # each reviewer in its own process group; the escape hatch needs it.
+                   # `set -m`, not `setsid` — that is util-linux and absent on macOS,
+                   # which this skill supports. See references/reviewer-panel.md.
    PASS_ID=$(printf '%02d' "$N")
    TO=$(command -v timeout || command -v gtimeout) \
      || { echo "no GNU timeout — see references/reviewer-panel.md"; exit 1; }
@@ -388,6 +391,49 @@ For each pass `N` from `1` to `MAX_PASSES`:
    Never run them sequentially just to read the first one's output — the panel's
    value is two *independent* reads. Feeding codex's findings into the Claude
    reviewer's prompt collapses it into an echo chamber.
+
+   **Do not edit the repo until both `wait`s have returned.** An edit made to a
+   tracked file while `codex review` is in flight is silently destroyed, and the
+   commit that should have carried it prints `nothing to commit, working tree
+   clean` with the content absent from the file and from `HEAD`. Backgrounding
+   both reviewers is exactly what puts this loop in the hazard window: codex's
+   findings are readable while Fable is still running, and acting on them there
+   is how the work disappears. If you must edit sooner, kill **both** reviewers by the
+   PIDs you captured at launch and **then reap them** — `kill` only *sends* SIGTERM
+   and returns immediately, so the wrapper and the reviewer are still shutting
+   down when it comes back, and an edit right after is still inside the window:
+
+   ```bash
+   # BOTH reviewers, not just codex. The hatch abandons the pass, and this section's own
+   # rule is that every reviewer has exited before you edit — leaving Fable alive holds a
+   # Bash-capable process against the tree you are about to change, and unreaped besides.
+   for _p in "$CODEX_PID" "$FABLE_PID"; do
+     kill "$_p" 2>/dev/null || true        # never `pkill -f`; already-exited is fine
+   done
+   # Bounded escalation. Signalling the `timeout` wrapper from outside forwards TERM but does
+   # NOT start its --kill-after timer, so a reviewer that ignores TERM leaves wrapper and
+   # child alive and the waits below block until the original 1500s deadline — which is
+   # exactly the hung-reviewer case this hatch exists for. Give it a few seconds, then KILL
+   # the process group.
+   sleep 5
+   for _p in "$CODEX_PID" "$FABLE_PID"; do
+     kill -0 "$_p" 2>/dev/null && kill -KILL -- "-$_p" 2>/dev/null || true
+   done
+   CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?   # reaping is what closes the window
+   FABLE_RC=0; wait "$FABLE_PID" || FABLE_RC=$?
+   ```
+
+   Both `||`s are load-bearing under `set -e`, and they guard different moments.
+   `kill` fails if codex exited on its own between your decision and the signal —
+   a race you cannot exclude — so an unguarded `kill` exits the shell before the
+   `wait`. And `wait` on a TERM-killed process returns **143**, so an unguarded
+   `wait` exits it before the edit this hatch exists for. Either way Fable is left
+   running unreaped. § 2's own `wait`s carry the same `|| VAR=$?` for the same
+   reason.
+
+   Then accept the lost pass. Full detail, the commit-time assertion, and the
+   probe that gives a false all-clear are in
+   [references/reviewer-panel.md](references/reviewer-panel.md).
 
 2. Unwrap the Claude reviewer's JSON into a plain findings file with `jq`, and
    parse findings from both reviewers with the shared pattern in
@@ -453,6 +499,13 @@ For each pass `N` from `1` to `MAX_PASSES`:
    reviewer output into the conversation unless the user asks.
 
 ### 3. Fix and validate
+
+**Entry condition: every reviewer has exited.** Not "codex has finished and I can
+see its findings" — both `wait`s returned. Editing a tracked file while `codex
+review` is still running destroys the edit silently (§ 2), so the first fix of
+this phase cannot legally start until the last reviewer of the previous one is
+dead. This is an ordering rule, not a preference; the skill tells you to run the
+reviewers in parallel, which is precisely what makes the early-start tempting.
 
 If every panel reviewer is clean, go to § 4b (the consistency pass) — not
 straight to "Finish". A clean diff is the entry condition for that phase, not

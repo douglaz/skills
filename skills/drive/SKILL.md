@@ -227,6 +227,38 @@ A phase closes on evidence or it does not close.
   green test that never could have gone red proves nothing.
 - Words that need a number or an exit code behind them: "passing", "working", "clean",
   "verified", "done". Without one, say what you actually observed instead.
+- **A commit is not evidence its content landed.** `nothing to commit, working tree
+  clean` is what you see both when the work is already committed and when it was
+  destroyed underneath you — and an edit made while `codex review` is running *is*
+  destroyed, silently, leaving nothing in the file or in `HEAD`. So never edit the repo
+  while a review process is in flight, and take both checks the message hides:
+
+  ```bash
+  # Stage the paths this change touched — NOT `git add -A`. On the dirty tree § 1.6
+  # permits, `-A` sweeps in another agent's edits and any untracked file lying around,
+  # including a secret, and `git show --stat` only reveals that after the commit exists.
+  git add -- <every path this change touched>   # NOT `git add -A`: on a dirty tree that
+                                               # stages unrelated work. Even by name, a path
+                                               # already dirty brings the other agent's hunks.
+  git diff --cached                            # read-only review of what you just staged
+  git commit -m "<msg>" || { echo "commit produced nothing"; exit 1; }
+  git show --stat --format= HEAD               # all the paths you meant, and only those
+  # Then per file, by the check that fits: gained content must contain a distinctive new
+  # phrase; a file with removals must still EXIST and hold the expected remaining count;
+  # a deleted path must be absent. A file with BOTH needs both checks — the added phrase
+  # passing says nothing about whether the removal survived. `grep -Fq --` (regex is the default), capture to a
+  # file first (`git show ... | grep` returns 141 under pipefail), and count occurrences
+  # rather than lines — demanding zero rejects a correct partial removal.
+  ```
+
+  The `||` catches a total loss — `git commit` with nothing staged exits **1**, however
+  reassuring its message reads. The loop catches a partial one, which commits cleanly at
+  exit 0. **Check every file, not one.** Grepping a single path proves only that path
+  survived: if another file was reverted while your sample was left intact, the commit
+  exits 0 and the grep passes, and the guard reports success for exactly the loss it was
+  written to catch. Gates that passed *before* the loss are not evidence either; the work
+  was real when they ran. See
+  [multi-reviewer-loop/references/reviewer-panel.md](../multi-reviewer-loop/references/reviewer-panel.md).
 - **`br` is not exempt — but know which failure you are guarding.** An *explicit*
   `br sync --flush-only` propagates a real exit code, so just require it to succeed. The
   *automatic* flush that follows a mutating command like `br close` does not: its error is

@@ -32,6 +32,32 @@ Treat that as the default for anything non-trivial.
    # no PROMPT arg when --base is used — they are mutually exclusive
    ```
 4. Apply findings, re-commit, re-review. Loop until a pass returns no P0/P1.
+   **Apply nothing until the review process has exited.** An edit to a tracked file
+   while `codex review` is running is silently destroyed, and the commit that should
+   have carried it prints `nothing to commit, working tree clean` with the content
+   gone from the file and from `HEAD`. On re-commit take both checks that message
+   hides: require `git commit` to exit 0 (it exits **1** on an empty commit, however
+   reassuring the wording), then assert **every** path you changed, by the right check for
+   each — a partial loss commits cleanly, and checking one path only proves that path
+   survived. Three cases, and one does not substitute for another:
+   - **gained content** — `git show "HEAD:$f" >"$_chk"` then
+     `grep -Fq -- '<new phrase>' "$_chk"`. `-F` because `grep` defaults to basic regex, so
+     a phrase containing `[`, `.` or `*` will not match itself; `--` because one starting
+     with `-` parses as an option.
+   - **removals, file retained** (whether or not it also gained content — a file with both
+     needs this check AND the one above) — same capture, then compare the EXPECTED REMAINING
+     COUNT: `grep -Fo -- '<deleted phrase>' "$_chk" | wc -l || true`. The `|| true` because
+     grep exits 1 on no match and `pipefail` would abort at the complete-removal case this
+     check exists to confirm. Not absence, which rejects a
+     correct commit that removed one of several identical lines; and not `grep -c`, which
+     counts matching *lines* rather than occurrences.
+   - **whole file deleted** — `git show "HEAD:$f"` must FAIL; running it through the
+     positive check rejects a correct commit
+
+   Capture to a file rather than piping: `git show ... | grep -q` returns 141 under
+   `pipefail` when grep exits early and git show takes SIGPIPE, which reads as "no match".
+   A clean `git status` is none of these checks. See
+   [multi-reviewer-loop/references/reviewer-panel.md](../../multi-reviewer-loop/references/reviewer-panel.md).
 5. For plan-shaped work, `plan-eng-review` / `plan-ceo-review` add a product lens.
 
 **Exit gate:** spec committed **and** a codex xhigh pass returns no P0/P1. Quote the pass.
@@ -203,7 +229,9 @@ phase whose entire job is to establish that the instrument works.
      -c 'model="gpt-5.6-sol"' -c 'model_reasoning_effort="xhigh"'
    ```
    Budget ~2 fix rounds of narrow P2 edges on delicate paths, then hold the line and
-   surface further P2s to the user rather than auto-chasing them.
+   surface further P2s to the user rather than auto-chasing them. As in SPEC, do not
+   edit while that review is in flight — the edit is destroyed silently and the failed
+   commit looks like a successful one.
 
 Re-verify the build and tests yourself after every fix round. **And re-run the panel after
 any final-gate fix** — once you change code, the earlier clean verdicts no longer cover the
