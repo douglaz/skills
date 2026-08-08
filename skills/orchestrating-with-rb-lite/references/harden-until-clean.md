@@ -68,11 +68,12 @@ if [ -n "$DEFAULT_BRANCH" ] && [ "$WORK_BRANCH" = "$DEFAULT_BRANCH" ]; then
   exit 1
 fi
 
-REVIEW_DIR="/tmp/harden-$(basename "$(git rev-parse --show-toplevel)")-$(echo "$WORK_BRANCH" | tr '/ ' '__')-$(date -u +%Y%m%dT%H%M%SZ)"
-# umask at creation, so it covers every later write — same reason as multi-reviewer-loop
-# § 1.3: this directory holds full reviewer output quoting the code under review, and 0022
-# leaves it world-readable on a shared host.
-(umask 077; mkdir -p "$REVIEW_DIR")
+# `mktemp -d` for exclusive creation at 0700 — same reason as multi-reviewer-loop § 1.3:
+# this directory holds full reviewer output quoting the code under review, a plain
+# `mkdir -p` leaves it 0755 under the usual umask, and `-p` on a path someone else
+# pre-created silently keeps their mode.
+REVIEW_DIR=$(mktemp -d "/tmp/harden-$(basename "$(git rev-parse --show-toplevel)")-$(echo "$WORK_BRANCH" | tr '/ ' '__')-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX") \
+  || { echo "cannot create a private review directory"; exit 1; }
 PROMPT_FILE="$REVIEW_DIR/fable-prompt.txt"
 ```
 

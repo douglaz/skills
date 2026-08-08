@@ -22,17 +22,21 @@ seven judgement calls.
 2. Three **byte-identical** fail-open `br where` paragraphs → checked assignment:
    `bead-polish-loop/SKILL.md:47`, `plan-to-beads-transfer/SKILL.md:39`,
    `orchestrating-with-rb-lite/references/harden-until-clean.md:192`. The correct form
-   already exists four other places, including line 240 of that same file. (#34 batch 7)
+   already existed in six other files, including line 240 of that same file. (#34 batch 7)
 3. `multi-reviewer-loop/SKILL.md:756` — `--no-renames` on the § 3a status capture.
    `reviewer-panel.md:512-549` already uses it. (#34 batch 1)
 4. Group-kill probe at **both** sites — `SKILL.md:420`, `reviewer-panel.md:187`.
    (#34 batch 6)
-5. `umask 077` at both review-dir creations — `SKILL.md:303`,
-   `harden-until-clean.md:71`. (#29)
-6. § 3a capture/replay/restore: pin ambient git config wholesale rather than per flag.
-   (#34 batch 10 class closure)
-7. `bot-gate` header + `pr-with-codex-bot-review` § 7: the first request after a push is
-   never provably answered. (#39)
+5. `mktemp -d` at both review-dir creations — exclusive, 0700. NOT the `(umask 077;
+   mkdir -p)` form #29 suggested: `-p` keeps a pre-created directory's mode, and a
+   subshell umask expires before the files are written. `second-model-bead-audit`
+   already had this right; the sweep initially copied the wrong sibling. (#29)
+6. § 3a capture/replay/restore: one pinned `git` over an enumerated key set, in a
+   single place, rather than a prose sentence per flag. (#34 batch 10 class closure)
+7. `bot-gate` header + `pr-with-codex-bot-review` § 7: asking for a review BEFORE the
+   tip has a wrapper costs a round. Not "every push costs a round" — when the auto
+   round lands its own wrapper first that anchors the next request, which
+   `bot-gate.test` pins at exit 0. (#39)
 
 Do NOT build: new scripts, new test fixtures, per-flag prose for config knobs the class
 closure already covers, or any rewording of a site that is already correct.

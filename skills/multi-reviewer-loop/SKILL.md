@@ -300,14 +300,17 @@ a reviewer.
    _PROJECT=$(basename "$(git rev-parse --show-toplevel)")
    _BRANCH=$(git branch --show-current 2>/dev/null | tr '/ ' '__')
    _TS=$(date -u +%Y%m%dT%H%M%SZ)
-   REVIEW_DIR="/tmp/review-${_PROJECT}-${_BRANCH:-detached}-${_TS}"
-   # `umask 077` in a subshell, at CREATION: under the common 0022 umask this directory is
-   # 0755 and every file in it 0644, readable by any other local user — and it holds full
-   # reviewer output quoting the code under review, the merged findings, the prompt, and
-   # (per § 3a) patches of the user's dirty tree. `chmod 700` afterwards works but leaves a
-   # window in which those files already exist. Do it here and it covers everything written
-   # later, rather than the two or three files someone remembers to tighten.
-   (umask 077; mkdir -p "$REVIEW_DIR")
+   # `mktemp -d`, not `mkdir -p`: this directory holds full reviewer output quoting the
+   # code under review, the merged findings, the prompt, and (per § 3a) patches of the
+   # user's dirty tree, and under the common 0022 umask a plain `mkdir -p` leaves it 0755.
+   # `mktemp -d` creates EXCLUSIVELY at 0700 — which `(umask 077; mkdir -p ...)` does not:
+   # `-p` is "no error if existing" and leaves an existing directory's mode alone, so on a
+   # shared host anyone can pre-create this otherwise predictable path (or a symlink to a
+   # world-readable one) and the guarantee silently evaporates. The 0700 directory is also
+   # what protects the files, since a subshell's umask expires with the subshell and every
+   # later write uses the caller's. `second-model-bead-audit` already does it this way.
+   REVIEW_DIR=$(mktemp -d "/tmp/review-${_PROJECT}-${_BRANCH:-detached}-${_TS}.XXXXXX") \
+     || { echo "cannot create a private review directory"; exit 1; }
    ```
 
    Store each pass separately, one file per reviewer:
@@ -753,17 +756,36 @@ finding precisely enough for someone else to act on, which by itself kills the v
   applies it with the whitespace silently stripped; `color.ui=always` writes ANSI into both
   patches so the replay dies on `No valid patches in input`; `diff.noprefix` and
   `diff.mnemonicPrefix` change the paths `git apply` expects; and `:(literal)` pathspecs are
-  **cwd-relative**, so running from a subdirectory captures nothing and exits 0. Patching
-  these one at a time does not converge — the surface is every config key that touches diff,
-  apply or pathspec resolution. Pin the lot instead:
+  **cwd-relative**, so running from a subdirectory captures nothing and exits 0. Chasing
+  these one prose sentence at a time does not converge — the surface is every config key
+  touching diff, apply or pathspec resolution. Put the pin in **one** place instead, so a
+  newly discovered key is a line there rather than a paragraph somewhere:
 
   ```bash
   _root=$(git rev-parse --show-toplevel) || { echo "not a worktree"; exit 1; }
   git_pinned() {
+    # The env vars neutralise GLOBAL and SYSTEM config. They do NOT touch the repository's
+    # own .git/config — there is no GIT_CONFIG_LOCAL — so `-c`, which overrides every
+    # level including local and worktree, is what actually does the work here. Measured on
+    # git 2.43: with a local `diff.noprefix=true` and only the env vars set, the capture
+    # emits `diff --git f f` and the replay exits 128 with no prefix to strip, after the
+    # revert has already run. That means this is a pin over an ENUMERATED key set, not a
+    # wholesale one; a new key needs a new line.
     GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
-    git -C "$_root" -c core.quotepath=false "$@"
+    git -C "$_root" \
+        -c core.quotepath=false \
+        -c diff.noprefix=false -c diff.mnemonicPrefix=false \
+        -c diff.ignoreSubmodules=none -c diff.external= \
+        -c apply.whitespace=nowarn \
+        -c color.ui=never -c color.diff=never \
+        "$@"
   }
   ```
+
+  `core.filemode` is deliberately **not** pinned: forcing it true on a filesystem that
+  cannot store the exec bit invents mode changes that are not there, which is a worse
+  failure than the one it would fix. A `core.filemode=false` repo still loses a delegated
+  file's mode change through this capture — refuse such a path rather than pretend.
 
   and pass the explicit flags each command needs anyway (`--no-color`,
   `--ignore-submodules=none`, `--binary`, `--no-textconv`, `--no-ext-diff` on the captures;
