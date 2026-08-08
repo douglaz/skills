@@ -868,10 +868,15 @@ finding precisely enough for someone else to act on, which by itself kills the v
      work the delegation never touched. This is the step that got missed when the captures
      were given `:(literal)` — the sibling site inside the same procedure.
   3. re-apply the **staged** patch with `git_pinned apply --index --whitespace=nowarn`,
-     then the **unstaged** one the same way.
+     then the **unstaged** one with `git_pinned apply --whitespace=nowarn` — the same
+     wrapper, but deliberately **without `--index`**. The flag applies to the index *as
+     well as* the worktree, so passing it on the second replay stages the hunks the user
+     had left unstaged and collapses the `MM` boundary that capturing two separate patches
+     exists to preserve; a later commit then carries work they chose to keep back. The two
+     replays differ by exactly this flag, which is why "the same way" will not do here.
      No `--include` is needed or wanted — the patches were already restricted by pathspec
      at capture time, which is the only way to scope them without pattern semantics. Not
-     `--cached`: it updates the index
+     `--cached` on either: it updates the index
      "without touching the working tree", so the worktree stays at `HEAD` and the unstaged
      patch fails against it — measured, `error: patch failed`, after the original was
      already reverted. Path-restricted capture is also what keeps the replay from touching
