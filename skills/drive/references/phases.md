@@ -129,8 +129,12 @@ comparable beads); confirm by re-reading the goal. Hard brake at 2× budget or r
   A long iteration is not a dead run, and `TaskList` can glitch empty. Never
   `pkill -f` (it self-matches your own shell and hits other sessions) — kill by exact PID.
 
-**Exit gate:** rb-lite exits clean **and** you independently ran the gate to a real exit
-code. The panel reads code; it does not run it.
+**Exit gate:** rb-lite exits clean, you independently ran the gate to a real exit code,
+**and** every load-bearing behavior the bead introduced has been inverted with a matching
+assertion observed to fail. The panel reads code; it does not run it — and a suite that was
+already green before the bead proves nothing about the bead. Most beads never reach PROVE
+(that phase is for test-shaped deliverables and money/data/infra work), so if this evidence
+is not required here it is required nowhere.
 
 ---
 
@@ -157,10 +161,25 @@ Two non-negotiables:
    ```bash
    <gate-cmd> > /tmp/gate.log 2>&1; echo "EXIT=$?"
    ```
-2. **Make it fail first.** Point the new test at the unfixed code and watch it go red.
-   A test that could never have failed proves nothing.
+2. **Make it fail first — once per property, on the right assertion.** Point the new test
+   at the unfixed code and watch it go red. A test that could never have failed proves
+   nothing. Two refinements that decide whether the red run means anything:
+   - **Read the failure.** It must name the assertion pinning the behavior you broke. An
+     initialization error, a panic, or an unrelated assertion reddens without the test
+     ever reaching the behavior, and taking that as proof certifies something nothing
+     tests.
+   - **One mutation per property.** A gate claiming two independent properties needs two;
+     reddening the first leaves the second untested while looking verified.
+   - Break the **production behavior**, never the test's expected value or its setup —
+     those redden any assertion, including one that never runs. And for a live gate
+     (real DB, running service, money), isolate first: a defective build can perform the
+     bad operation before an assertion notices. See `testing-with-rb-lite`.
 
-**Exit gate:** the gate ran, printed green, and you quoted the command and exit code.
+**Exit gate:** the gate ran and printed green, **and** you observed a matching assertion
+FAIL for every property it claims — quote both: the green command with its exit code, and
+each red run with the behavior you inverted and the assertion that reported it. Green alone
+does not close PROVE. A gate never observed red is an untested instrument, and this is the
+phase whose entire job is to establish that the instrument works.
 
 ---
 

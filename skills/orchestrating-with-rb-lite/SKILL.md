@@ -214,9 +214,12 @@ ready bead if the queue is not empty, and the exact reason the loop stopped.
   on a single surviving reviewer (check `log.txt` for the `K of M reviewers
   succeeded` line and the `review-round-*.md` status headers). Before trusting a
   run, **independently re-run the repo's own gates** (tests, goldens/digests,
-  fmt/clippy) on the landed diff; for high-stakes work add a **separate
-  adversarial result-review** (e.g. `codex exec` over the committed diff) — the
-  panel's `clean` is one input, not the gate. See "Verify the landed diff."
+  fmt/clippy) on the landed diff — and, because those gates were already green
+  before the run, **invert each load-bearing behavior it introduces and confirm
+  the assertion pinning that behavior goes red**; for high-stakes work add a
+  **separate adversarial result-review** (e.g. `codex exec` over the committed
+  diff) — the panel's `clean` is one input, not the gate. See "Verify the landed
+  diff."
 - In backlog-drain mode, one bead equals one branch and one **work** PR. Do not batch
   unrelated beads into one rb-lite run. The final closure/metadata PR (step 11) is not a
   second work PR and is not covered by this rule — it carries bookkeeping only.
@@ -346,9 +349,19 @@ ready bead if the queue is not empty, and the exact reason the loop stopped.
     commit it yourself; (b) check `log.txt` for `K of M reviewers succeeded` —
     a `clean` resting on 1-of-3 (e.g. a dead/unauthenticated reviewer) is one
     opinion, not a panel consensus; (c) re-run the repo's own gates on the
-    landed diff (tests, goldens/digests, fmt/clippy); (d) for high-stakes work,
-    add a separate adversarial result-review (e.g. `codex exec` over the
-    committed diff). See "Verify the landed diff" below.
+    landed diff (tests, goldens/digests, fmt/clippy); (d) invert **each**
+    load-bearing behavior the diff introduces — one at a time — and confirm the
+    assertion that pins *that* behavior goes red, since re-running an
+    already-green suite cannot tell you whether any of them is pinned at all;
+    (e) for high-stakes work, add a separate
+    adversarial result-review (e.g. `codex exec` over the committed diff). See
+    "Verify the landed diff" below.
+
+    **A mutation that stays green stops this workflow too**, exactly as it stops the
+    backlog drain. Standalone use reaches step 11 straight from here with the diff
+    already committed at (a), so without a stop the uncovered behavior ships and the
+    run reports success. Repair the test, observe both runs, and re-review the repair
+    — or report the run as incomplete and name the unpinned behavior.
 
 11. **Report concisely.** Tell the user what shipped, what didn't, where
     artifacts are, and whether anything needs manual follow-up. Don't
@@ -378,7 +391,7 @@ when rb-lite runs for more than a quick pass:
 ## Verify the landed diff
 
 The single most important habit when driving rb-lite for real work: **`clean`
-means "no surviving reviewer raised a P0/P1/P2," not "correct."** Four things
+means "no surviving reviewer raised a P0/P1/P2," not "correct."** Five things
 dogfooding made concrete:
 
 - **The diff is uncommitted.** rb-lite leaves the final accepted changes in the
@@ -411,6 +424,31 @@ dogfooding made concrete:
   reviewers then echoed the corrupted comment — a self-reinforcing loop that only
   broke on reading the unchanged cap code. Tests passing does not catch this;
   reading the claims against the code does.
+- **A green suite does not prove the diff is covered.** Re-running gates that
+  already passed cannot tell you whether the loop shipped a behavior no test
+  pins. For each load-bearing behavior the diff *introduces* — a new invariant,
+  an ordering, a clock or lock choice — **invert it in the working tree, confirm
+  a test FAILS, then revert.** Read the failure: it has to be *the assertion that
+  pins that behavior*, not merely something going red.
+
+  **Isolate the run if the gate touches anything live.** A feature's regression gate
+  can drive a real database, a running service, or real funds, and an inverted
+  behavior may PERFORM the harmful operation before any assertion notices — the
+  mutation is not a dry run. Use a disposable environment, pick a non-destructive
+  mutation, or say plainly that the check could not be done safely. Never run a
+  deliberately broken build against live state; this applies here and in the
+  backlog drain's step 7, not only where the deliverable is a test. A behavior mutation can
+  trip an initialization error, a panic, or an unrelated assertion long before
+  the intended check runs, and taking that as proof of coverage certifies a
+  behavior nothing tests. If nothing fails, the loop wrote code the panel
+  described and the suite ignores. Observed: a nine-round run ended `clean` with
+  every gate green — `fmt`, `clippy -D warnings`, 685 workspace tests, three
+  demos, a 16/16 adversarial suite, and CI on a dedicated runner — and swapping a
+  single argument at one call site (the mapping anchoring a security deadline)
+  still left all 498 lib tests passing. Nine rounds of reading missed it; one
+  mutation found it. Keep it scoped to the handful of behaviors the diff
+  introduces — each check is one edit, one targeted test, one revert — and treat
+  it as the cheapest thing that separates "tests pass" from "tests would notice."
 
 ## Backlog-drain workflow
 
@@ -469,6 +507,49 @@ implement → review loop for each bead.
 
    Treat real failures as part of the bead. Treat pre-existing flakiness as
    a separate bead; don't hand-tune the branch to hide a flaky CI failure.
+
+   **These gates were already green before the bead, so passing them proves
+   nothing about it.** For **each** load-bearing behavior the bead introduces —
+   a new invariant, an ordering, a clock or lock choice — invert it in the
+   working tree, one at a time, and confirm the assertion that pins *that*
+   behavior goes red; then revert. Read the failure rather than just observing
+   one: a mutation that trips an initialization error or an unrelated assertion
+   proves nothing, and a mutation that changes no test outcome means the drain
+   shipped a behavior nothing covers.
+
+   **Protect the accepted diff before you invert anything.** rb-lite leaves its
+   changes UNCOMMITTED until step 8, so the obvious way to undo a mutation —
+   `git restore <file>` / `git checkout -- <file>` — discards rb-lite's accepted
+   implementation in that file along with your inversion. The gates ran before the
+   mutation and nothing re-runs after the revert, so step 8 would commit and push
+   a tree missing part of the work. Commit or stash the accepted diff first, or
+   mutate in a scratch copy — not "revert and re-run green". When the accepted fix and a
+   regression test sit in the same file, the file-level restore removes both and the suite
+   then passes *because* the test that would expose the loss is gone. Verify by diffing the
+   restored tree against the preserved diff, not by trusting a green run.
+
+   **A mutation that stays green STOPS the drain — it is not a note to carry into
+   step 8.** Diagnosing an uncovered behavior and then committing anyway ships
+   exactly what the check was added to catch, and step 8 pushes immediately, so
+   there is no later point that is cheaper. Add or repair the test that pins the
+   behavior, observe its red run against the inverted code AND its green run
+   against the correct code, and only then continue.
+
+   **That repair was never reviewed.** rb-lite returned its verdict on the tree
+   before you touched it, and step 9's SHA guard assumes local `HEAD` is the tree
+   the panel read — which it no longer is. Red/green proves the test detects the
+   behavior; it says nothing about the test's cleanup, isolation, or fixtures.
+   Neither obvious continuation is allowed here, which is the real problem: a second
+   rb-lite run breaks the one-bead/one-run invariant, and carrying it forward reaches
+   step 9's SHA guard, which asserts local `HEAD` is the tree rb-lite reviewed. So take
+   the third path — **stop the drain and track the repair as its own work**, on its own
+   branch with its own review. If the repair is small enough to belong to this bead, a
+   separate reviewer pass over the amended tree is the only in-band option; say which you
+   chose. Do not let it ride out on a clean verdict that predates it, and do not pretend
+   a second rb-lite run is permitted. If you cannot pin it — the
+   behavior is not reachable from a test, or the fix is out of the bead's scope —
+   say so and stop; that is a finding about the bead, not a formality to wave
+   through. Full rationale in "Verify the landed diff".
 
 8. **Commit, push, PR.** Add only intentional source/docs/config changes and
    any bead-state sync files the repo expects. Do not commit `.rb-lite/` run

@@ -12,7 +12,13 @@ Before editing, classify each finding as `FIX`, `DEFER`, `REJECT`, or
 `CUT/SIMPLIFY`.
 
 - **FIX**: default outcome. The finding is plausible, in scope, and can be
-  addressed safely in this loop.
+  addressed safely in this loop. A `FIX` for an *untested-behavior* finding is
+  not complete until a mutation has failed **for every property the test claims**
+  — invert each one in turn and watch *that property's assertion* go red, not
+  merely something. A test that stays green against the very defect it was
+  written for has closed nothing; one that reddens on an unrelated panic has
+  proved nothing either; and one red run across a test asserting two independent
+  properties leaves the second untested while looking verified.
 - **DEFER**: the finding still looks real or plausible, but the safe fix needs
   a broader refactor, product decision, policy call, or cross-team
   coordination. Keep it open. Do not call it a false positive.

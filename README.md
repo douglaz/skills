@@ -30,8 +30,8 @@ The phase machine, and the skill each phase delegates to:
 |---|---|---|
 | SHAPE | `planning-workflow`, `grill-with-docs`, `spec` | spec committed, codex xhigh clean of P0/P1 |
 | GRAPH | `plan-to-beads-transfer` → `bead-polish-loop` → `second-model-bead-audit` | audit PASS, a scoped `br ready` bead exists |
-| BUILD | `orchestrating-with-rb-lite` | rb-lite clean **and** you ran the gate yourself |
-| PROVE | `testing-with-rb-lite` | the gate ran green at a real exit code |
+| BUILD | `orchestrating-with-rb-lite` | rb-lite clean, you ran the gate yourself, **and** each load-bearing behavior was inverted and seen to redden |
+| PROVE | `testing-with-rb-lite` | the gate ran green at a real exit code **and** was observed to FAIL once per property it claims |
 | HARDEN | `multi-reviewer-loop` + a final pinned `codex review --base` | `multi-reviewer-loop` reports `CLEAN` (reviewers **and** consistency pass), then the cleared SHA is recorded |
 | LAND | `pr-with-codex-bot-review` | no evidence of a pending bot round on the tip, base still an ancestor of it, squash-merged; closure lands via a reviewed path |
 | DONE | — | the scope is empty and any `Pending:` closure PR has merged |
@@ -239,10 +239,16 @@ Codex:
 Use the testing-with-rb-lite skill to build and verify an end-to-end gate for this flow.
 ```
 
-Front-loads the six ways a test reports PASS without proving anything — stale binaries,
+Front-loads the seven ways a test reports PASS without proving anything — stale binaries,
 substring assertions, assertion-weakening to force green, fake setup, false PASS on a
-hang, and editing the code under test — as hard constraints in the task file, then checks
-for each in the result. A test that falsely reports PASS is worse than no test.
+hang, editing the code under test, and a gate never observed red — as hard constraints in
+the task file, then checks for each in the result. A test that falsely reports PASS is
+worse than no test, and the last trap is the one that catches the rest: break the
+production behavior, one mutation per property, and watch the pinning assertion fail —
+in a **disposable environment** when the gate touches anything live. A deliberately
+defective build can perform the harmful operation against a real database, service or
+balance before the assertion notices; if it cannot be isolated, say the red run could
+not be done safely rather than doing it.
 
 ### orchestrating-with-rb-lite
 

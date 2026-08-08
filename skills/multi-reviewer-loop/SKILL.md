@@ -541,6 +541,50 @@ Otherwise:
    Passing validation supports a fix, but it does not by itself prove that a
    rejected finding was false.
 
+   **When the finding is that a behavior is untested — or when your fix adds or
+   changes a test — a green suite is not evidence the fix landed.** Invert the
+   code the test is supposed to pin, confirm the test FAILS, then revert. A test
+   written in answer to "nothing catches this" is worthless if it also passes
+   against the defect, and running it green proves only that it runs. This is the
+   one validation step that separates a test that *pins* a behavior from one that
+   merely *exercises* it.
+
+   Mutate the **code**, never the test's expected value — flipping the oracle
+   turns any assertion red, including one that never reaches the behavior at all,
+   so it proves nothing. Check that the failure names the assertion you meant to
+   pin, and run **one mutation per property** the test claims: reddening the first
+   of two leaves the second untested while looking verified.
+
+   **Protect the fix before you invert it.** Your fix is uncommitted at this point, so
+   `git restore <file>` / `git checkout -- <file>` to undo the mutation restores the
+   *pre-fix* version and discards the fix along with it. The green run happened before that
+   revert and nothing re-runs after it, so a later source-only pass can still report
+   `CLEAN` over a tree missing the fix. **Mutate in a scratch copy, or save a patch of the
+   fix first — those two only.** A green re-run is not a third option: when the fix and its
+   new test live in the same file, restoring that file removes both, and the pre-existing
+   suite then passes precisely because the test that would have caught the loss is gone
+   too. If you must verify by re-running, diff the restored tree against the saved fix
+   rather than trusting the green.
+
+   **Isolate the run if the code under test touches anything live.** A fix on a
+   money, data-loss or infrastructure path may be validated by a test that drives a
+   real database, service or balance, and the inverted build can perform the harmful
+   operation before the assertion notices — the mutation is not a dry run. Disposable
+   environment, non-destructive mutation, or say the red run could not be done safely.
+
+   Keep the trigger narrow — a coverage finding, or a test you touched — not
+   every fix. It is one edit, one targeted test run, one revert. It earns its
+   cost exactly where reading cannot help: a mapping, an ordering, a clock or
+   lock choice, whose absence changes no test outcome. **If the mutation changes
+   nothing, you have not verified the fix — you have found a second finding.**
+
+   **And it blocks `CLEAN`.** Neither reviewer executes the test, so the panel cannot
+   see this and § 5's verdict would otherwise be computed from their silence: the loop
+   would report `CLEAN` and offer to ship a test unable to detect the behavior it claims
+   to pin. Repair it and observe both runs — red against the inverted code, green against
+   the correct code — or report the pass as **not** clean and say which test is unpinned.
+   A verdict the panel is structurally blind to is one you have to enforce yourself.
+
 6. **Launch the next pass before you write the summary.** Not after — before. Go back to
    § 2 with `N+1`, start the reviewers, and only then write up what this pass did.
 
