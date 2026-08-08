@@ -314,6 +314,27 @@ done < <(printf '%s' "$REVIEWS" | jq -r --arg bot "$BOT_LOGIN" '
   .[][] | select(.user.login==$bot) | select(.user.type=="Bot")
   | (if ((.submitted_at // "") | length) == 0 then "@undated@"
      else ((.commit_id // "") + "\t" + .submitted_at) end)' 2>/dev/null)
+# Clean-round comments are round ENDS too — a round that found nothing still finished.
+# Feeding only review objects into these lists left a PR whose every round is clean with
+# an EMPTY anchor list, so `_round_covered` returned 1 for every request forever: the
+# documented escape (`@codex review` once more) posts a request that its own clean round
+# can then never answer. The verdict's channel-merge above already counts these comments
+# as wrappers; the coverage lists must see them for the same reason. The sha in the marker
+# is abbreviated, so the tip-scoped match is a prefix match (the capture requires >=7 hex).
+while IFS= read -r _wt; do
+  [[ -n "$_wt" ]] || continue
+  [[ "$_wt" == "@undated@" ]] && { WRAPPER_UNDATED=true; continue; }
+  _wtip="${_wt%%$'\t'*}"; _wts="${_wt#*$'\t'}"
+  _we=$(iso_to_epoch "$_wts") || { WRAPPER_UNDATED=true; continue; }
+  WRAPPER_EPOCHS="${WRAPPER_EPOCHS}${WRAPPER_EPOCHS:+$'\n'}${_we}"
+  [[ "$TIP" == "$_wtip"* ]] \
+    && WRAPPER_TIP_EPOCHS="${WRAPPER_TIP_EPOCHS}${WRAPPER_TIP_EPOCHS:+$'\n'}${_we}"
+done < <(printf '%s' "$ALL_COMMENTS" | jq -r --arg bot "$BOT_LOGIN" '
+  .[][] | select(.user.login==$bot)
+  | select((.body // "") | test("Reviewed commit"))
+  | ((.body | capture("Reviewed commit:\\*{0,2}[[:space:]]*`?(?<sha>[0-9a-f]{7,40})")).sha) as $sha
+  | (if ((.created_at // "") | length) == 0 then "@undated@"
+     else ($sha + "\t" + .created_at) end)' 2>/dev/null)
 
 # A wrapper AFTER a request does not show the REQUESTED round ended: rounds carry no
 # identity, so that wrapper can end a round that was already in flight when the request
