@@ -66,7 +66,8 @@ lie: `grep` defaults to regex (use `-Fq --`), `git show ... | grep` returns 141 
 than occurrences, and demanding *zero* occurrences rejects a correct partial removal.
 
 ```bash
-_chk=$(mktemp); trap 'rm -f "$_chk"' EXIT
+_chk=$(mktemp) || { echo "cannot create the scratch file — do NOT report the commit verified"; exit 1; }
+trap 'rm -f "$_chk"' EXIT
 # ...the three loops, using `grep -Fq --` / `grep -Fo | wc -l || true` on a captured file.
 ```
 

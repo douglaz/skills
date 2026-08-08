@@ -44,7 +44,8 @@ Treat that as the default for anything non-trivial.
    an unset `-u` shell silently redirects into an empty filename:
 
    ```bash
-   _chk=$(mktemp); trap 'rm -f "$_chk"' EXIT
+   _chk=$(mktemp) || { echo "cannot create the scratch file — do NOT report the commit verified"; exit 1; }
+   trap 'rm -f "$_chk"' EXIT
    ```
 
    - **gained content** — `git show "HEAD:$f" >"$_chk"` then
