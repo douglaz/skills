@@ -321,14 +321,21 @@ done < <(printf '%s' "$REVIEWS" | jq -r --arg bot "$BOT_LOGIN" '
 # can then never answer. The verdict's channel-merge above already counts these comments
 # as wrappers; the coverage lists must see them for the same reason. The sha in the marker
 # is abbreviated, so the tip-scoped match is a prefix match (the capture requires >=7 hex).
+#
+# ONLY the current tip's clean comments, though, and only into both lists together. A
+# normal (non-force) push is invisible to the start-event scan, so a PRIOR-tip clean
+# comment accepted as the pre-request anchor can certify a "quiet" gap that the push's
+# auto round is actually running in — crediting that round's later clean comment to a
+# request whose own round is still pending. Dropping prior-tip clean comments is
+# fail-closed: it removes anchors, never adds them.
 while IFS= read -r _wt; do
   [[ -n "$_wt" ]] || continue
   [[ "$_wt" == "@undated@" ]] && { WRAPPER_UNDATED=true; continue; }
   _wtip="${_wt%%$'\t'*}"; _wts="${_wt#*$'\t'}"
+  [[ "$TIP" == "$_wtip"* ]] || continue
   _we=$(iso_to_epoch "$_wts") || { WRAPPER_UNDATED=true; continue; }
   WRAPPER_EPOCHS="${WRAPPER_EPOCHS}${WRAPPER_EPOCHS:+$'\n'}${_we}"
-  [[ "$TIP" == "$_wtip"* ]] \
-    && WRAPPER_TIP_EPOCHS="${WRAPPER_TIP_EPOCHS}${WRAPPER_TIP_EPOCHS:+$'\n'}${_we}"
+  WRAPPER_TIP_EPOCHS="${WRAPPER_TIP_EPOCHS}${WRAPPER_TIP_EPOCHS:+$'\n'}${_we}"
 done < <(printf '%s' "$ALL_COMMENTS" | jq -r --arg bot "$BOT_LOGIN" '
   .[][] | select(.user.login==$bot)
   | select((.body // "") | test("Reviewed commit"))

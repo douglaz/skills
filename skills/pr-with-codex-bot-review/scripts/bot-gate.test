@@ -240,6 +240,18 @@ clean_sandwich "$NEW_UTC" "$NEW2_UTC" > "$FIX/issues.json"
 printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":"%s"}]]' "$MID_UTC" > "$FIX/reactions.json"
 check "an eyes in the anchor gap still blocks" 1
 
+# ...and only THIS tip's clean comments anchor. A normal push is invisible to the
+# start-event scan, so a prior-tip clean comment as anchor certifies a "quiet" gap the
+# push's auto round may be running in — the wrapper after the request would be that
+# round's, not the request's. Prior-tip clean comments anchor nothing.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+{ c1=$(clean_round "${OLDTIP:0:10}" "$OLD_UTC"); c2=$(clean_round "${TIP:0:10}" "$NEW_UTC")
+  printf '%s' "$c1" | jq -c --arg rt "$MID_UTC" \
+    --argjson c2 "$(printf '%s' "$c2" | jq '.[0][0]')" \
+    '.[0] += [{"user":{"login":"douglaz"},"created_at":$rt,"body":"@codex review"}, $c2]'
+} > "$FIX/issues.json"
+check "a prior-tip clean comment does not anchor" 1
+
 # The filter must remove only the BOT's mentions. A human request posted after the clean
 # round is still an unanswered request and still blocks.
 human_request() {  # $1 = created_at
