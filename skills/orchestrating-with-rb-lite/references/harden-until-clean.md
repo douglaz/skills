@@ -46,6 +46,11 @@ loop:
 - You know both refs: the *work branch* being hardened and the *review base*
   (usually the default branch). Ask once if either is unclear — the loop runs
   many subcommands and a silent misconfiguration is expensive.
+- **`jq` is on the HOST `PATH`.** Not a backlog-drain-only prerequisite: section 3 runs
+  `br create` and flushes before anything resolves the graph's path, and that resolution
+  is `br where --json | jq` in *your* shell — the Nix wrapper supplies jq to rb-lite, not
+  to you. Without it this loop mutates the graph and only then fails at the command that
+  would have located the damage. Check before section 3, not after.
 - `br` is **≥ 0.1.45**. Older versions corrupt their DB after branch resets:
   `br update`/`br close` start returning `ISSUE_NOT_FOUND` while `br show` and
   `br list` keep working, which hides the problem until you have lost bead state.
@@ -180,6 +185,21 @@ it still chooses how far to read, so run the grep yourself. Classes that repeat:
 - redaction on every sibling endpoint returning the same struct
 - scheme/domain/host scoping at every write site of the same cookie
 
+
+**Before the first `br` write, check the JSONL for divergence.** Any `br` mutation
+auto-flushes the cache over the tracked file, so an unstaged hand-edit is erased by your
+first write — and since neither the index nor `HEAD` holds it, every later diff shows only
+your intended changes and the loss becomes *undetectable*. Run `git status --porcelain --
+"$(br where --json | jq -er .jsonl_path)"`; if it is not empty, resolve it first — recovery
+case (a) in [orchestrating-with-rb-lite](../SKILL.md) step 11. After the first flush the choice
+is gone.
+
+**Start a replay manifest before minting.** Section 3 runs one `br create` per finding,
+each auto-flushing, and the damage check comes after all of them. If it fires, step 11's
+recovery deletes the cache and requires every intended mutation replayed — so record the
+`br` commands with their generated ids and field values as you go. Without it, restoring
+the good JSONL discards the whole iteration's legitimate bead additions.
+
 ## 3. Mint one bead per real finding
 
 ```bash
@@ -216,11 +236,43 @@ extra round trip.
 Then flush and commit — `br` never touches git, that part is yours:
 
 ```bash
-br sync --flush-only
-git add .beads/issues.jsonl
+br sync --flush-only || { echo "findings not persisted"; exit 1; }
+BEADS_JSONL=$(br where --json | jq -er .jsonl_path) || { echo "cannot resolve the beads JSONL"; exit 1; }
+git diff HEAD -- "$BEADS_JSONL" || { echo "cannot diff the JSONL — do NOT stage"; exit 1; }
+```
+
+**Stop the block here and read that diff.** This is a real split, not a comment: run the
+lines above, read the output, and continue below only once you have. Pasted as one block —
+or run non-interactively, where the pager never pauses — the diff scrolls past and the very
+next line stages, commits and pushes the collateral damage, which is the loss this check
+exists to catch. Prose underneath a `git add` cannot stop a shell.
+
+```bash
+# The split above is a real gate, not a suggestion: an automated runner executing block
+# after block reaches `git add` regardless of what the diff showed. Require the reviewer
+# to record what they saw before anything is staged.
+# Bind the acknowledgement to THIS pass. The loop runs in one shell, so a value set in
+# iteration 1 would satisfy every later iteration and let an unreviewed diff stage,
+# commit and push — the gate passing on the strength of a decision about a different
+# graph. Unset it before the diff, and record the pass it belongs to.
+unset BEADS_DIFF_REVIEWED
+# ...print and read the diff, then:
+: "${BEADS_DIFF_REVIEWED:?read THIS pass's diff, then set it to \"pass $ITERATION: <what you found>\"}"
+git add -- "$BEADS_JSONL"
 git commit -m "chore(beads): record review findings (iteration <N>, codex+fable)"
 git push
 ```
+
+Do not stage that file unread. The flush re-exports **every** bead from the
+gitignored `.beads/beads.db` cache over the tracked JSONL, so a body the cache
+holds a stale copy of is reverted here — silently, at exit 0, and once committed
+the loss looks like an ordinary bead-state sync. Minting findings as beads is
+when bodies are longest, so this iteration is when the loss costs most. Check the
+field-level changes: a full re-serialization with every id on both sides is
+normal; ids on only one side, or a `description` this iteration did not write, is
+the tell. Never hand-edit the JSONL — that is what makes the cache stale, since a
+hand edit does not advance `updated_at`. Recovery is in
+[SKILL.md](../SKILL.md) step 11.
 
 If the iteration ran degraded, say which reviewer was missing in that commit
 message. Months later it explains why iteration N looks thin.

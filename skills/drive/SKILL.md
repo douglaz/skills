@@ -234,6 +234,16 @@ A phase closes on evidence or it does not close.
   closed bead is not a closed bead until an explicit sync has confirmed the write:
 
   ```bash
+  # Divergence check FIRST — `br close` auto-flushes the cache over the tracked JSONL, so
+  # an unstaged hand-edit is destroyed by this very command and neither the index nor HEAD
+  # holds it. Capture separately: `[ -z "$(git status ...)" ]` discards git's exit code, so
+  # a failed inspection would read as clean and let the write through.
+  BEADS_JSONL=$(br where --json | jq -er '.jsonl_path') \
+    || { echo "cannot resolve the beads JSONL — do NOT close"; exit 1; }
+  _st=$(git status --porcelain -- "$BEADS_JSONL") \
+    || { echo "cannot read the worktree — do NOT close"; exit 1; }
+  [ -z "$_st" ] || { git diff HEAD -- "$BEADS_JSONL"
+    echo "JSONL differs from HEAD — resolve that BEFORE closing"; exit 1; }
   br close <id> || { echo "br close failed"; exit 1; }
   br sync --flush-only || { echo "closure not persisted to the JSONL"; exit 1; }
   ```
@@ -244,6 +254,18 @@ A phase closes on evidence or it does not close.
   know every beads layout, stay portable across GNU and BSD userland, and be captured
   before the first mutation — and got each of those wrong once, in review, across six
   copies of itself.
+
+  That sync proves *your* write landed. It does not tell you what else it overwrote: a
+  flush re-exports **every** bead from the gitignored `.beads/beads.db` over the tracked
+  JSONL, so any body the cache holds a stale copy of is reverted, silently, at exit 0.
+  Hand-editing `.beads/issues.jsonl` is what makes the cache stale — do not; use
+  `br update -d/--notes`. Then field-diff the tracked JSONL before committing and read the
+  changes — resolving its path rather than assuming it, with
+  `br where --json | jq -er .jsonl_path`. `.beads/issues.jsonl` is only the default:
+  `.beads.jsonl` and `<name>.beads.jsonl` are supported too, and a hardcoded path diffs
+  nothing on those — a false all-clear in the direction that loses text. Detail and
+  recovery:
+  [orchestrating-with-rb-lite](../orchestrating-with-rb-lite/SKILL.md) step 11.
 
 
 The rules above are what closes a *phase*. The fuller set on not lying about *edits* —

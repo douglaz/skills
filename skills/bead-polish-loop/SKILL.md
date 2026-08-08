@@ -26,13 +26,28 @@ merely plausible.
 
 ## Preflight
 
-- Confirm `br` and `bv` are on `PATH`. If either is missing, stop and say so.
-- Record whether `codex`, `claude`, and `jq` are available for the final reviewer
-  panel. Missing panel tools do not block polishing, but they determine whether
-  the eventual audit can be full, degraded, or blocked.
+- Confirm `br`, `bv`, **and `jq`** are on `PATH`. If any is missing, stop and say so.
+  `jq` is not a panel tool here: every `br` write can silently revert other beads
+  (step 5), and both the damage check and the recovery resolve the graph's real path
+  through `br where --json | jq`. Without it you can still mutate the graph and then
+  cannot tell whether you destroyed anything — the one ordering that must not be
+  possible. If `br where --json` cannot be parsed on this host, do not write to the
+  graph at all.
+- Record whether `codex` and `claude` are available for the final reviewer panel.
+  Missing panel tools do not block polishing, but they determine whether the eventual
+  audit can be full, degraded, or blocked.
 - Re-read `AGENTS.md`, `README.md`, and the relevant plan/spec before editing the graph.
 - If there are no meaningful beads yet, redirect to `plan-to-beads-transfer`.
 - If polishing keeps surfacing architecture questions, step back into plan space instead of repeatedly fixing downstream symptoms.
+
+
+**Before the first `br` write, check the JSONL for divergence.** Any `br` mutation
+auto-flushes the cache over the tracked file, so an unstaged hand-edit is erased by your
+first write — and since neither the index nor `HEAD` holds it, every later diff shows only
+your intended changes and the loss becomes *undetectable*. Run `git status --porcelain --
+"$(br where --json | jq -er .jsonl_path)"`; if it is not empty, resolve it first — recovery
+case (a) in [orchestrating-with-rb-lite](../orchestrating-with-rb-lite/SKILL.md) step 11. After the first flush the choice
+is gone.
 
 ## Session shape
 
@@ -119,7 +134,10 @@ run `second-model-bead-audit` by default after the graph meets these gates.
 - Merge tiny beads only when the merge sharpens execution instead of blurring it.
 - Reconcile priority with graph reality so critical blockers are obvious.
 
-4. Apply only justified changes with `br`.
+4. Write the replay manifest **before** applying anything — one line per intended `br`
+   command, verbatim and complete (ids, field values, order). Step 6's round summary is
+   written after the flush and records decisions, not the commands; recovery discards the
+   working JSONL before you could read them back off it. Then apply the changes with `br`.
 
 5. Flush with an **explicit** `br sync --flush-only` and require it to succeed:
 
@@ -131,6 +149,27 @@ run `second-model-bead-audit` by default after the graph meets these gates.
    mutating `br` command swallowing its error, and the mutation is still in the shared DB,
    so this either writes it or fails loudly. A round that applied no changes syncs cleanly
    and reports nothing — a healthy convergence signal, not a failed flush.
+
+   **But a flush writes the cache over the file.** The sync proves your mutation
+   persisted; it does not tell you what else it overwrote. Every `br` write re-exports
+   *all* beads from the gitignored `.beads/beads.db`, so a body the cache holds a stale
+   copy of is reverted — silently, exit 0. Hand-editing `.beads/issues.jsonl` is what makes
+   the cache stale (a hand edit does not advance `updated_at`, so the two are
+   indistinguishable by timestamp), and this skill rewrites long bead bodies for a living,
+   which is exactly when opening the file is tempting. Write bead text with
+   `br update -d/--notes`, and field-diff the tracked JSONL before committing (resolve it
+   with `br where --json | jq -er .jsonl_path`; the `.beads/` layout is only the default,
+   and a hardcoded path diffs nothing on the others): a full
+   re-serialization with every id on both sides is normal, ids on only one side or a
+   `description` you did not touch is the tell. Recovery — and why `br sync --import-only`
+   cannot do it — is in
+   [orchestrating-with-rb-lite](../orchestrating-with-rb-lite/SKILL.md) step 11, with one
+   caveat: its replay step assumes a SINGLE mutation, the drain's case. A polish round
+   batches several rewrites, so enumerate the complete intended delta (the step 4 replay manifest, NOT
+   the step 6 round summary — the summary records decisions, not commands, ids or order) before restoring — and restore from the side you established holds the good bodies, not
+   unconditionally from `HEAD`: when the index holds the last good export,
+   `git checkout HEAD --` overwrites that staged copy too, discarding the very source you
+   selected. Step 11 requires the choice explicitly; make it there.
 
 6. Write a round summary:
    - beads added, rewritten, merged, closed, or reprioritized

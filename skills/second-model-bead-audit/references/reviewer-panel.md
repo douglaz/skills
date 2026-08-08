@@ -138,8 +138,58 @@ for src in "${SOURCE_FILES[@]}"; do
   printf '%s\t%s\n' "$live_fp" "$src" >>"$SOURCE_STATE_BEFORE"
 done
 
-br sync --flush-only
-BEADS_JSONL=$(br where --json | jq -er '.jsonl_path')
+# RESOLVE AND INSPECT BEFORE FLUSHING. The flush writes the cache over the tracked file,
+# so an unstaged hand-edit is destroyed HERE — and the diff below then compares the file
+# against an index that already matches it, comes back empty, and the audit snapshots the
+# truncated graph having "checked". The check has to precede the write it guards.
+BEADS_JSONL=$(br where --json | jq -er '.jsonl_path') \
+  || { echo "cannot resolve the beads JSONL path" >&2; exit 1; }
+# INSPECT before flushing — the next line writes the cache over this file, so anything in
+# the worktree that the cache does not know about is gone afterwards, with no diff left to
+# show it. Do NOT gate on a clean file: the normal `bead-polish-loop` handoff arrives with
+# the round's intended `br` edits uncommitted, so demanding cleanliness would block the
+# audit after every non-noop round.
+#
+# The question is not "is it dirty" but "is any of this dirt something the cache will
+# destroy" — i.e. hand-edited bead text, which never advances `updated_at`. Read the diff
+# and continue only once you can say which it is.
+# Against HEAD, not the index: a damaged JSONL that is STAGED makes a worktree-vs-index
+# diff empty while HEAD still holds the good bodies, so the operator would acknowledge a
+# clean-looking diff and flush the damage.
+git status --porcelain -- "$BEADS_JSONL" || { echo "cannot read the worktree — do NOT flush" >&2; exit 1; }
+git diff HEAD -- "$BEADS_JSONL"          || { echo "cannot diff the JSONL — do NOT flush" >&2; exit 1; }
+# Keep a copy of what the worktree held BEFORE the flush. Neither git ref works as the
+# post-flush baseline: if the index holds an earlier damaged export and the worktree holds
+# the good recovery, HEAD-vs-worktree looks fine beforehand, the flush replaces the good
+# copy with the indexed damage, and a worktree-vs-index diff afterwards is EMPTY because
+# both now hold it. Only the pre-flush bytes can show that.
+cp "$BEADS_JSONL" "$AUDIT_DIR/preflush.jsonl" || { echo "cannot preserve the pre-flush graph" >&2; exit 1; }
+: "${BEADS_DIFF_REVIEWED:?read the two commands above, then set this to how you resolved it}"
+br sync --flush-only || { echo "flush failed — do not audit an unwritten graph" >&2; exit 1; }
+
+# STOP HERE AND READ THIS DIFF before snapshotting. The flush just re-exported EVERY bead
+# from the gitignored cache over the tracked JSONL, so any body the cache held a stale copy
+# of was silently reverted — exit 0, no warning. Snapshot now and the panel audits the
+# truncated graph, which is the one failure an audit cannot catch by reading: the text it
+# would have objected to is already gone. Field-diff it, key the +/- lines by `id`, and
+# assert only the fields you meant to change moved. Ids on one side only, or a
+# `description` this session did not write, is the tell. Recovery:
+# ../../orchestrating-with-rb-lite/SKILL.md step 11.
+git diff -- "$BEADS_JSONL"
+```
+
+**Stop the block here.** The line above is a real gate, not a comment: run the snapshot
+block only up to this point, read the diff, and continue *in a second invocation* once you
+have. A comment does not pause a shell — pasted as one block, the diff scrolls past and the
+copy below snapshots whatever the flush produced, which is the entire failure this check
+exists to catch. If you must automate it, make the continuation conditional on an explicit
+recorded acknowledgement rather than on the diff having been printed.
+
+```bash
+# Compare against the PRE-FLUSH bytes, not against the index. This is the only baseline
+# that can show a flush replacing a good worktree copy with an indexed damaged one.
+diff -u "$AUDIT_DIR/preflush.jsonl" "$BEADS_JSONL" \
+  || : "${BEADS_POSTFLUSH_REVIEWED:?the flush changed the graph — read that diff, then set this}"
 cp "$BEADS_JSONL" "$GRAPH_JSONL"
 GRAPH_FINGERPRINT=$(fingerprint_file "$GRAPH_JSONL") || {
   echo "Could not fingerprint initial graph snapshot" >&2

@@ -142,8 +142,13 @@ supplies those to the rb-lite process. For source/path installs, check the host 
 If you skip the file, you get rb-lite's built-in three-reviewer default, unpinned Gemini
 included. That is a choice, not a default this skill endorses — make it deliberately.
 
-Backlog-drain mode additionally needs `br` for bead selection/state and `gh`
-for PR creation/checks/merge. Require **`br` ≥ 0.1.45**: older builds corrupt
+Backlog-drain mode additionally needs `br` for bead selection/state, `gh`
+for PR creation/checks/merge, and **`jq` in the HOST shell**. That last one is not
+covered by the Nix-wrapper exemption above: the wrapper supplies `jq` to rb-lite, not
+to you, and step 11's collateral-damage check and its whole recovery resolve the graph's
+real path through `br where --json | jq`. Without host `jq` a drain can run `br update`
+and flush — silently reverting unrelated bead bodies — and only then fail at the command
+that would have located the damage. Check it before the first bead, not after. Require **`br` ≥ 0.1.45**: older builds corrupt
 their DB after branch resets, so `br update`/`br close` start returning
 `ISSUE_NOT_FOUND` while `br show`/`br list` keep working — which hides the
 failure until bead state is already lost. Both drain modes reset branches after
@@ -761,13 +766,93 @@ implement → review loop for each bead.
 
     Verify it landed with a checked *explicit* sync: it propagates a real exit code, which
     the automatic flush after `br update` does not — that one swallows its error. The
-    mutation is already in the shared DB, so the sync either writes it out or fails loudly,
-    and nothing needs to inspect the file:
+    mutation is already in the shared DB, so the sync either writes it out or fails loudly:
 
     ```bash
+    # DIVERGENCE CHECK FIRST — `br update` auto-flushes, so an unstaged hand-edit in the
+    # JSONL is destroyed by this very command, and neither the index nor HEAD holds it.
+        BEADS_JSONL=$(br where --json | jq -er '.jsonl_path') \
+      || { echo "cannot resolve the beads JSONL path — do NOT write"; exit 1; }
+    # Capture separately: `[ -z "$(git status ...)" ]` discards git's exit code, so a FAILED
+    # inspection reads as a clean tree and lets the write through — the guard failing open at
+    # exactly the moment it matters. Compare against HEAD, not the index: a damaged JSONL that
+    # is staged leaves a worktree-vs-index diff empty while HEAD holds the good bodies.
+    _st=$(git status --porcelain -- "$BEADS_JSONL") \
+      || { echo "cannot read the worktree — do NOT write"; exit 1; }
+    [ -z "$_st" ] || { git diff HEAD -- "$BEADS_JSONL"
+      echo "JSONL differs from HEAD — read that diff and resolve it BEFORE writing"; exit 1; }
     br update <bead-id> -s closed || { echo "br update failed"; exit 1; }
     br sync --flush-only || { echo "not persisted"; exit 1; }
     ```
+
+    **Check for divergence BEFORE the first `br` write.** `br update` auto-flushes, so a
+    hand-edit sitting unstaged in the JSONL is destroyed by the very first mutation — and
+    since neither the index nor `HEAD` holds it, every later diff shows only your intended
+    change, which makes the loss *undetectable*, not merely unrecoverable. Resolve the real
+    path (`br where --json | jq -er .jsonl_path`; `.beads/issues.jsonl` is only the default
+    layout, and a hardcoded path diffs nothing on a `.beads.jsonl` repo — a false
+    all-clear) and run `git status --porcelain` on it before any `br` command.
+
+    **That sync proves the closure reached the file. It says nothing about what else the
+    same write overwrote.** Every `br` write flushes the whole gitignored cache over the
+    tracked JSONL, so a write to **one** bead rewrites **all** of them, and any body the
+    cache holds a stale copy of is reverted. Observed on `br 0.2.19`: closing a single bead
+    silently reverted ~40 KB of specification text across three *other* beads and deleted a
+    fourth. Exit 0, success message, nothing failed. This step is the last write of every
+    bead, which is how the drain routes you into it every time.
+
+    Hand-editing the JSONL is what makes the cache stale — a hand edit does not advance
+    `updated_at`, so cache and file hold different bodies under identical timestamps and
+    nothing can tell them apart. **Write bead text through `br update -d/--notes`, never
+    the file.** The task template's ".beads/ is orchestration state" line is a *reviewing*
+    scope rule, not an editing licence. And the advertised guard does not help: `br sync
+    --help`'s "Stale DB Guard" is an **id**-level check, so same-id-different-body — the
+    case that loses text — is unguarded by design.
+
+    So field-diff the resolved path before committing any `br` write. A full-file
+    re-serialization with every id on both sides is normal; ids on only one side, or a
+    `description` you did not touch, is the tell.
+
+    **Recovery depends on which side holds the good text, and guessing cements the loss.**
+
+    - **(a) cache stale, file still good** — rebuild the cache from the file.
+      `br sync --import-only` alone cannot do it: it compares `updated_at`, so equal
+      timestamps with different bodies report `Skipped: N (up-to-date)` forever. The stale
+      DB has to go first.
+    - **(b) the flush already ran and the diff shows damage** — the working copy *is* the
+      damaged artifact. Restore it from the good side, **rebuild the cache**, and only then
+      replay: replaying first lets the still-stale cache auto-flush over what you just
+      restored. Read `git diff --cached` and `git diff` and decide explicitly which of
+      the index or `HEAD` holds the good bodies; a staged copy only proves a choice exists,
+      and an earlier flush may have been staged before anyone noticed.
+
+    Four things the recipe must do in both cases, each learned by getting it wrong: back up
+    the cache and **check the copy succeeded**; **verify the DB and its `-wal`/`-shm`
+    siblings are actually gone** (`rm -f` is silent on a permissions failure, and a
+    surviving cache makes the import skip equal-timestamp records and report success);
+    **check the import and the replay before any flush** (the stale DB is already deleted,
+    so a failed import leaves an empty one and the flush writes *that* over what you just
+    restored); and **rebuild the cache BEFORE replaying anything** — restore, delete and
+    re-import the DB, and only then replay. Restoring the file and replaying straight away
+    lets the first `br` command auto-flush the *still-stale* cache over what you just
+    restored, destroying the recovery with the recovery. And **replay the complete intended
+    delta**, not one command: the drain's case is a single closure, but
+    `plan-to-beads-transfer` and `bead-polish-loop` batch, so restoring from git there
+    discards their legitimate work unless the whole manifest is replayed.
+
+    **A round summary is not a replay manifest.** It records what you decided, not the
+    generated ids, the exact field values, or the order they were written in — and recovery
+    discards the working JSONL before you can go back and read them off it. So batching
+    callers must write the manifest *before* the first mutation: one line per intended `br`
+    command, complete enough to re-run verbatim. A coverage matrix or a round summary
+    reconstructed afterwards is a description of the work, not a copy of it.
+
+    Git is the whole recovery, which is why the field-diff must happen **before** you stage
+    anything: an uncommitted hand-edit that a flush overwrote is simply gone. That is the
+    sharpest reason never to write bead text through the file.
+
+    This is **not** the pre-0.1.45 corruption bug in "Tool dependencies": no
+    `ISSUE_NOT_FOUND`, no branch reset, and every command reported success.
 
     Closing on the feature branch before the merge is **not** a safe shortcut, however
     transactional it looks — the beads DB is shared across branches with no git
@@ -956,6 +1041,9 @@ phrases like "X happens when Y", not only test function names.>
   otherwise interfere with the surrounding orchestration.
 - Treat `.rb-lite/`, `.ralph-burning/`, `.git/ralph-burning-live/`, and
   `.beads/` as orchestration/state directories, not product code to review.
+  That is a *reviewing* scope rule, not an editing licence — nobody, implementer
+  or operator, hand-edits `.beads/issues.jsonl`; bead text is written with
+  `br update -d/--notes` or it gets silently reverted by the next flush (step 11).
   This does NOT forbid ordinary git usage: **`git add` any new SOURCE file you
   create** so it appears in the reviewed diff (`git diff <base>` omits untracked
   files — an unstaged new module reads to reviewers as "missing, won't compile").

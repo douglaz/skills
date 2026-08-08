@@ -713,12 +713,44 @@ And verify the closure actually happened. `br close` exits 0 even when the flush
 writes the JSONL failed, because the error is caught and logged at debug level:
 
 ```bash
+# DIVERGENCE CHECK FIRST: `br close` auto-flushes, so an unstaged hand-edit in the JSONL is
+# destroyed by this very command and neither the index nor HEAD holds it — the diff below
+# would then be empty and the loss undetectable.
+BEADS_JSONL=$(br where --json | jq -er '.jsonl_path') \
+  || { echo "cannot resolve the beads JSONL path — do NOT write"; exit 1; }
+# Capture separately: `[ -z "$(git status ...)" ]` discards git's exit code, so a FAILED
+# inspection reads as a clean tree and lets the write through — the guard failing open at
+# exactly the moment it matters. Compare against HEAD, not the index: a damaged JSONL that
+# is staged leaves a worktree-vs-index diff empty while HEAD holds the good bodies.
+_st=$(git status --porcelain -- "$BEADS_JSONL") \
+  || { echo "cannot read the worktree — do NOT write"; exit 1; }
+[ -z "$_st" ] || { git diff HEAD -- "$BEADS_JSONL"
+  echo "JSONL differs from HEAD — read that diff and resolve it BEFORE writing"; exit 1; }
 br close <id> || { echo "br close failed"; exit 1; }
 br sync --flush-only || { echo "closure not persisted — auto-flush was swallowed"; exit 1; }
 ```
 
 `||`, not `;`: a semicolon discards the exit status of the command before it, so the pair
 would report success on a closure that never happened.
+
+That proves the *closure* landed; it says nothing about what else the same flush wrote.
+Every `br` write re-exports **all** beads from the gitignored `.beads/beads.db` over the
+tracked JSONL, so any body the cache holds a stale copy of is reverted — silently, exit 0,
+and once committed it reads as an ordinary bead-state sync. So field-diff the tracked JSONL
+and read the field-level changes before staging — resolving its path first, since
+`.beads/issues.jsonl` is only the default and a hardcoded path diffs nothing on a
+`.beads.jsonl` layout:
+
+```bash
+BEADS_JSONL=$(br where --json | jq -er .jsonl_path) || { echo "cannot resolve the JSONL"; exit 1; }
+git diff "$BEADS_JSONL"
+```
+
+Ids on only one side, or a `description` this phase did not write, is the tell. Never
+hand-edit that file (a hand
+edit does not advance `updated_at`, which is what makes the cache stale and undetectable);
+write bead text with `br update -d/--notes`. Recovery is in
+[orchestrating-with-rb-lite](../../orchestrating-with-rb-lite/SKILL.md) step 11.
 
 A flush
 over a graph that was already committed and unchanged legitimately reports nothing, so a

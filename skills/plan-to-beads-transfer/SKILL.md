@@ -22,10 +22,24 @@ Turn plan-space intent into bead-space executable memory without losing anything
 
 ## Preflight
 
-- Confirm `br` and `bv` are on `PATH`. If either is missing, stop and say so.
+- Confirm `br`, `bv`, **and `jq`** are on `PATH`. If any is missing, stop and say so.
+  `jq` is load-bearing, not optional: every `br` write can silently revert other beads
+  (step 10), and both the damage check and the recovery resolve the graph's real path
+  through `br where --json | jq`. Without it a transfer can write a whole graph and then
+  be unable to tell whether it destroyed one — the ordering that must not be possible.
+  If `br where --json` cannot be parsed on this host, do not write to the graph.
 - Re-read `AGENTS.md`, `README.md`, and every relevant plan/spec file before mutating the graph.
 - If the session was compacted, or the plan changed materially since the last pass, reread before editing.
 - Refuse the transfer if core workflows, boundaries, constraints, failure modes, sequencing, or verification are still unstable. Report plan gaps instead of encoding guesses into beads.
+
+
+**Before the first `br` write, check the JSONL for divergence.** Any `br` mutation
+auto-flushes the cache over the tracked file, so an unstaged hand-edit is erased by your
+first write — and since neither the index nor `HEAD` holds it, every later diff shows only
+your intended changes and the loss becomes *undetectable*. Run `git status --porcelain --
+"$(br where --json | jq -er .jsonl_path)"`; if it is not empty, resolve it first — recovery
+case (a) in [orchestrating-with-rb-lite](../orchestrating-with-rb-lite/SKILL.md) step 11. After the first flush the choice
+is gone.
 
 ## Translation readiness test
 
@@ -62,6 +76,13 @@ Stop and report plan gaps when any of these are still fuzzy:
    - use tasks for independently claimable work packets
    - use subtasks only when they sharpen sequencing instead of hiding it
    - when one plan concept fans out into multiple deliverables, choose a canonical root bead that carries the full why/constraints/test story and let dependents carry the local details they need
+**Start the replay manifest before step 4, and keep it current.** Steps 4 and 7 write
+beads and auto-flush, so by step 9 the damage may already be done; recovery discards the
+working JSONL before you could read the generated ids back off it. One line per intended
+`br` command, complete enough to re-run verbatim, appended as each id is assigned. The
+coverage matrix maps plan elements to beads — it does not preserve ids, field values, or
+order.
+
 4. Create or update actual beads only with `br`.
 5. Write each material bead so it is self-contained. Use [references/bead-description-template.md](references/bead-description-template.md), and elaborate beyond the source plan whenever that removes ambiguity.
 6. Preserve important intent, not just surface tasks:
@@ -88,6 +109,27 @@ Stop and report plan gaps when any of these are still fuzzy:
     mutation is still in the shared DB, so this sync either writes it or fails loudly. A
     re-run whose graph already matches the plan syncs cleanly and writes nothing; that is
     a no-op, not a failure.
+
+    **A flush also writes the cache over the file.** The sync proves your mutation
+    persisted; it does not tell you what else it overwrote. Every `br` write re-exports
+    *all* beads from the gitignored `.beads/beads.db`, so a body the cache holds a stale
+    copy of is reverted — silently, exit 0. Transferring a plan means writing long
+    specification bodies, and pasting one into `.beads/issues.jsonl` by hand is precisely
+    what makes the cache stale: a hand edit does not advance `updated_at`, so the two
+    become indistinguishable by timestamp. Write every body through `br update -d/--notes`,
+    and field-diff the tracked JSONL before committing (resolve it with
+    `br where --json | jq -er .jsonl_path`; `.beads/` is only the default layout, and a
+    hardcoded path diffs nothing on the others) — ids on only one side, or a
+    `description` you did not touch, is the tell. Recovery, and why `br sync --import-only`
+    cannot do it, is in
+    [orchestrating-with-rb-lite](../orchestrating-with-rb-lite/SKILL.md) step 11 — but note
+    its replay step assumes a SINGLE mutation, the drain's case. A transfer has a whole
+    graph in flight, so enumerate the complete intended delta (the replay manifest you started before step 4 —
+    NOT the coverage matrix, which maps plan elements to beads and preserves no ids, field
+    values or ordering) before restoring — and restore from the source you established holds the good bodies,
+    which is not automatically `HEAD`: if the index holds the last good export and HEAD
+    an older one, `git checkout HEAD --` overwrites the good staged copy too. Step 11
+    requires that choice explicitly; make it there rather than assuming.
 11. If the repo workflow supports it, run `br lint` after major rewrites to catch missing sections.
 
 ## Quality bar
