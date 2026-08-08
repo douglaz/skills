@@ -116,6 +116,16 @@ run "$b" --target both --uninstall </dev/null >/dev/null
 if [[ ! -d "$b/clone" ]]; then fail "$t" "EOF was read as consent to delete"
 else pass "$t"; fi
 
+# The other half of that EOF handling, and the reason it is `|| true` rather than
+# `|| answer=""`: `read` assigns what it consumed BEFORE hitting EOF, so an unterminated
+# `y` sets answer=y and still exits 1. Clearing answer in the fallback silently declines a
+# prompt the caller answered. Raised by codex on PR #37 against exactly that first fix.
+t="an unterminated y is still consent"
+b=$(new_fixture "alpha"); link_skill "$b" alpha
+printf 'y' | run "$b" --target both --uninstall >/dev/null
+if [[ -d "$b/clone" ]]; then fail "$t" "a newline-less y was discarded as EOF"
+else pass "$t"; fi
+
 # ── install ─────────────────────────────────────────────────────────────────────────
 
 t="install links a named skill into both targets"
