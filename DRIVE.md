@@ -3,7 +3,7 @@
 **Scope:** the sites named below, and nothing else. Issues #30/#31/#32/#33/#35 are
 separate PRs and are NOT in scope. New scripts are NOT in scope — this sweep exists
 because the rules already exist and simply did not travel.
-**Phase:** BUILD · **Bead:** n/a (direct-edit tier, doc-only) · **Branch:** sibling-site-sweep
+**Phase:** HARDEN · **Bead:** n/a (direct-edit tier, doc-only) · **Branch:** sibling-site-sweep
 **Pending:** —
 **Gate:** `./install.test && ./skills/pr-with-codex-bot-review/scripts/bot-gate.test && ./skills/drive/scripts/drive-status.test`
 · last green 2026-08-08 (12 / 124 / 70, exit 0)
@@ -17,9 +17,14 @@ issues rather than patched again. Rule 3 was in the shipping set until round 4 r
 against the refusal list — the trim rule applied twice, on the same evidence standard.
 
 Shipping:
-1. `drive/references/phases.md` — `_chk=$(mktemp)`, the assignment the other three copies
-   of that recipe already had. (#34 batch 3)
-2. `br where` resolution in **two checked steps at all 10 sites** across 8 files. The
+1. `_chk=$(mktemp) || exit 1` at all **four** recipe copies — `drive/references/phases.md`
+   had no assignment at all (#34 batch 3), and the other three had an *unchecked* one, which
+   round 5 showed fails open: an unusable `TMPDIR` leaves `_chk` empty and the removal
+   check's `|| true` then reports count 0 as "phrase fully removed". A fifth site exists as
+   commented-out text (`multi-reviewer-loop/SKILL.md:156`) → #44.
+2. `br where` resolution in **two checked steps at all 10 CODE-BLOCK sites** across 8
+   files — plus a checked `git status`, since a failed inspection also prints nothing.
+   Prose and comments teaching the same one-liner are NOT converted → #44. The
    one-line form was fail-open everywhere, not just at the three sites #34 named: a
    pipeline reports only its LAST command's status, so `br where` can fail while emitting
    valid JSON and `jq` then succeeds. Reproduced at rc=0. (#34 batch 7, widened)

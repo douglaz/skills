@@ -37,15 +37,29 @@ Turn plan-space intent into bead-space executable memory without losing anything
 auto-flushes the cache over the tracked file, so an unstaged hand-edit is erased by your
 first write — and since neither the index nor `HEAD` holds it, every later diff shows only
 your intended changes and the loss becomes *undetectable*. Resolve the path in its own
-checked assignment first — embedding it in the `git status` argument swallows the inner
-exit code, so a `br where` failure yields an empty pathspec, `git status --porcelain -- ""`
-succeeds printing nothing, and "cannot resolve" is indistinguishable from "clean graph"
-right before the destructive first flush:
+checked steps, and check the inspection too — embedded in a `git status` argument the
+resolution's exit code is swallowed, and two of those failures are **silent** rather than
+loud. Measured on git 2.54 / jq 1.7:
+
+- `br where` exiting non-zero *after* emitting valid JSON. The pipeline reports only its
+  last command's status, so `jq` succeeds and the assignment returns 0.
+- `br where` emitting JSON without the key: `jq -er .jsonl_path` exits 1 **and prints
+  `null`**, so the substitution yields the literal pathspec `null` and
+  `git status --porcelain -- null` exits 0 printing nothing.
+
+(A genuinely empty pathspec is *not* the hazard — `git status --porcelain -- ""` fails
+loudly with `fatal: empty string is not a valid pathspec`, exit 128, on any git ≥ 2.16.)
+
+And `git status` itself can fail — a held `index.lock`, or a JSONL resolved outside this
+worktree — printing nothing on stderr-only output, so gating on stdout emptiness alone
+reads a failed inspection as a clean tree right before the destructive first flush:
 
 ```bash
 _bw=$(br where --json) || { echo "cannot resolve the beads JSONL"; exit 1; }
 BEADS_JSONL=$(printf '%s' "$_bw" | jq -er .jsonl_path) || { echo "cannot resolve the beads JSONL"; exit 1; }
-git status --porcelain -- "$BEADS_JSONL"
+_st=$(git status --porcelain -- "$BEADS_JSONL") \
+  || { echo "cannot read the worktree — do NOT write"; exit 1; }
+printf '%s' "$_st"
 ```
 
 If it is not empty, resolve it first — recovery
