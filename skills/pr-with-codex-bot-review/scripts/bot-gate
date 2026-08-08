@@ -314,6 +314,34 @@ done < <(printf '%s' "$REVIEWS" | jq -r --arg bot "$BOT_LOGIN" '
   .[][] | select(.user.login==$bot) | select(.user.type=="Bot")
   | (if ((.submitted_at // "") | length) == 0 then "@undated@"
      else ((.commit_id // "") + "\t" + .submitted_at) end)' 2>/dev/null)
+# Clean-round comments are round ENDS too — a round that found nothing still finished.
+# Feeding only review objects into these lists left a PR whose every round is clean with
+# an EMPTY anchor list, so `_round_covered` returned 1 for every request forever: the
+# documented escape (`@codex review` once more) posts a request that its own clean round
+# can then never answer. The verdict's channel-merge above already counts these comments
+# as wrappers; the coverage lists must see them for the same reason. The sha in the marker
+# is abbreviated, so the tip-scoped match is a prefix match (the capture requires >=7 hex).
+#
+# ONLY the current tip's clean comments, though, and only into both lists together. A
+# normal (non-force) push is invisible to the start-event scan, so a PRIOR-tip clean
+# comment accepted as the pre-request anchor can certify a "quiet" gap that the push's
+# auto round is actually running in — crediting that round's later clean comment to a
+# request whose own round is still pending. Dropping prior-tip clean comments is
+# fail-closed: it removes anchors, never adds them.
+while IFS= read -r _wt; do
+  [[ -n "$_wt" ]] || continue
+  [[ "$_wt" == "@undated@" ]] && { WRAPPER_UNDATED=true; continue; }
+  _wtip="${_wt%%$'\t'*}"; _wts="${_wt#*$'\t'}"
+  [[ "$TIP" == "$_wtip"* ]] || continue
+  _we=$(iso_to_epoch "$_wts") || { WRAPPER_UNDATED=true; continue; }
+  WRAPPER_EPOCHS="${WRAPPER_EPOCHS}${WRAPPER_EPOCHS:+$'\n'}${_we}"
+  WRAPPER_TIP_EPOCHS="${WRAPPER_TIP_EPOCHS}${WRAPPER_TIP_EPOCHS:+$'\n'}${_we}"
+done < <(printf '%s' "$ALL_COMMENTS" | jq -r --arg bot "$BOT_LOGIN" '
+  .[][] | select(.user.login==$bot)
+  | select((.body // "") | test("Reviewed commit"))
+  | ((.body | capture("Reviewed commit:\\*{0,2}[[:space:]]*`?(?<sha>[0-9a-f]{7,40})")).sha) as $sha
+  | (if ((.created_at // "") | length) == 0 then "@undated@"
+     else ($sha + "\t" + .created_at) end)' 2>/dev/null)
 
 # A wrapper AFTER a request does not show the REQUESTED round ended: rounds carry no
 # identity, so that wrapper can end a round that was already in flight when the request
@@ -572,9 +600,15 @@ if [[ -n "$WRAPPER_AT" ]] && [[ -n "${ALL_COMMENTS:-}" ]]; then
   # One list for both is wrong in whichever direction it is tuned. Anchoring both (as the
   # first fix for the clearing hole did) means `@codex review please` — a real trigger —
   # stops blocking.
+  # The bot's own comments are never triggers: its clean-round wrapper quotes the literal
+  # command in its About-Codex boilerplate, so without this filter every clean round is
+  # counted as a fresh request newer than the wrapper announcing it, RERUN_REQUESTED
+  # latches true, and a clean round can never clear its own gate.
   _mk_triggers() {  # $1 = jq test expression
     printf '%s' "$ALL_COMMENTS" \
-      | jq -r --arg re "$1" '.[][] | select((.body // "") | test($re; "i"))
+      | jq -r --arg re "$1" --arg bot "$BOT_LOGIN" '.[][]
+               | select((.user.login // "") != $bot)
+               | select((.body // "") | test($re; "i"))
                | if ((.created_at // "") | length) == 0 then "@undated@" else .created_at end' 2>/dev/null
   }
   _TRIGGERS=$(_mk_triggers "@codex[[:space:]]+review") \

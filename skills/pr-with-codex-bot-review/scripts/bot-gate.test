@@ -205,6 +205,63 @@ clean_round "${TIP:0:10}" "$OLD_UTC" > "$FIX/issues.json"
 printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":"%s"}]]' "$NOW_UTC" > "$FIX/reactions.json"
 check "an eyes after a clean round still blocks" 1
 
+# The REAL clean-round comment carries an About-Codex block that quotes the literal
+# trigger: `- Comment "@codex review".` Without an author filter on _mk_triggers, every
+# clean round therefore counted as a review request newer than the wrapper announcing it,
+# and a clean round could never clear its own gate — the bug that blocked three live merges.
+clean_round_boiler() {  # $1 = sha text to put in the marker, $2 = created_at
+  printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"created_at":"%s","body":"Codex Review: Didn'"'"'t find any major issues. :+1:\\n\\n**Reviewed commit:** `%s`\\n\\nAbout Codex in GitHub\\n- Comment \\"@codex review\\".\\n"}]]' "$2" "$1"
+}
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+clean_round_boiler "${TIP:0:10}" "$NOW_UTC" > "$FIX/issues.json"
+check "a clean round's own boilerplate is not a trigger" 0
+
+# Clean rounds must also ANSWER requests: they are round ends, so they belong in the
+# coverage anchor lists. With only review-object wrappers feeding those lists, a PR whose
+# every round is clean had an empty anchor list and every request was permanently
+# unanswerable — the escape request's own clean round could never cover it.
+clean_sandwich() {  # $1 = request created_at, $2 = second clean round created_at
+  local c1 c2
+  c1=$(clean_round "${TIP:0:10}" "$OLD_UTC"); c2=$(clean_round "${TIP:0:10}" "$2")
+  printf '%s' "$c1" | jq -c --arg rt "$1" \
+    --argjson c2 "$(printf '%s' "$c2" | jq '.[0][0]')" \
+    '.[0] += [{"user":{"login":"douglaz"},"created_at":$rt,"body":"@codex review"}, $c2]'
+}
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+clean_sandwich "$MID_UTC" "$NEW_UTC" > "$FIX/issues.json"
+check "a clean round answers the request before it" 0
+
+# ...but the clean-round anchor obeys the same gap rule as a review-object anchor: a
+# start event between the anchor and the request means a round may already have been in
+# flight, and the wrapper after the request could be that round's, not the request's.
+# Timeline: clean(OLD=0) < eyes(MID=1) < request(NEW=2) < clean(NEW2=3), strict everywhere.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+clean_sandwich "$NEW_UTC" "$NEW2_UTC" > "$FIX/issues.json"
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":"%s"}]]' "$MID_UTC" > "$FIX/reactions.json"
+check "an eyes in the anchor gap still blocks" 1
+
+# ...and only THIS tip's clean comments anchor. A normal push is invisible to the
+# start-event scan, so a prior-tip clean comment as anchor certifies a "quiet" gap the
+# push's auto round may be running in — the wrapper after the request would be that
+# round's, not the request's. Prior-tip clean comments anchor nothing.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+{ c1=$(clean_round "${OLDTIP:0:10}" "$OLD_UTC"); c2=$(clean_round "${TIP:0:10}" "$NEW_UTC")
+  printf '%s' "$c1" | jq -c --arg rt "$MID_UTC" \
+    --argjson c2 "$(printf '%s' "$c2" | jq '.[0][0]')" \
+    '.[0] += [{"user":{"login":"douglaz"},"created_at":$rt,"body":"@codex review"}, $c2]'
+} > "$FIX/issues.json"
+check "a prior-tip clean comment does not anchor" 1
+
+# The filter must remove only the BOT's mentions. A human request posted after the clean
+# round is still an unanswered request and still blocks.
+human_request() {  # $1 = created_at
+  printf '{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}' "$1"
+}
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+{ b=$(clean_round_boiler "${TIP:0:10}" "$OLD_UTC"); h=$(human_request "$NOW_UTC")
+  printf '%s' "$b" | jq -c --argjson h "$h" '.[0] += [$h]'; } > "$FIX/issues.json"
+check "a human request after the clean round still blocks" 1
+
 new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 check "no wrapper for tip blocks" 1
 
