@@ -196,7 +196,7 @@ first write — and since neither the index nor `HEAD` holds it, every later dif
 your intended changes and the loss becomes *undetectable*. Resolve the path in its own
 checked steps, and check the inspection too — embedded in a `git status` argument the
 resolution's exit code is swallowed, and two of those failures are **silent** rather than
-loud. Measured on git 2.54 / jq 1.7:
+loud. Measured on git 2.54.0 / jq 1.8.2:
 
 - `br where` exiting non-zero *after* emitting valid JSON. The pipeline reports only its
   last command's status, so `jq` succeeds and the assignment returns 0.

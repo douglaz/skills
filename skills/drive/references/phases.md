@@ -40,8 +40,13 @@ Treat that as the default for anything non-trivial.
    reassuring the wording), then assert **every** path you changed, by the right check for
    each — a partial loss commits cleanly, and checking one path only proves that path
    survived. Three cases, and one does not substitute for another — all three capture to
-   the same scratch file, so open with it, or `set -u` aborts on the first expansion and
-   an unset `-u` shell silently redirects into an empty filename:
+   the same scratch file, so open with it and require it. A failed `mktemp` does not fail
+   quietly everywhere, which is the trap: the redirect itself is refused loudly (`>""` is
+   `: No such file or directory`, exit 1, measured on bash 5.3) and the `grep -Fq` checks
+   exit 2, but the **removal** check swallows it — `grep -Fo -- '<phrase>' "" | wc -l
+   || true` reports count `0` at pipeline status 0, because `wc` succeeds on grep's empty
+   output. So an unverified removal reads as "the phrase was fully removed" from a file
+   that was never created, and only that one check needs the guard to have any teeth:
 
    ```bash
    _chk=$(mktemp) || { echo "cannot create the scratch file — do NOT report the commit verified"; exit 1; }
