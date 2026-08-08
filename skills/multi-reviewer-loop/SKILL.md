@@ -301,7 +301,13 @@ a reviewer.
    _BRANCH=$(git branch --show-current 2>/dev/null | tr '/ ' '__')
    _TS=$(date -u +%Y%m%dT%H%M%SZ)
    REVIEW_DIR="/tmp/review-${_PROJECT}-${_BRANCH:-detached}-${_TS}"
-   mkdir -p "$REVIEW_DIR"
+   # `umask 077` in a subshell, at CREATION: under the common 0022 umask this directory is
+   # 0755 and every file in it 0644, readable by any other local user — and it holds full
+   # reviewer output quoting the code under review, the merged findings, the prompt, and
+   # (per § 3a) patches of the user's dirty tree. `chmod 700` afterwards works but leaves a
+   # window in which those files already exist. Do it here and it covers everything written
+   # later, rather than the two or three files someone remembers to tighten.
+   (umask 077; mkdir -p "$REVIEW_DIR")
    ```
 
    Store each pass separately, one file per reviewer:
@@ -417,7 +423,12 @@ For each pass `N` from `1` to `MAX_PASSES`:
    # the process group.
    sleep 5
    for _p in "$CODEX_PID" "$FABLE_PID"; do
-     kill -0 "$_p" 2>/dev/null && kill -KILL -- "-$_p" 2>/dev/null || true
+     # Signal the GROUP unconditionally, never `kill -0 "$_p"` first: that probes the former
+     # group LEADER, and a wrapper that exits on TERM while a TERM-ignoring child keeps its
+     # PGID leaves the leader dead and the child running — the probe fails, the group KILL is
+     # skipped, and `wait` returns with that child still writing to the worktree. KILL on an
+     # already-empty group is harmless, so there is nothing for the probe to save.
+     kill -KILL -- "-$_p" 2>/dev/null || true
    done
    CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?   # reaping is what closes the window
    FABLE_RC=0; wait "$FABLE_PID" || FABLE_RC=$?
@@ -734,6 +745,37 @@ finding precisely enough for someone else to act on, which by itself kills the v
   .`, `git stash` and `git reset --hard` each discard the user's pre-existing work along
   with the delegated edit, which § 1.6 forbids.
 
+  **Run every capture, replay and restore below through one pinned `git`, from the
+  worktree root.** These commands inherit ambient repo/user config, and a long tail of it
+  silently empties a capture or corrupts a replay — each found separately in review, all
+  the same defect: `diff.ignoreSubmodules=all` captures a staged gitlink as an empty patch;
+  `apply.whitespace=error` rejects a captured edit that adds trailing whitespace and `=fix`
+  applies it with the whitespace silently stripped; `color.ui=always` writes ANSI into both
+  patches so the replay dies on `No valid patches in input`; `diff.noprefix` and
+  `diff.mnemonicPrefix` change the paths `git apply` expects; and `:(literal)` pathspecs are
+  **cwd-relative**, so running from a subdirectory captures nothing and exits 0. Patching
+  these one at a time does not converge — the surface is every config key that touches diff,
+  apply or pathspec resolution. Pin the lot instead:
+
+  ```bash
+  _root=$(git rev-parse --show-toplevel) || { echo "not a worktree"; exit 1; }
+  git_pinned() {
+    GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+    git -C "$_root" -c core.quotepath=false "$@"
+  }
+  ```
+
+  and pass the explicit flags each command needs anyway (`--no-color`,
+  `--ignore-submodules=none`, `--binary`, `--no-textconv`, `--no-ext-diff` on the captures;
+  `--whitespace=nowarn` on both replays). Anchoring at `--show-toplevel` is what makes
+  `:(top,literal)` pathspecs mean the same thing from any cwd — use that magic, not bare
+  `:(literal)`, on **every** capture, replay *and* restore. The restore is the one that got
+  missed: `git restore --staged --worktree -- '<path>'` treats its argument as a glob, and
+  on git 2.43 a delegated `a[1].txt` also restored an unrelated `a1.txt`.
+
+  Treat any future finding in this family as already dispositioned here: the answer is the
+  pinned invocation, not another sentence about another flag.
+
   Capture **three** things before granting access, and require the capture *commands* to
   succeed — never their output to be non-empty, since on a clean tree an empty patch is
   the correct answer:
@@ -753,11 +795,17 @@ finding precisely enough for someone else to act on, which by itself kills the v
     comes back ` M` and a later commit carries hunks the user left out. Both flags matter:
     without `--binary` a modified binary records only "Binary files differ" and will not
     apply; `--no-textconv` because the conversion is not what is on disk.
-  - `git status --porcelain -z`, NUL-delimited. Porcelain quotes paths that need it, so a
+  - `git status --porcelain -z --no-renames`, NUL-delimited. Porcelain quotes paths that
+    need it, so a
     `cut`-based parse hands back a literal `"caf\303\251.py"` that does not exist. This
     is also what restores **intent-to-add** entries (` A `) afterwards: § 1.5's `git add
     -N` runs only before the first pass, so a file demoted to `??` during a rollback drops
-    out of every later `codex review --base`.
+    out of every later `codex review --base`. `--no-renames` because rename detection
+    *coalesces* an intent-to-add path with a deleted tracked file of the same content into
+    one ` R b.txt\0a.txt\0` entry rather than ` A b.txt` — the re-add step below then never
+    fires, the file stays `??`, and it silently leaves every later pass. The panel's own
+    `DELETED` computation already passes this flag (`references/reviewer-panel.md`); this
+    is the sibling site that did not get it.
   - a **byte copy of every pre-existing untracked path in scope** — no patch contains
     them. Clear each destination before copying and again before restoring: `cp -pR` into
     an existing directory nests rather than replaces, and exits 0 either way.

@@ -39,7 +39,14 @@ Treat that as the default for anything non-trivial.
    hides: require `git commit` to exit 0 (it exits **1** on an empty commit, however
    reassuring the wording), then assert **every** path you changed, by the right check for
    each — a partial loss commits cleanly, and checking one path only proves that path
-   survived. Three cases, and one does not substitute for another:
+   survived. Three cases, and one does not substitute for another — all three capture to
+   the same scratch file, so open with it, or `set -u` aborts on the first expansion and
+   an unset `-u` shell silently redirects into an empty filename:
+
+   ```bash
+   _chk=$(mktemp); trap 'rm -f "$_chk"' EXIT
+   ```
+
    - **gained content** — `git show "HEAD:$f" >"$_chk"` then
      `grep -Fq -- '<new phrase>' "$_chk"`. `-F` because `grep` defaults to basic regex, so
      a phrase containing `[`, `.` or `*` will not match itself; `--` because one starting

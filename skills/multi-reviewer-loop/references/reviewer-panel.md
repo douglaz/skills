@@ -184,7 +184,12 @@ done
 # the process group.
 sleep 5
 for _p in "$CODEX_PID" "$FABLE_PID"; do
-  kill -0 "$_p" 2>/dev/null && kill -KILL -- "-$_p" 2>/dev/null || true
+  # Signal the GROUP unconditionally, never `kill -0 "$_p"` first: that probes the former
+  # group LEADER, and a wrapper that exits on TERM while a TERM-ignoring child keeps its
+  # PGID leaves the leader dead and the child running — the probe fails, the group KILL is
+  # skipped, and `wait` returns with that child still writing to the worktree. KILL on an
+  # already-empty group is harmless, so there is nothing for the probe to save.
+  kill -KILL -- "-$_p" 2>/dev/null || true
 done
 CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?   # reaping is what closes the window
 FABLE_RC=0; wait "$FABLE_PID" || FABLE_RC=$?

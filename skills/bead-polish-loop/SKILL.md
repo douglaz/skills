@@ -44,8 +44,18 @@ merely plausible.
 **Before the first `br` write, check the JSONL for divergence.** Any `br` mutation
 auto-flushes the cache over the tracked file, so an unstaged hand-edit is erased by your
 first write — and since neither the index nor `HEAD` holds it, every later diff shows only
-your intended changes and the loss becomes *undetectable*. Run `git status --porcelain --
-"$(br where --json | jq -er .jsonl_path)"`; if it is not empty, resolve it first — recovery
+your intended changes and the loss becomes *undetectable*. Resolve the path in its own
+checked assignment first — embedding it in the `git status` argument swallows the inner
+exit code, so a `br where` failure yields an empty pathspec, `git status --porcelain -- ""`
+succeeds printing nothing, and "cannot resolve" is indistinguishable from "clean graph"
+right before the destructive first flush:
+
+```bash
+BEADS_JSONL=$(br where --json | jq -er .jsonl_path) || { echo "cannot resolve the beads JSONL"; exit 1; }
+git status --porcelain -- "$BEADS_JSONL"
+```
+
+If it is not empty, resolve it first — recovery
 case (a) in [orchestrating-with-rb-lite](../orchestrating-with-rb-lite/SKILL.md) step 11. After the first flush the choice
 is gone.
 

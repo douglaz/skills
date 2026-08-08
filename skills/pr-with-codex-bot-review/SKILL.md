@@ -684,6 +684,18 @@ Don't merge when:
 **The wrapper is what matters; clock-time waits are a code smell that suggests you're
 ignoring the actual signal.**
 
+**Budget one extra round after every push.** The unanswered-request condition needs an
+anchor *before* the request, and only a wrapper naming the **current** tip may anchor one
+(the bullet above says why: a normal push starts an automatic round that leaves no
+timeline event, so a prior-tip anchor can certify a gap that round is running in). A push
+therefore invalidates every existing anchor, and the first `@codex review` after it is
+never provably answered — `bot-gate` returns `BLOCKED` even when the round answering it
+comes back clean and names the tip exactly. That is the fix-then-re-review cycle, i.e.
+most PRs, not an edge case. Ask once more, anchored by the wrapper the first round just
+produced, and it clears. Take that escape rather than the "accept the round explicitly"
+override: a visibly-clean PR reading `BLOCKED` is precisely when a gate gets bypassed
+instead of believed, and the second round costs about three minutes.
+
 ### 8. Squash-merge and clean up
 
 ```bash

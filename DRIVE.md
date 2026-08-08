@@ -1,35 +1,48 @@
-# DRIVE — fix install.sh's uninstall path and give it a test suite
+# DRIVE — sweep the rules that reached one sibling site and not the other
 
-**Scope:** `install.sh` + `install.test` only. The backlog plan (issues #29–#35) is
-NOT in scope for this drive — it is queued behind it as separate PRs.
-**Phase:** HARDEN · **Bead:** n/a (direct-edit tier) · **Branch:** installer-uninstall-abort
+**Scope:** the sites named below, and nothing else. Issues #30/#31/#32/#33/#35 are
+separate PRs and are NOT in scope. New scripts are NOT in scope — this sweep exists
+because the rules already exist and simply did not travel.
+**Phase:** BUILD · **Bead:** n/a (direct-edit tier, doc-only) · **Branch:** sibling-site-sweep
 **Pending:** —
 **Gate:** `./install.test && ./skills/pr-with-codex-bot-review/scripts/bot-gate.test && ./skills/drive/scripts/drive-status.test`
 · last green 2026-08-08 (12 / 124 / 70, exit 0)
 
 ## Done
-- BUILD: two `set -e` aborts on `--uninstall` fixed — a partial uninstall that fired only
-  when the removal succeeded, and a `read` EOF that made every non-interactive run report
-  failure. Both reproduced against the real installer before any edit.
-- BUILD: `install.test` added, the repo's third suite. Each defect gets its own fixture,
-  because either alone yields exit 1 and a combined test cannot say which fired.
-- Bot round 1 on `61792be` found a real defect **in the fix**: `|| answer=""` discards an
-  unterminated `y`. Fixed in `c3e3074` with its own fixture; thread resolved with evidence.
-- Bot round 2 on `c3e3074`: clean (`NO_PENDING_EVIDENCE`).
+- #37 merged (291a6ce): install.sh's two uninstall aborts, plus `install.test`.
 
 ## Now
-HARDEN: local codex + fable panel on `origin/master..HEAD`. Bot approval is not clearance
-— LAND is admitted by the local `cleared` marker, which this checkout does not have.
+Seven mechanical edits. Budget: ~7 files, ~120 changed lines. Every one is a rule this
+repo already established at one site and failed to carry to its sibling — the defect
+class #34 counts as its most frequent, and the reason this is a sweep rather than
+seven judgement calls.
+
+1. `drive/references/phases.md:43` — `$_chk` is used three times, never assigned. The
+   other three copies of this recipe all open with `_chk=$(mktemp)`. (#34 batch 3)
+2. Three **byte-identical** fail-open `br where` paragraphs → checked assignment:
+   `bead-polish-loop/SKILL.md:47`, `plan-to-beads-transfer/SKILL.md:39`,
+   `orchestrating-with-rb-lite/references/harden-until-clean.md:192`. The correct form
+   already exists four other places, including line 240 of that same file. (#34 batch 7)
+3. `multi-reviewer-loop/SKILL.md:756` — `--no-renames` on the § 3a status capture.
+   `reviewer-panel.md:512-549` already uses it. (#34 batch 1)
+4. Group-kill probe at **both** sites — `SKILL.md:420`, `reviewer-panel.md:187`.
+   (#34 batch 6)
+5. `umask 077` at both review-dir creations — `SKILL.md:303`,
+   `harden-until-clean.md:71`. (#29)
+6. § 3a capture/replay/restore: pin ambient git config wholesale rather than per flag.
+   (#34 batch 10 class closure)
+7. `bot-gate` header + `pr-with-codex-bot-review` § 7: the first request after a push is
+   never provably answered. (#39)
+
+Do NOT build: new scripts, new test fixtures, per-flag prose for config knobs the class
+closure already covers, or any rewording of a site that is already correct.
 
 ## Next
-LAND #37 (squash, delete branch) → then backlog PR 1, the sibling-site sweep: the
-uninitialized `$_chk` in `drive/references/phases.md:43`, the three byte-identical
-fail-open `br where` paragraphs, `--no-renames` on the § 3a status capture, the group-kill
-probe, `umask 077` (#29), and the batch-10 ambient-git-config class.
+Backlog PRs 2-4: drive Guard 2 (#30/#31), read-what-you-delegate (#33/#35),
+`verify-commit` (#32).
 
 ## Open questions for the human
-- `AGENTS.md` is absent. Phase 0 wants it installed once per repo, but adding it here
-  would make a PR about the installer also about repo-wide agent policy — and issue #33 is
-  open precisely about `agents-md` installing a block that contradicts the repo's own
-  agreement. Deferred to backlog PR 1, which is a real branch that will exist, not a
-  branch that never will. Stated rather than silently skipped.
+- `AGENTS.md` is still absent. It has a real addressee now — this branch — but installing
+  it would double this PR's review surface and issue #33 is open precisely about
+  `agents-md` writing a block that contradicts the repo's own agreement. Deferred to the
+  #33 PR, which is where that conflict gets resolved rather than inherited.

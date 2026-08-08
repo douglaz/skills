@@ -55,6 +55,16 @@
 # excluded the author's reply from the count but not the bot's original finding — which
 # is why the count is now reported and not gated.
 #
+# EXPECT ONE EXTRA ROUND AFTER EVERY PUSH. A request is provably answered only when a
+# wrapper lands BEFORE it with no round-start in the gap, and clean-round anchors are
+# scoped to the CURRENT tip (a normal push is invisible to the start-event scan, so a
+# prior-tip anchor can certify a gap the push's own auto-round is running in). So the
+# first `@codex review` after a push has no valid anchor and BLOCKS, however clean the
+# round answering it looks — take the documented escape and ask once more, now anchored
+# by the wrapper on the new tip. This is the normal shape of a fix-and-re-review cycle,
+# not a rare edge: budget the round. It is written here because a BLOCKED verdict on a
+# PR that is visibly clean is exactly when someone overrides the gate instead of it.
+#
 # TWO CLAUSES WERE REMOVED deliberately — a settle window, and an intersection of
 # CodeRabbit's skip list against the changed files. Both defended hazards that measurement
 # showed could not occur, and both are post-mortemed in full in ADR 0004. Do not restore

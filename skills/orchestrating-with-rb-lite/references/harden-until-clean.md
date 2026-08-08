@@ -69,7 +69,10 @@ if [ -n "$DEFAULT_BRANCH" ] && [ "$WORK_BRANCH" = "$DEFAULT_BRANCH" ]; then
 fi
 
 REVIEW_DIR="/tmp/harden-$(basename "$(git rev-parse --show-toplevel)")-$(echo "$WORK_BRANCH" | tr '/ ' '__')-$(date -u +%Y%m%dT%H%M%SZ)"
-mkdir -p "$REVIEW_DIR"
+# umask at creation, so it covers every later write — same reason as multi-reviewer-loop
+# § 1.3: this directory holds full reviewer output quoting the code under review, and 0022
+# leaves it world-readable on a shared host.
+(umask 077; mkdir -p "$REVIEW_DIR")
 PROMPT_FILE="$REVIEW_DIR/fable-prompt.txt"
 ```
 
@@ -189,8 +192,18 @@ it still chooses how far to read, so run the grep yourself. Classes that repeat:
 **Before the first `br` write, check the JSONL for divergence.** Any `br` mutation
 auto-flushes the cache over the tracked file, so an unstaged hand-edit is erased by your
 first write — and since neither the index nor `HEAD` holds it, every later diff shows only
-your intended changes and the loss becomes *undetectable*. Run `git status --porcelain --
-"$(br where --json | jq -er .jsonl_path)"`; if it is not empty, resolve it first — recovery
+your intended changes and the loss becomes *undetectable*. Resolve the path in its own
+checked assignment first — embedding it in the `git status` argument swallows the inner
+exit code, so a `br where` failure yields an empty pathspec, `git status --porcelain -- ""`
+succeeds printing nothing, and "cannot resolve" is indistinguishable from "clean graph"
+right before the destructive first flush:
+
+```bash
+BEADS_JSONL=$(br where --json | jq -er .jsonl_path) || { echo "cannot resolve the beads JSONL"; exit 1; }
+git status --porcelain -- "$BEADS_JSONL"
+```
+
+If it is not empty, resolve it first — recovery
 case (a) in [orchestrating-with-rb-lite](../SKILL.md) step 11. After the first flush the choice
 is gone.
 
