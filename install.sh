@@ -148,7 +148,14 @@ remove_symlinks_from_dir() {
     fi
   done
 
-  [[ $removed -eq 0 ]] && echo "No symlinks found in $dir pointing to $install_dir"
+  # An `if`, not `[[ ... ]] && echo`: that form returns 1 whenever it DID remove
+  # something, the function propagates that to its caller, and `set -e` then aborts the
+  # target loop mid-way — so `--target both` cleaned Claude, left Codex linked, skipped
+  # the clone prompt, and printed no error. The failure fired only when the removal
+  # succeeded, which is why it read as a clean uninstall.
+  if [[ $removed -eq 0 ]]; then
+    echo "No symlinks found in $dir pointing to $install_dir"
+  fi
 }
 
 # Drop installer-managed symlinks whose source is gone (skill renamed or removed
@@ -178,7 +185,13 @@ if $uninstall; then
   done
 
   if [[ -d "$install_dir" ]]; then
-    read -rp "Also remove cloned repo at $install_dir? [y/N] " answer
+    # `|| true`, because EOF makes `read` exit 1 and under `set -e` that aborts before
+    # the `exit 0` below — a non-interactive uninstall reported failure for work that had
+    # fully succeeded. Not `|| answer=""`: on EOF `read` still assigns whatever it read
+    # first, so `printf y | ...` (no trailing newline) sets answer=y AND exits 1, and
+    # clearing it there discards a real affirmative. An input-less EOF leaves it empty on
+    # its own, which is the declined [y/N] default.
+    read -rp "Also remove cloned repo at $install_dir? [y/N] " answer || true
     if [[ "$answer" =~ ^[Yy]$ ]]; then
       rm -rf "$install_dir"
       echo "Removed: $install_dir"

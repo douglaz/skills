@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+# install.test — fixture tests for the installer's uninstall and link paths.
+#
+# Written because `--uninstall` carried two independent `set -e` aborts that both
+# reported success:
+#
+#   1. `remove_symlinks_from_dir` ended on `[[ $removed -eq 0 ]] && echo ...`, so it
+#      returned 1 whenever it HAD removed something. `set -e` then killed the target
+#      loop: `--target both` unlinked Claude, left Codex linked, never reached the clone
+#      prompt, and printed no error. It fired only when the removal worked.
+#   2. `read -rp` at the clone prompt exits 1 on EOF, so every non-interactive uninstall
+#      exited 1 after fully succeeding.
+#
+# Both are this repo's recurring shape — a failure that looks like the happy path — and
+# the second masked the first's exit code, so the two get SEPARATE fixtures: each is red
+# against its own fix and green against the other's.
+#
+# Usage: ./install.test        (exits 0 if all pass)
+
+set -uo pipefail
+HERE=$(cd "$(dirname "$0")" && pwd)
+INSTALL="$HERE/install.sh"
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+PASS=0; FAIL=0
+
+pass() { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
+fail() { FAIL=$((FAIL+1)); printf '  FAIL %s\n         %s\n' "$1" "$2"; }
+
+# A self-contained clone plus two target roots, so no test can see another's state or
+# the real $HOME.
+# mktemp, not a counter: this runs inside `$( )`, so an `N=$((N+1))` here increments a
+# SUBSHELL's copy and every fixture comes back as the same path — the tests then inherit
+# each other's symlinks and pass on state they did not create.
+new_fixture() {  # $1 = space-separated skill names to create in the clone
+  local base s
+  base=$(mktemp -d "$WORK/fixture.XXXXXX")
+  mkdir -p "$base"/{clone/.git,home/.claude/skills,codexhome/skills,bin}
+  for s in $1; do
+    mkdir -p "$base/clone/skills/$s"
+    printf 'stub\n' > "$base/clone/skills/$s/SKILL.md"
+  done
+  # install.sh runs `git -C ... pull` (the clone dir has .git above) before linking.
+  # Stubbed so no test touches the network; git is used for nothing else in the script.
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$base/bin/git"
+  chmod +x "$base/bin/git"
+  printf '%s' "$base"
+}
+
+link_skill() {  # $1 = base, $2 = skill — pre-link into both targets
+  ln -s "$1/clone/skills/$2" "$1/home/.claude/skills/$2"
+  ln -s "$1/clone/skills/$2" "$1/codexhome/skills/$2"
+}
+
+# -L as well as -e: a dangling symlink is invisible to -e, and "removed" must mean the
+# link is gone, not merely broken.
+gone() { [[ ! -e "$1" && ! -L "$1" ]]; }
+
+run() {  # $1 = base, rest = installer args
+  local base=$1; shift
+  HOME="$base/home" CODEX_HOME="$base/codexhome" PATH="$base/bin:$PATH" \
+    bash "$INSTALL" --dir "$base/clone" "$@" 2>&1
+}
+
+# ── uninstall ───────────────────────────────────────────────────────────────────────
+
+# Asserts filesystem state ONLY, never the exit code — that is what isolates it from the
+# read-EOF defect, which leaves this outcome correct while still exiting 1.
+t="uninstall --target both reaches the SECOND target"
+b=$(new_fixture "alpha"); link_skill "$b" alpha
+run "$b" --target both --uninstall </dev/null >/dev/null
+if ! gone "$b/home/.claude/skills/alpha"; then fail "$t" "claude symlink survived"
+elif ! gone "$b/codexhome/skills/alpha"; then fail "$t" "codex symlink survived — the loop aborted after target 1"
+else pass "$t"; fi
+
+# Nothing to remove, so the partial-uninstall defect cannot fire and a non-zero exit can
+# only come from the prompt's EOF.
+t="a non-interactive uninstall exits 0"
+b=$(new_fixture "alpha")
+run "$b" --target both --uninstall </dev/null >/dev/null; rc=$?
+if [[ $rc -ne 0 ]]; then fail "$t" "exit $rc on a run with nothing to remove"
+else pass "$t"; fi
+
+t="the real case — links present, no tty — exits 0 with both targets clean"
+b=$(new_fixture "alpha"); link_skill "$b" alpha
+run "$b" --target both --uninstall </dev/null >/dev/null; rc=$?
+if [[ $rc -ne 0 ]]; then fail "$t" "exit $rc"
+elif ! gone "$b/codexhome/skills/alpha"; then fail "$t" "codex symlink survived"
+else pass "$t"; fi
+
+t="uninstall leaves symlinks that point outside the install dir"
+b=$(new_fixture "alpha"); mkdir -p "$b/foreign/beta"
+ln -s "$b/foreign/beta" "$b/home/.claude/skills/beta"
+run "$b" --target claude --uninstall </dev/null >/dev/null
+if gone "$b/home/.claude/skills/beta"; then fail "$t" "removed a symlink it does not own"
+else pass "$t"; fi
+
+t="answering y removes the clone"
+b=$(new_fixture "alpha"); link_skill "$b" alpha
+printf 'y\n' | run "$b" --target both --uninstall >/dev/null
+if [[ -d "$b/clone" ]]; then fail "$t" "clone survived an explicit y"
+else pass "$t"; fi
+
+t="answering n keeps the clone"
+b=$(new_fixture "alpha"); link_skill "$b" alpha
+printf 'n\n' | run "$b" --target both --uninstall >/dev/null
+if [[ ! -d "$b/clone" ]]; then fail "$t" "clone removed against an explicit n"
+else pass "$t"; fi
+
+# Pins the semantics the fix chose: EOF is a DECLINED prompt, matching the [y/N] default.
+# Without this a future `|| answer=y` would satisfy every other case here and delete the
+# clone out from under a scripted uninstall.
+t="EOF at the prompt keeps the clone"
+b=$(new_fixture "alpha"); link_skill "$b" alpha
+run "$b" --target both --uninstall </dev/null >/dev/null
+if [[ ! -d "$b/clone" ]]; then fail "$t" "EOF was read as consent to delete"
+else pass "$t"; fi
+
+# The other half of that EOF handling, and the reason it is `|| true` rather than
+# `|| answer=""`: `read` assigns what it consumed BEFORE hitting EOF, so an unterminated
+# `y` sets answer=y and still exits 1. Clearing answer in the fallback silently declines a
+# prompt the caller answered. Raised by codex on PR #37 against exactly that first fix.
+t="an unterminated y is still consent"
+b=$(new_fixture "alpha"); link_skill "$b" alpha
+printf 'y' | run "$b" --target both --uninstall >/dev/null
+if [[ -d "$b/clone" ]]; then fail "$t" "a newline-less y was discarded as EOF"
+else pass "$t"; fi
+
+# ── install ─────────────────────────────────────────────────────────────────────────
+
+t="install links a named skill into both targets"
+b=$(new_fixture "alpha beta")
+run "$b" --target both alpha >/dev/null; rc=$?
+if [[ $rc -ne 0 ]]; then fail "$t" "exit $rc"
+elif [[ ! -L "$b/home/.claude/skills/alpha" ]]; then fail "$t" "claude link missing"
+elif [[ ! -L "$b/codexhome/skills/alpha" ]]; then fail "$t" "codex link missing"
+elif [[ -L "$b/home/.claude/skills/beta" ]]; then fail "$t" "linked an unrequested skill"
+else pass "$t"; fi
+
+t="re-running an install is idempotent"
+b=$(new_fixture "alpha")
+run "$b" --target both alpha >/dev/null
+out=$(run "$b" --target both alpha); rc=$?
+if [[ $rc -ne 0 ]]; then fail "$t" "exit $rc on the second run"
+elif [[ "$out" != *"already linked"* ]]; then fail "$t" "did not report an existing link"
+else pass "$t"; fi
+
+t="a real directory at the target is skipped, not clobbered"
+b=$(new_fixture "alpha")
+mkdir -p "$b/home/.claude/skills/alpha"; printf 'mine\n' > "$b/home/.claude/skills/alpha/NOTES.md"
+run "$b" --target claude alpha >/dev/null; rc=$?
+if [[ ! -f "$b/home/.claude/skills/alpha/NOTES.md" ]]; then fail "$t" "destroyed a user directory"
+elif [[ $rc -eq 0 ]]; then fail "$t" "reported success while skipping"
+else pass "$t"; fi
+
+t="a missing skill name is a warning and a non-zero exit"
+b=$(new_fixture "alpha")
+out=$(run "$b" --target claude nosuch); rc=$?
+if [[ $rc -eq 0 ]]; then fail "$t" "exit 0 for a skill that does not exist"
+elif [[ "$out" != *"not found"* ]]; then fail "$t" "no warning naming the missing skill"
+else pass "$t"; fi
+
+printf '\npassed %d, failed %d\n' "$PASS" "$FAIL"
+[[ $FAIL -eq 0 ]]
