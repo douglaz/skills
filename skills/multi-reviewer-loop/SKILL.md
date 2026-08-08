@@ -764,16 +764,11 @@ finding precisely enough for someone else to act on, which by itself kills the v
     comes back ` M` and a later commit carries hunks the user left out. Both flags matter:
     without `--binary` a modified binary records only "Binary files differ" and will not
     apply; `--no-textconv` because the conversion is not what is on disk.
-  - `git status --porcelain -z --no-renames`, NUL-delimited. Porcelain quotes paths that need it, so a
+  - `git status --porcelain -z`, NUL-delimited. Porcelain quotes paths that need it, so a
     `cut`-based parse hands back a literal `"caf\303\251.py"` that does not exist. This
     is also what restores **intent-to-add** entries (` A `) afterwards: § 1.5's `git add
     -N` runs only before the first pass, so a file demoted to `??` during a rollback drops
-    out of every later `codex review --base`. `--no-renames` because rename detection
-    *coalesces* an intent-to-add path with a deleted tracked file of the same content into
-    one ` R b.txt\0a.txt\0` entry rather than ` A b.txt` — the re-add step below then
-    never fires, the file stays `??`, and it silently leaves every later pass. The panel's
-    own `DELETED` computation already passes this flag
-    (`references/reviewer-panel.md`); this is the sibling site that did not get it.
+    out of every later `codex review --base`.
   - a **byte copy of every pre-existing untracked path in scope** — no patch contains
     them. Clear each destination before copying and again before restoring: `cp -pR` into
     an existing directory nests rather than replaces, and exits 0 either way.

@@ -12,8 +12,9 @@ because the rules already exist and simply did not travel.
 - #37 merged (291a6ce): install.sh's two uninstall aborts, plus `install.test`.
 
 ## Now
-TRIMMED at the three-round stop-list. Five rules converged and ship here; two did not and
-were withdrawn to their own issues rather than patched a fourth time.
+TRIMMED at the three-round stop-list. Four rules converged and ship here; three did not and were withdrawn to their own
+issues rather than patched again. Rule 3 was in the shipping set until round 4 read it
+against the refusal list — the trim rule applied twice, on the same evidence standard.
 
 Shipping:
 1. `drive/references/phases.md` — `_chk=$(mktemp)`, the assignment the other three copies
@@ -22,7 +23,10 @@ Shipping:
    one-line form was fail-open everywhere, not just at the three sites #34 named: a
    pipeline reports only its LAST command's status, so `br where` can fail while emitting
    valid JSON and `jq` then succeeds. Reproduced at rc=0. (#34 batch 7, widened)
-3. `--no-renames` on the § 3a status capture. (#34 batch 1)
+3. ~~`--no-renames` on the § 3a status capture~~ — **withdrawn on round 4 → #43.** It
+   fixes batch 1's silent drop and simultaneously blinds the staged-rename refusal three
+   paragraphs above it, since detecting a staged rename requires the detection the flag
+   turns off. Needs two reads, not one flag.
 4. Kill the process group unconditionally at both escape-hatch sites. (#34 batch 6)
 5. `mktemp -d` for both review directories — exclusive at 0700. NOT the `(umask 077;
    mkdir -p)` form #29 suggested, which leaves a pre-created directory's mode alone;
