@@ -12,38 +12,30 @@ because the rules already exist and simply did not travel.
 - #37 merged (291a6ce): install.sh's two uninstall aborts, plus `install.test`.
 
 ## Now
-Seven rules. Budget: ~10 files, ~200 changed lines (raised once, when the round showed
-the br-where fix had to reach 10 sites rather than 3 — recorded, not silently absorbed). Every one is a rule this
-repo already established at one site and failed to carry to its sibling — the defect
-class #34 counts as its most frequent, and the reason this is a sweep rather than
-seven judgement calls.
+TRIMMED at the three-round stop-list. Five rules converged and ship here; two did not and
+were withdrawn to their own issues rather than patched a fourth time.
 
-1. `drive/references/phases.md:43` — `$_chk` is used three times, never assigned. The
-   other three copies of this recipe all open with `_chk=$(mktemp)`. (#34 batch 3)
-2. Three **byte-identical** fail-open `br where` paragraphs → checked assignment
-   (#34 batch 7). **Scope grew here, deliberately:** the round showed the checked form
-   at the other six files was itself fail-open, because a pipeline reports only its LAST
-   command's status — `br where` can fail while emitting valid JSON and `jq` then
-   succeeds. Reproduced: `(printf '{"jsonl_path":"x"}'; exit 7) | jq -er .jsonl_path`
-   gives rc=0. All **10** sites across 8 files now resolve in two checked steps, because
-   fixing 3 with a stronger form than the other 7 is the drift this PR exists to remove.
-3. `multi-reviewer-loop/SKILL.md:756` — `--no-renames` on the § 3a status capture.
-   `reviewer-panel.md:512-549` already uses it. (#34 batch 1)
-4. Group-kill probe at **both** sites — `SKILL.md:420`, `reviewer-panel.md:187`.
-   (#34 batch 6)
-5. `mktemp -d` at both review-dir creations — exclusive, 0700. NOT the `(umask 077;
-   mkdir -p)` form #29 suggested: `-p` keeps a pre-created directory's mode, and a
-   subshell umask expires before the files are written. `second-model-bead-audit`
-   already had this right; the sweep initially copied the wrong sibling. (#29)
-6. § 3a capture/replay/restore: one pinned `git` over an enumerated key set, in a
-   single place, rather than a prose sentence per flag. (#34 batch 10 class closure)
-7. `bot-gate` header + `pr-with-codex-bot-review` § 7: asking for a review BEFORE the
-   tip has a wrapper costs a round. Not "every push costs a round" — when the auto
-   round lands its own wrapper first that anchors the next request, which
-   `bot-gate.test` pins at exit 0. (#39)
+Shipping:
+1. `drive/references/phases.md` — `_chk=$(mktemp)`, the assignment the other three copies
+   of that recipe already had. (#34 batch 3)
+2. `br where` resolution in **two checked steps at all 10 sites** across 8 files. The
+   one-line form was fail-open everywhere, not just at the three sites #34 named: a
+   pipeline reports only its LAST command's status, so `br where` can fail while emitting
+   valid JSON and `jq` then succeeds. Reproduced at rc=0. (#34 batch 7, widened)
+3. `--no-renames` on the § 3a status capture. (#34 batch 1)
+4. Kill the process group unconditionally at both escape-hatch sites. (#34 batch 6)
+5. `mktemp -d` for both review directories — exclusive at 0700. NOT the `(umask 077;
+   mkdir -p)` form #29 suggested, which leaves a pre-created directory's mode alone;
+   `second-model-bead-audit` had this right all along. (closes #29)
 
-Do NOT build: new scripts, new test fixtures, per-flag prose for config knobs the class
-closure already covers, or any rewording of a site that is already correct.
+Withdrawn:
+- § 3a ambient-config pinning → **#41**. Rounds 1 and 3 each found a key the "closing"
+  set had missed (`diff.noprefix` via local config, then `diff.submodule`). An enumerated
+  `-c` list is still per-flag, which is what batch 10's class closure predicted would not
+  converge. Needs the tested helper (#34 batch 8), not more flags.
+- The #39 post-push round paragraph → **#42**. It was wrong twice because it documents an
+  inconsistency, not a rule: clean-comment anchors are tip-scoped, review-object anchors
+  are not. That is a code decision on the merge gate, with fixtures.
 
 ## Next
 Backlog PRs 2-4: drive Guard 2 (#30/#31), read-what-you-delegate (#33/#35),

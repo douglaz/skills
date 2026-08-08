@@ -55,22 +55,6 @@
 # excluded the author's reply from the count but not the bot's original finding — which
 # is why the count is now reported and not gated.
 #
-# ASKING BEFORE THE TIP HAS A WRAPPER COSTS AN EXTRA ROUND. A request is provably
-# answered only when a wrapper lands BEFORE it with no round-start in the gap, and
-# clean-round anchors are scoped to the CURRENT tip (a normal push is invisible to the
-# start-event scan, so a prior-tip anchor can certify a gap the push's own auto-round is
-# running in). A push therefore invalidates every existing anchor — so an `@codex review`
-# posted while no wrapper yet names the new tip can never be covered, however clean the
-# round answering it looks. Ask again once a wrapper exists and it clears.
-#
-# NOT "every push costs a round": when the push-triggered automatic round lands its own
-# current-tip wrapper first, that wrapper is a valid anchor and the next request clears
-# normally — `bot-gate.test`'s "a clean round answers the request before it" pins exactly
-# that sequence at exit 0. The trap is asking too early, which is easy on a docs-heavy
-# PR where the bot often never auto-fires at all. Wait for the auto round; only ask when
-# it does not come. Written here because a BLOCKED verdict on a visibly clean PR is
-# exactly when someone overrides the gate instead of believing it.
-#
 # TWO CLAUSES WERE REMOVED deliberately — a settle window, and an intersection of
 # CodeRabbit's skip list against the changed files. Both defended hazards that measurement
 # showed could not occur, and both are post-mortemed in full in ADR 0004. Do not restore

@@ -301,14 +301,11 @@ a reviewer.
    _BRANCH=$(git branch --show-current 2>/dev/null | tr '/ ' '__')
    _TS=$(date -u +%Y%m%dT%H%M%SZ)
    # `mktemp -d`, not `mkdir -p`: this directory holds full reviewer output quoting the
-   # code under review, the merged findings, the prompt, and (per § 3a) patches of the
-   # user's dirty tree, and under the common 0022 umask a plain `mkdir -p` leaves it 0755.
-   # `mktemp -d` creates EXCLUSIVELY at 0700 — which `(umask 077; mkdir -p ...)` does not:
-   # `-p` is "no error if existing" and leaves an existing directory's mode alone, so on a
-   # shared host anyone can pre-create this otherwise predictable path (or a symlink to a
-   # world-readable one) and the guarantee silently evaporates. The 0700 directory is also
-   # what protects the files, since a subshell's umask expires with the subshell and every
-   # later write uses the caller's. `second-model-bead-audit` already does it this way.
+   # code under review, the findings with excerpts, and the prompt, and under the common
+   # 0022 umask a plain `mkdir -p` leaves it 0755. `mktemp -d` creates EXCLUSIVELY at 0700
+   # — which `(umask 077; mkdir -p ...)` does not, since `-p` is "no error if existing"
+   # and keeps an existing directory's mode, so on a shared host anyone can pre-create
+   # this otherwise predictable path. `second-model-bead-audit` already does it this way.
    REVIEW_DIR=$(mktemp -d "/tmp/review-${_PROJECT}-${_BRANCH:-detached}-${_TS}.XXXXXX") \
      || { echo "cannot create a private review directory"; exit 1; }
    ```
@@ -426,11 +423,11 @@ For each pass `N` from `1` to `MAX_PASSES`:
    # the process group.
    sleep 5
    for _p in "$CODEX_PID" "$FABLE_PID"; do
-     # Signal the GROUP unconditionally, never `kill -0 "$_p"` first: that probes the former
-     # group LEADER, and a wrapper that exits on TERM while a TERM-ignoring child keeps its
-     # PGID leaves the leader dead and the child running — the probe fails, the group KILL is
-     # skipped, and `wait` returns with that child still writing to the worktree. KILL on an
-     # already-empty group is harmless, so there is nothing for the probe to save.
+     # Signal the GROUP unconditionally, never `kill -0 "$_p"` first: that probes the
+     # former group LEADER, and a wrapper that exits on TERM while a TERM-ignoring child
+     # retains its PGID leaves the leader dead and the child running — the probe fails,
+     # the group KILL is skipped, and `wait` returns with that child still writing to the
+     # worktree. KILL on an already-empty group is harmless, so the probe saves nothing.
      kill -KILL -- "-$_p" 2>/dev/null || true
    done
    CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?   # reaping is what closes the window
@@ -748,71 +745,16 @@ finding precisely enough for someone else to act on, which by itself kills the v
   .`, `git stash` and `git reset --hard` each discard the user's pre-existing work along
   with the delegated edit, which § 1.6 forbids.
 
-  **Run every capture, replay and restore below through one pinned `git`, from the
-  worktree root.** These commands inherit ambient repo/user config, and a long tail of it
-  silently empties a capture or corrupts a replay — each found separately in review, all
-  the same defect: `diff.ignoreSubmodules=all` captures a staged gitlink as an empty patch;
-  `apply.whitespace=error` rejects a captured edit that adds trailing whitespace and `=fix`
-  applies it with the whitespace silently stripped; `color.ui=always` writes ANSI into both
-  patches so the replay dies on `No valid patches in input`; `diff.noprefix` and
-  `diff.mnemonicPrefix` change the paths `git apply` expects; and `:(literal)` pathspecs are
-  **cwd-relative**, so running from a subdirectory captures nothing and exits 0. Chasing
-  these one prose sentence at a time does not converge — the surface is every config key
-  touching diff, apply or pathspec resolution. Put the pin in **one** place instead, so a
-  newly discovered key is a line there rather than a paragraph somewhere:
-
-  ```bash
-  _root=$(git rev-parse --show-toplevel) || { echo "not a worktree"; exit 1; }
-  git_pinned() {
-    # The env vars neutralise GLOBAL and SYSTEM config. They do NOT touch the repository's
-    # own .git/config — there is no GIT_CONFIG_LOCAL — so `-c`, which overrides every
-    # level including local and worktree, is what actually does the work here. Measured on
-    # git 2.43: with a local `diff.noprefix=true` and only the env vars set, the capture
-    # emits `diff --git f f` and the replay exits 128 with no prefix to strip, after the
-    # revert has already run. That means this is a pin over an ENUMERATED key set, not a
-    # wholesale one; a new key needs a new line.
-    GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
-    git -C "$_root" \
-        -c core.quotepath=false \
-        -c diff.noprefix=false -c diff.mnemonicPrefix=false \
-        -c diff.ignoreSubmodules=none -c diff.external= \
-        -c apply.whitespace=nowarn \
-        -c color.ui=never -c color.diff=never \
-        "$@"
-  }
-  ```
-
-  `core.filemode` is deliberately **not** pinned: forcing it true on a filesystem that
-  cannot store the exec bit invents mode changes that are not there, which is a worse
-  failure than the one it would fix. A `core.filemode=false` repo still loses a delegated
-  file's mode change through this capture — refuse such a path rather than pretend.
-
-  and pass the explicit flags each command needs anyway (`--no-color`,
-  `--ignore-submodules=none`, `--binary`, `--no-textconv`, `--no-ext-diff` on the captures;
-  `--whitespace=nowarn` on both replays). Anchoring at `--show-toplevel` is what makes
-  `:(top,literal)` pathspecs mean the same thing from any cwd — use that magic, not bare
-  `:(literal)`, on **every** capture, replay *and* restore. The restore is the one that got
-  missed: `git restore --staged --worktree -- '<path>'` treats its argument as a glob, and
-  on git 2.43 a delegated `a[1].txt` also restored an unrelated `a1.txt`.
-
-  Treat any future finding in this family as already dispositioned here: the answer is the
-  pinned invocation, not another sentence about another flag.
-
   Capture **three** things before granting access, and require the capture *commands* to
   succeed — never their output to be non-empty, since on a clean tree an empty patch is
   the correct answer:
 
-  - `git_pinned diff --cached --binary --no-color --no-textconv --no-ext-diff
-    --ignore-submodules=none -- <the delegated paths>` and the same without `--cached`,
-    as **two**
-    patches. Through `git_pinned`, not bare `git` — the wrapper is the whole point of
-    the paragraph above and a command that skips it inherits exactly the config that
-    empties a capture. `--no-ext-diff` because a configured `diff.external` helper is not disabled by
+  - `git diff --cached --binary --no-textconv --no-ext-diff -- <the delegated paths>` and
+    `git diff --binary --no-textconv --no-ext-diff -- <the delegated paths>`, as **two**
+    patches. `--no-ext-diff` because a configured `diff.external` helper is not disabled by
     `--no-textconv`: measured on git 2.43, a helper emitting `bogus` gave an exit-0 capture
-    of non-patch output that could restore nothing. And `-- :(top,literal)<path>` for each delegated path at
-    *capture* time — `top` because a bare `:(literal)` is resolved against the CURRENT
-    DIRECTORY, so the same command run from a subdirectory captures nothing and exits 0;
-    `literal` because a bare pathspec still globs
+    of non-patch output that could restore nothing. And `-- :(literal)<path>` for each delegated path at
+    *capture* time — the `:(literal)` magic matters, because a bare pathspec still globs
     and delegated `a[1].txt` alongside an unrelated dirty `a1.txt` captures both, which
     then aborts the replay on the hunk step 2 left applied. With literal magic the replay
     needs no filtering: `git apply --include` takes a **pattern**, and both a
@@ -822,17 +764,16 @@ finding precisely enough for someone else to act on, which by itself kills the v
     comes back ` M` and a later commit carries hunks the user left out. Both flags matter:
     without `--binary` a modified binary records only "Binary files differ" and will not
     apply; `--no-textconv` because the conversion is not what is on disk.
-  - `git_pinned status --porcelain -z --no-renames`, NUL-delimited. Porcelain quotes paths that
-    need it, so a
+  - `git status --porcelain -z --no-renames`, NUL-delimited. Porcelain quotes paths that need it, so a
     `cut`-based parse hands back a literal `"caf\303\251.py"` that does not exist. This
     is also what restores **intent-to-add** entries (` A `) afterwards: § 1.5's `git add
     -N` runs only before the first pass, so a file demoted to `??` during a rollback drops
     out of every later `codex review --base`. `--no-renames` because rename detection
     *coalesces* an intent-to-add path with a deleted tracked file of the same content into
-    one ` R b.txt\0a.txt\0` entry rather than ` A b.txt` — the re-add step below then never
-    fires, the file stays `??`, and it silently leaves every later pass. The panel's own
-    `DELETED` computation already passes this flag (`references/reviewer-panel.md`); this
-    is the sibling site that did not get it.
+    one ` R b.txt\0a.txt\0` entry rather than ` A b.txt` — the re-add step below then
+    never fires, the file stays `??`, and it silently leaves every later pass. The panel's
+    own `DELETED` computation already passes this flag
+    (`references/reviewer-panel.md`); this is the sibling site that did not get it.
   - a **byte copy of every pre-existing untracked path in scope** — no patch contains
     them. Clear each destination before copying and again before restoring: `cp -pR` into
     an existing directory nests rather than replaces, and exits 0 either way.
@@ -861,22 +802,11 @@ finding precisely enough for someone else to act on, which by itself kills the v
   1. **delete the delegated paths the implementer created** — those absent from the
      *existence list*, never those merely absent from porcelain status. A clean tracked
      file has no status entry, so the status test would delete a file that was fine
-  2. revert **only** the remaining delegated paths; leave every other path untouched —
-     `git_pinned restore --staged --worktree -- ':(top,literal)<path>'` per path. The
-     pathspec magic is not optional here either: a bare argument is a glob, and on git
-     2.43 reverting a delegated `a[1].txt` also restored an unrelated `a1.txt`, destroying
-     work the delegation never touched. This is the step that got missed when the captures
-     were given `:(literal)` — the sibling site inside the same procedure.
-  3. re-apply the **staged** patch with `git_pinned apply --index --whitespace=nowarn`,
-     then the **unstaged** one with `git_pinned apply --whitespace=nowarn` — the same
-     wrapper, but deliberately **without `--index`**. The flag applies to the index *as
-     well as* the worktree, so passing it on the second replay stages the hunks the user
-     had left unstaged and collapses the `MM` boundary that capturing two separate patches
-     exists to preserve; a later commit then carries work they chose to keep back. The two
-     replays differ by exactly this flag, which is why "the same way" will not do here.
+  2. revert **only** the remaining delegated paths; leave every other path untouched
+  3. re-apply the **staged** patch with `git apply --index`, then the **unstaged** one.
      No `--include` is needed or wanted — the patches were already restricted by pathspec
      at capture time, which is the only way to scope them without pattern semantics. Not
-     `--cached` on either: it updates the index
+     `--cached`: it updates the index
      "without touching the working tree", so the worktree stays at `HEAD` and the unstaged
      patch fails against it — measured, `error: patch failed`, after the original was
      already reverted. Path-restricted capture is also what keeps the replay from touching

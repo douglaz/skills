@@ -684,26 +684,6 @@ Don't merge when:
 **The wrapper is what matters; clock-time waits are a code smell that suggests you're
 ignoring the actual signal.**
 
-**Don't ask for a review before the tip has a wrapper — it costs a round.** The
-unanswered-request condition needs an anchor *before* the request, and only a wrapper
-naming the **current** tip may anchor one (the bullet above says why: a normal push starts
-an automatic round that leaves no timeline event, so a prior-tip anchor can certify a gap
-that round is running in). A push invalidates every existing anchor, so an `@codex review`
-posted while nothing yet names the new tip can never be covered — `bot-gate` returns
-`BLOCKED` even when the round answering it comes back clean and names the tip exactly.
-Ask again once a wrapper exists and it clears.
-
-This is **not** "every push costs a round". When the push-triggered automatic round lands
-its own current-tip wrapper first, that wrapper anchors the next request and it clears
-normally — `bot-gate.test`'s *"a clean round answers the request before it"* pins that
-sequence at exit 0. The trap is asking too *early*, which is easy on a docs-heavy PR where
-the bot frequently never auto-fires at all (§ above). So: wait for the auto round, and ask
-only if it does not come.
-
-When you do land in the blocked state, take that escape rather than the "accept the round
-explicitly" override: a visibly-clean PR reading `BLOCKED` is precisely when a gate gets
-bypassed instead of believed, and the extra round costs about three minutes.
-
 ### 8. Squash-merge and clean up
 
 ```bash
