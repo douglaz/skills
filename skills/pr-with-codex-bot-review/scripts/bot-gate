@@ -572,9 +572,15 @@ if [[ -n "$WRAPPER_AT" ]] && [[ -n "${ALL_COMMENTS:-}" ]]; then
   # One list for both is wrong in whichever direction it is tuned. Anchoring both (as the
   # first fix for the clearing hole did) means `@codex review please` — a real trigger —
   # stops blocking.
+  # The bot's own comments are never triggers: its clean-round wrapper quotes the literal
+  # command in its About-Codex boilerplate, so without this filter every clean round is
+  # counted as a fresh request newer than the wrapper announcing it, RERUN_REQUESTED
+  # latches true, and a clean round can never clear its own gate.
   _mk_triggers() {  # $1 = jq test expression
     printf '%s' "$ALL_COMMENTS" \
-      | jq -r --arg re "$1" '.[][] | select((.body // "") | test($re; "i"))
+      | jq -r --arg re "$1" --arg bot "$BOT_LOGIN" '.[][]
+               | select((.user.login // "") != $bot)
+               | select((.body // "") | test($re; "i"))
                | if ((.created_at // "") | length) == 0 then "@undated@" else .created_at end' 2>/dev/null
   }
   _TRIGGERS=$(_mk_triggers "@codex[[:space:]]+review") \
