@@ -751,8 +751,8 @@ writes the JSONL failed, because the error is caught and logged at debug level:
 # DIVERGENCE CHECK FIRST: `br close` auto-flushes, so an unstaged hand-edit in the JSONL is
 # destroyed by this very command and neither the index nor HEAD holds it — the diff below
 # would then be empty and the loss undetectable.
-BEADS_JSONL=$(br where --json | jq -er '.jsonl_path') \
-  || { echo "cannot resolve the beads JSONL path — do NOT write"; exit 1; }
+_bw=$(br where --json) || { echo "cannot resolve the beads JSONL path — do NOT write"; exit 1; }
+BEADS_JSONL=$(printf '%s' "$_bw" | jq -er .jsonl_path) || { echo "cannot resolve the beads JSONL path — do NOT write"; exit 1; }
 # Capture separately: `[ -z "$(git status ...)" ]` discards git's exit code, so a FAILED
 # inspection reads as a clean tree and lets the write through — the guard failing open at
 # exactly the moment it matters. Compare against HEAD, not the index: a damaged JSONL that
@@ -777,7 +777,8 @@ and read the field-level changes before staging — resolving its path first, si
 `.beads.jsonl` layout:
 
 ```bash
-BEADS_JSONL=$(br where --json | jq -er .jsonl_path) || { echo "cannot resolve the JSONL"; exit 1; }
+_bw=$(br where --json) || { echo "cannot resolve the JSONL"; exit 1; }
+BEADS_JSONL=$(printf '%s' "$_bw" | jq -er .jsonl_path) || { echo "cannot resolve the JSONL"; exit 1; }
 git diff "$BEADS_JSONL"
 ```
 

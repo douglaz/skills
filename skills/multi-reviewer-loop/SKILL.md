@@ -802,12 +802,17 @@ finding precisely enough for someone else to act on, which by itself kills the v
   succeed — never their output to be non-empty, since on a clean tree an empty patch is
   the correct answer:
 
-  - `git diff --cached --binary --no-textconv --no-ext-diff -- <the delegated paths>` and
-    `git diff --binary --no-textconv --no-ext-diff -- <the delegated paths>`, as **two**
-    patches. `--no-ext-diff` because a configured `diff.external` helper is not disabled by
+  - `git_pinned diff --cached --binary --no-color --no-textconv --no-ext-diff
+    --ignore-submodules=none -- <the delegated paths>` and the same without `--cached`,
+    as **two**
+    patches. Through `git_pinned`, not bare `git` — the wrapper is the whole point of
+    the paragraph above and a command that skips it inherits exactly the config that
+    empties a capture. `--no-ext-diff` because a configured `diff.external` helper is not disabled by
     `--no-textconv`: measured on git 2.43, a helper emitting `bogus` gave an exit-0 capture
-    of non-patch output that could restore nothing. And `-- :(literal)<path>` for each delegated path at
-    *capture* time — the `:(literal)` magic matters, because a bare pathspec still globs
+    of non-patch output that could restore nothing. And `-- :(top,literal)<path>` for each delegated path at
+    *capture* time — `top` because a bare `:(literal)` is resolved against the CURRENT
+    DIRECTORY, so the same command run from a subdirectory captures nothing and exits 0;
+    `literal` because a bare pathspec still globs
     and delegated `a[1].txt` alongside an unrelated dirty `a1.txt` captures both, which
     then aborts the replay on the hunk step 2 left applied. With literal magic the replay
     needs no filtering: `git apply --include` takes a **pattern**, and both a
@@ -817,7 +822,7 @@ finding precisely enough for someone else to act on, which by itself kills the v
     comes back ` M` and a later commit carries hunks the user left out. Both flags matter:
     without `--binary` a modified binary records only "Binary files differ" and will not
     apply; `--no-textconv` because the conversion is not what is on disk.
-  - `git status --porcelain -z --no-renames`, NUL-delimited. Porcelain quotes paths that
+  - `git_pinned status --porcelain -z --no-renames`, NUL-delimited. Porcelain quotes paths that
     need it, so a
     `cut`-based parse hands back a literal `"caf\303\251.py"` that does not exist. This
     is also what restores **intent-to-add** entries (` A `) afterwards: § 1.5's `git add
@@ -856,8 +861,14 @@ finding precisely enough for someone else to act on, which by itself kills the v
   1. **delete the delegated paths the implementer created** — those absent from the
      *existence list*, never those merely absent from porcelain status. A clean tracked
      file has no status entry, so the status test would delete a file that was fine
-  2. revert **only** the remaining delegated paths; leave every other path untouched
-  3. re-apply the **staged** patch with `git apply --index`, then the **unstaged** one.
+  2. revert **only** the remaining delegated paths; leave every other path untouched —
+     `git_pinned restore --staged --worktree -- ':(top,literal)<path>'` per path. The
+     pathspec magic is not optional here either: a bare argument is a glob, and on git
+     2.43 reverting a delegated `a[1].txt` also restored an unrelated `a1.txt`, destroying
+     work the delegation never touched. This is the step that got missed when the captures
+     were given `:(literal)` — the sibling site inside the same procedure.
+  3. re-apply the **staged** patch with `git_pinned apply --index --whitespace=nowarn`,
+     then the **unstaged** one the same way.
      No `--include` is needed or wanted — the patches were already restricted by pathspec
      at capture time, which is the only way to scope them without pattern semantics. Not
      `--cached`: it updates the index

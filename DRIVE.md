@@ -12,17 +12,21 @@ because the rules already exist and simply did not travel.
 - #37 merged (291a6ce): install.sh's two uninstall aborts, plus `install.test`.
 
 ## Now
-Seven mechanical edits. Budget: ~7 files, ~120 changed lines. Every one is a rule this
+Seven rules. Budget: ~10 files, ~200 changed lines (raised once, when the round showed
+the br-where fix had to reach 10 sites rather than 3 — recorded, not silently absorbed). Every one is a rule this
 repo already established at one site and failed to carry to its sibling — the defect
 class #34 counts as its most frequent, and the reason this is a sweep rather than
 seven judgement calls.
 
 1. `drive/references/phases.md:43` — `$_chk` is used three times, never assigned. The
    other three copies of this recipe all open with `_chk=$(mktemp)`. (#34 batch 3)
-2. Three **byte-identical** fail-open `br where` paragraphs → checked assignment:
-   `bead-polish-loop/SKILL.md:47`, `plan-to-beads-transfer/SKILL.md:39`,
-   `orchestrating-with-rb-lite/references/harden-until-clean.md:192`. The correct form
-   already existed in six other files, including line 240 of that same file. (#34 batch 7)
+2. Three **byte-identical** fail-open `br where` paragraphs → checked assignment
+   (#34 batch 7). **Scope grew here, deliberately:** the round showed the checked form
+   at the other six files was itself fail-open, because a pipeline reports only its LAST
+   command's status — `br where` can fail while emitting valid JSON and `jq` then
+   succeeds. Reproduced: `(printf '{"jsonl_path":"x"}'; exit 7) | jq -er .jsonl_path`
+   gives rc=0. All **10** sites across 8 files now resolve in two checked steps, because
+   fixing 3 with a stronger form than the other 7 is the drift this PR exists to remove.
 3. `multi-reviewer-loop/SKILL.md:756` — `--no-renames` on the § 3a status capture.
    `reviewer-panel.md:512-549` already uses it. (#34 batch 1)
 4. Group-kill probe at **both** sites — `SKILL.md:420`, `reviewer-panel.md:187`.

@@ -270,8 +270,8 @@ A phase closes on evidence or it does not close.
   # an unstaged hand-edit is destroyed by this very command and neither the index nor HEAD
   # holds it. Capture separately: `[ -z "$(git status ...)" ]` discards git's exit code, so
   # a failed inspection would read as clean and let the write through.
-  BEADS_JSONL=$(br where --json | jq -er '.jsonl_path') \
-    || { echo "cannot resolve the beads JSONL — do NOT close"; exit 1; }
+  _bw=$(br where --json) || { echo "cannot resolve the beads JSONL — do NOT close"; exit 1; }
+  BEADS_JSONL=$(printf '%s' "$_bw" | jq -er .jsonl_path) || { echo "cannot resolve the beads JSONL — do NOT close"; exit 1; }
   _st=$(git status --porcelain -- "$BEADS_JSONL") \
     || { echo "cannot read the worktree — do NOT close"; exit 1; }
   [ -z "$_st" ] || { git diff HEAD -- "$BEADS_JSONL"

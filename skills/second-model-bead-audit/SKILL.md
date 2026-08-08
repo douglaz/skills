@@ -159,7 +159,8 @@ recorded acceptance of the reduced review coverage.
    # reviewers will never see. Check BEFORE flushing: afterwards the file matches the index
    # again, so the diff comes back empty and the loss is undetectable. Recovery is in
    # ../orchestrating-with-rb-lite/SKILL.md step 11.
-   BEADS_JSONL=$(br where --json | jq -er .jsonl_path) || { echo "cannot resolve the JSONL"; exit 1; }
+   _bw=$(br where --json) || { echo "cannot resolve the JSONL"; exit 1; }
+   BEADS_JSONL=$(printf '%s' "$_bw" | jq -er .jsonl_path) || { echo "cannot resolve the JSONL"; exit 1; }
    # INSPECT, do not gate on cleanliness: the normal bead-polish-loop handoff arrives with
    # the round's intended `br` edits uncommitted, so demanding a clean file would block the
    # audit after every non-noop round. `git status` cannot tell an intended mutation from a

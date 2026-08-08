@@ -51,7 +51,8 @@ succeeds printing nothing, and "cannot resolve" is indistinguishable from "clean
 right before the destructive first flush:
 
 ```bash
-BEADS_JSONL=$(br where --json | jq -er .jsonl_path) || { echo "cannot resolve the beads JSONL"; exit 1; }
+_bw=$(br where --json) || { echo "cannot resolve the beads JSONL"; exit 1; }
+BEADS_JSONL=$(printf '%s' "$_bw" | jq -er .jsonl_path) || { echo "cannot resolve the beads JSONL"; exit 1; }
 git status --porcelain -- "$BEADS_JSONL"
 ```
 
