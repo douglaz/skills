@@ -183,6 +183,13 @@ When a rule graduates — enough repos need it, or it grows beyond a paragraph �
 move it to its own skill and leave a pointer, the way beads guidance lives in
 `br agents` rather than here.
 
+The block's rule on behavioural claims is the worked example: the paragraph in the
+block is the whole rule, and the incident behind it, the transcripts showing what a
+sufficient record looks like, and the observing-versus-explaining distinction live in
+[references/behavioural-claims.md](references/behavioural-claims.md). Note where the
+pointer is — here, not in the block. A reference in the copied text would be a dangling
+link in every downstream `AGENTS.md`, since the block travels and this repo does not.
+
 ## When not to use this
 
 - The repo has a carefully maintained `AGENTS.md` and the user wants

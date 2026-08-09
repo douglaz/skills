@@ -94,57 +94,17 @@ exit code.** If you cannot show one, say what you actually observed instead. Thi
 is the single most common way an agent reports success it did not have.
 
 **A claim about what a tool does needs a run, not a recollection.** Prose asserting
-observable behaviour — an exit code, whether output lands on stdout or stderr, which
-versions were tested — is as capable of being wrong as code, and nothing compiles it.
-Measured on one documentation branch: five such claims shipped false through eight review
-rounds, each sitting beside a **correct** fix, and three were introduced by the commit
-fixing the previous one. Every test suite stayed green throughout, because suites do not
-read prose. A wrong reason is worse than no reason: it invites the next agent to
-"simplify" the guard away, since the stated justification is disprovable in thirty
-seconds.
-
-So run it, and record enough that a reader can re-run it and disagree — the command, the
-mode if it matters, the version, and what you observed:
-
-```console
-$ git status --porcelain -- ""          # git 2.54.0
-fatal: empty string is not a valid pathspec. please use . instead if you meant
-to match all paths                     # stderr
-                                       # stdout: nothing
-                                       # status: 128
-```
-
-A bare `Measured on git 2.54.0` is greppable but asserts nothing checkable, and "fails
-silently" names no version or mode. Neither is a record.
-
-**Observing is not explaining, and only one of them is settled by re-running.** A rerun
-gives you the exit code and the streams; it does not tell you *why*. A command can fail
-for several config- or environment-dependent reasons, so "X fails because Y" needs more
-than a transcript of X failing: vary Y alone and show the outcome change, or cite the
-documentation or source. Absent that, write what you saw and leave the cause out — an
-invented mechanism beside a correct guard is exactly what gets the guard deleted later.
-The mode rider is the cheapest instance — and note it takes *two* runs, not one, because
-the second is the counterfactual:
-
-```console
-$ grep -Fo -- x "" | wc -l ; echo $?                  # bash 5.3.9, GNU grep 3.12
-grep: : No such file or directory                     # stderr
-0                                                     # stdout, from wc
-0                                                     # status
-$ set -o pipefail; grep -Fo -- x "" | wc -l ; echo $?
-grep: : No such file or directory                     # stderr
-0                                                     # stdout, from wc
-2                                                     # status
-```
-
-Same command, same output, different status — so "the count came back 0 because `wc`
-succeeded" is settled only by the pair. One run would have re-blessed the wrong
-component.
-
-**A claim you cannot run is not yours to assert.** A version you do not have, a kernel
-path you cannot force — say it is unmeasured and narrow it to a possibility. "Behavior
-may differ on older git — unmeasured here" costs one word over "behavior differs", and
-only one of them is a claim you can be wrong about.
+observable behaviour — an exit code, which stream output went to, which versions were
+tested — is as capable of being wrong as code, and nothing compiles it. Record enough that
+a reader can re-run it and disagree: the command, the versions, the mode where the mode
+changes the answer, and the observed result with the streams *separated by redirection*
+rather than labelled by hand. Two things that are not records: a bare "Measured on
+git 2.54.0", which names no command or result, and "fails silently", which names no
+version or mode. And observing is not explaining — a rerun gives you the exit code and the
+streams, never the *why*; "X fails because Y" needs Y varied on its own with the outcome
+changing, or the documentation cited. Absent that, write what you saw and leave the cause
+out. A claim you cannot run — a version you do not have — is not yours to assert: say it
+is unmeasured and narrow it to a possibility.
 
 **Reviewers read code; they do not run it.** A clean review — human, bot, or
 model — is not a passing build. Run the gate yourself before calling anything
