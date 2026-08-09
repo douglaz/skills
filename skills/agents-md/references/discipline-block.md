@@ -93,6 +93,19 @@ Then read the log. Note the `;` — not `|`.
 exit code.** If you cannot show one, say what you actually observed instead. This
 is the single most common way an agent reports success it did not have.
 
+**A claim about what a tool does needs a run, not a recollection.** Prose asserting
+observable behaviour — an exit code, which stream output went to, which versions were
+tested — is as capable of being wrong as code, and nothing compiles it. Record enough that
+a reader can re-run it and disagree: the command, the versions, the mode where the mode
+changes the answer, and the observed result with the streams *separated by redirection*
+rather than labelled by hand. Two things that are not records: a bare "Measured on
+git 2.54.0", which names no command or result, and "fails silently", which names no
+version or mode. And observing is not explaining — a rerun gives you the exit code and the
+streams, never the *why*; "X fails because Y" needs Y varied on its own with the outcome
+changing, or the documentation cited. Absent that, write what you saw and leave the cause
+out. A claim you cannot run — a version you do not have — is not yours to assert: say it
+is unmeasured and narrow it to a possibility.
+
 **Reviewers read code; they do not run it.** A clean review — human, bot, or
 model — is not a passing build. Run the gate yourself before calling anything
 done.
