@@ -122,9 +122,23 @@ for several config- or environment-dependent reasons, so "X fails because Y" nee
 than a transcript of X failing: vary Y alone and show the outcome change, or cite the
 documentation or source. Absent that, write what you saw and leave the cause out — an
 invented mechanism beside a correct guard is exactly what gets the guard deleted later.
-The mode rider is the cheapest instance: `grep -Fo … "" | wc -l` exits 0 without
-`pipefail` and 2 with it, so attributing the swallow to the wrong component is a causal
-claim two runs would have settled.
+The mode rider is the cheapest instance — and note it takes *two* runs, not one, because
+the second is the counterfactual:
+
+```
+$ grep -Fo -- x "" | wc -l ; echo $?                  # bash 5.3.9, GNU grep 3.12
+grep: : No such file or directory                     # stderr
+0                                                     # stdout, from wc
+0                                                     # status
+$ set -o pipefail; grep -Fo -- x "" | wc -l ; echo $?
+grep: : No such file or directory
+0
+2
+```
+
+Same command, same output, different status — so "the count came back 0 because `wc`
+succeeded" is settled only by the pair. One run would have re-blessed the wrong
+component.
 
 **A claim you cannot run is not yours to assert.** A version you do not have, a kernel
 path you cannot force — say it is unmeasured and narrow it to a possibility. "Behavior

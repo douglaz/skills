@@ -18,7 +18,9 @@
 One rule, in one file. Both panel reviewers independently picked #45 as the next PR, and
 both said land it alone, then write #32 under it.
 
-The evidence is #40's own history: 6 bot rounds, 5 panel passes, 13 corrections to land
+The evidence is #40's own history: 8 codex bot rounds (6 review objects plus 2 clean
+wrappers — a clean round posts no review object, which is why the naive count reads 6),
+5 panel passes, 13 corrections to land
 four one-line rules — and the corrections were overwhelmingly to **sentences**, not code.
 Five factual claims about tool behaviour shipped false, each beside a *correct* fix, three
 of them introduced by the commit fixing the previous one. Every test suite was green
