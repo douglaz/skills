@@ -328,6 +328,11 @@ exits 2 having started no auditor at all. A model pin fills the `claude` slot *a
 pins the ladder to that one model:
 
 ```bash
+# The default belongs HERE, not at dispatch: normalization reads $PANEL_REVIEWERS, and
+# under this file's `set -u` an unset one aborts before the probe with no auditor
+# started — i.e. it would break the DEFAULT audit while the pinned case it was written
+# for passed.
+PANEL_REVIEWERS=${PANEL_REVIEWERS:-codex,claude}
 # Map any model name in the list onto the claude slot, remembering the pin.
 CLAUDE_MODEL_PIN=""
 _norm=""
@@ -360,7 +365,7 @@ as `failed` after fifteen minutes rather than as `substituted` after one.
 ### 3. Dispatch
 
 ```bash
-PANEL_REVIEWERS=${PANEL_REVIEWERS:-codex,claude}
+# $PANEL_REVIEWERS was defaulted and normalized in step 1 — do not re-default it here.
 if command -v timeout >/dev/null 2>&1 &&
    timeout --kill-after=1s 1s true >/dev/null 2>&1; then
   TIMEOUT_BIN=$(command -v timeout)
@@ -399,6 +404,8 @@ fi
 # `$RUN_CLAUDE` says the user asked for this slot; `$CLAUDE_SLOT` says a model actually
 # answered. Both are required — requested-but-unfillable must reach the report as an
 # empty slot, not as `--model ""`.
+CLAUDE_PID=""
+CLAUDE_RC=0
 if $RUN_CLAUDE && [ "${CLAUDE_SLOT:-empty}" = filled ]; then
   (
     cd "$REPO_ROOT"
@@ -422,8 +429,16 @@ fi
 if $RUN_CODEX; then
   if wait "$CODEX_PID"; then CODEX_RC=0; else CODEX_RC=$?; fi
 fi
-if $RUN_CLAUDE; then
+# Guard on the PID, not on $RUN_CLAUDE: a requested slot the ladder could not fill
+# never launched anything, so `wait "$CLAUDE_PID"` would expand an unset variable under
+# `set -u` and abort instead of producing the degraded audit this path promises.
+if [ -n "$CLAUDE_PID" ]; then
   if wait "$CLAUDE_PID"; then CLAUDE_RC=0; else CLAUDE_RC=$?; fi
+elif $RUN_CLAUDE; then
+  # Requested but never started. NOT rc 0 — that is the value a healthy auditor
+  # returns, and the state table below reads it.
+  CLAUDE_RC=127
+  echo "claude auditor requested but no ladder candidate answered — slot EMPTY"
 fi
 ```
 
@@ -449,7 +464,10 @@ coordinator pre-captures every `br`/`bv` output the reviewers need. Do not add
 
 ## Unwrap and validate the Claude auditor
 
-Run this only when the Claude auditor was requested:
+Run this only when the Claude auditor actually **started** (`[ -n "$CLAUDE_PID" ]`) —
+not merely when it was requested. A requested-but-unfilled slot wrote no JSON, and the
+input redirect below fails before `jq` even runs, taking the audit down under `set -e`
+on the exact path that was supposed to degrade cleanly:
 
 ```bash
 if jq -er 'if .is_error then error(.result // "claude auditor returned is_error")

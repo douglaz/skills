@@ -88,11 +88,15 @@ else
 fi
 ```
 
-Run verbatim, under `set -euo pipefail`, on a host whose first ladder entry was
-unreachable:
+Run on a host whose first ladder entry was unreachable. `ladder.sh` is the block above
+extracted from this file programmatically, with a single `set -euo pipefail` line
+prepended — the block itself sets no shell options, so the harness has to supply them,
+and saying "run verbatim under `set -euo pipefail`" without saying where the `set` came
+from is the same one-step-removed sloppiness this section is about:
 
 ```console
-$ bash ladder.sh ; echo "LADDER_EXIT=$?"   # the block above, extracted from THIS file
+$ { echo 'set -euo pipefail'; extract_bash_block reviewer-panel.md; } > ladder.sh
+$ bash ladder.sh ; echo "LADDER_EXIT=$?"
 claude reviewer: 'fable' did not answer (exit 124) — trying the next candidate
 claude reviewer: using opus
 LADDER_EXIT=0
@@ -118,8 +122,12 @@ candidate a failed (124)
 candidate b failed (124)
 M=<none> reached_end=yes
 exit=0
-$ ( set +e ; bash -c 'set -euo pipefail; ... timeout 1 sleep 5; _rc=$? ...' ; echo "exit=$?" )
-exit=124                                                # unguarded: died on candidate a,
+$ ( set +e ; bash -c 'set -euo pipefail; M=""; for m in a b; do _rc=0
+>     timeout 1 sleep 5; _rc=$?                         # unguarded — the ONLY change
+>     [ "$_rc" -eq 0 ] && { M=$m; break; }
+>     echo "candidate $m failed ($_rc)"
+>   done; echo "M=${M:-<none>} reached_end=yes"' ; echo "exit=$?" )
+exit=124                                                # died on candidate a,
                                                         # printed nothing, never tried b
 ```
 
@@ -300,8 +308,11 @@ fi
 # there: CODEX_RC is never assigned, the Claude reviewer is never reaped, and the degraded-pass and
 # two-consecutive-timeout handling below never runs. The `||` keeps errexit off the hook.
 CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?
-# Only wait on a reviewer that was started. `wait ""` reaps every child, so an empty
-# slot would make this return once codex is done and look like a completed pass.
+# Only wait on a reviewer that was started. Measured on bash 5.3.9 with two live
+# children: `wait ""` returns in ~1ms with `wait: `': not a pid or valid job spec`,
+# rc=1, having reaped NOTHING — it is bare `wait` (no argument) that waits for all.
+# So unguarded, the `|| CLAUDE_RC=$?` records rc=1 and the pass reports a *failed*
+# Claude reviewer that was never launched, plus that error on the operator's terminal.
 CLAUDE_RC=0
 if [ -n "$CLAUDE_PID" ]; then wait "$CLAUDE_PID" || CLAUDE_RC=$?; fi
 ```
@@ -354,7 +365,12 @@ for _p in "$CODEX_PID" "$CLAUDE_PID"; do
   kill -KILL -- "-$_p" 2>/dev/null || true
 done
 CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?   # reaping is what closes the window
-CLAUDE_RC=0; wait "$CLAUDE_PID" || CLAUDE_RC=$?
+# Same PID guard as the normal path: on an empty slot there is nothing to reap, and an
+# unguarded `wait ""` prints `not a pid or valid job spec` to the operator's terminal
+# (this hatch redirects the `kill`s but not this) and records a failure for a reviewer
+# that never ran — inside the one block whose job is proving every reviewer has exited.
+CLAUDE_RC=0
+if [ -n "$CLAUDE_PID" ]; then wait "$CLAUDE_PID" || CLAUDE_RC=$?; fi
 ```
 
 The `wait` is not decoration. `kill` returns as soon as SIGTERM is delivered, so
@@ -504,10 +520,22 @@ Notes on the flags:
 
 ## Unwrapping the Claude reviewer's output
 
+Only when the reviewer actually started. On an empty slot nothing created `$CLAUDE_RAW`,
+and the input redirect fails *before* `jq` runs — so under `set -e` the pass dies here
+instead of being reported as the codex-only `DEGRADED` pass it is. The redirect also
+precedes the output one, so `$CLAUDE_OUT` is never created either and every later
+`grep` on it counts findings in a file that does not exist.
+
 ```bash
-jq -er 'if .is_error then error(.result // "claude reviewer returned is_error")
-        else (.result // empty) end' <"$CLAUDE_RAW" >"$CLAUDE_OUT"
-JQ_RC=$?
+JQ_RC=0
+if [ -n "$CLAUDE_PID" ]; then
+  jq -er 'if .is_error then error(.result // "claude reviewer returned is_error")
+          else (.result // empty) end' <"$CLAUDE_RAW" >"$CLAUDE_OUT"
+  JQ_RC=$?
+else
+  : >"$CLAUDE_OUT"   # exists and empty, so the finding counters below read 0 rather
+  JQ_RC=127          # than erroring — but never 0, which is what a clean pass returns
+fi
 ```
 
 Two cheap sanity checks worth running on the raw JSON:
@@ -771,6 +799,12 @@ files:
 ```bash
 TO=$(command -v timeout || command -v gtimeout) \
   || { echo "no GNU timeout — see the panel invocation above"; exit 1; }
+# Guarded like every other Claude invocation. An empty slot leaves $CLAUDE_MODEL set
+# but EMPTY, which `set -u` does not catch, so without this the CLI is called as
+# `--model ""` on the very pass that decides CLEAN vs CLEAN_DIFF_ONLY. With no Claude
+# model and no codex pin, § 4b cannot run: say so and report CLEAN_DEGRADED.
+[ "${CLAUDE_SLOT:-empty}" = filled ] \
+  || { echo "no Claude model for the consistency pass — use codex exec (below) or report it unrun"; exit 1; }
 "$TO" --kill-after=60 1500 \
   claude -p "$(cat "$REVIEW_DIR/claude-consistency-prompt.txt")" \
   --model "$CLAUDE_MODEL" --effort high --output-format json \

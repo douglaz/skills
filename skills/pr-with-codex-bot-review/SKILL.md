@@ -240,15 +240,27 @@ probe is bounded. An unreachable model does not return an error you can check �
 does not return at all, so the `CLAUDE_RC` check further down is never reached and
 the step simply stops, mid-ship, with no output in either file.
 
-Two adjustments for this site specifically, because this reviewer is **optional** and
-the rest of the skill must survive without it:
+**Treat the probe, the invocation and the unwrap as one optional operation**, because
+this reviewer is optional and the rest of the skill must survive without it. Check GNU
+`timeout` yourself *before* running the probe, and skip the whole step if it is
+missing: the canonical probe block opens with its own
+`|| { echo ...; exit 1; }` on a missing `timeout`, which would abort the ship before
+any skip logic here is reached. The panel skills can afford that `exit 1` — the panel
+is their whole job. Here it would stop a PR over a missing convenience binary, which
+is worse than opening it with the box unticked.
 
-- If GNU `timeout`/`gtimeout` is absent, **skip the pre-review** and say so. Do not
-  `exit 1` the way the panel snippets do — they are the whole job, this is one
-  optional step before shipping, and aborting a PR over a missing convenience binary
-  is a worse outcome than opening it with the box unticked.
-- If no ladder candidate answers, likewise skip and say so. An empty slot here means
-  no pre-review happened, which is a thing to report, not to work around.
+```bash
+# Gate the probe itself. Everything below is skipped as one unit.
+if command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then
+  : # run the ladder probe from multi-reviewer-loop § Resolving the Claude reviewer's
+    # model here; it sets CLAUDE_MODEL and CLAUDE_SLOT
+else
+  CLAUDE_SLOT=empty
+fi
+```
+
+If no ladder candidate answers, likewise skip and say so. An empty slot here means no
+pre-review happened — a thing to report, not to work around.
 
 ```bash
 BASE=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)
@@ -291,10 +303,18 @@ else
   CLAUDE_RC=$?
 fi
 
-jq -er 'if .is_error then error(.result // "reviewer returned is_error")
-        else (.result // empty) end' \
-  <"$RD/claude.json" >"$RD/claude.txt"
-JQ_RC=$?
+# Inside the same guard: on the skip path no JSON exists, and the INPUT redirect fails
+# before jq runs — which under `set -e` aborts the ship on the branch that was meant to
+# continue without a pre-review.
+JQ_RC=0
+if [ "$CLAUDE_RC" -eq 0 ]; then
+  jq -er 'if .is_error then error(.result // "reviewer returned is_error")
+          else (.result // empty) end' \
+    <"$RD/claude.json" >"$RD/claude.txt"
+  JQ_RC=$?
+else
+  JQ_RC=127
+fi
 ```
 
 **Check both exit codes before believing the output.** `CLAUDE_RC != 0` or

@@ -21,11 +21,14 @@ recorded runs in the reference, not the suites.
 ## Now
 Fable is out of credits, so every panel in this repo currently has one working
 reviewer and does not know it. The measured failure is the reason this is a change
-rather than a config tweak: an unreachable model does **not** error, it hangs — over
-eight minutes of zero bytes on both streams, and when finally killed it exits 124
-having written valid JSON with `is_error: true` and only the small side-model in
-`modelUsage`. stderr stays empty throughout, so every "read stderr for the auth error"
-rule in these skills was unreachable for this case.
+rather than a config tweak: an unreachable model does **not** error, it hangs. Two
+separate runs, kept separate because they show different things — the *bounded* 90s
+probe exits 124 having written valid JSON with `is_error: true`, a null `.result`, and
+only the small side-model in `modelUsage`; an *unbounded* call in the same state was
+observed still running after eight minutes with both output files at zero bytes, and
+was killed by hand (no 124, no JSON — that is the whole point of the contrast). stderr
+was empty in both, so every "read stderr for the auth error" rule in these skills was
+unreachable for this case.
 
 So: a `$CLAUDE_MODEL` ladder (`fable` → `opus`; a user pin *replaces* the ladder rather
 than heading it, so a named model fails instead of being substituted), resolved once per
@@ -36,7 +39,7 @@ Artifacts and source tags rename from the model (`fable`) to the slot (`claude`)
 because after a fallback a file named `pass-01.fable.txt` is a false provenance claim —
 the exact defect #46 landed a rule against.
 
-Budget: 14 files, ~500 insertions. Round 2 of max 4 (round 1 panel: 15 findings, all accepted).
+Budget: 14 files, ~560 insertions. Round 3 of max 4 (panel rounds 1-2: 29 findings, all accepted).
 Do NOT build: a retry/backoff policy, a model-capability matrix, per-pass re-probing,
 or a shared shell library — these are five prose skills, not a program.
 

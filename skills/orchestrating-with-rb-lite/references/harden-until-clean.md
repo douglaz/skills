@@ -156,13 +156,26 @@ fi
 # other reviewer is reaped. Exit 124 (TERM) and 137 (the --kill-after KILL) are
 # reviewer failures, never clean.
 CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?
-CLAUDE_RC=0
-if [ -n "$CLAUDE_PID" ]; then wait "$CLAUDE_PID" || CLAUDE_RC=$?; fi
-
-jq -er 'if .is_error then error(.result // "claude reviewer returned is_error")
-        else (.result // empty) end' \
-  <"$REVIEW_DIR/pass-$PASS.claude.json" >"$REVIEW_DIR/pass-$PASS.claude.txt"
+# NOT `CLAUDE_RC=0` on the empty-slot path: 0 is what a healthy reviewer returns, and
+# the "proceed with the survivor, label DEGRADED" rule below reads this variable — so
+# leaving it 0 tells the iteration a reviewer that never launched came back clean.
+if [ -n "$CLAUDE_PID" ]; then
+  CLAUDE_RC=0; wait "$CLAUDE_PID" || CLAUDE_RC=$?
+  jq -er 'if .is_error then error(.result // "claude reviewer returned is_error")
+          else (.result // empty) end' \
+    <"$REVIEW_DIR/pass-$PASS.claude.json" >"$REVIEW_DIR/pass-$PASS.claude.txt"
+else
+  CLAUDE_RC=127
+  : >"$REVIEW_DIR/pass-$PASS.claude.txt"
+  echo "claude slot EMPTY this iteration — findings come from codex alone (DEGRADED)"
+fi
 ```
+
+The unwrap is inside the guard for a concrete reason: on the empty-slot path no
+`.claude.json` exists, and the **input** redirect fails before `jq` ever runs
+(`No such file or directory`, exit 1). Because `<` is evaluated before `>`, the
+`.claude.txt` output file is never created either, so the finding count further down
+runs against a missing file — one dead iteration reported as a review.
 
 Four things to know about these commands:
 
@@ -184,7 +197,9 @@ then merge into one deduped list, each entry tagged `BOTH`, `CODEX`, or `CLAUDE`
 Dedupe on the claim, not the wording — the same defect described from two angles
 is **one bead**, never two, or you will build yourself a merge conflict.
 
-If one reviewer fails, proceed with the survivor and label the iteration
+An empty Claude slot — the ladder resolved nothing — counts as a failed reviewer here,
+not as a clean one: the guard above sets `CLAUDE_RC=127` precisely so this rule can see
+it. If one reviewer fails, proceed with the survivor and label the iteration
 `DEGRADED`, in chat and in the beads commit message.
 
 ## 2. Triage before minting anything

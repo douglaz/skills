@@ -344,13 +344,7 @@ a reviewer.
    filename, where a fallback would turn the name into a false claim about who wrote
    it.
 
-4. **Resolve `$CLAUDE_MODEL`** with the bounded probe in
-   [references/reviewer-panel.md](references/reviewer-panel.md) § Resolving the Claude
-   reviewer's model, and print the model you got. Do this once, here — not per pass,
-   and not lazily inside the first pass, where an unreachable model burns the whole
-   `RC_TIMEOUT` before anyone learns it was unreachable.
-
-5. Check whether there is anything to review.
+4. Check whether there is anything to review.
    Treat these as reviewable changes:
    - committed branch diff vs `DIFF_BASE`
    - staged changes
@@ -359,6 +353,19 @@ a reviewer.
 
    If all are empty, stop: "No changes detected against `<DIFF_BASE>`.
    Nothing to review."
+
+5. **Resolve `$CLAUDE_MODEL`** with the bounded probe in
+   [references/reviewer-panel.md](references/reviewer-panel.md) § Resolving the Claude
+   reviewer's model, and print the model you got. Do this once, here — not per pass,
+   and not lazily inside the first pass, where an unreachable model burns the whole
+   `RC_TIMEOUT` before anyone learns it was unreachable.
+
+   **After** the no-work check above and **only if the panel includes the Claude
+   slot.** The probe spends up to 90 seconds per unreachable rung and costs a real
+   (if small) amount, so a `--reviewers codex` run must not pay it — and neither
+   should a run that is about to stop with "nothing to review". On a codex-pinned
+   panel, skip the probe entirely and leave `CLAUDE_SLOT` unset; every invocation
+   guard below reads it as empty, which is exactly right.
 
 6. **Make untracked source files visible to codex, or the panel reviews two
    different things.** Measured behavior of `codex review --base`: it covers
@@ -421,7 +428,8 @@ For each pass `N` from `1` to `MAX_PASSES`:
    # `|| VAR=$?` — a timeout kill returns 124/137, and under `set -e` the bare
    # `; VAR=$?` form terminates the shell before the status is ever captured.
    CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?
-   # `wait ""` reaps ALL children, so an empty slot would look like a finished pass.
+   # `wait ""` does NOT reap all children (that is bare `wait`) — it errors, rc=1,
+   # reaping nothing, so unguarded it books a failure against a reviewer never started.
    CLAUDE_RC=0
    if [ -n "$CLAUDE_PID" ]; then wait "$CLAUDE_PID" || CLAUDE_RC=$?; fi
    ```
@@ -785,9 +793,9 @@ finding precisely enough for someone else to act on, which by itself kills the v
   the same work with one rule — *use the CLI, never edit the file* — landed clean and the
   database still parsed. Name the tool, forbid the file, and require a read-back.
 - **Snapshot first — and non-destructively.** The implementer has write access, and
-  § 1.6 explicitly permits a dirty tree, so plain `git` is *not* your undo: `git checkout
+  § 1.7 explicitly permits a dirty tree, so plain `git` is *not* your undo: `git checkout
   .`, `git stash` and `git reset --hard` each discard the user's pre-existing work along
-  with the delegated edit, which § 1.6 forbids.
+  with the delegated edit, which § 1.7 forbids.
 
   Capture **three** things before granting access, and require the capture *commands* to
   succeed — never their output to be non-empty, since on a clean tree an empty patch is
@@ -810,7 +818,7 @@ finding precisely enough for someone else to act on, which by itself kills the v
     apply; `--no-textconv` because the conversion is not what is on disk.
   - `git status --porcelain -z`, NUL-delimited. Porcelain quotes paths that need it, so a
     `cut`-based parse hands back a literal `"caf\303\251.py"` that does not exist. This
-    is also what restores **intent-to-add** entries (` A `) afterwards: § 1.5's `git add
+    is also what restores **intent-to-add** entries (` A `) afterwards: § 1.6's `git add
     -N` runs only before the first pass, so a file demoted to `??` during a rollback drops
     out of every later `codex review --base`.
   - a **byte copy of every pre-existing untracked path in scope** — no patch contains
@@ -858,7 +866,7 @@ finding precisely enough for someone else to act on, which by itself kills the v
   5. re-run `git add -N` for every path the status snapshot recorded as `" A "` — a leading
      space, then `A`; `"A "` is an ordinary staged addition and must not be re-added
 
-  **`git stash create` cannot replace any of this.** It fails outright on the tree § 1.5
+  **`git stash create` cannot replace any of this.** It fails outright on the tree § 1.6
   builds:
 
   ```console
