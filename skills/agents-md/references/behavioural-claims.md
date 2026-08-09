@@ -8,8 +8,12 @@ and hard to apply. It stays in this repository; it is not part of the copied blo
 ## The incident
 
 One documentation branch (`douglaz/skills` #40) carried four one-line rules between sibling
-sites. Landing it took **8 codex bot rounds, 5 local panel passes, 13 corrections** — and
-the corrections were overwhelmingly to *sentences*, not code:
+sites. Landing those four took **8 codex bot rounds, 5 local panel passes, 13 corrections**
+— the corrections outnumbering the rules, and overwhelmingly to *sentences* rather than
+code. Five of them were false statements about tool behaviour, recorded here as they were
+corrected in that branch's review; the command, version and captured output for each are in
+its commit history rather than restated below, since this table is a summary of prior
+corrections and not itself new evidence:
 
 | claimed | measured |
 |---|---|
@@ -54,18 +58,26 @@ on its own with the outcome changing, or the documentation or source cited.
 The cheapest instance, and the one that shipped wrong on #40 — note it takes **two** runs,
 because the second is the counterfactual:
 
+Pin the baseline explicitly. `bash -c` inherits `pipefail` when the parent exports
+`SHELLOPTS`, and a contaminated baseline reports 2, silently collapsing the contrast the
+experiment depends on (measured — with `SHELLOPTS` exported, the unpinned baseline gives
+2, and `--noprofile --norc` plus `set +o pipefail` restores 0):
+
 ```console
-$ bash -c '{ grep -Fo -- x "" | wc -l ; } >o1 2>e1 ; echo "status=$?"'   # bash 5.3.9, GNU grep 3.12
-status=0
+$ bash --noprofile --norc -c 'set +o pipefail; { grep -Fo -- x "" | wc -l ; } >o1 2>e1 ; st=$?; echo "status=$st"'
+status=0                                       # bash 5.3.9, GNU grep 3.12, coreutils 9.11
 $ cat o1 ; cat e1
 0
 grep: : No such file or directory
-$ bash -c 'set -o pipefail; { grep -Fo -- x "" | wc -l ; } >o2 2>e2 ; echo "status=$?"'
+$ bash --noprofile --norc -c 'set -o pipefail; { grep -Fo -- x "" | wc -l ; } >o2 2>e2 ; st=$?; echo "status=$st"'
 status=2
 $ cat o2 ; cat e2
 0
 grep: : No such file or directory
 ```
+
+`wc`'s version is recorded because `wc` is one of the two commands whose status the
+experiment is about.
 
 Identical stdout, identical stderr, **different status** — and the status is the only thing
 that moved, so the status is the only thing this pair explains. It settles

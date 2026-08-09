@@ -2,7 +2,7 @@
 
 **Scope:** issue #45 only — the rule, in `agents-md`'s managed discipline block.
 Issues #30/#31/#32/#33/#35/#38/#41/#43/#44 are separate PRs and NOT in scope.
-**Phase:** BUILD · **Bead:** n/a (direct-edit tier, doc-only) · **Branch:** prose-execution-rule
+**Phase:** HARDEN · **Bead:** n/a (direct-edit tier, doc-only) · **Branch:** prose-execution-rule
 **Pending:** —
 **Gate:** `./install.test && ./skills/pr-with-codex-bot-review/scripts/bot-gate.test && ./skills/drive/scripts/drive-status.test`
 · run at a2e7893 on bash 5.3.9: `passed 12, failed 0` / `passed 124, failed 0` /
