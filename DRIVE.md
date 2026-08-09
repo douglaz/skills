@@ -41,8 +41,7 @@ runner could execute the ```console blocks and compare status and output, which 
 issue #49 proposes — but no *generic* script validates an arbitrary natural-language claim,
 so reviewer-plus-recorded-run is the enforcement the rule can rely on today.
 Do NOT retro-fit "Measured on" to existing sentences across the repo.
-Do NOT edit any skill other than `agents-md`. retro-fitting "Measured on" to existing sentences
-across the repo; or edits to any skill other than `agents-md`.
+Do NOT edit any skill other than `agents-md`.
 
 ## Next
 Issue #32 `verify-commit`, written under this rule. Then #30/#31 (drive Guard 2 — both

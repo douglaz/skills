@@ -37,6 +37,10 @@ Separate the streams with redirection. Hand-labelled comments on merged output a
 provenance rather than showing it — rerun in a terminal or CI log that combines file
 descriptors and nothing distinguishes the two:
 
+Run this one **inside a git repository**: outside one it also exits 128 with an empty
+stdout, so two of the three recorded lines match for entirely the wrong reason and only
+the stderr gives it away.
+
 ```console
 $ ( set +e                            # these commands FAIL on purpose; under `set -e`
 >   d=$(mktemp -d) || exit 1          # the subshell dies before recording anything
@@ -68,8 +72,10 @@ Pin the baseline explicitly. `bash -c` inherits `pipefail` when the parent expor
 children were left unpinned the pair would read 2 vs 2, with nothing in the output saying
 why. The run below pins only the second, which is what makes the contamination visible:
 `unpinned=2` against `pinned=0`. (Note `set +e` here precedes the export, so `SHELLOPTS`
-carries `pipefail` and not `errexit` — `braceexpand:hashall:interactive-comments:pipefail`,
-measured. Order matters for what gets inherited.)
+carries `pipefail` and not `errexit`. Order matters for what gets inherited. The exact
+`SHELLOPTS` string depends on the parent shell — interactive parents add `history`,
+`emacs` and more — so what must reproduce is the presence of `pipefail` and the absence
+of `errexit`, not the literal list.)
 Shown rather than asserted, because a warning about unverifiable claims has no business
 being one:
 
@@ -78,7 +84,10 @@ $ ( set +e ; set -o pipefail ; export SHELLOPTS    # bash 5.3.9
 >   bash -c '{ grep -Fo -- x "" | wc -l ; } >/dev/null 2>&1 ; echo "unpinned=$?"'
 >   bash --noprofile --norc -c 'set +o pipefail; { grep -Fo -- x "" | wc -l ; } >/dev/null 2>&1 ; echo "pinned=$?"' )
 unpinned=2                                     # baseline contaminated
-pinned=0                                       # --noprofile --norc + explicit mode
+#   measured: under a contaminated parent, `set +o pipefail` alone gives 0 and
+#   `--noprofile --norc` alone still gives 2 — the flags do not pin the mode. They
+#   are kept only to keep rc/profile files out of the run.
+pinned=0                                       # `set +o pipefail` is the pin
 ```
 
 With that established, the experiment itself:
