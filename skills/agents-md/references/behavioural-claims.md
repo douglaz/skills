@@ -38,13 +38,12 @@ provenance rather than showing it — rerun in a terminal or CI log that combine
 descriptors and nothing distinguishes the two:
 
 ```console
-$ d=$(mktemp -d) || { echo "no temp dir"; exit 1; }   # NOT `&&`: on failure `d` is empty
-$ trap 'rm -rf "$d"' EXIT                             # and the next line writes to /o
-$ git status --porcelain -- "" >"$d/o" 2>"$d/e" ; echo "status=$?"   # git 2.54.0
+$ ( d=$(mktemp -d) || exit 1          # `||`, not `&&`: on failure d is empty and the
+>   trap 'rm -rf "$d"' EXIT           # next line would redirect to /o
+>   git status --porcelain -- "" >"$d/o" 2>"$d/e"
+>   echo "status=$?" ; wc -c <"$d/o" ; cat "$d/e" )      # git 2.54.0
 status=128
-$ wc -c <"$d/o"
 0
-$ cat "$d/e"
 fatal: empty string is not a valid pathspec. please use . instead if you meant to match all paths
 ```
 
@@ -66,16 +65,15 @@ experiment depends on (measured — with `SHELLOPTS` exported, the unpinned base
 2, and `--noprofile --norc` plus `set +o pipefail` restores 0):
 
 ```console
-$ d=$(mktemp -d) || { echo "no temp dir"; exit 1; }
-$ trap 'rm -rf "$d"' EXIT ; export d
-$ bash --noprofile --norc -c 'set +o pipefail; { grep -Fo -- x "" | wc -l ; } >"$d/o1" 2>"$d/e1" ; st=$?; echo "status=$st"'
-status=0                                       # bash 5.3.9, GNU grep 3.12, coreutils 9.11
-$ cat "$d/o1" ; cat "$d/e1"
+$ ( d=$(mktemp -d) || exit 1 ; trap 'rm -rf "$d"' EXIT ; export d
+>   bash --noprofile --norc -c 'set +o pipefail; { grep -Fo -- x "" | wc -l ; } >"$d/o1" 2>"$d/e1" ; echo "status=$?"'
+>   cat "$d/o1" "$d/e1"
+>   bash --noprofile --norc -c 'set -o pipefail; { grep -Fo -- x "" | wc -l ; } >"$d/o2" 2>"$d/e2" ; echo "status=$?"'
+>   cat "$d/o2" "$d/e2" )              # bash 5.3.9, GNU grep 3.12, coreutils 9.11
+status=0
 0
 grep: : No such file or directory
-$ bash --noprofile --norc -c 'set -o pipefail; { grep -Fo -- x "" | wc -l ; } >"$d/o2" 2>"$d/e2" ; st=$?; echo "status=$st"'
 status=2
-$ cat "$d/o2" ; cat "$d/e2"
 0
 grep: : No such file or directory
 ```
@@ -88,7 +86,10 @@ starts — while bare `o1`/`e1` litter whatever directory the reader is standing
 creation is checked with `||`, not chained with `&&`: on failure `&&` skips only the trap,
 leaving `d` empty so the *next* command redirects to `/o` at the filesystem root. That is
 the unchecked-`mktemp` defect this repo fixed at four sites in #40, which is how thoroughly
-this class recurs.
+this class recurs. Each example is one **subshell**, so its `EXIT` trap fires the moment the
+example ends: a single-quoted trap expands `$d` at exit, so in an interactive shell a reader
+who reassigns `d` afterwards gets `rm -rf` on the *new* value — measured, it deleted an
+unrelated directory and leaked the original.
 
 Identical stdout, identical stderr, **different status** — and the status is the only thing
 that moved, so the status is the only thing this pair explains. It settles
