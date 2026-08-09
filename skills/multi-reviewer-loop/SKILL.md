@@ -46,9 +46,11 @@ The default panel is two reviewers, run in parallel every pass:
 | `claude` | `claude -p "<review prompt>" --model "$CLAUDE_MODEL" --effort high --output-format json` | Repo-aware, reads beyond the diff |
 
 **The Claude slot is a role, not a model.** `$CLAUDE_MODEL` is resolved once per run
-by a bounded probe down a ladder — the user's pin, then `fable`, then `opus` — because
-a model you cannot reach *hangs* rather than erroring, and finding that out inside a
-real pass costs the full 25-minute timeout. The probe, the measured evidence for it,
+by a bounded probe down a ladder — `fable`, then `opus`, or a user pin that *replaces*
+the ladder instead of heading it — because a model you cannot reach *hangs* rather than
+erroring, and finding that out inside a real pass costs the full 25-minute timeout.
+When no candidate answers, the slot is empty and the Claude reviewer is not invoked at
+all; that is the `DEGRADED` case. The probe, the measured evidence for it,
 and the mid-run re-resolution rule are in
 [references/reviewer-panel.md](references/reviewer-panel.md) § Resolving the Claude
 reviewer's model. Read it before the first pass.
@@ -405,16 +407,23 @@ For each pass `N` from `1` to `MAX_PASSES`:
      -c 'model="gpt-5.6-sol"' -c 'model_reasoning_effort="xhigh"' \
      </dev/null >"$REVIEW_DIR/pass-${PASS_ID}.codex.txt" 2>"$REVIEW_DIR/pass-${PASS_ID}.codex.stderr.txt" &
    CODEX_PID=$!
-   "$TO" --kill-after=60 1500 \
-     claude -p "$(cat "$CLAUDE_PROMPT_FILE")" --model "$CLAUDE_MODEL" --effort high --output-format json \
-     --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
-     --disallowedTools "Edit,Write,NotebookEdit" \
-     </dev/null >"$REVIEW_DIR/pass-${PASS_ID}.claude.raw.json" 2>"$REVIEW_DIR/pass-${PASS_ID}.claude.stderr.txt" &
-   CLAUDE_PID=$!
+   CLAUDE_PID=""
+   # Guarded on the slot, not just on $CLAUDE_MODEL: an exhausted ladder must not
+   # reach the CLI as `--model ""`. The reference has the full form.
+   if [ "${CLAUDE_SLOT:-empty}" = filled ]; then
+     "$TO" --kill-after=60 1500 \
+       claude -p "$(cat "$CLAUDE_PROMPT_FILE")" --model "$CLAUDE_MODEL" --effort high --output-format json \
+       --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
+       --disallowedTools "Edit,Write,NotebookEdit" \
+       </dev/null >"$REVIEW_DIR/pass-${PASS_ID}.claude.raw.json" 2>"$REVIEW_DIR/pass-${PASS_ID}.claude.stderr.txt" &
+     CLAUDE_PID=$!
+   fi
    # `|| VAR=$?` — a timeout kill returns 124/137, and under `set -e` the bare
    # `; VAR=$?` form terminates the shell before the status is ever captured.
    CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?
-   CLAUDE_RC=0; wait "$CLAUDE_PID" || CLAUDE_RC=$?
+   # `wait ""` reaps ALL children, so an empty slot would look like a finished pass.
+   CLAUDE_RC=0
+   if [ -n "$CLAUDE_PID" ]; then wait "$CLAUDE_PID" || CLAUDE_RC=$?; fi
    ```
 
    **Do not pass focus text as a `codex review` argument.** `codex review` rejects
@@ -512,6 +521,10 @@ For each pass `N` from `1` to `MAX_PASSES`:
 
 5. Append a short entry to `summary.md` with:
    - pass number
+   - **the model that filled the Claude slot for this pass**, and whether it came from
+     the ladder default, a user pin, or a mid-run fallback. This is the durable record
+     the slot-based filenames deliberately do not carry — omit it and the provenance
+     gap the rename closed simply reopens somewhere else.
    - commands used, and each reviewer's exit status
    - counts by priority, per reviewer, plus merged/deduped totals
    - agreement counts (`BOTH` / `CODEX`-only / `CLAUDE`-only)

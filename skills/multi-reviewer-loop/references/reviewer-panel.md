@@ -32,16 +32,23 @@ different diffs.
 
 **The Claude slot is a role, not a model.** Resolve which model fills it once per
 run, before the first pass, into `$CLAUDE_MODEL`; every invocation below uses that
-variable and none hardcodes a name. The ladder is the user's pin, then `fable`,
-then `opus`.
+variable and none hardcodes a name. The default ladder is `fable` then `opus`. **A
+user pin replaces the ladder rather than sitting in front of it** — a pinned model
+that cannot be reached fails the slot, because substituting there would hand the user
+a different reviewer than the one they named.
 
 **Probe it — do not discover it inside a real pass.** A model you cannot reach does
-not fail fast, it *hangs*: measured below, `--model fable` on a host whose Fable
-access was exhausted wrote **zero bytes to both streams for over eight minutes** and
-never exited on its own. Inside a pass that costs the whole `RC_TIMEOUT` (25 minutes)
-and yields a truncated review that is not clean and not ambiguous, just gone. The
-probe is one trivial prompt, bounded at 90s, and it cost **$0.032** on the model that
-answered and **$0.0006** on the one that did not.
+not fail fast, it *hangs*. What the transcript below establishes: bounded at 90s, the
+unreachable model had produced **zero bytes on stderr**, written nothing usable, and
+not exited on its own — it had to be killed, exit 124. Separately observed on the same
+host and not reproduced as a transcript here: an *unbounded* call in the same state sat
+for **more than eight minutes** with both output files still zero bytes before it was
+killed by hand. So "it hangs" is measured to 90 seconds and observed well past it; what
+it is not is a claim that it never exits, which nothing here tested. Inside a pass even
+the 90-second floor is the wrong place to find out — the reviewer timeout is 25 minutes
+and the result is a truncated review that is not clean and not ambiguous, just gone. The
+probe is one trivial prompt and cost **$0.032** on the model that answered, **$0.0006**
+on the one that did not.
 
 ```bash
 TO=$(command -v timeout || command -v gtimeout) \
@@ -67,22 +74,35 @@ for _m in $CLAUDE_MODEL_LADDER; do
   fi
   echo "claude reviewer: '$_m' did not answer (exit $_rc) — trying the next candidate"
 done
-# The loop exits 0 whether or not anything answered, so CHECK. An empty $CLAUDE_MODEL
-# reaches the invocations below as `--model ""`, and a panel that never asked the CLI
-# for a valid model is not the same as one whose reviewer came back clean.
-[ -n "$CLAUDE_MODEL" ] \
-  || echo "no ladder candidate answered — the Claude slot is EMPTY; run DEGRADED on codex"
+# The loop exits 0 whether or not anything answered, so CHECK — and set a flag rather
+# than only printing one. An empty $CLAUDE_MODEL reaches the invocations below as
+# `--model ""`, and a panel that never asked the CLI for a valid model is not the same
+# as one whose reviewer came back clean. Every Claude invocation below is guarded on
+# CLAUDE_SLOT, the same shape `second-model-bead-audit` uses for `$RUN_CLAUDE`.
+if [ -n "$CLAUDE_MODEL" ]; then
+  CLAUDE_SLOT=filled
+  echo "claude reviewer: using $CLAUDE_MODEL"
+else
+  CLAUDE_SLOT=empty
+  echo "no ladder candidate answered — Claude slot EMPTY; run DEGRADED on codex and do NOT invoke claude"
+fi
 ```
 
 Run verbatim, under `set -euo pipefail`, on a host whose first ladder entry was
 unreachable:
 
 ```console
-$ bash ladder.sh ; echo "LADDER_EXIT=$?"        # the block above, byte for byte
+$ bash ladder.sh ; echo "LADDER_EXIT=$?"   # the block above, extracted from THIS file
 claude reviewer: 'fable' did not answer (exit 124) — trying the next candidate
-CLAUDE_MODEL=opus
+claude reviewer: using opus
 LADDER_EXIT=0
 ```
+
+Extracted programmatically rather than retyped, because a transcript hand-copied from
+an earlier draft records what the block *used* to print. That is not hypothetical: the
+first version of this section recorded a `CLAUDE_MODEL=opus` line that the block had no
+`echo` to produce — it came from a scratch wrapper — and review caught it here, in the
+one block the rest of this change rests on.
 
 The `|| _rc=$?` and the `if` are what make that exit 0 rather than an errexit abort on
 the first candidate. Measured on the same shape with `timeout 1 sleep 5` standing in
@@ -261,23 +281,29 @@ TO=$(command -v timeout || command -v gtimeout) \
   </dev/null >"$CODEX_OUT" 2>"$CODEX_ERR" &
 CODEX_PID=$!
 
-"$TO" --kill-after=60 "$RC_TIMEOUT" \
-  claude -p "$(cat "$CLAUDE_PROMPT_FILE")" \
-  --model "$CLAUDE_MODEL" \
-  --effort high \
-  --output-format json \
-  --tools "Bash,Read,Glob,Grep" \
-  --allowedTools "Bash,Read,Glob,Grep" \
-  --disallowedTools "Edit,Write,NotebookEdit" \
-  </dev/null >"$CLAUDE_RAW" 2>"$CLAUDE_ERR" &
-CLAUDE_PID=$!
+CLAUDE_PID=""
+if [ "${CLAUDE_SLOT:-empty}" = filled ]; then
+  "$TO" --kill-after=60 "$RC_TIMEOUT" \
+    claude -p "$(cat "$CLAUDE_PROMPT_FILE")" \
+    --model "$CLAUDE_MODEL" \
+    --effort high \
+    --output-format json \
+    --tools "Bash,Read,Glob,Grep" \
+    --allowedTools "Bash,Read,Glob,Grep" \
+    --disallowedTools "Edit,Write,NotebookEdit" \
+    </dev/null >"$CLAUDE_RAW" 2>"$CLAUDE_ERR" &
+  CLAUDE_PID=$!
+fi
 
 # `|| VAR=$?`, not `; VAR=$?`. A timeout kill makes `wait` return 124/137, and under
-# `set -e` — which this file assumes at line 99 — the bare form terminates the shell right
+# `set -e` — which the prompt-building section above assumes — the bare form terminates the shell right
 # there: CODEX_RC is never assigned, the Claude reviewer is never reaped, and the degraded-pass and
 # two-consecutive-timeout handling below never runs. The `||` keeps errexit off the hook.
 CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?
-CLAUDE_RC=0; wait "$CLAUDE_PID" || CLAUDE_RC=$?
+# Only wait on a reviewer that was started. `wait ""` reaps every child, so an empty
+# slot would make this return once codex is done and look like a completed pass.
+CLAUDE_RC=0
+if [ -n "$CLAUDE_PID" ]; then wait "$CLAUDE_PID" || CLAUDE_RC=$?; fi
 ```
 
 **The `set -m` above is load-bearing**, not decoration: it is what makes the escape hatch's

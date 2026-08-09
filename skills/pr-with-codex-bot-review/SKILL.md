@@ -235,10 +235,20 @@ routinely miss.
 
 Resolve `$CLAUDE_MODEL` with the ladder probe in
 [multi-reviewer-loop/references/reviewer-panel.md](../multi-reviewer-loop/references/reviewer-panel.md)
-§ Resolving the Claude reviewer's model. It matters more here than anywhere else in
-this skill, because this reviewer is optional: an unreachable model produces no
-findings and no stderr, which is byte-identical to a reviewer that found nothing —
-and the next step in this section is a PR body claiming a pre-review happened.
+§ Resolving the Claude reviewer's model, and bound the call below the same way the
+probe is bounded. An unreachable model does not return an error you can check — it
+does not return at all, so the `CLAUDE_RC` check further down is never reached and
+the step simply stops, mid-ship, with no output in either file.
+
+Two adjustments for this site specifically, because this reviewer is **optional** and
+the rest of the skill must survive without it:
+
+- If GNU `timeout`/`gtimeout` is absent, **skip the pre-review** and say so. Do not
+  `exit 1` the way the panel snippets do — they are the whole job, this is one
+  optional step before shipping, and aborting a PR over a missing convenience binary
+  is a worse outcome than opening it with the box unticked.
+- If no ladder candidate answers, likewise skip and say so. An empty slot here means
+  no pre-review happened, which is a thing to report, not to work around.
 
 ```bash
 BASE=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)
@@ -260,12 +270,26 @@ propose mechanism no correctness/security/data-loss requirement needs. Do not
 modify any file. Output exactly "No findings." if clean.
 EOF
 
-claude -p "$(cat "$RD/prompt.txt")" \
-  --model "$CLAUDE_MODEL" --effort high --output-format json \
-  --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
-  --disallowedTools "Edit,Write,NotebookEdit" \
-  >"$RD/claude.json" 2>"$RD/claude.stderr"
-CLAUDE_RC=$?
+TO=$(command -v timeout || command -v gtimeout || true)
+# `if`, not `[ ... ] && _skip=...`: that form returns 1 whenever the condition is
+# false, and this repo has already shipped one `set -e` abort from exactly that shape
+# (install.sh --uninstall, #37). It is harmless mid-script and lethal as a function's
+# last statement, so do not write the fragile version and rely on its position.
+_skip=""
+if [ -z "$TO" ]; then _skip="no GNU timeout (nor gtimeout) to bound the reviewer"; fi
+if [ "${CLAUDE_SLOT:-empty}" != filled ]; then _skip="no ladder candidate answered"; fi
+if [ -n "$_skip" ]; then
+  echo "skipping the optional local pre-review: $_skip"
+  CLAUDE_RC=127          # not 0 — a skipped review must never read as a clean one
+else
+  "$TO" --kill-after=60 1500 \
+    claude -p "$(cat "$RD/prompt.txt")" \
+    --model "$CLAUDE_MODEL" --effort high --output-format json \
+    --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
+    --disallowedTools "Edit,Write,NotebookEdit" \
+    </dev/null >"$RD/claude.json" 2>"$RD/claude.stderr"
+  CLAUDE_RC=$?
+fi
 
 jq -er 'if .is_error then error(.result // "reviewer returned is_error")
         else (.result // empty) end' \
@@ -287,10 +311,10 @@ that never ran is worse than not running one. The same goes for *which* reviewer
 name the model in the body, since "a local review ran" and "Fable reviewed it" stop
 being the same sentence the moment the ladder falls through.
 
-There is no `timeout` in the block above and this is the one place in the repo where
-that is deliberate — it is a foreground, interactive step, so a hang is visible to
-you rather than silent. If you background it or script it, bound it like every other
-reviewer invocation.
+The block is bounded even though it runs in the foreground. "You would notice a hang"
+is not a mechanism — an unreachable model is indistinguishable from a slow review
+while you watch it, and the measured behaviour is that it does not exit on its own.
+Every reviewer invocation in this repo is bounded for the same reason.
 
 Triage it exactly like a bot finding: credible hypothesis, verify before agreeing
 or rejecting, fix what's real, and don't build mechanism no requirement needs.

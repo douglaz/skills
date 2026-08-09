@@ -317,12 +317,47 @@ find.
 Set `PANEL_REVIEWERS` from the parsed `--reviewers` value. The default is
 `codex,claude`; a pinned run starts only the requested block.
 
-Resolve `$CLAUDE_MODEL` first, with the bounded probe in
+Three steps, **in this order** — normalize, then probe, then dispatch. The order is the
+point: the probe reads the ladder, so a pin parsed *after* it has already been ignored.
+
+### 1. Normalize a model-name pin to its slot
+
+`--reviewers fable` and `--reviewers opus` are documented as valid, and the case
+statement below accepts only slot names — so without this step a documented invocation
+exits 2 having started no auditor at all. A model pin fills the `claude` slot *and*
+pins the ladder to that one model:
+
+```bash
+# Map any model name in the list onto the claude slot, remembering the pin.
+CLAUDE_MODEL_PIN=""
+_norm=""
+IFS=',' read -ra _rv <<<"$PANEL_REVIEWERS"
+for _r in "${_rv[@]}"; do
+  case "$_r" in
+    codex|claude) _norm="${_norm:+$_norm,}$_r" ;;
+    "")           ;;
+    *)            CLAUDE_MODEL_PIN="$_r"; _norm="${_norm:+$_norm,}claude" ;;
+  esac
+done
+PANEL_REVIEWERS="$_norm"
+# A pin REPLACES the ladder; an unreachable pinned model fails the slot rather than
+# substituting, because the user named that model specifically. `if` rather than
+# `[ ... ] && ...` — the latter returns 1 on the no-pin path, which is the `set -e`
+# abort shape #37 already cost this repo once.
+if [ -n "$CLAUDE_MODEL_PIN" ]; then export CLAUDE_REVIEWER_MODELS="$CLAUDE_MODEL_PIN"; fi
+```
+
+### 2. Resolve `$CLAUDE_MODEL`
+
+Run the bounded probe in
 [multi-reviewer-loop/references/reviewer-panel.md](../../multi-reviewer-loop/references/reviewer-panel.md)
-§ Resolving the Claude reviewer's model — same ladder, same acceptance rule. An
-unreachable model hangs rather than erroring, so without the probe the 900s
-`timeout` below is the first thing that notices, and it reports the auditor as
-`failed` after fifteen minutes rather than as `substituted` after one.
+§ Resolving the Claude reviewer's model — same ladder, same acceptance rule, and it
+reads the `CLAUDE_REVIEWER_MODELS` just set. It also sets `CLAUDE_SLOT`, which the
+dispatch below uses. An unreachable model hangs rather than erroring, so without the
+probe the 900s `timeout` is the first thing that notices, and it reports the auditor
+as `failed` after fifteen minutes rather than as `substituted` after one.
+
+### 3. Dispatch
 
 ```bash
 PANEL_REVIEWERS=${PANEL_REVIEWERS:-codex,claude}
@@ -361,7 +396,10 @@ if $RUN_CODEX; then
   CODEX_PID=$!
 fi
 
-if $RUN_CLAUDE; then
+# `$RUN_CLAUDE` says the user asked for this slot; `$CLAUDE_SLOT` says a model actually
+# answered. Both are required — requested-but-unfillable must reach the report as an
+# empty slot, not as `--model ""`.
+if $RUN_CLAUDE && [ "${CLAUDE_SLOT:-empty}" = filled ]; then
   (
     cd "$REPO_ROOT"
     "$TIMEOUT_BIN" --kill-after=30s 900s claude -p "$(cat "$AUDIT_PROMPT_FILE")" \
@@ -608,9 +646,10 @@ and rerun only after capturing a stable new baseline.
 |---|---|
 | Codex model unavailable | Retry once without `-m gpt-5.6-sol`; record the environment-default fallback. |
 | Codex auth/non-zero error | Surface stderr; continue `DEGRADED` with the Claude auditor. |
-| Claude `is_error`, rate limit, overload, or auth error | Retry once; then continue `DEGRADED` with Codex. |
+| Claude `is_error`, rate limit, overload, or auth error | Retry once. If it fails again, **re-resolve the ladder once** and rerun on the next model before degrading — credits can expire between the probe and a 900s audit, and degrading with an untried rung is the exact outcome the ladder exists to prevent. `DEGRADED` only once every candidate has failed. |
 | Output ambiguous | Reread the prompt file and rerun that reviewer once. A second ambiguity is a reviewer failure. |
-| Reviewer timeout | Ignore partial output and mark that reviewer failed. |
+| Reviewer timeout | Ignore partial output and mark that reviewer failed. On the Claude side a timeout is also the signature of an unreachable model, so re-resolve the ladder once (same one-re-resolution cap) before concluding the auditor is merely slow. |
+| A model pin cannot be reached | Report the slot as failed. Do **not** substitute: a pin replaces the ladder, and the user named that model specifically. |
 | Graph or source snapshot drifts | Invalidate every vote and report `BLOCKED`; never synthesize a verdict from stale evidence. |
 | All requested reviewers fail or are absent | Report `BLOCKED` with no launch verdict; preserve every failure reason. |
 

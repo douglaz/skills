@@ -81,10 +81,11 @@ PROMPT_FILE="$REVIEW_DIR/claude-prompt.txt"
 `$CLAUDE_MODEL`, with the bounded probe in
 [multi-reviewer-loop/references/reviewer-panel.md](../../multi-reviewer-loop/references/reviewer-panel.md)
 § Resolving the Claude reviewer's model. That file owns the ladder, the probe and
-the evidence; this loop just uses the result. Do not hardcode a model here — an
-unreachable one hangs rather than erroring, and inside a hardening iteration that
-burns the timeout and produces no findings, which is indistinguishable from a clean
-review if you are only watching for a non-zero exit.
+the evidence; this loop just uses the result, including the `CLAUDE_SLOT` flag it sets.
+Do not hardcode a model here — an unreachable one hangs rather than erroring, and with
+the bound added below that costs a whole 25-minute iteration and yields no findings,
+which is indistinguishable from a clean review if you are only watching for a non-zero
+exit.
 
 Write the Claude reviewer's prompt once, into `$PROMPT_FILE`. Interpolate the base
 with `printf` and keep the rubric in a **quoted** heredoc, so nothing in the text
@@ -125,21 +126,38 @@ into a single opinion.
 
 ```bash
 PASS=$(printf '%02d' "$ITERATION")
+# Bound BOTH reviewers. Either can hang with no output and no exit, and an unreachable
+# model does exactly that — so without this the `wait` below never returns, the `jq`
+# unwrap is never reached, and the "proceed with the survivor" handling further down
+# never runs. That is a permanent stall, not a slow iteration, and it looks identical
+# to a reviewer still thinking.
+TO=$(command -v timeout || command -v gtimeout) \
+  || { echo "no GNU timeout (nor gtimeout) — cannot bound the reviewers"; exit 1; }
+RC_TIMEOUT=1500
 
-codex review --base "$REVIEW_BASE" \
+"$TO" --kill-after=60 "$RC_TIMEOUT" \
+  codex review --base "$REVIEW_BASE" \
   -c 'model="gpt-5.6-sol"' -c 'model_reasoning_effort="xhigh"' \
-  >"$REVIEW_DIR/pass-$PASS.codex.txt" 2>"$REVIEW_DIR/pass-$PASS.codex.err" &
+  </dev/null >"$REVIEW_DIR/pass-$PASS.codex.txt" 2>"$REVIEW_DIR/pass-$PASS.codex.err" &
 CODEX_PID=$!
 
-claude -p "$(cat "$PROMPT_FILE")" \
-  --model "$CLAUDE_MODEL" --effort high --output-format json \
-  --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
-  --disallowedTools "Edit,Write,NotebookEdit" \
-  >"$REVIEW_DIR/pass-$PASS.claude.json" 2>"$REVIEW_DIR/pass-$PASS.claude.err" &
-CLAUDE_PID=$!
+CLAUDE_PID=""
+if [ "${CLAUDE_SLOT:-empty}" = filled ]; then
+  "$TO" --kill-after=60 "$RC_TIMEOUT" \
+    claude -p "$(cat "$PROMPT_FILE")" \
+    --model "$CLAUDE_MODEL" --effort high --output-format json \
+    --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
+    --disallowedTools "Edit,Write,NotebookEdit" \
+    </dev/null >"$REVIEW_DIR/pass-$PASS.claude.json" 2>"$REVIEW_DIR/pass-$PASS.claude.err" &
+  CLAUDE_PID=$!
+fi
 
-wait "$CODEX_PID"; CODEX_RC=$?
-wait "$CLAUDE_PID"; CLAUDE_RC=$?
+# `|| VAR=$?` so a 124/137 timeout does not kill the shell under `set -e` before the
+# other reviewer is reaped. Exit 124 (TERM) and 137 (the --kill-after KILL) are
+# reviewer failures, never clean.
+CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?
+CLAUDE_RC=0
+if [ -n "$CLAUDE_PID" ]; then wait "$CLAUDE_PID" || CLAUDE_RC=$?; fi
 
 jq -er 'if .is_error then error(.result // "claude reviewer returned is_error")
         else (.result // empty) end' \

@@ -27,13 +27,16 @@ having written valid JSON with `is_error: true` and only the small side-model in
 `modelUsage`. stderr stays empty throughout, so every "read stderr for the auth error"
 rule in these skills was unreachable for this case.
 
-So: a `$CLAUDE_MODEL` ladder (user pin → `fable` → `opus`), resolved once per run by a
-bounded 90s probe, keyed on exit code **and** `is_error` **and** a non-empty `.result`.
+So: a `$CLAUDE_MODEL` ladder (`fable` → `opus`; a user pin *replaces* the ladder rather
+than heading it, so a named model fails instead of being substituted), resolved once per
+run by a bounded 90s probe, keyed on exit code **and** `is_error` **and** a non-empty
+`.result`, and setting a `CLAUDE_SLOT` flag so an exhausted ladder never reaches the CLI
+as `--model ""`.
 Artifacts and source tags rename from the model (`fable`) to the slot (`claude`),
 because after a fallback a file named `pass-01.fable.txt` is a false provenance claim —
 the exact defect #46 landed a rule against.
 
-Budget: 13 files, ~420 insertions. Round 1.
+Budget: 14 files, ~500 insertions. Round 2 of max 4 (round 1 panel: 15 findings, all accepted).
 Do NOT build: a retry/backoff policy, a model-capability matrix, per-pass re-probing,
 or a shared shell library — these are five prose skills, not a program.
 
