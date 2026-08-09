@@ -84,24 +84,27 @@ $ ( set +e ; set -o pipefail ; export SHELLOPTS    # bash 5.3.9
 >   env -u BASH_ENV bash -c '{ grep -Fo -- x "" | wc -l ; } >/dev/null 2>&1 ; echo "unpinned=$?"'
 >   env -u BASH_ENV bash -c 'set +o pipefail; { grep -Fo -- x "" | wc -l ; } >/dev/null 2>&1 ; echo "pinned=$?"' )
 unpinned=2                                     # baseline contaminated
-#   measured: `set +o pipefail` alone gives 0 under a contaminated parent, while
-#   `--noprofile --norc` alone still gives 2. Those flags suppress login/interactive
-#   startup files, which a non-interactive `bash -c` never reads — so they pin
-#   nothing here and are gone. `env -u BASH_ENV` is NOT decorative: BASH_ENV *is*
-#   sourced by non-interactive bash, so it can turn pipefail back on (measured) or
-#   redefine `grep` before the command string ever runs. BOTH children get it: the
-#   unpinned one is only "unpinned" as to `pipefail`, and a startup file setting
-#   `set +o pipefail` would turn its 2 into a 0 and quietly destroy the contrast.
+#   THIS block deliberately leaves its children exposed — that is the hazard it
+#   shows. The experiment below does not: it uses `env -i "PATH=$PATH"`.
+#
+#   Enumerating contamination vectors does not converge. Review of this file found
+#   three in three rounds: SHELLOPTS (carries pipefail), BASH_ENV (sourced by
+#   non-interactive bash, so it can re-enable a mode or redefine `grep`), and
+#   `export -f grep` (an imported function that survives `env -u BASH_ENV`, making
+#   the pair read 0/0 — measured). `--noprofile --norc` pins none of them, and a
+#   non-interactive `bash -c` never reads the files they suppress. `env -i` with an
+#   explicit PATH closes the class: measured, the imported function is gone
+#   (`type -t grep` -> file), SHELLOPTS loses pipefail, BASH_ENV is unset.
 pinned=0                                       # `set +o pipefail` is the pin
 ```
 
 With that established, the experiment itself:
 
 ```console
-$ ( set +e ; d=$(mktemp -d) || exit 1 ; trap 'rm -rf "$d"' EXIT ; export d
->   env -u BASH_ENV bash -c 'set +o pipefail; { grep -Fo -- x "" | wc -l ; } >"$d/o1" 2>"$d/e1" ; echo "status=$?"'
+$ ( set +e ; d=$(mktemp -d) || exit 1 ; trap 'rm -rf "$d"' EXIT
+>   env -i "PATH=$PATH" "d=$d" bash -c 'set +o pipefail; { grep -Fo -- x "" | wc -l ; } >"$d/o1" 2>"$d/e1" ; echo "status=$?"'
 >   cat "$d/o1" "$d/e1"
->   env -u BASH_ENV bash -c 'set -o pipefail; { grep -Fo -- x "" | wc -l ; } >"$d/o2" 2>"$d/e2" ; echo "status=$?"'
+>   env -i "PATH=$PATH" "d=$d" bash -c 'set -o pipefail; { grep -Fo -- x "" | wc -l ; } >"$d/o2" 2>"$d/e2" ; echo "status=$?"'
 >   cat "$d/o2" "$d/e2" )              # bash 5.3.9, GNU grep 3.12, coreutils 9.11
 status=0
 0
