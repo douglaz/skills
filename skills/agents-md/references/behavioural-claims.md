@@ -111,13 +111,19 @@ who reassigns `d` afterwards gets `rm -rf` on the *new* value. Shown with `echo`
 `rm -rf`, so the record is complete without being destructive:
 
 ```console
-$ ( set +e ; d=$(mktemp -d) || exit 1 ; victim=$(mktemp -d) || exit 1
->   trap 'echo "trap would run: rm -rf $d"' EXIT
+$ ( set +e ; orig=$(mktemp -d) || exit 1 ; victim=$(mktemp -d) || exit 1 ; d="$orig"
+>   trap 'echo "trap would run: rm -rf $d" ; rm -rf "$orig" "$victim"' EXIT
 >   echo "registered with d=$d" ; d="$victim" ; echo "reassigned  d=$d" )
-registered with d=/tmp/tmp.CfHlCRTodM
-reassigned  d=/tmp/tmp.zduT0zfbZk
-trap would run: rm -rf /tmp/tmp.zduT0zfbZk          # bash 5.3.9 — the VICTIM
+registered with d=/tmp/tmp.mkZzPEd1Zj
+reassigned  d=/tmp/tmp.4TTmbbLLqg
+trap would run: rm -rf /tmp/tmp.4TTmbbLLqg          # bash 5.3.9 — the VICTIM
+
+# mktemp randomises, so YOUR paths will differ; what must reproduce is that the
+# third line names the SECOND directory, not the first.
 ```
+
+The cleanup uses `$orig`/`$victim`, which nothing reassigns, so the demonstration
+removes both directories while still showing `$d` resolving late.
 
 Identical stdout, identical stderr, **different status** — and the status is the only thing
 that moved, so the status is the only thing this pair explains. It settles
