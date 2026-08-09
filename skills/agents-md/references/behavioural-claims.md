@@ -93,26 +93,37 @@ unpinned=2                                     # baseline contaminated
 #   `export -f grep` (an imported function that survives `env -u BASH_ENV`, making
 #   the pair read 0/0 — measured). `--noprofile --norc` pins none of them, and a
 #   non-interactive `bash -c` never reads the files they suppress. `env -i` with an
-#   explicit PATH closes the class: measured, the imported function is gone
-#   (`type -t grep` -> file), SHELLOPTS loses pipefail, BASH_ENV is unset.
+#   `env -i` plus ABSOLUTE binaries closes it: measured, the imported function is
+#   gone (`type -t grep` -> file), SHELLOPTS loses pipefail, BASH_ENV is unset, and
+#   a `grep` earlier on PATH cannot be reached. Passing `PATH=$PATH` through `env -i`
+#   does NOT close it — that re-imports the shadowing, which is the fourth vector a
+#   review round found here after the first three were patched one at a time.
 pinned=0                                       # `set +o pipefail` is the pin
 ```
 
 With that established, the experiment itself:
 
 ```console
+$ G=$(type -P grep) ; W=$(type -P wc) ; "$G" --version | head -1 ; "$W" --version | head -1
+grep (GNU grep) 3.12                   # resolve, then CHECK what you resolved: under a
+wc (GNU coreutils) 9.11                # hostile PATH `type -P` finds the shadow, not GNU
 $ ( set +e ; d=$(mktemp -d) || exit 1 ; trap 'rm -rf "$d"' EXIT
->   env -i "PATH=$PATH" "d=$d" bash -c 'set +o pipefail; { grep -Fo -- x "" | wc -l ; } >"$d/o1" 2>"$d/e1" ; echo "status=$?"'
+>   env -i "d=$d" "G=$G" "W=$W" bash -c 'set +o pipefail; { "$G" -Fo -- x "" | "$W" -l ; } >"$d/o1" 2>"$d/e1" ; echo "status=$?"'
 >   cat "$d/o1" "$d/e1"
->   env -i "PATH=$PATH" "d=$d" bash -c 'set -o pipefail; { grep -Fo -- x "" | wc -l ; } >"$d/o2" 2>"$d/e2" ; echo "status=$?"'
->   cat "$d/o2" "$d/e2" )              # bash 5.3.9, GNU grep 3.12, coreutils 9.11
+>   env -i "d=$d" "G=$G" "W=$W" bash -c 'set -o pipefail; { "$G" -Fo -- x "" | "$W" -l ; } >"$d/o2" 2>"$d/e2" ; echo "status=$?"'
+>   cat "$d/o2" "$d/e2" )              # bash 5.3.9
 status=0
 0
-grep: : No such file or directory
+/run/current-system/sw/bin/grep: : No such file or directory
 status=2
 0
-grep: : No such file or directory
+/run/current-system/sw/bin/grep: : No such file or directory
 ```
+
+Absolute binaries, not names on a `PATH`: `env -i "PATH=$PATH"` re-imports the caller's
+`PATH` and with it any `grep` wrapper earlier on it — measured, that turns the 0/2 pair
+into 0/0. Your paths will differ from the ones above; what must reproduce is the 0 then
+the 2.
 
 `wc`'s version is recorded because `wc` is one of the two commands whose status the
 experiment is about. Both captures go to a `mktemp -d` directory with a cleanup trap, not
