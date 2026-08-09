@@ -82,11 +82,14 @@ being one:
 ```console
 $ ( set +e ; set -o pipefail ; export SHELLOPTS    # bash 5.3.9
 >   bash -c '{ grep -Fo -- x "" | wc -l ; } >/dev/null 2>&1 ; echo "unpinned=$?"'
->   bash --noprofile --norc -c 'set +o pipefail; { grep -Fo -- x "" | wc -l ; } >/dev/null 2>&1 ; echo "pinned=$?"' )
+>   env -u BASH_ENV bash -c 'set +o pipefail; { grep -Fo -- x "" | wc -l ; } >/dev/null 2>&1 ; echo "pinned=$?"' )
 unpinned=2                                     # baseline contaminated
-#   measured: under a contaminated parent, `set +o pipefail` alone gives 0 and
-#   `--noprofile --norc` alone still gives 2 — the flags do not pin the mode. They
-#   are kept only to keep rc/profile files out of the run.
+#   measured: `set +o pipefail` alone gives 0 under a contaminated parent, while
+#   `--noprofile --norc` alone still gives 2. Those flags suppress login/interactive
+#   startup files, which a non-interactive `bash -c` never reads — so they pin
+#   nothing here and are gone. `env -u BASH_ENV` is NOT decorative: BASH_ENV *is*
+#   sourced by non-interactive bash, so it can turn pipefail back on (measured) or
+#   redefine `grep` before the command string ever runs.
 pinned=0                                       # `set +o pipefail` is the pin
 ```
 
@@ -94,9 +97,9 @@ With that established, the experiment itself:
 
 ```console
 $ ( set +e ; d=$(mktemp -d) || exit 1 ; trap 'rm -rf "$d"' EXIT ; export d
->   bash --noprofile --norc -c 'set +o pipefail; { grep -Fo -- x "" | wc -l ; } >"$d/o1" 2>"$d/e1" ; echo "status=$?"'
+>   env -u BASH_ENV bash -c 'set +o pipefail; { grep -Fo -- x "" | wc -l ; } >"$d/o1" 2>"$d/e1" ; echo "status=$?"'
 >   cat "$d/o1" "$d/e1"
->   bash --noprofile --norc -c 'set -o pipefail; { grep -Fo -- x "" | wc -l ; } >"$d/o2" 2>"$d/e2" ; echo "status=$?"'
+>   env -u BASH_ENV bash -c 'set -o pipefail; { grep -Fo -- x "" | wc -l ; } >"$d/o2" 2>"$d/e2" ; echo "status=$?"'
 >   cat "$d/o2" "$d/e2" )              # bash 5.3.9, GNU grep 3.12, coreutils 9.11
 status=0
 0
