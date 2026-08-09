@@ -76,9 +76,22 @@ conclusion to the varied condition is the whole discipline; drifting from "the s
 was 0" to "the count was 0" is how a correct experiment gets written up as the wrong
 claim.
 
-Capture the status into a variable on the same line, too. `echo "status=$?  count=$(cat o1)"`
-reports **`cat`'s** status, because the substitution runs first — measured while writing
-this file, on the run that was supposed to verify it.
+Capture the status before anything else runs on that line. Expansions happen left to right,
+so a command substitution *earlier* in the word completes before a *later* `$?` is expanded,
+and `$?` then reports the substitution rather than the command you meant:
+
+```console
+$ bash -c 'false; echo "count=$(printf 0) status=$?"'   # bash 5.3.9
+count=0 status=0
+$ bash -c 'false; echo "status=$? count=$(printf 0)"'
+status=1 count=0
+```
+
+Same command, same two expansions, opposite order, opposite answer. `st=$?` on its own line
+removes the question. Recorded because this file first got the *mechanism* backwards — it
+claimed the substitution clobbers `$?` regardless of position, having observed a real
+failure (the first form) and explained it with the wrong cause. Which is the section above,
+happening to the section above.
 
 ## A claim you cannot run is not yours to assert
 
