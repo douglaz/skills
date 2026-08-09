@@ -42,11 +42,13 @@ Treat that as the default for anything non-trivial.
    survived. Three cases, and one does not substitute for another — all three capture to
    the same scratch file, so open with it and require it. A failed `mktemp` does not fail
    quietly everywhere, which is the trap: the redirect itself is refused loudly (`>""` is
-   `: No such file or directory`, exit 1, measured on bash 5.3) and the `grep -Fq` checks
-   exit 2, but the **removal** check swallows it — `grep -Fo -- '<phrase>' "" | wc -l
-   || true` reports count `0` at pipeline status 0, because `wc` succeeds on grep's empty
-   output. So an unverified removal reads as "the phrase was fully removed" from a file
-   that was never created, and only that one check needs the guard to have any teeth:
+   `: No such file or directory`, exit 1, measured on bash 5.3.9) and the `grep -Fq` checks
+   exit 2. The **removal** check is the one that swallows it. Under the `pipefail` this
+   section assumes throughout, `grep -Fo -- '<phrase>' "" | wc -l` exits **2** on the
+   unopenable file — and the `|| true` that exists for the complete-removal case (below)
+   converts that to 0, while `wc` counting grep's empty output supplies a plausible `0`.
+   So an unverified removal reads as "the phrase was fully removed" from a file that was
+   never created. Only that check needs the guard to have any teeth:
 
    ```bash
    _chk=$(mktemp) || { echo "cannot create the scratch file — do NOT report the commit verified"; exit 1; }
