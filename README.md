@@ -86,7 +86,7 @@ them — it is copied everywhere, so bloat gets the whole thing ignored.
 
 ### multi-reviewer-loop
 
-Runs an iterative multi-reviewer review/fix/re-review loop on your current branch. Detects a review base, runs two reviewers in parallel — `codex review` (`gpt-5.6-sol` at `xhigh`) and Claude Fable at high effort — merges and dedupes their findings, treats findings as credible until disproven, fixes accepted items, validates the changed code, and repeats until both reviewers are clean on the current diff. A final consistency pass then reads the changed files — plus the untouched docs that describe them — as one artifact and asks whether they still agree — the class of defect a diff-scoped loop structurally cannot see, such as a summary table that no longer matches the behaviour it describes, or a rule in one file that forbids what another file requires. `CLEAN` requires both.
+Runs an iterative multi-reviewer review/fix/re-review loop on your current branch. Detects a review base, runs two reviewers in parallel — `codex review` (`gpt-5.6-sol` at `xhigh`) and a Claude reviewer at high effort — merges and dedupes their findings, treats findings as credible until disproven, fixes accepted items, validates the changed code, and repeats until both reviewers are clean on the current diff. A final consistency pass then reads the changed files — plus the untouched docs that describe them — as one artifact and asks whether they still agree — the class of defect a diff-scoped loop structurally cannot see, such as a summary table that no longer matches the behaviour it describes, or a rule in one file that forbids what another file requires. `CLEAN` requires both.
 
 ```
 /multi-reviewer-loop              # up to 6 passes (default), both reviewers
@@ -95,7 +95,9 @@ Runs an iterative multi-reviewer review/fix/re-review loop on your current branc
 /multi-reviewer-loop --reviewers codex          # pin a single reviewer
 ```
 
-Two reviewers with different scopes — codex sees the diff, Fable reads out into the repo — catch more than either alone, and their disagreements are the highest-signal moments in the loop. Findings both raise get fixed first; a finding only one raises still gets the full evidence bar, because the other reviewer's silence is not counter-evidence. If one reviewer is unavailable the loop runs degraded and says so; it never reports a one-reviewer pass as clean.
+Two reviewers with different scopes — codex sees the diff, the Claude reviewer reads out into the repo — catch more than either alone, and their disagreements are the highest-signal moments in the loop. Findings both raise get fixed first; a finding only one raises still gets the full evidence bar, because the other reviewer's silence is not counter-evidence. If one reviewer is unavailable the loop runs degraded and says so; it never reports a one-reviewer pass as clean.
+
+The Claude slot is a role, not a model: a bounded probe picks the first reachable model down a ladder (`fable`, then `opus`) before the first pass, because a model you cannot reach *hangs* rather than erroring — measured at over eight minutes of zero output — and discovering that inside a real pass costs the whole 25-minute reviewer timeout. A fallback is a full panel with a substitute, not a degraded one, and every report names the model that actually ran.
 
 Best fit: Claude Code explicit invocation. This skill shells out to both `codex`
 and `claude` and is most natural when run as a slash command from Claude Code.
@@ -199,8 +201,8 @@ Use the bead-polish-loop skill on the current bead graph.
 
 Provides the default final audit of a polished bead graph against the plan, with
 blocking findings first and exact bead-level fixes when obvious. It runs a
-read-only reviewer panel in parallel — Codex `gpt-5.6-sol` at `xhigh` plus Claude
-Fable at high effort — then merges findings as `BOTH`, `CODEX`, `FABLE`, or
+read-only reviewer panel in parallel — Codex `gpt-5.6-sol` at `xhigh` plus a Claude
+reviewer at high effort — then merges findings as `BOTH`, `CODEX`, `CLAUDE`, or
 `CONFLICT` and reconciles them against the plan and graph. One unavailable
 reviewer produces a clearly labeled degraded audit; with neither external
 reviewer available, the audit is blocked rather than silently replaced by a
@@ -210,7 +212,7 @@ Claude Code:
 
 ```text
 /second-model-bead-audit docs/PLAN.md
-/second-model-bead-audit docs/PLAN.md --reviewers fable  # explicitly pin one reviewer
+/second-model-bead-audit docs/PLAN.md --reviewers claude  # explicitly pin one reviewer
 ```
 
 Codex:
@@ -271,7 +273,7 @@ Use the orchestrating-with-rb-lite skill to run rb-lite until this branch is cle
 Use the orchestrating-with-rb-lite skill to clear the ready br backlog one bead at a time.
 ```
 
-It also runs a **harden-until-clean drive**: a codex + Claude Fable panel
+It also runs a **harden-until-clean drive**: a codex + Claude reviewer panel
 reviews the whole branch, every real finding becomes a bead labeled with the
 reviewer that found it, the beads drain one rb-lite run at a time, and the panel
 runs again over everything that merged — until both reviewers are clean.
@@ -294,7 +296,7 @@ drove the same loop through `ralph-burning`.)
 
 Opens and lands GitHub pull requests through the `chatgpt-codex-connector`
 review bot, with guidance for CodeRabbit when it is configured. Covers PR body
-drafting, local gates, a local Claude Fable pre-review before push so the bots
+drafting, local gates, a local Claude pre-review before push so the bots
 review the good version of the diff, bot re-triggers, review comment handling,
 force-push amends, and squash-merge cleanup.
 
@@ -450,7 +452,7 @@ directories created by `--migrate-existing`.
   `second-model-bead-audit` panel,
   `orchestrating-with-rb-lite` harden-until-clean panel, and the default
   `orchestrating-with-rb-lite` reviewer panel
-- `claude` on `PATH` for the Claude Fable reviewer in `multi-reviewer-loop`,
+- `claude` on `PATH` for the Claude reviewer in `multi-reviewer-loop`,
   `second-model-bead-audit`,
   `orchestrating-with-rb-lite` harden-until-clean mode, and
   `pr-with-codex-bot-review`, and for the default `orchestrating-with-rb-lite`

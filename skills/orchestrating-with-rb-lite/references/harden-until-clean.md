@@ -30,8 +30,8 @@ introducing bugs.
 
 ```
 loop:
-  codex_findings, fable_findings = review_panel(work_branch, base=review_base)  # parallel
-  findings = merge_and_dedupe(...)                     # tagged BOTH / CODEX / FABLE
+  codex_findings, claude_findings = review_panel(work_branch, base=review_base)  # parallel
+  findings = merge_and_dedupe(...)                     # tagged BOTH / CODEX / CLAUDE
   if no_real_findings(findings): break                 # DONE
   beads = [create_bead(f) for f in triage(findings)]
   sync_and_commit(beads)
@@ -74,10 +74,19 @@ fi
 # pre-created silently keeps their mode.
 REVIEW_DIR=$(mktemp -d "/tmp/harden-$(basename "$(git rev-parse --show-toplevel)")-$(echo "$WORK_BRANCH" | tr '/ ' '__')-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX") \
   || { echo "cannot create a private review directory"; exit 1; }
-PROMPT_FILE="$REVIEW_DIR/fable-prompt.txt"
+PROMPT_FILE="$REVIEW_DIR/claude-prompt.txt"
 ```
 
-Write the Fable reviewer's prompt once, into `$PROMPT_FILE`. Interpolate the base
+**Resolve the Claude reviewer's model before the first iteration**, into
+`$CLAUDE_MODEL`, with the bounded probe in
+[multi-reviewer-loop/references/reviewer-panel.md](../../multi-reviewer-loop/references/reviewer-panel.md)
+§ Resolving the Claude reviewer's model. That file owns the ladder, the probe and
+the evidence; this loop just uses the result. Do not hardcode a model here — an
+unreachable one hangs rather than erroring, and inside a hardening iteration that
+burns the timeout and produces no findings, which is indistinguishable from a clean
+review if you are only watching for a non-zero exit.
+
+Write the Claude reviewer's prompt once, into `$PROMPT_FILE`. Interpolate the base
 with `printf` and keep the rubric in a **quoted** heredoc, so nothing in the text
 gets shell-expanded:
 
@@ -123,18 +132,18 @@ codex review --base "$REVIEW_BASE" \
 CODEX_PID=$!
 
 claude -p "$(cat "$PROMPT_FILE")" \
-  --model fable --effort high --output-format json \
+  --model "$CLAUDE_MODEL" --effort high --output-format json \
   --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
   --disallowedTools "Edit,Write,NotebookEdit" \
-  >"$REVIEW_DIR/pass-$PASS.fable.json" 2>"$REVIEW_DIR/pass-$PASS.fable.err" &
-FABLE_PID=$!
+  >"$REVIEW_DIR/pass-$PASS.claude.json" 2>"$REVIEW_DIR/pass-$PASS.claude.err" &
+CLAUDE_PID=$!
 
 wait "$CODEX_PID"; CODEX_RC=$?
-wait "$FABLE_PID"; FABLE_RC=$?
+wait "$CLAUDE_PID"; CLAUDE_RC=$?
 
-jq -er 'if .is_error then error(.result // "fable reviewer returned is_error")
+jq -er 'if .is_error then error(.result // "claude reviewer returned is_error")
         else (.result // empty) end' \
-  <"$REVIEW_DIR/pass-$PASS.fable.json" >"$REVIEW_DIR/pass-$PASS.fable.txt"
+  <"$REVIEW_DIR/pass-$PASS.claude.json" >"$REVIEW_DIR/pass-$PASS.claude.txt"
 ```
 
 Four things to know about these commands:
@@ -143,7 +152,7 @@ Four things to know about these commands:
   exclusive — passing both fails arg parsing before any review runs.
 - **`codex review --base` does not see untracked files** (`--uncommitted` does,
   but cannot be combined with `--base`). Run `git add -N` on new source files
-  first, or codex and Fable are reviewing different diffs.
+  first, or codex and the Claude reviewer are reviewing different diffs.
 - **All three tool flags are needed.** `--tools` restricts the toolset,
   `--allowedTools` pre-approves it (without this, Bash calls are silently
   recorded as denials mid-review), `--disallowedTools` is belt-and-braces.
@@ -153,7 +162,7 @@ Four things to know about these commands:
   is degraded for it.
 
 Findings from both are lines starting with `[P0]`–`[P3]`. Count per reviewer,
-then merge into one deduped list, each entry tagged `BOTH`, `CODEX`, or `FABLE`.
+then merge into one deduped list, each entry tagged `BOTH`, `CODEX`, or `CLAUDE`.
 Dedupe on the claim, not the wording — the same defect described from two angles
 is **one bead**, never two, or you will build yourself a merge conflict.
 
@@ -178,7 +187,7 @@ only when you can point at code or tests that disprove it.
 **Sibling sweep — the step that saves whole iterations.** When a finding names
 one instance of a class ("these new routes lack auth"), grep the file for every
 sibling with the same shape and mint beads for those too. Six separate auth-gap
-beads collapsed into one sweep once this became explicit. The Fable reviewer
+beads collapsed into one sweep once this became explicit. The Claude reviewer
 catches more siblings than codex does alone, because it reads whole files — but
 it still chooses how far to read, so run the grep yourself. Classes that repeat:
 
@@ -238,7 +247,7 @@ the good JSONL discards the whole iteration's legitimate bead additions.
 br create --actor "$ACTOR" "<short, concrete title>" \
   --priority <0..4> \
   --type bug \
-  --labels <area>,code-review,review-src:<both|codex|fable> \
+  --labels <area>,code-review,review-src:<both|codex|claude> \
   --description "<finding summary, with file:line anchors>
 
 Acceptance criteria:
@@ -248,7 +257,7 @@ Acceptance criteria:
 - <at least one named test for the happy path and one for the rejection path>
 - <the repo's gate set passes on the final tree>
 
-Source: <codex | claude fable | both reviewers> review of $WORK_BRANCH vs $REVIEW_BASE, iteration <N>." \
+Source: <codex | claude/$CLAUDE_MODEL | both reviewers> review of $WORK_BRANCH vs $REVIEW_BASE, iteration <N>." \
   --json
 ```
 
@@ -292,7 +301,7 @@ unset BEADS_DIFF_REVIEWED
 # ...print and read the diff, then:
 : "${BEADS_DIFF_REVIEWED:?read THIS pass's diff, then set it to \"pass $ITERATION: <what you found>\"}"
 git add -- "$BEADS_JSONL"
-git commit -m "chore(beads): record review findings (iteration <N>, codex+fable)"
+git commit -m "chore(beads): record review findings (iteration <N>, codex+claude/<model>)"
 git push
 ```
 

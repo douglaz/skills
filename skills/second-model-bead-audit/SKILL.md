@@ -3,13 +3,13 @@ name: second-model-bead-audit
 description: >-
   Runs the default final launch-readiness audit for a polished bead graph against
   its plan. A read-only two-reviewer panel (Codex gpt-5.6-sol at xhigh plus Claude
-  Fable at high effort) independently checks coverage, ownership, bead quality,
+  reviewer at high effort) independently checks coverage, ownership, bead quality,
   dependencies, priority, verification, and operational obligations; the
   orchestrator merges and reconciles their findings into one verdict. Use after
   bead-polish-loop by default, or when the user asks to sanity-check, audit, get a
   second opinion on, or approve beads before implementation. Prefer read-only
   review unless the user explicitly asks for bead edits.
-argument-hint: "[plan/spec path] [--reviewers codex|fable|codex,fable]"
+argument-hint: "[plan/spec path] [--reviewers codex|claude|codex,claude]"
 compatibility: >-
   Requires br, bv, jq, SHA-256 tooling (sha256sum or shasum), and GNU timeout
   (timeout or gtimeout) on PATH, plus a repo that uses .beads/. The full default
@@ -48,8 +48,10 @@ independent audit.
 
 ## Inputs
 
-Parse `--reviewers <list>` first. Valid values are `codex`, `fable`, and
-`codex,fable`; the default is both. A user-pinned one-reviewer audit is a
+Parse `--reviewers <list>` first. Valid values are `codex`, `claude`, and
+`codex,claude`; the default is both. A model name (`fable`, `opus`) is accepted
+where the slot name goes and pins that model instead of running the ladder. A
+user-pinned one-reviewer audit is a
 `PINNED PANEL`, not an availability failure, but it still lacks full-panel
 agreement.
 
@@ -69,7 +71,12 @@ The default panel is:
 | Reviewer | Invocation | Role |
 |---|---|---|
 | `codex` | `codex exec`, `gpt-5.6-sol`, `model_reasoning_effort="xhigh"`, read-only sandbox | Independent plan/graph audit with a custom rubric |
-| `fable` | `claude -p`, `--model fable --effort high`, read-only tool set | Independent plan/graph audit with the same rubric |
+| `claude` | `claude -p`, `--model "$CLAUDE_MODEL" --effort high`, read-only tool set | Independent plan/graph audit with the same rubric |
+
+`$CLAUDE_MODEL` is resolved by the ladder probe in
+[multi-reviewer-loop/references/reviewer-panel.md](../multi-reviewer-loop/references/reviewer-panel.md)
+§ Resolving the Claude reviewer's model. Record which model actually ran — the
+report template has a field for it, and the independence rule below turns on it.
 
 `jq` is used to build the common graph snapshot and unwrap the Claude JSON result.
 
@@ -101,9 +108,21 @@ For each reviewer, label independence:
   second opinion.
 - `UNKNOWN`: graph authorship could not be established.
 
-With a Codex-built graph, Fable supplies the independent vote; with a Claude-built
-graph, Codex does. When authorship is mixed or unknown, the two-reviewer panel is
-still stronger than guessing which single auditor to invoke.
+With a Codex-built graph, the Claude auditor supplies the independent vote; with a
+Claude-built graph, Codex does. When authorship is mixed or unknown, the two-reviewer
+panel is still stronger than guessing which single auditor to invoke.
+
+**A model fallback can only ever weaken this label, so re-check it after one.** The
+ladder stays inside the Claude family, so a `fable`→`opus` substitution never *earns*
+`INDEPENDENT` on a Claude-built graph — it was `BUILDER-LINEAGE` before and it stays
+`BUILDER-LINEAGE`. The case worth naming is narrower and easy to miss: when the agent
+coordinating this audit is itself the fallback model, the "second model" becomes the
+*same* model as the driver. That is a separate process with its own context and a
+read-only tool set, so it is not literally the self-review the panel-health rules
+forbid — but it is one model checking work its own model produced, and reporting it as
+a clean second opinion without saying so is the substantive lie here. Label it
+`BUILDER-LINEAGE`, name the model, and say plainly that Codex is carrying the
+independent vote alone.
 
 ## Required outputs
 
@@ -113,7 +132,7 @@ still stronger than guessing which single auditor to invoke.
 2. Audit quality: `FULL PANEL`, `DEGRADED`, `PINNED PANEL`, or `BLOCKED`.
 3. Panel roster, model settings, exit health, and independence labels.
 4. One merged report with blockers first and every finding tagged `BOTH`,
-   `CODEX`, `FABLE`, or `CONFLICT`.
+   `CODEX`, `CLAUDE`, or `CONFLICT`.
 5. Exact bead-level fixes or proposed `br` actions where they are safe to state.
 6. Disagreements and contradictions, plus the plan section or bead evidence that
    settled them.
@@ -191,7 +210,7 @@ recorded acceptance of the reduced review coverage.
 
 ### 2. Run the panel
 
-Start Codex and Fable in parallel with the same prompt. Close stdin on both batch
+Start Codex and the Claude auditor in parallel with the same prompt. Close stdin on both batch
 commands, persist stdout/stderr separately, and bound hangs with GNU `timeout`, which is
 **required** — the prerequisites say to stop if it is missing, and the reference's snippet
 `exit 1`s rather than run an unbounded panel.
@@ -221,7 +240,7 @@ ambiguous rather than treating the presence of any finding tag as a usable audit
 Merge on the underlying claim, not wording:
 
 - `BOTH`: both reviewers found the same issue.
-- `CODEX` / `FABLE`: only that reviewer found it.
+- `CODEX` / `CLAUDE`: only that reviewer found it.
 - `CONFLICT`: one asserts a problem and the other explicitly says the same graph
   shape is correct.
 

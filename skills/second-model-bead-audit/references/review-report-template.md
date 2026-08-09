@@ -8,7 +8,8 @@ Load this file when merging the panel's findings and writing the final verdict.
 ## Panel
 - Quality: FULL PANEL | DEGRADED | PINNED PANEL | BLOCKED
 - Codex: <model/effort> — <healthy | failed | unavailable | not requested> — <INDEPENDENT | BUILDER-LINEAGE | UNKNOWN>
-- Fable: <model/effort> — <healthy | failed | unavailable | not requested> — <INDEPENDENT | BUILDER-LINEAGE | UNKNOWN>
+- Claude: <model actually used>/<effort> — <healthy | failed | unavailable | not requested> — <INDEPENDENT | BUILDER-LINEAGE | UNKNOWN>
+- Claude model source: <ladder default | user pin | fell back from <model>, reason>
 - Graph authorship: <known model lineage or UNKNOWN>
 - Independent vote present: yes | no | unknown
 - Graph snapshot: <fingerprint>
@@ -19,22 +20,22 @@ Load this file when merging the panel's findings and writing the final verdict.
 - FAIL | CONDITIONAL PASS | PASS | PASS (DEGRADED) | PASS (PINNED PANEL) |
   PASS (<quality>, NO INDEPENDENT VOTE) | NONE (panel BLOCKED)
 - <one-sentence reason>
-- Reviewer votes: Codex=<vote or n/a>, Fable=<vote or n/a>
+- Reviewer votes: Codex=<vote or n/a>, Claude=<vote or n/a>
 
 ## Blocking findings
-- [B1][BOTH | CODEX | FABLE | CONFLICT] <finding>
+- [B1][BOTH | CODEX | CLAUDE | CONFLICT] <finding>
   - Evidence: <plan section and bead IDs>
   - Why it blocks:
   - Recommended bead-level fix:
 
 ## Important conditions
-- [I1][BOTH | CODEX | FABLE | CONFLICT] <finding>
+- [I1][BOTH | CODEX | CLAUDE | CONFLICT] <finding>
   - Evidence: <plan section and bead IDs>
   - Why it matters:
   - Recommended bead-level fix:
 
 ## Optional nits
-- [N1][BOTH | CODEX | FABLE] <finding>
+- [N1][BOTH | CODEX | CLAUDE] <finding>
   - Evidence:
   - Suggested cleanup:
 
@@ -52,7 +53,7 @@ Load this file when merging the panel's findings and writing the final verdict.
 
 ## Reconciliation
 - <single-source or disputed claim> — upheld / rejected / reframed, per <plan section and bead IDs>
-- <direct contradiction> — Codex right / Fable right, per <plan section and bead IDs>
+- <direct contradiction> — Codex right / Claude right, per <plan section and bead IDs>
 
 ## Suggested br actions
 ```bash
@@ -61,7 +62,7 @@ Load this file when merging the panel's findings and writing the final verdict.
 
 ## Logs
 - Codex: <path>
-- Fable: <path>
+- Claude: <path>
 - Merged: <path>
 ````
 

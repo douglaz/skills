@@ -4,7 +4,7 @@ description: >-
   How to open and land a pull request through GitHub's `chatgpt-codex-connector` review bot
   (the one that auto-comments "Codex Review" on PRs), gating also on `coderabbitai[bot]`
   when it is configured on the repo. Covers writing the PR body, running local gates, a
-  local Claude Fable pre-review before push so bot rounds start from the good diff, the
+  local Claude pre-review before push so bot rounds start from the good diff, the
   codex bot's actual behavior — auto-fires on substantive code PRs, often silent on
   docs-only PRs, line-level findings live in PR review comments not the review body —
   re-triggering with `@codex review`, addressing findings via amend + force-push, knowing
@@ -229,9 +229,16 @@ force-push and a re-trigger. Running one local reviewer first turns findings you
 would have collected over three bot rounds into edits you make before the PR
 exists.
 
-Claude Fable at high effort is the default local reviewer here: it reads the repo
-around the diff, so it catches the out-of-diff callers and siblings the bots
+A Claude reviewer at high effort is the default local reviewer here: it reads the
+repo around the diff, so it catches the out-of-diff callers and siblings the bots
 routinely miss.
+
+Resolve `$CLAUDE_MODEL` with the ladder probe in
+[multi-reviewer-loop/references/reviewer-panel.md](../multi-reviewer-loop/references/reviewer-panel.md)
+§ Resolving the Claude reviewer's model. It matters more here than anywhere else in
+this skill, because this reviewer is optional: an unreachable model produces no
+findings and no stderr, which is byte-identical to a reviewer that found nothing —
+and the next step in this section is a PR body claiming a pre-review happened.
 
 ```bash
 BASE=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)
@@ -254,29 +261,36 @@ modify any file. Output exactly "No findings." if clean.
 EOF
 
 claude -p "$(cat "$RD/prompt.txt")" \
-  --model fable --effort high --output-format json \
+  --model "$CLAUDE_MODEL" --effort high --output-format json \
   --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
   --disallowedTools "Edit,Write,NotebookEdit" \
-  >"$RD/fable.json" 2>"$RD/fable.stderr"
+  >"$RD/claude.json" 2>"$RD/claude.stderr"
 CLAUDE_RC=$?
 
 jq -er 'if .is_error then error(.result // "reviewer returned is_error")
         else (.result // empty) end' \
-  <"$RD/fable.json" >"$RD/fable.txt"
+  <"$RD/claude.json" >"$RD/claude.txt"
 JQ_RC=$?
 ```
 
 **Check both exit codes before believing the output.** `CLAUDE_RC != 0` or
-`JQ_RC != 0` means the review never ran — auth, rate limit (429), or overload
-(529) — and `$RD/fable.txt` will be empty. Do not pipe this straight
+`JQ_RC != 0` means the review never ran — auth, rate limit (429), overload
+(529), or an unreachable model — and `$RD/claude.txt` will be empty. Do not pipe this straight
 into `tee` and read the file: a failed reviewer and a clean reviewer both leave
 you with no findings on stdout, and the difference is the whole point. The clean
 signal is exit 0 plus exactly `No findings.`; empty output with exit 0 is
 ambiguous, not clean.
 
-If it failed, either re-run it or open the PR without a pre-review — but do not
-tick the pre-review line in the PR body. Claiming a review that never ran is
-worse than not running one.
+If it failed, re-run it on the next ladder model, or open the PR without a
+pre-review — but do not tick the pre-review line in the PR body. Claiming a review
+that never ran is worse than not running one. The same goes for *which* reviewer:
+name the model in the body, since "a local review ran" and "Fable reviewed it" stop
+being the same sentence the moment the ladder falls through.
+
+There is no `timeout` in the block above and this is the one place in the repo where
+that is deliberate — it is a foreground, interactive step, so a hang is visible to
+you rather than silent. If you background it or script it, bound it like every other
+reviewer invocation.
 
 Triage it exactly like a bot finding: credible hypothesis, verify before agreeing
 or rejecting, fix what's real, and don't build mechanism no requirement needs.
@@ -315,7 +329,7 @@ honesty in commit messages with kinder reviews.>
 - [x] `nix develop -c cargo clippy --locked -- -D warnings` clean
 - [x] `nix develop -c cargo fmt --check` clean
 - [x] `nix build` succeeds
-- [x] Local review (claude fable, high effort): <N findings addressed / clean>
+- [x] Local review (claude/<model>, high effort): <N findings addressed / clean>
 - [ ] CI green
 - [ ] Codex bot review
 

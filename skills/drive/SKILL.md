@@ -440,7 +440,7 @@ At each transition, one compact block. No preamble, no re-explaining what the us
 ```text
 ✅ BUILD acme-42 — clean in 2 rounds, 3 files, +180 LOC (budget 250)
    gate: nix develop -c ./check.sh → EXIT=0
-   → HARDEN: launching codex + fable panel now
+   → HARDEN: launching codex + claude panel now
 ```
 
 If a background job is running, say what you're waiting on and that you'll continue

@@ -34,15 +34,20 @@ Before editing, classify each finding as `FIX`, `DEFER`, `REJECT`, or
 
 ## Cross-reviewer signals
 
-Each merged finding carries a source tag: `BOTH`, `CODEX`, `FABLE`, or
+Each merged finding carries a source tag: `BOTH`, `CODEX`, `CLAUDE`, or
 `CONFLICT`. The tag changes *ordering and attention*, never the evidence bar.
+
+It names the **slot**, not the model that filled it. A mid-run fallback must not
+split one slot's findings across two tag names: `BOTH` would then be reachable from
+a single slot reviewed twice, and the one thing the tag is for — two *independent*
+reads agreeing — is exactly what that would not be.
 
 - **`BOTH`** — two independent reads found the same defect. Fix these first.
   Agreement raises confidence that the defect is real; it says nothing about
   whether the proposed remedy is right, so the over-specification test still
   applies. Two reviewers can both talk you into building something no
   requirement needs.
-- **`CODEX` / `FABLE` only** — normal disposition, normal evidence bar. The
+- **`CODEX` / `CLAUDE` only** — normal disposition, normal evidence bar. The
   reviewers have different visibility: `codex review` sees the diff against the
   base, while the Claude reviewer reads out into the repo. Each one routinely
   catches things the other structurally cannot see. A single-source P1 is still

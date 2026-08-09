@@ -228,7 +228,7 @@ phase whose entire job is to establish that the instrument works.
 
 **Enter when:** the branch carries substantive unreviewed code.
 
-1. `multi-reviewer-loop` — codex plus Claude Fable in parallel each pass. Their
+1. `multi-reviewer-loop` — codex plus a Claude reviewer in parallel each pass. Their
    disagreements are the highest-signal moments. Findings both raise get fixed first; a
    finding only one raises still gets the full evidence bar, because the other reviewer's
    silence is not counter-evidence.
@@ -619,7 +619,7 @@ over someone else's work is stop-list). Then:
   producing findings after three rounds is telling you the change is wrong-shaped, not
   that it needs a fourth patch. That is a stop-list item.
 
-Run a local Fable pre-review **before** the first push so the bot rounds start from the
+Run a local Claude pre-review **before** the first push so the bot rounds start from the
 good diff and the cap is spent on real findings.
 
 ### Squash-merge, then clean up

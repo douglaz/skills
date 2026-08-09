@@ -1,7 +1,7 @@
 # Bead Audit Reviewer Panel
 
 Exact setup, prompt, invocations, and failure handling for the default read-only
-Codex + Claude Fable bead-audit panel. Load this before starting an audit.
+Codex + Claude bead-audit panel. Load this before starting an audit.
 
 ## Why a panel
 
@@ -34,9 +34,9 @@ AUDIT_PROMPT_FILE="$AUDIT_DIR/audit-prompt.txt"
 CODEX_OUT="$AUDIT_DIR/codex.txt"
 CODEX_TRACE="$AUDIT_DIR/codex.trace.txt"
 CODEX_ERR="$AUDIT_DIR/codex.stderr.txt"
-FABLE_RAW="$AUDIT_DIR/fable.raw.json"
-FABLE_OUT="$AUDIT_DIR/fable.txt"
-FABLE_ERR="$AUDIT_DIR/fable.stderr.txt"
+CLAUDE_RAW="$AUDIT_DIR/claude.raw.json"
+CLAUDE_OUT="$AUDIT_DIR/claude.txt"
+CLAUDE_ERR="$AUDIT_DIR/claude.stderr.txt"
 MERGED_OUT="$AUDIT_DIR/merged.md"
 GRAPH_JSON="$AUDIT_DIR/graph.json"
 GRAPH_JSONL="$AUDIT_DIR/issues.jsonl"
@@ -315,10 +315,17 @@ find.
 ## Run both reviewers in parallel
 
 Set `PANEL_REVIEWERS` from the parsed `--reviewers` value. The default is
-`codex,fable`; a pinned run starts only the requested block.
+`codex,claude`; a pinned run starts only the requested block.
+
+Resolve `$CLAUDE_MODEL` first, with the bounded probe in
+[multi-reviewer-loop/references/reviewer-panel.md](../../multi-reviewer-loop/references/reviewer-panel.md)
+§ Resolving the Claude reviewer's model — same ladder, same acceptance rule. An
+unreachable model hangs rather than erroring, so without the probe the 900s
+`timeout` below is the first thing that notices, and it reports the auditor as
+`failed` after fifteen minutes rather than as `substituted` after one.
 
 ```bash
-PANEL_REVIEWERS=${PANEL_REVIEWERS:-codex,fable}
+PANEL_REVIEWERS=${PANEL_REVIEWERS:-codex,claude}
 if command -v timeout >/dev/null 2>&1 &&
    timeout --kill-after=1s 1s true >/dev/null 2>&1; then
   TIMEOUT_BIN=$(command -v timeout)
@@ -331,11 +338,11 @@ else
 fi
 
 RUN_CODEX=false
-RUN_FABLE=false
+RUN_CLAUDE=false
 case "$PANEL_REVIEWERS" in
-  codex)       RUN_CODEX=true ;;
-  fable)       RUN_FABLE=true ;;
-  codex,fable) RUN_CODEX=true; RUN_FABLE=true ;;
+  codex)        RUN_CODEX=true ;;
+  claude)       RUN_CLAUDE=true ;;
+  codex,claude) RUN_CODEX=true; RUN_CLAUDE=true ;;
   *) echo "Invalid reviewer panel: $PANEL_REVIEWERS" >&2; exit 2 ;;
 esac
 
@@ -354,11 +361,11 @@ if $RUN_CODEX; then
   CODEX_PID=$!
 fi
 
-if $RUN_FABLE; then
+if $RUN_CLAUDE; then
   (
     cd "$REPO_ROOT"
     "$TIMEOUT_BIN" --kill-after=30s 900s claude -p "$(cat "$AUDIT_PROMPT_FILE")" \
-      --model fable \
+      --model "$CLAUDE_MODEL" \
       --effort high \
       --output-format json \
       --no-session-persistence \
@@ -370,15 +377,15 @@ if $RUN_FABLE; then
       --allowedTools "Read,Glob,Grep" \
       --disallowedTools "Edit,Write,NotebookEdit" \
       </dev/null
-  ) >"$FABLE_RAW" 2>"$FABLE_ERR" &
-  FABLE_PID=$!
+  ) >"$CLAUDE_RAW" 2>"$CLAUDE_ERR" &
+  CLAUDE_PID=$!
 fi
 
 if $RUN_CODEX; then
   if wait "$CODEX_PID"; then CODEX_RC=0; else CODEX_RC=$?; fi
 fi
-if $RUN_FABLE; then
-  if wait "$FABLE_PID"; then FABLE_RC=0; else FABLE_RC=$?; fi
+if $RUN_CLAUDE; then
+  if wait "$CLAUDE_PID"; then CLAUDE_RC=0; else CLAUDE_RC=$?; fi
 fi
 ```
 
@@ -395,20 +402,20 @@ abort before the other reviewer's status is collected.
 
 The Codex sandbox enforces read-only filesystem access; `--ignore-user-config`
 plus the empty `mcp_servers` override prevents configured MCP tools from bypassing
-it. Fable's safe/strict empty-MCP configuration and built-in tool allowlist expose
+it. The Claude auditor's safe/strict empty-MCP configuration and built-in tool allowlist expose
 only file inspection tools. `--add-dir "$AUDIT_DIR"` makes the snapshots readable
 when Claude restricts file access to declared working directories; the absence of
 write-capable tools keeps that added directory read-only in practice. The
 coordinator pre-captures every `br`/`bv` output the reviewers need. Do not add
 `Bash`, remove the MCP isolation flags, or use `--permission-mode acceptEdits`.
 
-## Unwrap and validate Fable
+## Unwrap and validate the Claude auditor
 
-Run this only when Fable was requested:
+Run this only when the Claude auditor was requested:
 
 ```bash
-if jq -er 'if .is_error then error(.result // "fable auditor returned is_error")
-           else (.result // empty) end' <"$FABLE_RAW" >"$FABLE_OUT"; then
+if jq -er 'if .is_error then error(.result // "claude auditor returned is_error")
+           else (.result // empty) end' <"$CLAUDE_RAW" >"$CLAUDE_OUT"; then
   JQ_RC=0
 else
   JQ_RC=$?
@@ -419,19 +426,19 @@ If unwrapping succeeded, inspect denied tool names and carry inspection denials
 into reviewer state:
 
 ```bash
-FABLE_DENIALS=
-FABLE_INSPECTION_BLOCKED=false
+CLAUDE_DENIALS=
+CLAUDE_INSPECTION_BLOCKED=false
 if [ "$JQ_RC" -eq 0 ]; then
-  if FABLE_DENIALS=$(jq -r '.permission_denials[]?.tool_name' <"$FABLE_RAW"); then
-    if printf '%s\n' "$FABLE_DENIALS" |
+  if CLAUDE_DENIALS=$(jq -r '.permission_denials[]?.tool_name' <"$CLAUDE_RAW"); then
+    if printf '%s\n' "$CLAUDE_DENIALS" |
        grep -qE '^(Read|Glob|Grep)$'; then
-      FABLE_INSPECTION_BLOCKED=true
+      CLAUDE_INSPECTION_BLOCKED=true
     fi
   else
     JQ_RC=$?
   fi
 fi
-printf '%s\n' "$FABLE_DENIALS"
+printf '%s\n' "$CLAUDE_DENIALS"
 ```
 
 - Denied `Edit`, `Write`, or `NotebookEdit`: the read-only guard worked; note it,
@@ -444,7 +451,7 @@ Optionally confirm the actual model:
 
 ```bash
 if [ "$JQ_RC" -eq 0 ]; then
-  jq -r '.modelUsage | keys[]' <"$FABLE_RAW" || true
+  jq -r '.modelUsage | keys[]' <"$CLAUDE_RAW" || true
 fi
 ```
 
@@ -527,17 +534,17 @@ if $RUN_CODEX && [ "$CODEX_RC" -eq 0 ]; then
 elif $RUN_CODEX; then
   CODEX_STATE=failed
 fi
-if $RUN_FABLE && [ "$FABLE_RC" -eq 0 ] && [ "$JQ_RC" -eq 0 ] &&
-   ! $FABLE_INSPECTION_BLOCKED; then
-  if validate_audit_output "$FABLE_OUT"; then
-    FABLE_STATE=usable
+if $RUN_CLAUDE && [ "$CLAUDE_RC" -eq 0 ] && [ "$JQ_RC" -eq 0 ] &&
+   ! $CLAUDE_INSPECTION_BLOCKED; then
+  if validate_audit_output "$CLAUDE_OUT"; then
+    CLAUDE_STATE=usable
   else
-    FABLE_STATE=ambiguous
+    CLAUDE_STATE=ambiguous
   fi
-elif $RUN_FABLE && $FABLE_INSPECTION_BLOCKED; then
-  FABLE_STATE=failed
-elif $RUN_FABLE; then
-  FABLE_STATE=failed
+elif $RUN_CLAUDE && $CLAUDE_INSPECTION_BLOCKED; then
+  CLAUDE_STATE=failed
+elif $RUN_CLAUDE; then
+  CLAUDE_STATE=failed
 fi
 ```
 
@@ -600,7 +607,7 @@ and rerun only after capturing a stable new baseline.
 | Symptom | Action |
 |---|---|
 | Codex model unavailable | Retry once without `-m gpt-5.6-sol`; record the environment-default fallback. |
-| Codex auth/non-zero error | Surface stderr; continue `DEGRADED` with Fable. |
+| Codex auth/non-zero error | Surface stderr; continue `DEGRADED` with the Claude auditor. |
 | Claude `is_error`, rate limit, overload, or auth error | Retry once; then continue `DEGRADED` with Codex. |
 | Output ambiguous | Reread the prompt file and rerun that reviewer once. A second ambiguity is a reviewer failure. |
 | Reviewer timeout | Ignore partial output and mark that reviewer failed. |
@@ -619,7 +626,7 @@ Merge duplicate claims into one finding and tag source:
 | # | Severity | Source | Claim | Evidence | Disposition |
 |---|---|---|---|---|---|
 | 1 | BLOCKER | BOTH | Recovery workflow is unowned | Plan §4; bd-12, bd-18 | UPHELD |
-| 2 | IMPORTANT | FABLE | bd-31 has no executable acceptance signal | Plan §7; bd-31 | UPHELD |
+| 2 | IMPORTANT | CLAUDE | bd-31 has no executable acceptance signal | Plan §7; bd-31 | UPHELD |
 | 3 | NIT | CODEX | Two tiny docs beads could merge | Plan §9; bd-42, bd-43 | REJECTED |
 | 4 | IMPORTANT | CONFLICT | Whether rollout blocks the API epic | Plan §8; bd-7, bd-20 | RESOLVED: CODEX |
 ```
@@ -647,9 +654,9 @@ if $RUN_CODEX && [ "${CODEX_STATE:-failed}" = usable ]; then
   [ -s "$CODEX_OUT" ]
   cp "$CODEX_OUT" "$AUDIT_DIR/audit.codex.txt"
 fi
-if $RUN_FABLE && [ "${FABLE_STATE:-failed}" = usable ]; then
-  [ -s "$FABLE_OUT" ]
-  cp "$FABLE_OUT" "$AUDIT_DIR/audit.fable.txt"
+if $RUN_CLAUDE && [ "${CLAUDE_STATE:-failed}" = usable ]; then
+  [ -s "$CLAUDE_OUT" ]
+  cp "$CLAUDE_OUT" "$AUDIT_DIR/audit.claude.txt"
 fi
 cp "$MERGED_OUT" "$AUDIT_DIR/audit.merged.md"
 ```
