@@ -38,9 +38,10 @@ provenance rather than showing it — rerun in a terminal or CI log that combine
 descriptors and nothing distinguishes the two:
 
 ```console
-$ d=$(mktemp -d) && trap 'rm -rf "$d"' EXIT      # not /tmp/o: a predictable path can
-$ git status --porcelain -- "" >"$d/o" 2>"$d/e" ; echo "status=$?"   # already be a symlink
-status=128                                       # git 2.54.0
+$ d=$(mktemp -d) || { echo "no temp dir"; exit 1; }   # NOT `&&`: on failure `d` is empty
+$ trap 'rm -rf "$d"' EXIT                             # and the next line writes to /o
+$ git status --porcelain -- "" >"$d/o" 2>"$d/e" ; echo "status=$?"   # git 2.54.0
+status=128
 $ wc -c <"$d/o"
 0
 $ cat "$d/e"
@@ -65,7 +66,8 @@ experiment depends on (measured — with `SHELLOPTS` exported, the unpinned base
 2, and `--noprofile --norc` plus `set +o pipefail` restores 0):
 
 ```console
-$ d=$(mktemp -d) && trap 'rm -rf "$d"' EXIT && export d
+$ d=$(mktemp -d) || { echo "no temp dir"; exit 1; }
+$ trap 'rm -rf "$d"' EXIT ; export d
 $ bash --noprofile --norc -c 'set +o pipefail; { grep -Fo -- x "" | wc -l ; } >"$d/o1" 2>"$d/e1" ; st=$?; echo "status=$st"'
 status=0                                       # bash 5.3.9, GNU grep 3.12, coreutils 9.11
 $ cat "$d/o1" ; cat "$d/e1"
@@ -82,7 +84,11 @@ grep: : No such file or directory
 experiment is about. Both captures go to a `mktemp -d` directory with a cleanup trap, not
 to fixed names: these snippets exist to be re-run, and a predictable `/tmp/o` on a shared
 host can already be a symlink that redirection follows and truncates before the command
-starts — while bare `o1`/`e1` litter whatever directory the reader is standing in.
+starts — while bare `o1`/`e1` litter whatever directory the reader is standing in. And the
+creation is checked with `||`, not chained with `&&`: on failure `&&` skips only the trap,
+leaving `d` empty so the *next* command redirects to `/o` at the filesystem root. That is
+the unchecked-`mktemp` defect this repo fixed at four sites in #40, which is how thoroughly
+this class recurs.
 
 Identical stdout, identical stderr, **different status** — and the status is the only thing
 that moved, so the status is the only thing this pair explains. It settles
