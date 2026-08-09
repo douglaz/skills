@@ -106,11 +106,12 @@ seconds.
 So run it, and record enough that a reader can re-run it and disagree — the command, the
 mode if it matters, the version, and what you observed:
 
-```
+```console
 $ git status --porcelain -- ""          # git 2.54.0
 fatal: empty string is not a valid pathspec. please use . instead if you meant
-to match all paths
-exit 128, nothing on stdout
+to match all paths                     # stderr
+                                       # stdout: nothing
+                                       # status: 128
 ```
 
 A bare `Measured on git 2.54.0` is greppable but asserts nothing checkable, and "fails
@@ -125,15 +126,15 @@ invented mechanism beside a correct guard is exactly what gets the guard deleted
 The mode rider is the cheapest instance — and note it takes *two* runs, not one, because
 the second is the counterfactual:
 
-```
+```console
 $ grep -Fo -- x "" | wc -l ; echo $?                  # bash 5.3.9, GNU grep 3.12
 grep: : No such file or directory                     # stderr
 0                                                     # stdout, from wc
 0                                                     # status
 $ set -o pipefail; grep -Fo -- x "" | wc -l ; echo $?
-grep: : No such file or directory
-0
-2
+grep: : No such file or directory                     # stderr
+0                                                     # stdout, from wc
+2                                                     # status
 ```
 
 Same command, same output, different status — so "the count came back 0 because `wc`
