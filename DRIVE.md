@@ -1,57 +1,49 @@
-# DRIVE — sweep the rules that reached one sibling site and not the other
+# DRIVE — make behavioural claims in prose carry the evidence code already has to
 
-**Scope:** the sites named below, and nothing else. Issues #30/#31/#32/#33/#35 are
-separate PRs and are NOT in scope. New scripts are NOT in scope — this sweep exists
-because the rules already exist and simply did not travel.
-**Phase:** HARDEN · **Bead:** n/a (direct-edit tier, doc-only) · **Branch:** sibling-site-sweep
+**Scope:** issue #45 only — the rule, in `agents-md`'s managed discipline block. Issues
+#30/#31/#32/#33/#35/#38/#41/#43/#44 are separate PRs and NOT in scope.
+**Phase:** BUILD · **Bead:** n/a (direct-edit tier, doc-only) · **Branch:** prose-execution-rule
 **Pending:** —
 **Gate:** `./install.test && ./skills/pr-with-codex-bot-review/scripts/bot-gate.test && ./skills/drive/scripts/drive-status.test`
-· last green 2026-08-08 (12 / 124 / 70, exit 0)
+· last green 2026-08-09 (12 / 124 / 70, exit 0)
 
 ## Done
 - #37 merged (291a6ce): install.sh's two uninstall aborts, plus `install.test`.
+- #40 merged (fe5149e): four sibling-site rules — guarded `mktemp`, two-step `br where`
+  resolution at 10 sites, unconditional group kill, `mktemp -d` review directories.
+  Three further rules withdrawn to #41/#43/#44; #29 closed; #39 closed as superseded
+  by #42, with the false-closure corrected on the issue.
 
 ## Now
-TRIMMED at the three-round stop-list. Four rules converged and ship here; three did not and were withdrawn to their own
-issues rather than patched again. Rule 3 was in the shipping set until round 4 read it
-against the refusal list — the trim rule applied twice, on the same evidence standard.
+One rule, in one file. Both panel reviewers independently picked #45 as the next PR, and
+both said land it alone, then write #32 under it.
 
-Shipping:
-1. `_chk=$(mktemp) || exit 1` at all **four** recipe copies — `drive/references/phases.md`
-   had no assignment at all (#34 batch 3), and the other three had an *unchecked* one, which
-   round 5 showed fails open: an unusable `TMPDIR` leaves `_chk` empty and the removal
-   check's `|| true` then reports count 0 as "phrase fully removed". A fifth site exists as
-   commented-out text (`multi-reviewer-loop/SKILL.md:156`) → #44.
-2. `br where` resolution in **two checked steps at all 10 CODE-BLOCK sites** across 8
-   files — plus a checked `git status`, since a failed inspection also prints nothing.
-   Prose and comments teaching the same one-liner are NOT converted → #44. The
-   one-line form was fail-open everywhere, not just at the three sites #34 named: a
-   pipeline reports only its LAST command's status, so `br where` can fail while emitting
-   valid JSON and `jq` then succeeds. Reproduced at rc=0. (#34 batch 7, widened)
-3. ~~`--no-renames` on the § 3a status capture~~ — **withdrawn on round 4 → #43.** It
-   fixes batch 1's silent drop and simultaneously blinds the staged-rename refusal three
-   paragraphs above it, since detecting a staged rename requires the detection the flag
-   turns off. Needs two reads, not one flag.
-4. Kill the process group unconditionally at both escape-hatch sites. (#34 batch 6)
-5. `mktemp -d` for both review directories — exclusive at 0700. NOT the `(umask 077;
-   mkdir -p)` form #29 suggested, which leaves a pre-created directory's mode alone;
-   `second-model-bead-audit` had this right all along. (closes #29)
+The evidence is #40's own history: 6 bot rounds, 5 panel passes, 13 corrections to land
+four one-line rules — and the corrections were overwhelmingly to **sentences**, not code.
+Five factual claims about tool behaviour shipped false, each beside a *correct* fix, three
+of them introduced by the commit fixing the previous one. Every test suite was green
+throughout, because suites do not read prose.
 
-Withdrawn:
-- § 3a ambient-config pinning → **#41**. Rounds 1 and 3 each found a key the "closing"
-  set had missed (`diff.noprefix` via local config, then `diff.submodule`). An enumerated
-  `-c` list is still per-flag, which is what batch 10's class closure predicted would not
-  converge. Needs the tested helper (#34 batch 8), not more flags.
-- The #39 post-push round paragraph → **#42**. It was wrong twice because it documents an
-  inconsistency, not a rule: clean-comment anchors are tip-scoped, review-object anchors
-  are not. That is a code decision on the merge gate, with fixtures.
+`agents-md/references/discipline-block.md` is the home: it already carries the sibling
+rule for edits (`sed -i` reports success when it matched nothing), and the block's own
+admission bar — applies to every repo, agents get it wrong by default, every line traces
+to a concrete failure — is met on all three counts.
+
+**This PR must satisfy its own rule.** Every behavioural claim in it gets executed and the
+run recorded, including the ones in the rule's own text.
+
+Do NOT build: a linter or script — no script can check a documentation claim, which is
+why the reviewer plus the recorded run *is* the enforcement and why this is a rule rather
+than an extension of `verify-commit`; retro-fitting "Measured on" to existing sentences
+across the repo; or edits to any skill other than `agents-md`.
 
 ## Next
-Backlog PRs 2-4: drive Guard 2 (#30/#31), read-what-you-delegate (#33/#35),
-`verify-commit` (#32).
+#32 `verify-commit`, written under this rule. Then #30/#31 (drive Guard 2 — both
+reviewers previously said decline the watcher script and use `--max-rounds`), #33/#35,
+and the § 3a residue (#41, #43, #44).
 
 ## Open questions for the human
-- `AGENTS.md` is still absent. It has a real addressee now — this branch — but installing
-  it would double this PR's review surface and issue #33 is open precisely about
-  `agents-md` writing a block that contradicts the repo's own agreement. Deferred to the
-  #33 PR, which is where that conflict gets resolved rather than inherited.
+- `AGENTS.md` is still absent from this repo, so the block this PR edits is not installed
+  here. Orthogonal — the block's purpose is to travel to other repos — but it does mean
+  this repo does not yet hold itself to the rule it ships. Deferred to the #33 PR, where
+  `agents-md` installation is the subject rather than a side effect.

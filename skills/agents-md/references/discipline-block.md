@@ -93,6 +93,27 @@ Then read the log. Note the `;` — not `|`.
 exit code.** If you cannot show one, say what you actually observed instead. This
 is the single most common way an agent reports success it did not have.
 
+**A claim about what a tool does needs a run, not a recollection.** Prose asserting
+observable behaviour — an exit code, whether output lands on stdout or stderr, *why* a
+command fails, which versions were tested — is as capable of being wrong as code, and
+nothing compiles it. Measured on one documentation branch: five such claims shipped false
+through eight review rounds, each sitting beside a **correct** fix, and three were
+introduced by the commit fixing the previous one. Every test suite stayed green
+throughout, because suites do not read prose. A wrong reason is worse than no reason: it
+invites the next agent to "simplify" the guard away, since the stated justification is
+disprovable in thirty seconds.
+
+So run it, and record the run — the tool, its version, the observed result. `Measured on
+git 2.54.0` is greppable and falsifiable; "fails silently" is neither. Two riders, both
+from claims that shipped wrong:
+
+- **State the mode when the mode changes the answer.** `grep -Fo … "" | wc -l` exits 0
+  without `pipefail` and 2 with it, so a sentence naming neither is unfalsifiable.
+- **A claim you cannot run is not yours to assert.** A version you do not have, a kernel
+  path you cannot force — say it is unmeasured and narrow it to a possibility. "Behavior
+  may differ on older git — unmeasured here" costs one word over "behavior differs", and
+  only one of them is a claim you can be wrong about.
+
 **Reviewers read code; they do not run it.** A clean review — human, bot, or
 model — is not a passing build. Run the gate yourself before calling anything
 done.
