@@ -33,13 +33,14 @@ unreachable for this case.
 So: a `$CLAUDE_MODEL` ladder (`fable` → `opus`; a user pin *replaces* the ladder rather
 than heading it, so a named model fails instead of being substituted), resolved once per
 run by a bounded 90s probe, keyed on exit code **and** `is_error` **and** a non-empty
-`.result`, and setting a `CLAUDE_SLOT` flag so an exhausted ladder never reaches the CLI
-as `--model ""`.
+`.result`. An exhausted ladder is **not** a new state: it means the Claude reviewer is
+unavailable, which every one of these skills already handled — so it drops out of the
+panel and the existing `DEGRADED` rules take over unchanged.
 Artifacts and source tags rename from the model (`fable`) to the slot (`claude`),
 because after a fallback a file named `pass-01.fable.txt` is a false provenance claim —
 the exact defect #46 landed a rule against.
 
-Budget: 14 files, ~560 insertions. Round 3 of max 4 (panel rounds 1-2: 29 findings, all accepted).
+Budget: 14 files. Round 4 = the CUT, not another fix round: panel rounds 1-3 produced 41 findings, 0 rejected, 0 cut, all rooted in one over-built path. Removing that path is the corrective.
 Do NOT build: a retry/backoff policy, a model-capability matrix, per-pass re-probing,
 or a shared shell library — these are five prose skills, not a program.
 

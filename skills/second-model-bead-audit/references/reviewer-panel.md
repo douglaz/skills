@@ -354,13 +354,23 @@ if [ -n "$CLAUDE_MODEL_PIN" ]; then export CLAUDE_REVIEWER_MODELS="$CLAUDE_MODEL
 
 ### 2. Resolve `$CLAUDE_MODEL`
 
+**Only when the normalized panel contains `claude`.** A `--reviewers codex` audit must
+not pay for a probe of a reviewer it excluded — up to 90 seconds per unreachable rung,
+and a real model call.
+
 Run the bounded probe in
 [multi-reviewer-loop/references/reviewer-panel.md](../../multi-reviewer-loop/references/reviewer-panel.md)
-§ Resolving the Claude reviewer's model — same ladder, same acceptance rule, and it
-reads the `CLAUDE_REVIEWER_MODELS` just set. It also sets `CLAUDE_SLOT`, which the
-dispatch below uses. An unreachable model hangs rather than erroring, so without the
-probe the 900s `timeout` is the first thing that notices, and it reports the auditor
-as `failed` after fifteen minutes rather than as `substituted` after one.
+§ Resolving the Claude reviewer's model — same ladder, same acceptance rule, reading the
+`CLAUDE_REVIEWER_MODELS` just set. An unreachable model hangs rather than erroring, so
+without the probe the 900s `timeout` is the first thing that notices, and it reports the
+auditor as `failed` after fifteen minutes rather than as `substituted` after one.
+
+If no candidate answers, **drop `claude` from `PANEL_REVIEWERS`** and record why. That
+is all: `RUN_CLAUDE` then derives to `false` in step 3, and every existing guard — the
+launch, the `wait`, the unwrap, the `CLAUDE_STATE` table, the `DEGRADED` verdict — is
+already written for a reviewer that was not requested. Do not add a second flag beside
+`RUN_CLAUDE` for it; an earlier draft did, and each of the three review rounds that
+followed found an unbound variable or an uninitialised state on the new path.
 
 ### 3. Dispatch
 
@@ -401,12 +411,7 @@ if $RUN_CODEX; then
   CODEX_PID=$!
 fi
 
-# `$RUN_CLAUDE` says the user asked for this slot; `$CLAUDE_SLOT` says a model actually
-# answered. Both are required — requested-but-unfillable must reach the report as an
-# empty slot, not as `--model ""`.
-CLAUDE_PID=""
-CLAUDE_RC=0
-if $RUN_CLAUDE && [ "${CLAUDE_SLOT:-empty}" = filled ]; then
+if $RUN_CLAUDE; then
   (
     cd "$REPO_ROOT"
     "$TIMEOUT_BIN" --kill-after=30s 900s claude -p "$(cat "$AUDIT_PROMPT_FILE")" \
@@ -429,16 +434,8 @@ fi
 if $RUN_CODEX; then
   if wait "$CODEX_PID"; then CODEX_RC=0; else CODEX_RC=$?; fi
 fi
-# Guard on the PID, not on $RUN_CLAUDE: a requested slot the ladder could not fill
-# never launched anything, so `wait "$CLAUDE_PID"` would expand an unset variable under
-# `set -u` and abort instead of producing the degraded audit this path promises.
-if [ -n "$CLAUDE_PID" ]; then
+if $RUN_CLAUDE; then
   if wait "$CLAUDE_PID"; then CLAUDE_RC=0; else CLAUDE_RC=$?; fi
-elif $RUN_CLAUDE; then
-  # Requested but never started. NOT rc 0 — that is the value a healthy auditor
-  # returns, and the state table below reads it.
-  CLAUDE_RC=127
-  echo "claude auditor requested but no ladder candidate answered — slot EMPTY"
 fi
 ```
 
@@ -464,10 +461,11 @@ coordinator pre-captures every `br`/`bv` output the reviewers need. Do not add
 
 ## Unwrap and validate the Claude auditor
 
-Run this only when the Claude auditor actually **started** (`[ -n "$CLAUDE_PID" ]`) —
-not merely when it was requested. A requested-but-unfilled slot wrote no JSON, and the
-input redirect below fails before `jq` even runs, taking the audit down under `set -e`
-on the exact path that was supposed to degrade cleanly:
+Run this only when the Claude auditor was requested — i.e. `$RUN_CLAUDE`, which an
+exhausted ladder has already turned off. This block is also the only place `JQ_RC` and
+`CLAUDE_INSPECTION_BLOCKED` are initialised, which is why skipping it on any path that
+still reaches the state table below is an unbound-variable abort under this file's
+`set -u`:
 
 ```bash
 if jq -er 'if .is_error then error(.result // "claude auditor returned is_error")

@@ -251,16 +251,15 @@ is worse than opening it with the box unticked.
 
 ```bash
 # Gate the probe itself. Everything below is skipped as one unit.
+CLAUDE_MODEL=""
 if command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then
   : # run the ladder probe from multi-reviewer-loop § Resolving the Claude reviewer's
-    # model here; it sets CLAUDE_MODEL and CLAUDE_SLOT
-else
-  CLAUDE_SLOT=empty
+    # model here; it sets CLAUDE_MODEL, empty when no candidate answered
 fi
 ```
 
-If no ladder candidate answers, likewise skip and say so. An empty slot here means no
-pre-review happened — a thing to report, not to work around.
+If no ladder candidate answers, likewise skip and say so. No reachable model here means
+no pre-review happened — a thing to report, not to work around.
 
 ```bash
 BASE=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)
@@ -287,33 +286,47 @@ TO=$(command -v timeout || command -v gtimeout || true)
 # false, and this repo has already shipped one `set -e` abort from exactly that shape
 # (install.sh --uninstall, #37). It is harmless mid-script and lethal as a function's
 # last statement, so do not write the fragile version and rely on its position.
+# `elif`, not two independent `if`s: with no `timeout` the probe never ran, so BOTH
+# conditions are true and a second unconditional assignment would overwrite the real
+# reason with "no model answered". That reason is the only signal the operator gets
+# about why the pre-review box is unticked.
 _skip=""
-if [ -z "$TO" ]; then _skip="no GNU timeout (nor gtimeout) to bound the reviewer"; fi
-if [ "${CLAUDE_SLOT:-empty}" != filled ]; then _skip="no ladder candidate answered"; fi
+if [ -z "$TO" ]; then
+  _skip="no GNU timeout (nor gtimeout) to bound the reviewer"
+elif [ -z "$CLAUDE_MODEL" ]; then
+  _skip="no ladder candidate answered"
+fi
 if [ -n "$_skip" ]; then
   echo "skipping the optional local pre-review: $_skip"
   CLAUDE_RC=127          # not 0 — a skipped review must never read as a clean one
 else
+  # `|| CLAUDE_RC=$?`, never a bare `; CLAUDE_RC=$?`. The timeout wrapper is what makes
+  # 124/137 reachable, and under `set -e` the bare form ends the shell before the
+  # status is captured — leaving the "check both exit codes" rule below unreachable for
+  # the exact failure the wrapper was added to catch.
+  CLAUDE_RC=0
   "$TO" --kill-after=60 1500 \
     claude -p "$(cat "$RD/prompt.txt")" \
     --model "$CLAUDE_MODEL" --effort high --output-format json \
     --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
     --disallowedTools "Edit,Write,NotebookEdit" \
-    </dev/null >"$RD/claude.json" 2>"$RD/claude.stderr"
-  CLAUDE_RC=$?
+    </dev/null >"$RD/claude.json" 2>"$RD/claude.stderr" || CLAUDE_RC=$?
 fi
 
 # Inside the same guard: on the skip path no JSON exists, and the INPUT redirect fails
 # before jq runs — which under `set -e` aborts the ship on the branch that was meant to
 # continue without a pre-review.
-JQ_RC=0
+JQ_RC=127
 if [ "$CLAUDE_RC" -eq 0 ]; then
-  jq -er 'if .is_error then error(.result // "reviewer returned is_error")
-          else (.result // empty) end' \
-    <"$RD/claude.json" >"$RD/claude.txt"
-  JQ_RC=$?
-else
-  JQ_RC=127
+  # `if`, same reason: jq's non-zero exit IS the documented `is_error` case, so a bare
+  # capture would abort here instead of reaching the check below.
+  if jq -er 'if .is_error then error(.result // "reviewer returned is_error")
+             else (.result // empty) end' \
+       <"$RD/claude.json" >"$RD/claude.txt"; then
+    JQ_RC=0
+  else
+    JQ_RC=$?
+  fi
 fi
 ```
 

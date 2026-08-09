@@ -74,19 +74,29 @@ for _m in $CLAUDE_MODEL_LADDER; do
   fi
   echo "claude reviewer: '$_m' did not answer (exit $_rc) — trying the next candidate"
 done
-# The loop exits 0 whether or not anything answered, so CHECK — and set a flag rather
-# than only printing one. An empty $CLAUDE_MODEL reaches the invocations below as
-# `--model ""`, and a panel that never asked the CLI for a valid model is not the same
-# as one whose reviewer came back clean. Every Claude invocation below is guarded on
-# CLAUDE_SLOT, the same shape `second-model-bead-audit` uses for `$RUN_CLAUDE`.
+# The loop exits 0 whether or not anything answered, so CHECK: an empty $CLAUDE_MODEL
+# would reach the CLI below as `--model ""`.
 if [ -n "$CLAUDE_MODEL" ]; then
-  CLAUDE_SLOT=filled
   echo "claude reviewer: using $CLAUDE_MODEL"
 else
-  CLAUDE_SLOT=empty
-  echo "no ladder candidate answered — Claude slot EMPTY; run DEGRADED on codex and do NOT invoke claude"
+  echo "no ladder candidate answered — the Claude reviewer is UNAVAILABLE for this run"
 fi
 ```
+
+**An exhausted ladder is not a new state.** It means the Claude reviewer is unavailable,
+which is a case every skill here already handles — the same as a missing `claude` binary
+or an unauthenticated CLI. Drop it from the panel and the existing rules take over
+unchanged: do not launch it, run the pass on the survivor, label every pass `DEGRADED`,
+and finish at `CLEAN_DEGRADED` at best (§ Tool dependencies in the skill).
+
+That reuse is deliberate and was learned the expensive way. An earlier draft of this
+change threaded a separate `CLAUDE_SLOT` flag through launch, `wait`, unwrap and the
+state table in five files; three consecutive review rounds then found bugs *in the
+guards themselves* — unbound variables under `set -u`, statuses captured with a bare
+`VAR=$?` that `set -e` never reaches, stub output files — because every added branch
+needed its own initialisation and its own status capture. The unavailable-reviewer path
+already existed, already had all of that, and was already reviewed. A second path
+beside it bought nothing but places to be wrong.
 
 Run on a host whose first ladder entry was unreachable. `ladder.sh` is the block above
 extracted from this file programmatically, with a single `set -euo pipefail` line
@@ -180,11 +190,16 @@ not do is *hide* the substitution: name the resolved model in the pass header, i
 `summary.md`, and in the final report. `DEGRADED` is for a slot that ended up
 **empty** — every candidate in the ladder failed.
 
-**One re-resolution per run, mid-flight.** If the probe passed but a real pass then
-returns 124/137 or `is_error`, re-run the ladder once and switch for the remainder of
-the run, noting the pass it changed at. If the ladder still yields the same model, or
-the run has already re-resolved once, treat it as a failed reviewer and mark that pass
-`DEGRADED` — do not let a flapping model spend the loop's passes on retries.
+**One re-resolution per run, mid-flight, and it must advance.** If the probe passed but
+a real pass then returns 124/137 or `is_error`, re-run the ladder **starting after the
+model that just failed** and switch for the remainder of the run, noting the pass it
+changed at. Re-running the *unchanged* ladder is the trap: a real review is a far larger
+workload than a trivial `PANEL_OK` probe, so a model can fail the pass while still
+answering the probe — the ladder then re-selects it, and the "degrade only once every
+candidate has failed" promise quietly becomes "degrade without ever trying the next
+one". Once the remaining candidates are exhausted, or the run has already re-resolved,
+treat it as a failed reviewer and mark that pass `DEGRADED` — a flapping model must not
+spend the loop's passes on retries.
 
 ## Setup, once per pass
 
@@ -289,33 +304,28 @@ TO=$(command -v timeout || command -v gtimeout) \
   </dev/null >"$CODEX_OUT" 2>"$CODEX_ERR" &
 CODEX_PID=$!
 
-CLAUDE_PID=""
-if [ "${CLAUDE_SLOT:-empty}" = filled ]; then
-  "$TO" --kill-after=60 "$RC_TIMEOUT" \
-    claude -p "$(cat "$CLAUDE_PROMPT_FILE")" \
-    --model "$CLAUDE_MODEL" \
-    --effort high \
-    --output-format json \
-    --tools "Bash,Read,Glob,Grep" \
-    --allowedTools "Bash,Read,Glob,Grep" \
-    --disallowedTools "Edit,Write,NotebookEdit" \
-    </dev/null >"$CLAUDE_RAW" 2>"$CLAUDE_ERR" &
-  CLAUDE_PID=$!
-fi
+"$TO" --kill-after=60 "$RC_TIMEOUT" \
+  claude -p "$(cat "$CLAUDE_PROMPT_FILE")" \
+  --model "$CLAUDE_MODEL" \
+  --effort high \
+  --output-format json \
+  --tools "Bash,Read,Glob,Grep" \
+  --allowedTools "Bash,Read,Glob,Grep" \
+  --disallowedTools "Edit,Write,NotebookEdit" \
+  </dev/null >"$CLAUDE_RAW" 2>"$CLAUDE_ERR" &
+CLAUDE_PID=$!
 
 # `|| VAR=$?`, not `; VAR=$?`. A timeout kill makes `wait` return 124/137, and under
 # `set -e` — which the prompt-building section above assumes — the bare form terminates the shell right
 # there: CODEX_RC is never assigned, the Claude reviewer is never reaped, and the degraded-pass and
 # two-consecutive-timeout handling below never runs. The `||` keeps errexit off the hook.
 CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?
-# Only wait on a reviewer that was started. Measured on bash 5.3.9 with two live
-# children: `wait ""` returns in ~1ms with `wait: `': not a pid or valid job spec`,
-# rc=1, having reaped NOTHING — it is bare `wait` (no argument) that waits for all.
-# So unguarded, the `|| CLAUDE_RC=$?` records rc=1 and the pass reports a *failed*
-# Claude reviewer that was never launched, plus that error on the operator's terminal.
-CLAUDE_RC=0
-if [ -n "$CLAUDE_PID" ]; then wait "$CLAUDE_PID" || CLAUDE_RC=$?; fi
+CLAUDE_RC=0; wait "$CLAUDE_PID" || CLAUDE_RC=$?
 ```
+
+This block runs the **default two-reviewer panel**. On a panel of one — a pinned run, a
+missing CLI, or an exhausted ladder — launch only the reviewer that is in the panel and
+skip the other's launch, `wait` and unwrap together, exactly as before this change.
 
 **The `set -m` above is load-bearing**, not decoration: it is what makes the escape hatch's
 group-kill able to reach anything. Without it a TERM-ignoring reviewer keeps the `wait`
@@ -365,12 +375,7 @@ for _p in "$CODEX_PID" "$CLAUDE_PID"; do
   kill -KILL -- "-$_p" 2>/dev/null || true
 done
 CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?   # reaping is what closes the window
-# Same PID guard as the normal path: on an empty slot there is nothing to reap, and an
-# unguarded `wait ""` prints `not a pid or valid job spec` to the operator's terminal
-# (this hatch redirects the `kill`s but not this) and records a failure for a reviewer
-# that never ran — inside the one block whose job is proving every reviewer has exited.
-CLAUDE_RC=0
-if [ -n "$CLAUDE_PID" ]; then wait "$CLAUDE_PID" || CLAUDE_RC=$?; fi
+CLAUDE_RC=0; wait "$CLAUDE_PID" || CLAUDE_RC=$?
 ```
 
 The `wait` is not decoration. `kill` returns as soon as SIGTERM is delivered, so
@@ -520,21 +525,19 @@ Notes on the flags:
 
 ## Unwrapping the Claude reviewer's output
 
-Only when the reviewer actually started. On an empty slot nothing created `$CLAUDE_RAW`,
-and the input redirect fails *before* `jq` runs — so under `set -e` the pass dies here
-instead of being reported as the codex-only `DEGRADED` pass it is. The redirect also
-precedes the output one, so `$CLAUDE_OUT` is never created either and every later
-`grep` on it counts findings in a file that does not exist.
+Runs only when the Claude reviewer is in the panel — same as its launch and `wait`.
+
+`if`, not a bare `JQ_RC=$?` after it: `jq -er` exits non-zero on exactly the
+`is_error: true` case the failure table below prescribes a recovery for, and under the
+`set -e` this file assumes, the bare form terminates the pass before `JQ_RC` is ever
+assigned — so the retry, and the ladder re-resolution it leads to, never run.
 
 ```bash
-JQ_RC=0
-if [ -n "$CLAUDE_PID" ]; then
-  jq -er 'if .is_error then error(.result // "claude reviewer returned is_error")
-          else (.result // empty) end' <"$CLAUDE_RAW" >"$CLAUDE_OUT"
-  JQ_RC=$?
+if jq -er 'if .is_error then error(.result // "claude reviewer returned is_error")
+           else (.result // empty) end' <"$CLAUDE_RAW" >"$CLAUDE_OUT"; then
+  JQ_RC=0
 else
-  : >"$CLAUDE_OUT"   # exists and empty, so the finding counters below read 0 rather
-  JQ_RC=127          # than erroring — but never 0, which is what a clean pass returns
+  JQ_RC=$?
 fi
 ```
 
@@ -799,11 +802,10 @@ files:
 ```bash
 TO=$(command -v timeout || command -v gtimeout) \
   || { echo "no GNU timeout — see the panel invocation above"; exit 1; }
-# Guarded like every other Claude invocation. An empty slot leaves $CLAUDE_MODEL set
-# but EMPTY, which `set -u` does not catch, so without this the CLI is called as
-# `--model ""` on the very pass that decides CLEAN vs CLEAN_DIFF_ONLY. With no Claude
-# model and no codex pin, § 4b cannot run: say so and report CLEAN_DEGRADED.
-[ "${CLAUDE_SLOT:-empty}" = filled ] \
+# Needs a model. With the Claude reviewer unavailable, use the `codex exec` form below
+# or report § 4b unrun — never call the CLI with an empty `--model`, which `set -u`
+# does not catch, on the pass that decides CLEAN vs CLEAN_DIFF_ONLY.
+[ -n "$CLAUDE_MODEL" ] \
   || { echo "no Claude model for the consistency pass — use codex exec (below) or report it unrun"; exit 1; }
 "$TO" --kill-after=60 1500 \
   claude -p "$(cat "$REVIEW_DIR/claude-consistency-prompt.txt")" \

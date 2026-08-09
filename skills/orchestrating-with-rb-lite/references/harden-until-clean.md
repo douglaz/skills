@@ -81,7 +81,8 @@ PROMPT_FILE="$REVIEW_DIR/claude-prompt.txt"
 `$CLAUDE_MODEL`, with the bounded probe in
 [multi-reviewer-loop/references/reviewer-panel.md](../../multi-reviewer-loop/references/reviewer-panel.md)
 § Resolving the Claude reviewer's model. That file owns the ladder, the probe and
-the evidence; this loop just uses the result, including the `CLAUDE_SLOT` flag it sets.
+the evidence; this loop just uses the resolved `$CLAUDE_MODEL`, and treats an exhausted
+ladder as a reviewer it does not have.
 Do not hardcode a model here — an unreachable one hangs rather than erroring, and with
 the bound added below that costs a whole 25-minute iteration and yields no findings,
 which is indistinguishable from a clean review if you are only watching for a non-zero
@@ -141,41 +142,36 @@ RC_TIMEOUT=1500
   </dev/null >"$REVIEW_DIR/pass-$PASS.codex.txt" 2>"$REVIEW_DIR/pass-$PASS.codex.err" &
 CODEX_PID=$!
 
-CLAUDE_PID=""
-if [ "${CLAUDE_SLOT:-empty}" = filled ]; then
-  "$TO" --kill-after=60 "$RC_TIMEOUT" \
-    claude -p "$(cat "$PROMPT_FILE")" \
-    --model "$CLAUDE_MODEL" --effort high --output-format json \
-    --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
-    --disallowedTools "Edit,Write,NotebookEdit" \
-    </dev/null >"$REVIEW_DIR/pass-$PASS.claude.json" 2>"$REVIEW_DIR/pass-$PASS.claude.err" &
-  CLAUDE_PID=$!
-fi
+"$TO" --kill-after=60 "$RC_TIMEOUT" \
+  claude -p "$(cat "$PROMPT_FILE")" \
+  --model "$CLAUDE_MODEL" --effort high --output-format json \
+  --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
+  --disallowedTools "Edit,Write,NotebookEdit" \
+  </dev/null >"$REVIEW_DIR/pass-$PASS.claude.json" 2>"$REVIEW_DIR/pass-$PASS.claude.err" &
+CLAUDE_PID=$!
 
 # `|| VAR=$?` so a 124/137 timeout does not kill the shell under `set -e` before the
 # other reviewer is reaped. Exit 124 (TERM) and 137 (the --kill-after KILL) are
 # reviewer failures, never clean.
 CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?
-# NOT `CLAUDE_RC=0` on the empty-slot path: 0 is what a healthy reviewer returns, and
-# the "proceed with the survivor, label DEGRADED" rule below reads this variable — so
-# leaving it 0 tells the iteration a reviewer that never launched came back clean.
-if [ -n "$CLAUDE_PID" ]; then
-  CLAUDE_RC=0; wait "$CLAUDE_PID" || CLAUDE_RC=$?
-  jq -er 'if .is_error then error(.result // "claude reviewer returned is_error")
-          else (.result // empty) end' \
-    <"$REVIEW_DIR/pass-$PASS.claude.json" >"$REVIEW_DIR/pass-$PASS.claude.txt"
+CLAUDE_RC=0; wait "$CLAUDE_PID" || CLAUDE_RC=$?
+
+# `if`, not `jq ... ; JQ_RC=$?`. The timeout above made 124/137 reachable, and on that
+# path the JSON is truncated or empty, so `jq -er` exits non-zero — which under `set -e`
+# kills the iteration right here, before the survivor/DEGRADED handling below. That
+# would turn the stall this timeout was added to prevent into an abort one line later.
+if jq -er 'if .is_error then error(.result // "claude reviewer returned is_error")
+           else (.result // empty) end' \
+     <"$REVIEW_DIR/pass-$PASS.claude.json" >"$REVIEW_DIR/pass-$PASS.claude.txt"; then
+  JQ_RC=0
 else
-  CLAUDE_RC=127
-  : >"$REVIEW_DIR/pass-$PASS.claude.txt"
-  echo "claude slot EMPTY this iteration — findings come from codex alone (DEGRADED)"
+  JQ_RC=$?
 fi
 ```
 
-The unwrap is inside the guard for a concrete reason: on the empty-slot path no
-`.claude.json` exists, and the **input** redirect fails before `jq` ever runs
-(`No such file or directory`, exit 1). Because `<` is evaluated before `>`, the
-`.claude.txt` output file is never created either, so the finding count further down
-runs against a missing file — one dead iteration reported as a review.
+With the Claude reviewer unavailable — no ladder candidate answered — do not launch it,
+and skip its `wait` and unwrap with it. That is the existing one-reviewer path, not a
+new one: the survivor rule below already covers it.
 
 Four things to know about these commands:
 
@@ -197,9 +193,10 @@ then merge into one deduped list, each entry tagged `BOTH`, `CODEX`, or `CLAUDE`
 Dedupe on the claim, not the wording — the same defect described from two angles
 is **one bead**, never two, or you will build yourself a merge conflict.
 
-An empty Claude slot — the ladder resolved nothing — counts as a failed reviewer here,
-not as a clean one: the guard above sets `CLAUDE_RC=127` precisely so this rule can see
-it. If one reviewer fails, proceed with the survivor and label the iteration
+If the Claude reviewer fails **mid-run** — a 124/137 timeout, or `is_error` — re-resolve
+the ladder once and rerun that iteration's reviewer on the next model before falling back
+to the survivor. Degrading with an untried rung is the outcome the ladder exists to
+prevent. If one reviewer fails, proceed with the survivor and label the iteration
 `DEGRADED`, in chat and in the beads commit message.
 
 ## 2. Triage before minting anything

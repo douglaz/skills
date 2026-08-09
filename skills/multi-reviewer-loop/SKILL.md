@@ -49,8 +49,8 @@ The default panel is two reviewers, run in parallel every pass:
 by a bounded probe down a ladder — `fable`, then `opus`, or a user pin that *replaces*
 the ladder instead of heading it — because a model you cannot reach *hangs* rather than
 erroring, and finding that out inside a real pass costs the full 25-minute timeout.
-When no candidate answers, the slot is empty and the Claude reviewer is not invoked at
-all; that is the `DEGRADED` case. The probe, the measured evidence for it,
+When no candidate answers, the Claude reviewer is simply unavailable — the same case as
+a missing CLI, handled by the same rule below. The probe, the measured evidence for it,
 and the mid-run re-resolution rule are in
 [references/reviewer-panel.md](references/reviewer-panel.md) § Resolving the Claude
 reviewer's model. Read it before the first pass.
@@ -111,10 +111,19 @@ Parse in this order, so a flag never leaks into the focus text:
    not "degraded" — report it as a pinned panel.
 
    Accept a **model name** where the slot name goes — `--reviewers codex,opus` — and
-   treat it as pinning both the slot and its model, replacing the ladder. `fable`
-   keeps working for the same reason, and is now a pin rather than the default;
-   pinning a model that cannot be reached fails the slot instead of substituting,
-   because the user asked for that model specifically.
+   treat it as pinning both the slot and its model. `fable` keeps working for the same
+   reason, and is now a pin rather than the default.
+
+   A pin must actually reach the probe, which reads exactly one variable. Parsing it
+   into a local and never exporting it is not a pin — the run then silently uses the
+   default ladder and every report names the model the *ladder* picked:
+
+   ```bash
+   # `--reviewers codex,opus` -> panel `codex,claude`, ladder pinned to `opus`.
+   # A pin REPLACES the ladder, so an unreachable pinned model fails the slot instead
+   # of substituting: the user asked for that model by name.
+   if [ -n "$CLAUDE_MODEL_PIN" ]; then export CLAUDE_REVIEWER_MODELS="$CLAUDE_MODEL_PIN"; fi
+   ```
 2. **A leading positive integer** in what's left: use it as `MAX_PASSES` and
    remove it.
 3. **Everything still remaining** is focus text (possibly empty).
@@ -363,9 +372,12 @@ a reviewer.
    **After** the no-work check above and **only if the panel includes the Claude
    slot.** The probe spends up to 90 seconds per unreachable rung and costs a real
    (if small) amount, so a `--reviewers codex` run must not pay it — and neither
-   should a run that is about to stop with "nothing to review". On a codex-pinned
-   panel, skip the probe entirely and leave `CLAUDE_SLOT` unset; every invocation
-   guard below reads it as empty, which is exactly right.
+   should a run that is about to stop with "nothing to review".
+
+   If no candidate answers, the Claude reviewer is **unavailable for this run**. That
+   is not a new state: drop it from the panel and every existing rule applies
+   unchanged — do not launch it, run each pass on the survivor, label them `DEGRADED`,
+   and finish no better than `CLEAN_DEGRADED`. Say which models were tried.
 
 6. **Make untracked source files visible to codex, or the panel reviews two
    different things.** Measured behavior of `codex review --base`: it covers
@@ -414,25 +426,22 @@ For each pass `N` from `1` to `MAX_PASSES`:
      -c 'model="gpt-5.6-sol"' -c 'model_reasoning_effort="xhigh"' \
      </dev/null >"$REVIEW_DIR/pass-${PASS_ID}.codex.txt" 2>"$REVIEW_DIR/pass-${PASS_ID}.codex.stderr.txt" &
    CODEX_PID=$!
-   CLAUDE_PID=""
-   # Guarded on the slot, not just on $CLAUDE_MODEL: an exhausted ladder must not
-   # reach the CLI as `--model ""`. The reference has the full form.
-   if [ "${CLAUDE_SLOT:-empty}" = filled ]; then
-     "$TO" --kill-after=60 1500 \
-       claude -p "$(cat "$CLAUDE_PROMPT_FILE")" --model "$CLAUDE_MODEL" --effort high --output-format json \
-       --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
-       --disallowedTools "Edit,Write,NotebookEdit" \
-       </dev/null >"$REVIEW_DIR/pass-${PASS_ID}.claude.raw.json" 2>"$REVIEW_DIR/pass-${PASS_ID}.claude.stderr.txt" &
-     CLAUDE_PID=$!
-   fi
+   "$TO" --kill-after=60 1500 \
+     claude -p "$(cat "$CLAUDE_PROMPT_FILE")" --model "$CLAUDE_MODEL" --effort high --output-format json \
+     --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
+     --disallowedTools "Edit,Write,NotebookEdit" \
+     </dev/null >"$REVIEW_DIR/pass-${PASS_ID}.claude.raw.json" 2>"$REVIEW_DIR/pass-${PASS_ID}.claude.stderr.txt" &
+   CLAUDE_PID=$!
    # `|| VAR=$?` — a timeout kill returns 124/137, and under `set -e` the bare
    # `; VAR=$?` form terminates the shell before the status is ever captured.
    CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?
-   # `wait ""` does NOT reap all children (that is bare `wait`) — it errors, rc=1,
-   # reaping nothing, so unguarded it books a failure against a reviewer never started.
-   CLAUDE_RC=0
-   if [ -n "$CLAUDE_PID" ]; then wait "$CLAUDE_PID" || CLAUDE_RC=$?; fi
+   CLAUDE_RC=0; wait "$CLAUDE_PID" || CLAUDE_RC=$?
    ```
+
+   That is the two-reviewer panel. On a one-reviewer panel — pinned, missing CLI, or an
+   exhausted ladder — launch only the reviewer in the panel and skip the other's launch,
+   `wait` and unwrap as a unit, which is how this skill has always handled a reviewer it
+   does not have.
 
    **Do not pass focus text as a `codex review` argument.** `codex review` rejects
    a `[PROMPT]` argument together with `--base` (`error: the argument '[PROMPT]'
