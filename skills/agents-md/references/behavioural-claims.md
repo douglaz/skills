@@ -85,7 +85,8 @@ $ ( set +e ; set -o pipefail ; export SHELLOPTS    # bash 5.3.9
 >   env -u BASH_ENV bash -c 'set +o pipefail; { grep -Fo -- x "" | wc -l ; } >/dev/null 2>&1 ; echo "pinned=$?"' )
 unpinned=2                                     # baseline contaminated
 #   THIS block deliberately leaves its children exposed — that is the hazard it
-#   shows. The experiment below does not: it uses `env -i "PATH=$PATH"`.
+#   shows. The experiment below does not: `env -i` with NO PATH, and absolute
+#   binaries passed in. Do not copy this block's invocation.
 #
 #   Enumerating contamination vectors does not converge. Review of this file found
 #   three in three rounds: SHELLOPTS (carries pipefail), BASH_ENV (sourced by
@@ -109,15 +110,15 @@ grep (GNU grep) 3.12                   # resolve, then CHECK what you resolved: 
 wc (GNU coreutils) 9.11                # hostile PATH `type -P` finds the shadow, not GNU
 $ ( set +e ; d=$(mktemp -d) || exit 1 ; trap 'rm -rf "$d"' EXIT
 >   env -i "d=$d" "G=$G" "W=$W" bash -c 'set +o pipefail; { "$G" -Fo -- x "" | "$W" -l ; } >"$d/o1" 2>"$d/e1" ; echo "status=$?"'
->   cat "$d/o1" "$d/e1"
+>   printf 'stdout: ' ; cat "$d/o1" ; printf 'stderr: ' ; cat "$d/e1"
 >   env -i "d=$d" "G=$G" "W=$W" bash -c 'set -o pipefail; { "$G" -Fo -- x "" | "$W" -l ; } >"$d/o2" 2>"$d/e2" ; echo "status=$?"'
->   cat "$d/o2" "$d/e2" )              # bash 5.3.9
+>   printf 'stdout: ' ; cat "$d/o2" ; printf 'stderr: ' ; cat "$d/e2" )   # bash 5.3.9
 status=0
-0
-/run/current-system/sw/bin/grep: : No such file or directory
+stdout: 0
+stderr: /run/current-system/sw/bin/grep: : No such file or directory
 status=2
-0
-/run/current-system/sw/bin/grep: : No such file or directory
+stdout: 0
+stderr: /run/current-system/sw/bin/grep: : No such file or directory
 ```
 
 Absolute binaries, not names on a `PATH`: `env -i "PATH=$PATH"` re-imports the caller's
