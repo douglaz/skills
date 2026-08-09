@@ -39,7 +39,22 @@ Treat that as the default for anything non-trivial.
    hides: require `git commit` to exit 0 (it exits **1** on an empty commit, however
    reassuring the wording), then assert **every** path you changed, by the right check for
    each — a partial loss commits cleanly, and checking one path only proves that path
-   survived. Three cases, and one does not substitute for another:
+   survived. Three cases, and one does not substitute for another — all three capture to
+   the same scratch file, so open with it and require it. A failed `mktemp` does not fail
+   quietly everywhere, which is the trap: the redirect itself is refused loudly (`>""` is
+   `: No such file or directory`, exit 1, measured on bash 5.3.9) and the `grep -Fq` checks
+   exit 2. The **removal** check is the one that swallows it. Under the `pipefail` this
+   section assumes throughout, `grep -Fo -- '<phrase>' "" | wc -l` exits **2** on the
+   unopenable file — and the `|| true` that exists for the complete-removal case (below)
+   converts that to 0, while `wc` counting grep's empty output supplies a plausible `0`.
+   So an unverified removal reads as "the phrase was fully removed" from a file that was
+   never created. Only that check needs the guard to have any teeth:
+
+   ```bash
+   _chk=$(mktemp) || { echo "cannot create the scratch file — do NOT report the commit verified"; exit 1; }
+   trap 'rm -f "$_chk"' EXIT
+   ```
+
    - **gained content** — `git show "HEAD:$f" >"$_chk"` then
      `grep -Fq -- '<new phrase>' "$_chk"`. `-F` because `grep` defaults to basic regex, so
      a phrase containing `[`, `.` or `*` will not match itself; `--` because one starting
@@ -744,8 +759,8 @@ writes the JSONL failed, because the error is caught and logged at debug level:
 # DIVERGENCE CHECK FIRST: `br close` auto-flushes, so an unstaged hand-edit in the JSONL is
 # destroyed by this very command and neither the index nor HEAD holds it — the diff below
 # would then be empty and the loss undetectable.
-BEADS_JSONL=$(br where --json | jq -er '.jsonl_path') \
-  || { echo "cannot resolve the beads JSONL path — do NOT write"; exit 1; }
+_bw=$(br where --json) || { echo "cannot resolve the beads JSONL path — do NOT write"; exit 1; }
+BEADS_JSONL=$(printf '%s' "$_bw" | jq -er .jsonl_path) || { echo "cannot resolve the beads JSONL path — do NOT write"; exit 1; }
 # Capture separately: `[ -z "$(git status ...)" ]` discards git's exit code, so a FAILED
 # inspection reads as a clean tree and lets the write through — the guard failing open at
 # exactly the moment it matters. Compare against HEAD, not the index: a damaged JSONL that
@@ -770,7 +785,8 @@ and read the field-level changes before staging — resolving its path first, si
 `.beads.jsonl` layout:
 
 ```bash
-BEADS_JSONL=$(br where --json | jq -er .jsonl_path) || { echo "cannot resolve the JSONL"; exit 1; }
+_bw=$(br where --json) || { echo "cannot resolve the JSONL"; exit 1; }
+BEADS_JSONL=$(printf '%s' "$_bw" | jq -er .jsonl_path) || { echo "cannot resolve the JSONL"; exit 1; }
 git diff "$BEADS_JSONL"
 ```
 

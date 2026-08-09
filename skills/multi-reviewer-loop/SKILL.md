@@ -300,8 +300,14 @@ a reviewer.
    _PROJECT=$(basename "$(git rev-parse --show-toplevel)")
    _BRANCH=$(git branch --show-current 2>/dev/null | tr '/ ' '__')
    _TS=$(date -u +%Y%m%dT%H%M%SZ)
-   REVIEW_DIR="/tmp/review-${_PROJECT}-${_BRANCH:-detached}-${_TS}"
-   mkdir -p "$REVIEW_DIR"
+   # `mktemp -d`, not `mkdir -p`: this directory holds full reviewer output quoting the
+   # code under review, the findings with excerpts, and the prompt, and under the common
+   # 0022 umask a plain `mkdir -p` leaves it 0755. `mktemp -d` creates EXCLUSIVELY at 0700
+   # — which `(umask 077; mkdir -p ...)` does not, since `-p` is "no error if existing"
+   # and keeps an existing directory's mode, so on a shared host anyone can pre-create
+   # this otherwise predictable path. `second-model-bead-audit` already does it this way.
+   REVIEW_DIR=$(mktemp -d "/tmp/review-${_PROJECT}-${_BRANCH:-detached}-${_TS}.XXXXXX") \
+     || { echo "cannot create a private review directory"; exit 1; }
    ```
 
    Store each pass separately, one file per reviewer:
@@ -417,7 +423,12 @@ For each pass `N` from `1` to `MAX_PASSES`:
    # the process group.
    sleep 5
    for _p in "$CODEX_PID" "$FABLE_PID"; do
-     kill -0 "$_p" 2>/dev/null && kill -KILL -- "-$_p" 2>/dev/null || true
+     # Signal the GROUP unconditionally, never `kill -0 "$_p"` first: that probes the
+     # former group LEADER, and a wrapper that exits on TERM while a TERM-ignoring child
+     # retains its PGID leaves the leader dead and the child running — the probe fails,
+     # the group KILL is skipped, and `wait` returns with that child still writing to the
+     # worktree. KILL on an already-empty group is harmless, so the probe saves nothing.
+     kill -KILL -- "-$_p" 2>/dev/null || true
    done
    CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?   # reaping is what closes the window
    FABLE_RC=0; wait "$FABLE_PID" || FABLE_RC=$?

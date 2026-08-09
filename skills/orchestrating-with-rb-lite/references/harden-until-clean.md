@@ -68,8 +68,12 @@ if [ -n "$DEFAULT_BRANCH" ] && [ "$WORK_BRANCH" = "$DEFAULT_BRANCH" ]; then
   exit 1
 fi
 
-REVIEW_DIR="/tmp/harden-$(basename "$(git rev-parse --show-toplevel)")-$(echo "$WORK_BRANCH" | tr '/ ' '__')-$(date -u +%Y%m%dT%H%M%SZ)"
-mkdir -p "$REVIEW_DIR"
+# `mktemp -d` for exclusive creation at 0700 — same reason as multi-reviewer-loop § 1.3:
+# this directory holds full reviewer output quoting the code under review, a plain
+# `mkdir -p` leaves it 0755 under the usual umask, and `-p` on a path someone else
+# pre-created silently keeps their mode.
+REVIEW_DIR=$(mktemp -d "/tmp/harden-$(basename "$(git rev-parse --show-toplevel)")-$(echo "$WORK_BRANCH" | tr '/ ' '__')-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX") \
+  || { echo "cannot create a private review directory"; exit 1; }
 PROMPT_FILE="$REVIEW_DIR/fable-prompt.txt"
 ```
 
@@ -189,8 +193,36 @@ it still chooses how far to read, so run the grep yourself. Classes that repeat:
 **Before the first `br` write, check the JSONL for divergence.** Any `br` mutation
 auto-flushes the cache over the tracked file, so an unstaged hand-edit is erased by your
 first write — and since neither the index nor `HEAD` holds it, every later diff shows only
-your intended changes and the loss becomes *undetectable*. Run `git status --porcelain --
-"$(br where --json | jq -er .jsonl_path)"`; if it is not empty, resolve it first — recovery
+your intended changes and the loss becomes *undetectable*. Resolve the path in its own
+checked steps, and check the inspection too — embedded in a `git status` argument the
+resolution's exit code is swallowed, and two of those failures are **silent** rather than
+loud. Measured on git 2.54.0 / jq 1.8.2:
+
+- `br where` exiting non-zero *after* emitting valid JSON. The pipeline reports only its
+  last command's status, so `jq` succeeds and the assignment returns 0.
+- `br where` emitting JSON without the key: `jq -er .jsonl_path` exits 1 **and prints
+  `null`**, so the substitution yields the literal pathspec `null` and
+  `git status --porcelain -- null` exits 0 printing nothing.
+
+(A genuinely empty pathspec is *not* the hazard — `git status --porcelain -- ""` fails
+loudly with `fatal: empty string is not a valid pathspec`, exit 128, on the version stated
+above. Behavior may differ on older git — unmeasured here; if you must support one,
+measure there.)
+
+And `git status` itself can fail — a JSONL resolved outside this worktree exits 128
+(`fatal: … is outside repository`) — printing nothing on **stdout**, so gating on stdout
+emptiness alone reads a failed inspection as a clean tree right before the destructive
+first flush:
+
+```bash
+_bw=$(br where --json) || { echo "cannot resolve the beads JSONL"; exit 1; }
+BEADS_JSONL=$(printf '%s' "$_bw" | jq -er .jsonl_path) || { echo "cannot resolve the beads JSONL"; exit 1; }
+_st=$(git status --porcelain -- "$BEADS_JSONL") \
+  || { echo "cannot read the worktree — do NOT write"; exit 1; }
+printf '%s' "$_st"
+```
+
+If it is not empty, resolve it first — recovery
 case (a) in [orchestrating-with-rb-lite](../SKILL.md) step 11. After the first flush the choice
 is gone.
 
@@ -237,7 +269,8 @@ Then flush and commit — `br` never touches git, that part is yours:
 
 ```bash
 br sync --flush-only || { echo "findings not persisted"; exit 1; }
-BEADS_JSONL=$(br where --json | jq -er .jsonl_path) || { echo "cannot resolve the beads JSONL"; exit 1; }
+_bw=$(br where --json) || { echo "cannot resolve the beads JSONL"; exit 1; }
+BEADS_JSONL=$(printf '%s' "$_bw" | jq -er .jsonl_path) || { echo "cannot resolve the beads JSONL"; exit 1; }
 git diff HEAD -- "$BEADS_JSONL" || { echo "cannot diff the JSONL — do NOT stage"; exit 1; }
 ```
 

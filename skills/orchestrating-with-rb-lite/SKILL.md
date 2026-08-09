@@ -149,7 +149,8 @@ lie: `grep` defaults to regex (use `-Fq --`), `git show ... | grep` returns 141 
 than occurrences, and demanding *zero* occurrences rejects a correct partial removal.
 
 ```bash
-_chk=$(mktemp); trap 'rm -f "$_chk"' EXIT
+_chk=$(mktemp) || { echo "cannot create the scratch file — do NOT report the commit verified"; exit 1; }
+trap 'rm -f "$_chk"' EXIT
 # ...the three loops, using `grep -Fq --` / `grep -Fo | wc -l || true` on a captured file.
 ```
 
@@ -812,8 +813,8 @@ implement → review loop for each bead.
     ```bash
     # DIVERGENCE CHECK FIRST — `br update` auto-flushes, so an unstaged hand-edit in the
     # JSONL is destroyed by this very command, and neither the index nor HEAD holds it.
-        BEADS_JSONL=$(br where --json | jq -er '.jsonl_path') \
-      || { echo "cannot resolve the beads JSONL path — do NOT write"; exit 1; }
+        _bw=$(br where --json) || { echo "cannot resolve the beads JSONL path — do NOT write"; exit 1; }
+        BEADS_JSONL=$(printf '%s' "$_bw" | jq -er .jsonl_path) || { echo "cannot resolve the beads JSONL path — do NOT write"; exit 1; }
     # Capture separately: `[ -z "$(git status ...)" ]` discards git's exit code, so a FAILED
     # inspection reads as a clean tree and lets the write through — the guard failing open at
     # exactly the moment it matters. Compare against HEAD, not the index: a damaged JSONL that

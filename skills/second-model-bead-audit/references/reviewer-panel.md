@@ -142,8 +142,8 @@ done
 # so an unstaged hand-edit is destroyed HERE — and the diff below then compares the file
 # against an index that already matches it, comes back empty, and the audit snapshots the
 # truncated graph having "checked". The check has to precede the write it guards.
-BEADS_JSONL=$(br where --json | jq -er '.jsonl_path') \
-  || { echo "cannot resolve the beads JSONL path" >&2; exit 1; }
+_bw=$(br where --json) || { echo "cannot resolve the beads JSONL path" >&2; exit 1; }
+BEADS_JSONL=$(printf '%s' "$_bw" | jq -er .jsonl_path) || { echo "cannot resolve the beads JSONL path" >&2; exit 1; }
 # INSPECT before flushing — the next line writes the cache over this file, so anything in
 # the worktree that the cache does not know about is gone afterwards, with no diff left to
 # show it. Do NOT gate on a clean file: the normal `bead-polish-loop` handoff arrives with
