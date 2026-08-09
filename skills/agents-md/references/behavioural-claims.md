@@ -102,9 +102,11 @@ over "behavior differs", and only one of them is a claim you can be wrong about.
 ## The honest cost
 
 This rule is meaningfully harder to satisfy than to state. The pull request that introduced
-it (`douglaz/skills` #46) needed a correction in **every** review round it ran — its commit
-history carries the running total, deliberately not restated here, since a count asserted in
-prose goes stale the next round and this file is about not doing that. Every one was an
+it (`douglaz/skills` #46) required at least one correction in each of its **first six**
+review rounds — a bounded historical fact rather than a present universal, which would
+refute itself on the first clean round, i.e. exactly the event needed to land. Its commit
+history carries the per-round detail, deliberately not restated here, since a running count
+asserted in prose goes stale the next round and this file is about not doing that. Every one was an
 instance of the defect the rule names. Several were found by pointing the rule at itself:
 a transcript that misquoted its own output, an example that failed the standard it was
 demonstrating, a gate claim recorded as a date rather than a commit, hand-labelled streams

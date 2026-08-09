@@ -1,6 +1,6 @@
 # DRIVE — make behavioural claims in prose carry the evidence code already has to
 
-**Scope:** issue #45 only — the rule, in `agents-md`'s managed discipline block. Issues
+**Scope:** issue #45 only — the rule, in `agents-md`'s managed discipline block.
 Issues #30/#31/#32/#33/#35/#38/#41/#43/#44 are separate PRs and NOT in scope.
 **Phase:** BUILD · **Bead:** n/a (direct-edit tier, doc-only) · **Branch:** prose-execution-rule
 **Pending:** —
