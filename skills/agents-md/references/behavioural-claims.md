@@ -67,9 +67,18 @@ $ cat o2 ; cat e2
 grep: : No such file or directory
 ```
 
-Identical output, different status. So "the count came back 0 because `wc` succeeded" is
-settled only by the pair — one run re-blesses the wrong component, which is exactly what
-happened.
+Identical stdout, identical stderr, **different status** — and the status is the only thing
+that moved, so the status is the only thing this pair explains. It settles
+"the pipeline *reported* 0 because `wc`, the last command, succeeded": remove `pipefail`
+and grep's failure is invisible; add it and the 2 surfaces. It does **not** explain why the
+count is 0 — that is unchanged in both runs, so nothing here bears on it. Matching the
+conclusion to the varied condition is the whole discipline; drifting from "the status
+was 0" to "the count was 0" is how a correct experiment gets written up as the wrong
+claim.
+
+Capture the status into a variable on the same line, too. `echo "status=$?  count=$(cat o1)"`
+reports **`cat`'s** status, because the substitution runs first — measured while writing
+this file, on the run that was supposed to verify it.
 
 ## A claim you cannot run is not yours to assert
 
@@ -80,10 +89,14 @@ over "behavior differs", and only one of them is a claim you can be wrong about.
 ## The honest cost
 
 This rule is meaningfully harder to satisfy than to state. The pull request that introduced
-it needed **ten corrections to its own text across three review rounds**, every one an
-instance of the defect the rule names, and three of them found by pointing the rule at
-itself — including a transcript that misquoted its own output, an example that failed the
-standard it was demonstrating, and a gate claim recorded as a date rather than a commit.
+it (`douglaz/skills` #46) needed a correction in **every** review round it ran — its commit
+history carries the running total, deliberately not restated here, since a count asserted in
+prose goes stale the next round and this file is about not doing that. Every one was an
+instance of the defect the rule names. Several were found by pointing the rule at itself:
+a transcript that misquoted its own output, an example that failed the standard it was
+demonstrating, a gate claim recorded as a date rather than a commit, hand-labelled streams
+that asserted provenance instead of showing it, and a counterfactual whose conclusion named
+a different quantity than the one it varied.
 
 That is not an argument against the rule. It is the measurement of how invisible this class
 of error is without one, and it should be quoted to anyone who thinks the rule is obvious.
