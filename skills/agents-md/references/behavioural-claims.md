@@ -38,11 +38,12 @@ provenance rather than showing it — rerun in a terminal or CI log that combine
 descriptors and nothing distinguishes the two:
 
 ```console
-$ git status --porcelain -- "" >/tmp/o 2>/tmp/e ; echo "status=$?"   # git 2.54.0
-status=128
-$ wc -c </tmp/o
+$ d=$(mktemp -d) && trap 'rm -rf "$d"' EXIT      # not /tmp/o: a predictable path can
+$ git status --porcelain -- "" >"$d/o" 2>"$d/e" ; echo "status=$?"   # already be a symlink
+status=128                                       # git 2.54.0
+$ wc -c <"$d/o"
 0
-$ cat /tmp/e
+$ cat "$d/e"
 fatal: empty string is not a valid pathspec. please use . instead if you meant to match all paths
 ```
 
@@ -64,20 +65,24 @@ experiment depends on (measured — with `SHELLOPTS` exported, the unpinned base
 2, and `--noprofile --norc` plus `set +o pipefail` restores 0):
 
 ```console
-$ bash --noprofile --norc -c 'set +o pipefail; { grep -Fo -- x "" | wc -l ; } >o1 2>e1 ; st=$?; echo "status=$st"'
+$ d=$(mktemp -d) && trap 'rm -rf "$d"' EXIT && export d
+$ bash --noprofile --norc -c 'set +o pipefail; { grep -Fo -- x "" | wc -l ; } >"$d/o1" 2>"$d/e1" ; st=$?; echo "status=$st"'
 status=0                                       # bash 5.3.9, GNU grep 3.12, coreutils 9.11
-$ cat o1 ; cat e1
+$ cat "$d/o1" ; cat "$d/e1"
 0
 grep: : No such file or directory
-$ bash --noprofile --norc -c 'set -o pipefail; { grep -Fo -- x "" | wc -l ; } >o2 2>e2 ; st=$?; echo "status=$st"'
+$ bash --noprofile --norc -c 'set -o pipefail; { grep -Fo -- x "" | wc -l ; } >"$d/o2" 2>"$d/e2" ; st=$?; echo "status=$st"'
 status=2
-$ cat o2 ; cat e2
+$ cat "$d/o2" ; cat "$d/e2"
 0
 grep: : No such file or directory
 ```
 
 `wc`'s version is recorded because `wc` is one of the two commands whose status the
-experiment is about.
+experiment is about. Both captures go to a `mktemp -d` directory with a cleanup trap, not
+to fixed names: these snippets exist to be re-run, and a predictable `/tmp/o` on a shared
+host can already be a symlink that redirection follows and truncates before the command
+starts — while bare `o1`/`e1` litter whatever directory the reader is standing in.
 
 Identical stdout, identical stderr, **different status** — and the status is the only thing
 that moved, so the status is the only thing this pair explains. It settles
