@@ -36,11 +36,12 @@ to a concrete failure — is met on all three counts.
 **This PR must satisfy its own rule.** Every behavioural claim in it gets executed and the
 run recorded, including the ones in the rule's own text.
 
-Do NOT build: a linter or script in THIS PR. Not because automation is impossible — a
-doctest-style runner could execute the ```console blocks and compare status and output,
-which is exactly what issue #49 proposes — but because no *generic* script validates an
-arbitrary natural-language claim, so the reviewer plus the recorded run is the enforcement
-the rule can rely on today; retro-fitting "Measured on" to existing sentences
+Do NOT build a linter or script in THIS PR. Automation is possible — a doctest-style
+runner could execute the ```console blocks and compare status and output, which is what
+issue #49 proposes — but no *generic* script validates an arbitrary natural-language claim,
+so reviewer-plus-recorded-run is the enforcement the rule can rely on today.
+Do NOT retro-fit "Measured on" to existing sentences across the repo.
+Do NOT edit any skill other than `agents-md`. retro-fitting "Measured on" to existing sentences
 across the repo; or edits to any skill other than `agents-md`.
 
 ## Next

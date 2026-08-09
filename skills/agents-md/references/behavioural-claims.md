@@ -64,13 +64,17 @@ The cheapest instance, and the one that shipped wrong on #40 — note it takes *
 because the second is the counterfactual:
 
 Pin the baseline explicitly. `bash -c` inherits `pipefail` when the parent exports
-`SHELLOPTS`, and a contaminated baseline reports 2 — silently collapsing the contrast the
-experiment depends on, since the pair then reads 2 vs 2 and nothing in the output says why.
+`SHELLOPTS`, and a contaminated baseline reports 2 where it should report 0 — so if BOTH
+children were left unpinned the pair would read 2 vs 2, with nothing in the output saying
+why. The run below pins only the second, which is what makes the contamination visible:
+`unpinned=2` against `pinned=0`. (Note `set +e` here precedes the export, so `SHELLOPTS`
+carries `pipefail` and not `errexit` — `braceexpand:hashall:interactive-comments:pipefail`,
+measured. Order matters for what gets inherited.)
 Shown rather than asserted, because a warning about unverifiable claims has no business
 being one:
 
 ```console
-$ ( set +e ; set -o pipefail ; export SHELLOPTS    # SHELLOPTS carries errexit too
+$ ( set +e ; set -o pipefail ; export SHELLOPTS    # bash 5.3.9
 >   bash -c '{ grep -Fo -- x "" | wc -l ; } >/dev/null 2>&1 ; echo "unpinned=$?"'
 >   bash --noprofile --norc -c 'set +o pipefail; { grep -Fo -- x "" | wc -l ; } >/dev/null 2>&1 ; echo "pinned=$?"' )
 unpinned=2                                     # baseline contaminated
@@ -103,8 +107,17 @@ leaving `d` empty so the *next* command redirects to `/o` at the filesystem root
 the unchecked-`mktemp` defect this repo fixed at four sites in #40, which is how thoroughly
 this class recurs. Each example is one **subshell**, so its `EXIT` trap fires the moment the
 example ends: a single-quoted trap expands `$d` at exit, so in an interactive shell a reader
-who reassigns `d` afterwards gets `rm -rf` on the *new* value — measured, it deleted an
-unrelated directory and leaked the original.
+who reassigns `d` afterwards gets `rm -rf` on the *new* value. Shown with `echo` in place of
+`rm -rf`, so the record is complete without being destructive:
+
+```console
+$ ( set +e ; d=$(mktemp -d) || exit 1 ; victim=$(mktemp -d) || exit 1
+>   trap 'echo "trap would run: rm -rf $d"' EXIT
+>   echo "registered with d=$d" ; d="$victim" ; echo "reassigned  d=$d" )
+registered with d=/tmp/tmp.CfHlCRTodM
+reassigned  d=/tmp/tmp.zduT0zfbZk
+trap would run: rm -rf /tmp/tmp.zduT0zfbZk          # bash 5.3.9 — the VICTIM
+```
 
 Identical stdout, identical stderr, **different status** — and the status is the only thing
 that moved, so the status is the only thing this pair explains. It settles
@@ -137,7 +150,9 @@ happening to the section above.
 A version you do not have, a kernel path you cannot force. Say it is unmeasured and narrow
 it to a possibility. "Behavior **may** differ on older git — unmeasured here" adds one word
 to "Behavior differs on older git — unmeasured here", and only one of the two is a claim you
-can be wrong about.
+can be wrong about. The modal does not supply evidence — it is still unverified, and a
+reader who needs the answer must go and measure it. What it buys is honesty about which of
+those two states you are in.
 
 ## The honest cost
 
