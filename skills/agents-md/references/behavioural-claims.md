@@ -60,9 +60,20 @@ The cheapest instance, and the one that shipped wrong on #40 — note it takes *
 because the second is the counterfactual:
 
 Pin the baseline explicitly. `bash -c` inherits `pipefail` when the parent exports
-`SHELLOPTS`, and a contaminated baseline reports 2, silently collapsing the contrast the
-experiment depends on (measured — with `SHELLOPTS` exported, the unpinned baseline gives
-2, and `--noprofile --norc` plus `set +o pipefail` restores 0):
+`SHELLOPTS`, and a contaminated baseline reports 2 — silently collapsing the contrast the
+experiment depends on, since the pair then reads 2 vs 2 and nothing in the output says why.
+Shown rather than asserted, because a warning about unverifiable claims has no business
+being one:
+
+```console
+$ ( set -o pipefail; export SHELLOPTS
+>   bash -c '{ grep -Fo -- x "" | wc -l ; } >/dev/null 2>&1 ; echo "unpinned=$?"'
+>   bash --noprofile --norc -c 'set +o pipefail; { grep -Fo -- x "" | wc -l ; } >/dev/null 2>&1 ; echo "pinned=$?"' )
+unpinned=2                                     # baseline contaminated
+pinned=0                                       # --noprofile --norc + explicit mode
+```
+
+With that established, the experiment itself:
 
 ```console
 $ ( d=$(mktemp -d) || exit 1 ; trap 'rm -rf "$d"' EXIT ; export d
