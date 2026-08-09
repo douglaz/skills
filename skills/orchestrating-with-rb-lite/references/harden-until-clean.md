@@ -205,11 +205,13 @@ loud. Measured on git 2.54.0 / jq 1.8.2:
   `git status --porcelain -- null` exits 0 printing nothing.
 
 (A genuinely empty pathspec is *not* the hazard — `git status --porcelain -- ""` fails
-loudly with `fatal: empty string is not a valid pathspec`, exit 128, on any git ≥ 2.16.)
+loudly with `fatal: empty string is not a valid pathspec`, exit 128, measured on the
+version below. Older git accepted it; if you must support one, measure there too.)
 
-And `git status` itself can fail — a held `index.lock`, or a JSONL resolved outside this
-worktree — printing nothing on stderr-only output, so gating on stdout emptiness alone
-reads a failed inspection as a clean tree right before the destructive first flush:
+And `git status` itself can fail — a JSONL resolved outside this worktree exits 128
+(`fatal: … is outside repository`) — printing nothing on **stdout**, so gating on stdout
+emptiness alone reads a failed inspection as a clean tree right before the destructive
+first flush:
 
 ```bash
 _bw=$(br where --json) || { echo "cannot resolve the beads JSONL"; exit 1; }
