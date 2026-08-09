@@ -38,8 +38,9 @@ provenance rather than showing it — rerun in a terminal or CI log that combine
 descriptors and nothing distinguishes the two:
 
 ```console
-$ ( d=$(mktemp -d) || exit 1          # `||`, not `&&`: on failure d is empty and the
->   trap 'rm -rf "$d"' EXIT           # next line would redirect to /o
+$ ( set +e                            # these commands FAIL on purpose; under `set -e`
+>   d=$(mktemp -d) || exit 1          # the subshell dies before recording anything
+>   trap 'rm -rf "$d"' EXIT           # `||` not `&&`: on failure d is empty -> /o
 >   git status --porcelain -- "" >"$d/o" 2>"$d/e"
 >   echo "status=$?" ; wc -c <"$d/o" ; cat "$d/e" )      # git 2.54.0
 status=128
@@ -47,7 +48,10 @@ status=128
 fatal: empty string is not a valid pathspec. please use . instead if you meant to match all paths
 ```
 
-The redirection *is* the evidence for "nothing on stdout". A reader can re-run it and
+Two things are being shown and they should not be conflated: the redirection establishes
+**where** each stream went, and `wc -c <"$d/o"` returning 0 establishes that stdout was
+**empty**. Redirection alone proves provenance only — a record that captures streams and
+never inspects them has shown nothing about their contents. A reader can re-run both and
 disagree, which is the whole test.
 
 ## Observing is not explaining
@@ -66,7 +70,7 @@ Shown rather than asserted, because a warning about unverifiable claims has no b
 being one:
 
 ```console
-$ ( set -o pipefail; export SHELLOPTS
+$ ( set +e ; set -o pipefail ; export SHELLOPTS    # SHELLOPTS carries errexit too
 >   bash -c '{ grep -Fo -- x "" | wc -l ; } >/dev/null 2>&1 ; echo "unpinned=$?"'
 >   bash --noprofile --norc -c 'set +o pipefail; { grep -Fo -- x "" | wc -l ; } >/dev/null 2>&1 ; echo "pinned=$?"' )
 unpinned=2                                     # baseline contaminated
@@ -76,7 +80,7 @@ pinned=0                                       # --noprofile --norc + explicit m
 With that established, the experiment itself:
 
 ```console
-$ ( d=$(mktemp -d) || exit 1 ; trap 'rm -rf "$d"' EXIT ; export d
+$ ( set +e ; d=$(mktemp -d) || exit 1 ; trap 'rm -rf "$d"' EXIT ; export d
 >   bash --noprofile --norc -c 'set +o pipefail; { grep -Fo -- x "" | wc -l ; } >"$d/o1" 2>"$d/e1" ; echo "status=$?"'
 >   cat "$d/o1" "$d/e1"
 >   bash --noprofile --norc -c 'set -o pipefail; { grep -Fo -- x "" | wc -l ; } >"$d/o2" 2>"$d/e2" ; echo "status=$?"'
@@ -131,8 +135,9 @@ happening to the section above.
 ## A claim you cannot run is not yours to assert
 
 A version you do not have, a kernel path you cannot force. Say it is unmeasured and narrow
-it to a possibility. "Behavior may differ on older git — unmeasured here" costs one word
-over "behavior differs", and only one of them is a claim you can be wrong about.
+it to a possibility. "Behavior **may** differ on older git — unmeasured here" adds one word
+to "Behavior differs on older git — unmeasured here", and only one of the two is a claim you
+can be wrong about.
 
 ## The honest cost
 

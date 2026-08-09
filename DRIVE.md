@@ -36,9 +36,11 @@ to a concrete failure — is met on all three counts.
 **This PR must satisfy its own rule.** Every behavioural claim in it gets executed and the
 run recorded, including the ones in the rule's own text.
 
-Do NOT build: a linter or script — no script can check a documentation claim, which is
-why the reviewer plus the recorded run *is* the enforcement and why this is a rule rather
-than an extension of `verify-commit`; retro-fitting "Measured on" to existing sentences
+Do NOT build: a linter or script in THIS PR. Not because automation is impossible — a
+doctest-style runner could execute the ```console blocks and compare status and output,
+which is exactly what issue #49 proposes — but because no *generic* script validates an
+arbitrary natural-language claim, so the reviewer plus the recorded run is the enforcement
+the rule can rely on today; retro-fitting "Measured on" to existing sentences
 across the repo; or edits to any skill other than `agents-md`.
 
 ## Next
