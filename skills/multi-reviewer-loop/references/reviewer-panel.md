@@ -8,7 +8,7 @@ and what to do when one of them fails. Load this before the first pass.
 `codex review` and the Claude reviewer fail in different directions, which is
 the whole reason to pay for both:
 
-| | `codex review` | Claude Fable (`--effort high`) |
+| | `codex review` | the Claude reviewer (`--effort high`) |
 |---|---|---|
 | Scope | The diff against `--base` | The diff *plus* whatever repo code it decides to read |
 | Untracked files | **Not seen** (`--uncommitted` covers them but conflicts with `--base`) | Seen — the prompt tells it to read them |
@@ -28,19 +28,230 @@ reviewer had read it in full. Run `git add -N` on new source files before the
 first pass (see the skill's preflight) or the panel is comparing notes on two
 different diffs.
 
+## Resolving the Claude reviewer's model
+
+**The Claude slot is a role, not a model.** Resolve which model fills it once per
+run, before the first pass, into `$CLAUDE_MODEL`; every invocation below uses that
+variable and none hardcodes a name. The default ladder is `fable` then `opus`. **A
+user pin replaces the ladder rather than sitting in front of it** — a pinned model
+that cannot be reached fails the slot, because substituting there would hand the user
+a different reviewer than the one they named.
+
+**Probe it — do not discover it inside a real pass.** A model you cannot reach does
+not fail fast, it *hangs*. What the transcript below establishes: bounded at 90s, the
+unreachable model had produced **zero bytes on stderr**, written nothing usable, and
+not exited on its own — it had to be killed, exit 124. Separately observed on the same
+host and not reproduced as a transcript here: an *unbounded* call in the same state sat
+for **more than eight minutes** with both output files still zero bytes before it was
+killed by hand. So "it hangs" is measured to 90 seconds and observed well past it; what
+it is not is a claim that it never exits, which nothing here tested. Inside a pass even
+the 90-second floor is the wrong place to find out — the reviewer timeout is 25 minutes
+and the result is a truncated review that is not clean and not ambiguous, just gone. The
+probe is one trivial prompt and cost **$0.032** on the model that answered, **$0.0006**
+on the one that did not.
+
+```bash
+# Pick a timeout that is actually GNU's. `command -v timeout || command -v gtimeout`
+# takes `timeout` whenever it merely EXISTS, so on a host with busybox `timeout` ahead
+# of GNU `gtimeout` every rung fails on `--kill-after` and the ladder reports "no model
+# answered" — a dependency problem diagnosed as an exhausted account. Validate each
+# candidate and keep the first that passes.
+#
+# Resolve it only if the caller has not already. This step is OPTIONAL (skipped on a
+# codex-only panel) while § 2's launches are not, so `$TO` must not originate here —
+# do it in preflight and let this block reuse it. Written to work either way so the
+# block still runs standalone.
+if [ -z "${TO:-}" ]; then
+  TO=""
+  for _c in timeout gtimeout; do
+    if command -v "$_c" >/dev/null 2>&1 && "$_c" --kill-after=1s 1s true >/dev/null 2>&1; then
+      TO=$(command -v "$_c"); break
+    fi
+  done
+fi
+[ -n "$TO" ] || { echo "no GNU timeout (nor gtimeout) — cannot bound the probe"; exit 1; }
+# Unquoted on purpose: this is a space-separated ladder and the split IS the loop.
+CLAUDE_MODEL_LADDER="${CLAUDE_REVIEWER_MODELS:-fable opus}"
+CLAUDE_MODEL=""
+_pj=$(mktemp) || { echo "cannot create the probe scratch file"; exit 1; }
+# Deleted inline at the end of this block, NOT via `trap ... EXIT`. Bash keeps one EXIT
+# trap per shell, and § 1's preflight already installed one for its own scratch file —
+# an unconditional trap here would silently replace it and leak that file instead.
+for _m in $CLAUDE_MODEL_LADDER; do
+  _rc=0
+  "$TO" --kill-after=15 90 claude -p 'Reply with exactly: PANEL_OK' \
+    --model "$_m" --output-format json \
+    --tools "Read" --allowedTools "Read" --disallowedTools "Edit,Write,NotebookEdit" \
+    </dev/null >"$_pj" 2>/dev/null || _rc=$?
+  # All three conjuncts, because each catches what the others miss: the exit code
+  # catches the hang (124, or 137 via --kill-after), `.is_error` catches a fast
+  # refusal that still exits 0, and a non-empty `.result` catches a "success" that
+  # came back with nothing in it.
+  if [ "$_rc" -eq 0 ] \
+     && jq -e '(.is_error | not) and ((.result // "") != "")' <"$_pj" >/dev/null 2>&1; then
+    CLAUDE_MODEL="$_m"; break
+  fi
+  echo "claude reviewer: '$_m' did not answer (exit $_rc)"
+done
+# The loop exits 0 whether or not anything answered, so CHECK: an empty $CLAUDE_MODEL
+# would reach the CLI below as `--model ""`.
+rm -f "$_pj"
+if [ -n "$CLAUDE_MODEL" ]; then
+  echo "claude reviewer: using $CLAUDE_MODEL"
+else
+  echo "no ladder candidate answered — the Claude reviewer is UNAVAILABLE for this run"
+fi
+```
+
+**An exhausted ladder is not a new state.** It means the Claude reviewer is unavailable,
+which is a case every skill here already handles — the same as a missing `claude` binary
+or an unauthenticated CLI. Drop it from the panel and the existing rules take over
+unchanged: do not launch it, run the pass on the survivor, label every pass `DEGRADED`,
+and finish at `CLEAN_DEGRADED` at best (§ Tool dependencies in the skill).
+
+**Unless it was the only reviewer** — `--reviewers claude`, or a model-only pin. There
+is then no survivor, nothing reviewed the code, and the answer is `BLOCKED`, never a
+`CLEAN_DEGRADED` over an unread tree. Do not substitute codex for a reviewer the user
+pinned. `second-model-bead-audit` exits with the same verdict for the same case.
+
+That reuse is deliberate and was learned the expensive way. An earlier draft of this
+change threaded a separate `CLAUDE_SLOT` flag through launch, `wait`, unwrap and the
+state table in five files; three consecutive review rounds then found bugs *in the
+guards themselves* — unbound variables under `set -u`, statuses captured with a bare
+`VAR=$?` that `set -e` never reaches, stub output files — because every added branch
+needed its own initialisation and its own status capture. The unavailable-reviewer path
+already existed, already had all of that, and was already reviewed. A second path
+beside it bought nothing but places to be wrong.
+
+Run on a host whose first ladder entry was unreachable. `ladder.sh` is the block above
+extracted from this file programmatically, with a single `set -euo pipefail` line
+prepended — the block itself sets no shell options, so the harness has to supply them,
+and saying "run verbatim under `set -euo pipefail`" without saying where the `set` came
+from is the same one-step-removed sloppiness this section is about:
+
+```console
+$ { echo 'set -euo pipefail'; extract_bash_block reviewer-panel.md; } > ladder.sh
+$ bash ladder.sh ; echo "LADDER_EXIT=$?"
+claude reviewer: 'fable' did not answer (exit 124)
+claude reviewer: using opus
+LADDER_EXIT=0
+```
+
+Extracted programmatically rather than retyped, because a transcript hand-copied from
+an earlier draft records what the block *used* to print. That is not hypothetical: the
+first version of this section recorded a `CLAUDE_MODEL=opus` line that the block had no
+`echo` to produce — it came from a scratch wrapper — and review caught it here, in the
+one block the rest of this change rests on.
+
+The `|| _rc=$?` and the `if` are what make that exit 0 rather than an errexit abort on
+the first candidate. Measured on the same shape with `timeout 1 sleep 5` standing in
+for an unreachable model, two candidates in the ladder:
+
+```console
+$ ( set +e ; bash -c 'set -euo pipefail; M=""; for m in a b; do _rc=0
+>     timeout 1 sleep 5 || _rc=$?                       # guarded
+>     [ "$_rc" -eq 0 ] && { M=$m; break; }
+>     echo "candidate $m failed ($_rc)"
+>   done; echo "M=${M:-<none>} reached_end=yes"' ; echo "exit=$?" )
+candidate a failed (124)
+candidate b failed (124)
+M=<none> reached_end=yes
+exit=0
+$ ( set +e ; bash -c 'set -euo pipefail; M=""; for m in a b; do _rc=0
+>     timeout 1 sleep 5; _rc=$?                         # unguarded — the ONLY change
+>     [ "$_rc" -eq 0 ] && { M=$m; break; }
+>     echo "candidate $m failed ($_rc)"
+>   done; echo "M=${M:-<none>} reached_end=yes"' ; echo "exit=$?" )
+exit=124                                                # died on candidate a,
+                                                        # printed nothing, never tried b
+```
+
+The unguarded form does not merely skip a candidate — it takes the whole shell down
+before the second one is tried and before anything is printed, so on a host where the
+*second* entry was reachable the operator sees a silent non-zero exit rather than a
+working panel.
+
+**Do not key this on stderr.** The measured failure wrote **0 bytes** there, so any
+rule that reads stderr to find out what went wrong never fires on it — which is why the
+"Both fail in the same pass" row below now names each reviewer's real location instead
+of sending you to "both stderr files". (The table's Claude-side row already pointed at
+`.result` on stdout; it was the both-failed row that misdirected.) Everything diagnostic
+arrived as JSON on *stdout*, including from the run killed mid-stream.
+
+```console
+$ ( set +e ; TO=$(command -v timeout)
+>   probe() { local m=$1 rc=0
+>     "$TO" --kill-after=15 90 claude -p 'Reply with exactly: PANEL_OK' \
+>       --model "$m" --output-format json \
+>       --tools "Read" --allowedTools "Read" --disallowedTools "Edit,Write,NotebookEdit" \
+>       </dev/null >"p.$m.json" 2>"p.$m.err" || rc=$?
+>     echo "=== $m: status=$rc stderr_bytes=$(wc -c <"p.$m.err") ==="
+>     jq -c '{is_error, subtype, terminal_reason, result, out_tokens: .usage.output_tokens,
+>             models: (.modelUsage // {} | keys), cost: .total_cost_usd}' <"p.$m.json" ; }
+>   probe opus ; probe fable )
+=== opus: status=0 stderr_bytes=0 ===
+{"is_error":false,"subtype":"success","terminal_reason":"completed","result":"PANEL_OK",
+ "out_tokens":9,"models":["claude-haiku-4-5-20251001","claude-opus-5"],"cost":0.0320075}
+=== fable: status=124 stderr_bytes=0 ===
+{"is_error":true,"subtype":"error_during_execution","terminal_reason":"aborted_streaming",
+ "result":null,"out_tokens":0,"models":["claude-haiku-4-5-20251001"],"cost":0.000579}
+# claude 2.1.226, jq 1.8.2, GNU timeout/wc 9.11, bash 5.3.9. The JSON is one line each;
+# wrapped here for width. Which model is exhausted is an account fact, not a property of
+# the CLI — on your host the two rows may swap, and what must reproduce is the shape:
+# the reachable model answers with is_error false and a non-empty result, the unreachable
+# one does not.
+```
+
+Note `modelUsage` on the failed row: **only the small side model** appears, and
+`out_tokens` is 0 — the requested model never ran at all. That is not what catches
+*this* failure, though: the row also carries `is_error: true`, so the unwrap's `jq -er`
+already routes it to the retry rule before `modelUsage` is consulted. The check earns
+its place on the case not recorded here — a run that exits 0 and looks clean while
+having quietly used a different model — which is why it is worth running even when
+nothing appears wrong.
+
+The observation is that the unreachable model did not answer. *Why* it was unreachable
+— exhausted credits, a plan that excludes it, an outage — is not something this probe
+measures, and the ladder does not care: the same three conjuncts fall through for all of
+them.
+
+**A fallback panel is not a degraded panel.** `codex` + `opus` is still two
+independent reviewers from two vendors, so it can reach plain `CLEAN`. What it must
+not do is *hide* the substitution: name the resolved model in the pass header, in
+`summary.md`, and in the final report. `DEGRADED` is for a slot that ended up
+**empty** — every candidate in the ladder failed.
+
+**One re-resolution per run, mid-flight, and it must advance.** If the probe passed but
+a real pass then returns 124/137 or `is_error`, re-run the ladder **starting after the
+model that just failed** and switch for the remainder of the run, noting the pass it
+changed at. Re-running the *unchanged* ladder is the trap: a real review is a far larger
+workload than a trivial `PANEL_OK` probe, so a model can fail the pass while still
+answering the probe — the ladder then re-selects it, and the "degrade only once every
+candidate has failed" promise quietly becomes "degrade without ever trying the next
+one". Once the remaining candidates are exhausted, or the run has already re-resolved,
+treat it as a failed reviewer and mark that pass `DEGRADED` — a flapping model must not
+spend the loop's passes on retries. On a two-rung ladder those two conditions coincide;
+on a longer one they do not, and this cap wins over the failure table's shorter phrasing.
+
 ## Setup, once per pass
 
 ```bash
 PASS_ID=$(printf '%02d' "$N")
 CODEX_OUT="$REVIEW_DIR/pass-${PASS_ID}.codex.txt"
 CODEX_ERR="$REVIEW_DIR/pass-${PASS_ID}.codex.stderr.txt"
-FABLE_RAW="$REVIEW_DIR/pass-${PASS_ID}.fable.raw.json"
-FABLE_OUT="$REVIEW_DIR/pass-${PASS_ID}.fable.txt"
-FABLE_ERR="$REVIEW_DIR/pass-${PASS_ID}.fable.stderr.txt"
+CLAUDE_RAW="$REVIEW_DIR/pass-${PASS_ID}.claude.raw.json"
+CLAUDE_OUT="$REVIEW_DIR/pass-${PASS_ID}.claude.txt"
+CLAUDE_ERR="$REVIEW_DIR/pass-${PASS_ID}.claude.stderr.txt"
 PASS_MERGED="$REVIEW_DIR/pass-${PASS_ID}.merged.md"
 PASS_NOTES="$REVIEW_DIR/pass-${PASS_ID}.notes.md"
-FABLE_PROMPT_FILE="$REVIEW_DIR/fable-prompt.txt"
+CLAUDE_PROMPT_FILE="$REVIEW_DIR/claude-prompt.txt"
 ```
+
+The artifacts are named for the **slot** (`claude`), not the model, and the model is
+recorded *inside* `summary.md` and each pass header. A file named `pass-01.fable.txt`
+holding a review some other model wrote is a hand-labelled provenance claim of exactly
+the kind this repo's discipline block forbids — and after a mid-run fallback that is
+precisely what a model-named file would be.
 
 `$PASS_NOTES` is where dispositions and evidence go — the disposition rules
 reference it by name.
@@ -91,7 +302,7 @@ Rules:
 - Do not modify, create, or delete any file. This is a read-only review.
 - If you find nothing, output exactly: No findings.
 EOF
-} >"$FABLE_PROMPT_FILE"
+} >"$CLAUDE_PROMPT_FILE"
 ```
 
 The `if` form (rather than `[ -n ... ] && printf`) is deliberate: the `&&` form
@@ -114,10 +325,16 @@ Both reviewers start together and neither sees the other's output.
 # exit 127 before either reviewer starts, on a machine meeting every documented dependency.
 set -m
 RC_TIMEOUT=1500   # 25 min; a normal pass is 5-15
-# Homebrew coreutils installs GNU timeout as `gtimeout`; hardcoding `timeout` makes both
-# reviewers exit command-not-found on macOS and the loop can never reach clean.
-TO=$(command -v timeout || command -v gtimeout) \
-  || { echo "no GNU timeout (nor gtimeout) — bound the pass another way; see below"; exit 1; }
+# REUSE the `$TO` validated in the skill's § 1.1 preflight — NOT the one § Resolving
+# may set, since that step is skipped on a codex-only panel and cannot be the source
+# for these launches. Do not re-resolve with
+# `command -v timeout || command -v gtimeout`. That form takes `timeout` whenever it
+# exists, so on a busybox-`timeout` host the probe would pick GNU `gtimeout` and
+# succeed while these two 25-minute calls died instantly on an unrecognised
+# `--kill-after`, with nothing attributing it to the dependency. (Homebrew coreutils
+# installs GNU timeout as `gtimeout`, which is why both names are tried at all.)
+[ -n "${TO:-}" ] \
+  || { echo "no validated GNU timeout — see § Resolving; bound the pass another way"; exit 1; }
 
 "$TO" --kill-after=60 "$RC_TIMEOUT" \
   codex review --base "$DIFF_BASE" \
@@ -126,23 +343,27 @@ TO=$(command -v timeout || command -v gtimeout) \
 CODEX_PID=$!
 
 "$TO" --kill-after=60 "$RC_TIMEOUT" \
-  claude -p "$(cat "$FABLE_PROMPT_FILE")" \
-  --model fable \
+  claude -p "$(cat "$CLAUDE_PROMPT_FILE")" \
+  --model "$CLAUDE_MODEL" \
   --effort high \
   --output-format json \
   --tools "Bash,Read,Glob,Grep" \
   --allowedTools "Bash,Read,Glob,Grep" \
   --disallowedTools "Edit,Write,NotebookEdit" \
-  </dev/null >"$FABLE_RAW" 2>"$FABLE_ERR" &
-FABLE_PID=$!
+  </dev/null >"$CLAUDE_RAW" 2>"$CLAUDE_ERR" &
+CLAUDE_PID=$!
 
 # `|| VAR=$?`, not `; VAR=$?`. A timeout kill makes `wait` return 124/137, and under
-# `set -e` — which this file assumes at line 99 — the bare form terminates the shell right
-# there: CODEX_RC is never assigned, Fable is never reaped, and the degraded-pass and
+# `set -e` — which the prompt-building section above assumes — the bare form terminates the shell right
+# there: CODEX_RC is never assigned, the Claude reviewer is never reaped, and the degraded-pass and
 # two-consecutive-timeout handling below never runs. The `||` keeps errexit off the hook.
 CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?
-FABLE_RC=0; wait "$FABLE_PID" || FABLE_RC=$?
+CLAUDE_RC=0; wait "$CLAUDE_PID" || CLAUDE_RC=$?
 ```
+
+This block runs the **default two-reviewer panel**. On a panel of one — a pinned run, a
+missing CLI, or an exhausted ladder — launch only the reviewer that is in the panel and
+skip the other's launch, `wait` and unwrap together, exactly as before this change.
 
 **The `set -m` above is load-bearing**, not decoration: it is what makes the escape hatch's
 group-kill able to reach anything. Without it a TERM-ignoring reviewer keeps the `wait`
@@ -172,9 +393,9 @@ the exact PIDs captured at launch, then reap them**, and accept the lost pass:
 
 ```bash
 # BOTH reviewers, not just codex. The hatch abandons the pass, and this section's own
-# rule is that every reviewer has exited before you edit — leaving Fable alive holds a
+# rule is that every reviewer has exited before you edit — leaving the Claude one alive holds a
 # Bash-capable process against the tree you are about to change, and unreaped besides.
-for _p in "$CODEX_PID" "$FABLE_PID"; do
+for _p in "$CODEX_PID" "$CLAUDE_PID"; do
   kill "$_p" 2>/dev/null || true        # never `pkill -f`; already-exited is fine
 done
 # Bounded escalation. Signalling the `timeout` wrapper from outside forwards TERM but does
@@ -183,7 +404,7 @@ done
 # exactly the hung-reviewer case this hatch exists for. Give it a few seconds, then KILL
 # the process group.
 sleep 5
-for _p in "$CODEX_PID" "$FABLE_PID"; do
+for _p in "$CODEX_PID" "$CLAUDE_PID"; do
   # Signal the GROUP unconditionally, never `kill -0 "$_p"` first: that probes the former
   # group LEADER, and a wrapper that exits on TERM while a TERM-ignoring child keeps its
   # PGID leaves the leader dead and the child running — the probe fails, the group KILL is
@@ -192,7 +413,7 @@ for _p in "$CODEX_PID" "$FABLE_PID"; do
   kill -KILL -- "-$_p" 2>/dev/null || true
 done
 CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?   # reaping is what closes the window
-FABLE_RC=0; wait "$FABLE_PID" || FABLE_RC=$?
+CLAUDE_RC=0; wait "$CLAUDE_PID" || CLAUDE_RC=$?
 ```
 
 The `wait` is not decoration. `kill` returns as soon as SIGTERM is delivered, so
@@ -204,7 +425,7 @@ Neither `||` is decoration, and they guard different moments. `kill` fails when
 codex exited on its own between your decision and the signal — a race you cannot
 exclude — so an unguarded `kill` exits the shell before the `wait` ever runs. And
 `wait` on a TERM-killed process returns **143**, so an unguarded `wait` exits it
-before the edit this hatch exists for. Either way Fable is left running unreaped.
+before the edit this hatch exists for. Either way the Claude reviewer is left running unreaped.
 Same rule as the `wait`s under "Running the panel".
 
 Not `pkill -f "codex review"` either: that matches your own shell and other
@@ -212,7 +433,7 @@ sessions' reviewers running the same command, per the rule below.
 
 This loop is the most exposed skill in the repo to it: § 2 backgrounds both
 reviewers *by design*, and § 3 is entirely about editing. An agent that starts on
-codex's findings while Fable is still running is inside the hazard window with
+codex's findings while the Claude reviewer is still running is inside the hazard window with
 no warning.
 
 What the loss looks like is a commit whose *message* reads like a no-op:
@@ -311,9 +532,11 @@ Notes on the flags:
   `if [ -n "${FOCUS:-}" ]` block above). For a *focused* codex pass you need `codex exec`
   with your own prompt instead, which gives up `codex review`'s structured
   output — usually not worth it inside the loop.
-- `--model fable` resolves to the current Fable model; `--effort high` is the
-  reasoning tier this panel is tuned for. Drop to a lower effort only if the user
-  asks for a cheaper pass, and say so in the summary.
+- `--model "$CLAUDE_MODEL"` carries whatever the ladder resolved — never a literal
+  model name at the call site, or a fallback silently reverts here while the rest of
+  the run reports the substitute. `--effort high` is the reasoning tier this panel is
+  tuned for. Drop to a lower effort only if the user asks for a cheaper pass, and say
+  so in the summary.
 - **The three tool flags do different jobs, and the reviewer needs all three.**
   `--tools` sets which tools exist at all — this is the one that makes a reviewer
   read-only; `--allowedTools` only *pre-approves* tools, removing none;
@@ -340,17 +563,33 @@ Notes on the flags:
 
 ## Unwrapping the Claude reviewer's output
 
+Runs only when the Claude reviewer is in the panel — same as its launch and `wait`.
+
+`if`, not a bare `JQ_RC=$?` after it: `jq -er` exits non-zero on exactly the
+`is_error: true` case the failure table below prescribes a recovery for, and under the
+`set -e` this file assumes, the bare form terminates the pass before `JQ_RC` is ever
+assigned — so the retry, and the ladder re-resolution it leads to, never run.
+
 ```bash
-jq -er 'if .is_error then error(.result // "claude reviewer returned is_error")
-        else (.result // empty) end' <"$FABLE_RAW" >"$FABLE_OUT"
-JQ_RC=$?
+if jq -er 'if .is_error then error(.result // "claude reviewer returned is_error")
+           else (.result // empty) end' <"$CLAUDE_RAW" >"$CLAUDE_OUT"; then
+  JQ_RC=0
+else
+  JQ_RC=$?
+fi
 ```
 
 Two cheap sanity checks worth running on the raw JSON:
 
 ```bash
-jq -r '.modelUsage | keys[]' <"$FABLE_RAW"           # confirm a fable model actually ran
-jq -r '.permission_denials[].tool_name' <"$FABLE_RAW" # WHICH tools were denied, not how many
+# `?` and `|| true` because `permission_denials` is absent on every clean run, and bare
+# `jq` exits 5 there ("Cannot iterate over null") — which under the `set -e` this
+# section assumes ends the pass between the unwrap and the merge. A sanity check must
+# not be able to kill the thing it is checking. (`modelUsage` is normally PRESENT — the
+# transcript in § Resolving records two entries on a successful probe — so its guard is
+# belt-and-braces for a malformed result, not the common case.)
+jq -r '.modelUsage? // {} | keys[]' <"$CLAUDE_RAW" || true      # confirm $CLAUDE_MODEL ran
+jq -r '.permission_denials[]?.tool_name' <"$CLAUDE_RAW" || true # WHICH tools, not how many
 ```
 
 **Read the denied tool names, not the count.** The two kinds mean opposite
@@ -378,7 +617,7 @@ bullets, `- [P1] src/foo.rs:42 - claim`. Parse both with one tolerant pattern:
 ```bash
 FINDING_RE='^[[:space:]]*([-*+][[:space:]]+|[0-9]+[.)][[:space:]]+|#{1,6}[[:space:]]+)?([`*_]{0,2})(\[P[0-3]\]|P[0-3]:)'
 grep -cE "$FINDING_RE" "$CODEX_OUT"
-grep -cE "$FINDING_RE" "$FABLE_OUT"
+grep -cE "$FINDING_RE" "$CLAUDE_OUT"
 # per-severity: swap [0-3] for the digit you want
 ```
 
@@ -389,7 +628,7 @@ requires an unambiguous tag (`[P1]` or `P1:`) so prose like `P10 items remain`,
 **This is not a cosmetic nicety.** Measured across 7 real passes of this panel,
 the old first-token rule `^\s*\[P[0-3]\]` matched **0 codex findings in every
 pass** while codex had actually filed **43**; the tolerant pattern matched all 43
-and every Fable finding. A first-token rule cannot report codex as *clean* (the
+and every Claude-reviewer finding. A first-token rule cannot report codex as *clean* (the
 ambiguity net catches that), but it under-reports codex to the user and trips § 4's
 "ambiguous twice in a row" stop condition on a healthy reviewer. If codex's output
 shape changes again, widen this pattern — do not narrow it.
@@ -425,7 +664,7 @@ they name the same defect in the same code path, even if one says
 | # | Sev | Source | File:line | Claim | Disposition |
 |---|-----|--------|-----------|-------|-------------|
 | 1 | P1  | BOTH   | src/pay.rs:88 | Retry path double-charges on 409 | FIX |
-| 2 | P2  | FABLE  | src/db.rs:12  | Migration lacks rollback | DEFER |
+| 2 | P2  | CLAUDE | src/db.rs:12  | Migration lacks rollback | DEFER |
 | 3 | P2  | CODEX  | src/api.rs:40 | Unbounded response buffer | FIX |
 ```
 
@@ -444,16 +683,19 @@ code yourself.
 |---|---|---|
 | `codex` non-zero, auth error in stderr | `$CODEX_ERR` | Surface the exact error. Continue degraded on the Claude reviewer; tell the user to re-auth. |
 | `codex` reports the model is unavailable | `$CODEX_ERR` | Retry once with the environment default model; note the fallback in the summary. |
-| `jq` exits non-zero (`is_error: true`) | `.result` in `$FABLE_RAW` | Usually rate limit (429), overload (529), or auth. Retry once after a short wait; if it fails again, continue degraded on codex. |
-| Claude reviewer returns prose but no `[P*]` and no `No findings.` | `$FABLE_OUT` | Ambiguous, not clean. Re-run once; if it repeats, the prompt file is likely truncated — rewrite it. |
-| `.permission_denials` contains `Bash`/`Read`/`Glob`/`Grep` | `$FABLE_RAW` | The reviewer was blocked from looking. Confirm `--allowedTools` lists every tool in `--tools`, then re-run that reviewer. |
-| `.permission_denials` contains only `Edit`/`Write`/`NotebookEdit` | `$FABLE_RAW` | Working as intended — the read-only guard fired. Not a failure; do not re-run. |
-| Either reviewer times out (exit 124 **or 137**) | the partial output file | Treat as failed for that pass. Do not mine a truncated review for findings. 137 is the `--kill-after` path — counting only 124 spends another full timeout on the same hung reviewer. |
-| Both fail in the same pass | both stderr files | Stop the loop. Nothing reviewed the code; report `BLOCKED`. |
+| `jq` exits non-zero (`is_error: true`) | `.result` in `$CLAUDE_RAW` | Usually rate limit (429), overload (529), auth, or an exhausted model. Retry once after a short wait; if it fails again, re-resolve the ladder (§ Resolving) and re-run the pass on the next model — **once per run**. Degrade when that re-resolution is spent or the remaining candidates are exhausted, whichever comes first; on a ladder of three or more those are not the same moment, and § Resolving is the authority. |
+| The Claude reviewer's model is exhausted or unreachable mid-run | `$CLAUDE_RAW` on **stdout** — not stderr, which is empty | Re-resolve the ladder once and switch `$CLAUDE_MODEL` for the rest of the run, naming the pass it changed at. **If a later rung answers**, that is a substitution and the panel stays full. If none does — the last rung, or a pinned run, where a pin replaces the ladder and leaves nothing to advance to — the slot is empty: `DEGRADED` with ceiling `CLEAN_DEGRADED` **when codex is still in the panel**, and `BLOCKED` when the Claude reviewer was the only one, since nothing then reviewed the code (SKILL.md § 1.5). |
+| Claude reviewer returns prose but no `[P*]` and no `No findings.` | `$CLAUDE_OUT` | Ambiguous, not clean. Re-run once; if it repeats, the prompt file is likely truncated — rewrite it. |
+| `.permission_denials` contains `Bash`/`Read`/`Glob`/`Grep` | `$CLAUDE_RAW` | The reviewer was blocked from looking. Confirm `--allowedTools` lists every tool in `--tools`, then re-run that reviewer. |
+| `.permission_denials` contains only `Edit`/`Write`/`NotebookEdit` | `$CLAUDE_RAW` | Working as intended — the read-only guard fired. Not a failure; do not re-run. |
+| Either reviewer times out (exit 124 **or 137**) | the partial output file | Treat as failed for that pass. Do not mine a truncated review for findings. 137 is the `--kill-after` path — counting only 124 spends another full timeout on the same hung reviewer. On the Claude side a timeout is also the signature of an unreachable model, so re-resolve the ladder once before concluding the reviewer is simply slow. |
+| Both fail in the same pass | `$CODEX_ERR` **and** `$CLAUDE_RAW` | Stop the loop. Nothing reviewed the code; report `BLOCKED` with both reasons. Read each reviewer where its reason actually lives: codex writes its error to stderr, while a Claude-side failure leaves stderr empty and puts everything diagnostic in the JSON on stdout. |
 
-A pass that lost a reviewer is `DEGRADED`. The loop can still fix what the
-survivor found, but it cannot finish `CLEAN` — only `CLEAN_DEGRADED`, naming the
-reviewer that never weighed in.
+A pass whose Claude slot fell through to the **next model in the ladder** is not
+degraded — it is a full panel with a substitute, and it must name the substitute.
+`DEGRADED` is for a pass that lost a reviewer outright: every ladder candidate failed,
+or codex did. The loop can still fix what the survivor found, but it cannot finish
+`CLEAN` — only `CLEAN_DEGRADED`, naming the reviewer that never weighed in.
 
 ## The inverted (skeptical) audit prompt
 
@@ -462,7 +704,7 @@ it reads the whole repo, so it can tell you what already covers a case. Same
 invocation as above, with this prompt:
 
 ```bash
-cat >"$REVIEW_DIR/fable-audit-prompt.txt" <<EOF
+cat >"$REVIEW_DIR/claude-audit-prompt.txt" <<EOF
 Audit the changes on this branch against ${DIFF_BASE} for OVER-SPECIFICATION,
 not for bugs. Another reviewer owns defects; you own scope.
 
@@ -492,8 +734,8 @@ Used by § 4b of the skill — after a panel pass comes back clean, and again af
 every fix, until a panel pass and this pass are clean on the same tree. Normal
 passes review `git diff <base>`, so they can only see defects inside changed
 lines; this one reviews the changed files *and the files that document them* as a
-single artifact, and asks whether they still agree. Run it on Fable: it opens files the diff does
-not show, which is exactly what cross-file agreement requires.
+single artifact, and asks whether they still agree. Run it on the Claude reviewer: it opens files
+the diff does not show, which is exactly what cross-file agreement requires.
 
 Build the file list from git's own path outputs, never from porcelain status
 lines. `git status --porcelain | cut -c4-` looks equivalent and is not: a rename
@@ -502,9 +744,9 @@ whitespace or non-ASCII comes out C-quoted with the quotes attached, and a file
 that is both committed-changed and currently dirty appears twice.
 
 ```bash
-CONSISTENCY_OUT="$REVIEW_DIR/consistency.fable.txt"
+CONSISTENCY_OUT="$REVIEW_DIR/consistency.claude.txt"
 CONSISTENCY_RC=0
-CONSISTENCY_RAW="$REVIEW_DIR/consistency.fable.raw.json"
+CONSISTENCY_RAW="$REVIEW_DIR/consistency.claude.raw.json"
 
 # -z everywhere: NUL-delimited output is the only form that survives a path
 # containing a newline or tab, which core.quotePath=false alone does not fix.
@@ -558,7 +800,7 @@ DELETED=$( { git diff -z --no-renames --diff-filter=D --name-only "$DIFF_BASE...
 EXISTING=$(changed_z | _q | sort -u \
            | { [ -n "$DELETED" ] && grep -vxF -f <(printf '%s\n' "$DELETED") || cat; })
 
-cat >"$REVIEW_DIR/fable-consistency-prompt.txt" <<EOF
+cat >"$REVIEW_DIR/claude-consistency-prompt.txt" <<EOF
 Do not hunt for bugs — another pass owns those. You own INTERNAL AGREEMENT.
 
 Read these files as one artifact — one path per line, shell-quoted where a name
@@ -602,26 +844,48 @@ effort, and the three tool flags), pointing at this prompt file and these output
 files:
 
 ```bash
-TO=$(command -v timeout || command -v gtimeout) \
-  || { echo "no GNU timeout — see the panel invocation above"; exit 1; }
+[ -n "${TO:-}" ] \
+  || { echo "no validated GNU timeout — see § Resolving"; exit 1; }   # reuse, don't re-resolve
+# Needs a model. With the Claude reviewer unavailable, use the `codex exec` form below
+# or report § 4b unrun — never call the CLI with an empty `--model`, which `set -u`
+# does not catch, on the pass that decides CLEAN vs CLEAN_DIFF_ONLY.
+# `${CLAUDE_MODEL:-}`: on a `--reviewers codex` run the probe never ran, so this is
+# UNSET, not empty, and a bare `[ -n "$CLAUDE_MODEL" ]` aborts on the unbound variable
+# instead of printing the guidance it exists to print.
+[ -n "${CLAUDE_MODEL:-}" ] \
+  || { echo "no Claude model for the consistency pass — use codex exec (below) or report it unrun"; exit 1; }
 "$TO" --kill-after=60 1500 \
-  claude -p "$(cat "$REVIEW_DIR/fable-consistency-prompt.txt")" \
-  --model fable --effort high --output-format json \
+  claude -p "$(cat "$REVIEW_DIR/claude-consistency-prompt.txt")" \
+  --model "$CLAUDE_MODEL" --effort high --output-format json \
   --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
   --disallowedTools "Edit,Write,NotebookEdit" \
-  </dev/null >"$CONSISTENCY_RAW" 2>"$REVIEW_DIR/consistency.fable.stderr.txt" \
+  </dev/null >"$CONSISTENCY_RAW" 2>"$REVIEW_DIR/consistency.claude.stderr.txt" \
   || CONSISTENCY_RC=$?   # `||`, so a 124/137 timeout under `set -e` does not kill the
                          # shell before the status is captured — and captured BEFORE any
                          # pipeline replaces it
-[[ "$CONSISTENCY_RC" -eq 0 ]] \
-  || { echo "consistency reviewer exited $CONSISTENCY_RC (124/137 = timeout) — NOT clean"; exit 1; }
-jq -er 'if .is_error then error(.result // "err") else (.result // empty) end' \
-  <"$CONSISTENCY_RAW" >"$CONSISTENCY_OUT"
+# Do NOT `exit 1` here, and do not leave the `jq` bare: both are the recovery's own
+# entry conditions, and either form ends the shell before the re-resolution below can
+# run — so the rung that would have finished the gate is never tried.
+CONSISTENCY_JQ_RC=0
+if [ "$CONSISTENCY_RC" -eq 0 ]; then
+  jq -er 'if .is_error then error(.result // "err") else (.result // empty) end' \
+    <"$CONSISTENCY_RAW" >"$CONSISTENCY_OUT" || CONSISTENCY_JQ_RC=$?
+fi
+if [ "$CONSISTENCY_RC" -ne 0 ] || [ "$CONSISTENCY_JQ_RC" -ne 0 ]; then
+  echo "consistency reviewer failed (rc=$CONSISTENCY_RC jq=$CONSISTENCY_JQ_RC; 124/137 = timeout) — NOT clean"
+  # -> re-resolve once and rerun, per the paragraph below, before giving up on § 4b
+fi
 ```
 
 A timed-out reviewer can still leave syntactically valid JSON on disk — killed during
 teardown, say — and `jq` succeeding on it would replace the 124/137 with 0. Capture the
 reviewer's own status first; a pass that did not finish is never clean.
+
+**The re-resolution rule applies here too.** A model can go unreachable between a clean
+panel pass and this one, and § 4b is mandatory for plain `CLEAN` — so a single failed
+invocation here would cap the whole run at `CLEAN_DIFF_ONLY` with a reachable rung
+untried. On a 124/137 or `is_error`, re-resolve once (advancing past the failed model,
+per § Resolving) and rerun this pass before concluding it cannot be run.
 
 On a `--reviewers codex` pinned run, use
 `codex exec --sandbox read-only "$(cat ...)" </dev/null` with the same prompt instead

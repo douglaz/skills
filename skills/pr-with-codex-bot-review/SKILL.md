@@ -4,7 +4,7 @@ description: >-
   How to open and land a pull request through GitHub's `chatgpt-codex-connector` review bot
   (the one that auto-comments "Codex Review" on PRs), gating also on `coderabbitai[bot]`
   when it is configured on the repo. Covers writing the PR body, running local gates, a
-  local Claude Fable pre-review before push so bot rounds start from the good diff, the
+  local Claude pre-review before push so bot rounds start from the good diff, the
   codex bot's actual behavior — auto-fires on substantive code PRs, often silent on
   docs-only PRs, line-level findings live in PR review comments not the review body —
   re-triggering with `@codex review`, addressing findings via amend + force-push, knowing
@@ -229,9 +229,56 @@ force-push and a re-trigger. Running one local reviewer first turns findings you
 would have collected over three bot rounds into edits you make before the PR
 exists.
 
-Claude Fable at high effort is the default local reviewer here: it reads the repo
-around the diff, so it catches the out-of-diff callers and siblings the bots
+A Claude reviewer at high effort is the default local reviewer here: it reads the
+repo around the diff, so it catches the out-of-diff callers and siblings the bots
 routinely miss.
+
+Resolve `$CLAUDE_MODEL` with the ladder probe in
+[multi-reviewer-loop/references/reviewer-panel.md](../multi-reviewer-loop/references/reviewer-panel.md)
+§ Resolving the Claude reviewer's model, and bound the call below the same way the
+probe is bounded. An unreachable model does not return an error you can check — it does
+not return at all, which is why the call below carries a `timeout`. With that bound in
+place the failure is survivable but expensive: 25 minutes of wall clock before
+`CLAUDE_RC` reports 124, on an *optional* step. The 90-second probe buys those minutes
+back; it is not what makes the failure detectable.
+
+**Treat the probe, the invocation and the unwrap as one optional operation**, because
+this reviewer is optional and the rest of the skill must survive without it. The
+canonical probe block carries **two** `exit 1`s — a missing GNU `timeout`, and a failed
+`mktemp` for its scratch file — and either would abort the ship before any skip logic
+here is reached. Run the probe in a subshell and treat any non-zero exit as "no model",
+rather than gating on the one precondition you thought of: a full or unwritable
+`TMPDIR` stops a PR just as thoroughly as a missing convenience binary, and neither is
+a reason to. The panel skills can afford that `exit 1` — the panel
+is their whole job. Here it would stop a PR over a missing convenience binary, which
+is worse than opening it with the box unticked.
+
+Put the probe in a file and run it as a child, so its `exit 1`s end the child and not
+your shell — and make the child print **only the model** on stdout:
+
+```bash
+# probe.sh:
+#   { <the block from multi-reviewer-loop § Resolving the Claude reviewer's model> ; } >&2
+#   printf '%s' "$CLAUDE_MODEL"
+CLAUDE_MODEL=$(bash probe.sh) || CLAUDE_MODEL=""
+```
+
+**The `>&2` is the load-bearing part.** Every progress line in that block is a plain
+`echo`, i.e. stdout, so without it the command substitution captures the diagnostics
+*as the model name*. Both failure modes are silent: on a successful fallback
+`--model` receives `"claude reviewer: 'fable' did not answer (exit 124)⏎claude
+reviewer: using opus⏎opus"` and the call dies in argument parsing; on an exhausted
+ladder the block still exits 0 and still prints `no ladder candidate answered — …`,
+so `CLAUDE_MODEL` is **non-empty**, the skip below never fires, and the ship proceeds
+believing it has a model. That would make the whole `_skip`/`CLAUDE_RC=127` mechanism
+below dead code.
+
+Redirecting the *substitution* instead (`CLAUDE_MODEL=$(bash probe.sh 2>/dev/null)`)
+does not help and is a different bug: it discards stderr, which is empty, while the
+stdout it needs to suppress flows straight into the variable.
+
+If no ladder candidate answers, likewise skip and say so. No reachable model here means
+no pre-review happened — a thing to report, not to work around.
 
 ```bash
 BASE=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)
@@ -253,30 +300,96 @@ propose mechanism no correctness/security/data-loss requirement needs. Do not
 modify any file. Output exactly "No findings." if clean.
 EOF
 
-claude -p "$(cat "$RD/prompt.txt")" \
-  --model fable --effort high --output-format json \
-  --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
-  --disallowedTools "Edit,Write,NotebookEdit" \
-  >"$RD/fable.json" 2>"$RD/fable.stderr"
-CLAUDE_RC=$?
+# Validate, do not merely locate — the same rule the probe follows. A busybox `timeout`
+# ahead of GNU `gtimeout` is non-empty here, so the `elif` below would blame an
+# exhausted ladder for what is actually a missing dependency: the one misdiagnosis this
+# ordering exists to prevent.
+TO=""
+for _c in timeout gtimeout; do
+  if command -v "$_c" >/dev/null 2>&1 && "$_c" --kill-after=1s 1s true >/dev/null 2>&1; then
+    TO=$(command -v "$_c"); break
+  fi
+done
+# `if`, not `[ ... ] && _skip=...`: that form returns 1 whenever the condition is
+# false, and this repo has already shipped one `set -e` abort from exactly that shape
+# (install.sh --uninstall, #37). It is harmless mid-script and lethal as a function's
+# last statement, so do not write the fragile version and rely on its position.
+# `elif`, not two independent `if`s: with no `timeout` the probe never ran, so BOTH
+# conditions are true and a second unconditional assignment would overwrite the real
+# reason with "no model answered". That reason is the only signal the operator gets
+# about why the pre-review box is unticked.
+_skip=""
+if [ -z "$TO" ]; then
+  _skip="no GNU timeout (nor gtimeout) to bound the reviewer"
+elif [ -z "${CLAUDE_MODEL:-}" ]; then
+  _skip="no ladder candidate answered"
+fi
+if [ -n "$_skip" ]; then
+  echo "skipping the optional local pre-review: $_skip"
+  CLAUDE_RC=127          # not 0 — a skipped review must never read as a clean one
+else
+  # `|| CLAUDE_RC=$?`, never a bare `; CLAUDE_RC=$?`. The timeout wrapper is what makes
+  # 124/137 reachable, and under `set -e` the bare form ends the shell before the
+  # status is captured — leaving the "check both exit codes" rule below unreachable for
+  # the exact failure the wrapper was added to catch.
+  CLAUDE_RC=0
+  "$TO" --kill-after=60 1500 \
+    claude -p "$(cat "$RD/prompt.txt")" \
+    --model "$CLAUDE_MODEL" --effort high --output-format json \
+    --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
+    --disallowedTools "Edit,Write,NotebookEdit" \
+    </dev/null >"$RD/claude.json" 2>"$RD/claude.stderr" || CLAUDE_RC=$?
+fi
 
-jq -er 'if .is_error then error(.result // "reviewer returned is_error")
-        else (.result // empty) end' \
-  <"$RD/fable.json" >"$RD/fable.txt"
-JQ_RC=$?
+# Inside the same guard: on the skip path no JSON exists, and the INPUT redirect fails
+# before jq runs — which under `set -e` aborts the ship on the branch that was meant to
+# continue without a pre-review.
+JQ_RC=127
+if [ "$CLAUDE_RC" -eq 0 ]; then
+  # `if`, same reason: jq's non-zero exit IS the documented `is_error` case, so a bare
+  # capture would abort here instead of reaching the check below.
+  if jq -er 'if .is_error then error(.result // "reviewer returned is_error")
+             else (.result // empty) end' \
+       <"$RD/claude.json" >"$RD/claude.txt"; then
+    JQ_RC=0
+  else
+    JQ_RC=$?
+  fi
+fi
 ```
 
 **Check both exit codes before believing the output.** `CLAUDE_RC != 0` or
-`JQ_RC != 0` means the review never ran — auth, rate limit (429), or overload
-(529) — and `$RD/fable.txt` will be empty. Do not pipe this straight
+`JQ_RC != 0` means the review never ran — auth, rate limit (429), overload
+(529), or an unreachable model — and `$RD/claude.txt` is **not usable either way**, but
+it differs by branch and existence alone will not tell them apart. When `CLAUDE_RC` is
+non-zero the file is missing (`jq` never ran). When `JQ_RC` is non-zero it exists and
+is **empty**: the shell creates and truncates it before `jq` starts, and `jq -er` then
+aborts via `error()` having written nothing — which is every `is_error` case, i.e. rate
+limit, overload and exhausted model, the failures this whole section is about. So
+branch on the two status variables, and use `[ -s ... ]` rather than `[ -e ... ]` if
+you must ask the filesystem. Either test aborts the ship step under `set -e` when
+written bare, exactly as `cat` would; put it in an `if`. Do not pipe this straight
 into `tee` and read the file: a failed reviewer and a clean reviewer both leave
 you with no findings on stdout, and the difference is the whole point. The clean
 signal is exit 0 plus exactly `No findings.`; empty output with exit 0 is
 ambiguous, not clean.
 
-If it failed, either re-run it or open the PR without a pre-review — but do not
-tick the pre-review line in the PR body. Claiming a review that never ran is
-worse than not running one.
+If it failed, re-run it on the next ladder model, or open the PR without a
+pre-review — but do not tick the pre-review line in the PR body. Claiming a review
+that never ran is worse than not running one. The same goes for *which* reviewer:
+name the model in the body, since "a local review ran" and "Fable reviewed it" stop
+being the same sentence the moment the ladder falls through.
+
+The block is bounded even though it runs in the foreground. "You would notice a hang"
+is not a mechanism — an unreachable model is indistinguishable from a slow review
+while you watch it, and the measured behaviour is that it does not exit on its own.
+
+Every reviewer invocation *this skill and the panel skills own* is bounded for the same
+reason. Not every one in the repo is: `orchestrating-with-rb-lite` documents **three**
+unbounded `claude -p` reviewer commands that rb-lite itself dispatches — `SKILL.md:111`
+pinning `claude-opus-5`, and `:1296`/`:1298` pinning `opus` — which carry no timeout
+because this repo does not launch them. All three hang on exactly the failure this
+change removes elsewhere; tracked in #51 rather than claimed as covered here.
 
 Triage it exactly like a bot finding: credible hypothesis, verify before agreeing
 or rejecting, fix what's real, and don't build mechanism no requirement needs.
@@ -315,7 +428,7 @@ honesty in commit messages with kinder reviews.>
 - [x] `nix develop -c cargo clippy --locked -- -D warnings` clean
 - [x] `nix develop -c cargo fmt --check` clean
 - [x] `nix build` succeeds
-- [x] Local review (claude fable, high effort): <N findings addressed / clean>
+- [x] Local review (claude/<model>, high effort): <N findings addressed / clean>
 - [ ] CI green
 - [ ] Codex bot review
 

@@ -5,7 +5,7 @@ description: >-
   git repo. Covers one self-contained task on a branch, a serialized `br`
   backlog drain where each ready bead becomes one branch, one rb-lite run, one
   work PR, one squash merge, and one bead closure, and a harden-until-clean drive
-  that reviews a whole branch with a codex + Claude Fable panel, mints beads
+  that reviews a whole branch with a codex + Claude reviewer panel, mints beads
   from the findings, drains them, and re-reviews until clean. Use when the user
   says "rb-lite", "use rb-lite", "run the rb-lite loop", "iterate on this with
   rb-lite", "implement this with codex + claude until clean", "review-and-fix
@@ -1003,7 +1003,7 @@ panel runs again over everything that merged.
 
 ```
 loop:
-  findings = review_panel(work_branch, base=review_base)   # codex + claude fable, parallel
+  findings = review_panel(work_branch, base=review_base)   # codex + claude reviewer, parallel
   if none: break                                           # DONE
   beads   = mint(triage(findings))                         # one bead per real defect
   drain(beads)                                             # the Backlog-drain workflow above

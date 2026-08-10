@@ -249,7 +249,7 @@ After convergence:
 
 1. Flush the final graph with `br sync --flush-only`.
 2. Invoke `second-model-bead-audit` with the source plan/spec path. Its default
-   Codex + Fable panel is read-only and must not receive this skill's findings
+   Codex + Claude panel is read-only and must not receive this skill's findings
    ledger or conclusions.
 3. Handle the verdict:
    - unqualified `PASS`: polishing is complete; proceed to implementation.

@@ -1,55 +1,65 @@
-# DRIVE — make behavioural claims in prose carry the evidence code already has to
+# DRIVE — the Claude reviewer slot is a role, not a model, and it fails over
 
-**Scope:** issue #45 only — the rule, in `agents-md`'s managed discipline block.
-Issues #30/#31/#32/#33/#35/#38/#41/#43/#44 are separate PRs and NOT in scope.
-**Phase:** HARDEN · **Bead:** n/a (direct-edit tier, doc-only) · **Branch:** prose-execution-rule
+**Scope:** the reviewer-model fallback in every panel **this repo launches** —
+`multi-reviewer-loop`, `second-model-bead-audit`, `harden-until-clean`, and
+`pr-with-codex-bot-review`'s pre-push review. Explicitly NOT in scope: the reviewer
+commands `orchestrating-with-rb-lite` hands to **rb-lite** to dispatch (SKILL.md:111,
+plus :1296/:1298 under `## Customizing the panel`) — three unbounded `claude -p`
+reviewers with hardcoded models, which still hang on an exhausted one — this repo does not launch those processes and
+cannot bound them, so converting them is its own change. Filed as #51, not fixed here.
+Issues #30/#31/#32/#33/#35/#38/#41/#42/#43/#44/#47/#48/#49/#50 are separate PRs and
+NOT in scope.
+**Phase:** HARDEN · **Bead:** n/a (direct-edit tier, doc-only) · **Branch:** claude-reviewer-fallback
 **Pending:** —
 **Gate:** `./install.test && ./skills/pr-with-codex-bot-review/scripts/bot-gate.test && ./skills/drive/scripts/drive-status.test`
-· run at a2e7893 on bash 5.3.9: `passed 12, failed 0` / `passed 124, failed 0` /
-`passed 70, failed 0`, each exit 0. Re-runnable at that commit; this line records the
-commit rather than a date, so a reader can reproduce it rather than trust it.
+· run at aeaceb3 on bash 5.3.9: `passed 12, failed 0` / `passed 124, failed 0` /
+`passed 70, failed 0`, each exit 0. Re-runnable at that commit — a SHA, not "on this
+branch", which names no reproducible point once the branch has six of them. Note what that does **not** cover: every file in
+this change is prose, and no suite reads prose. The evidence for this change is the
+recorded runs in the reference, not the suites.
 
 ## Done
 - #37 merged (291a6ce): install.sh's two uninstall aborts, plus `install.test`.
-- #40 merged (fe5149e): four sibling-site rules — guarded `mktemp`, two-step `br where`
-  resolution at 10 sites, unconditional group kill, `mktemp -d` review directories.
-  Three further rules withdrawn to #41/#43/#44; #29 closed; #39 closed as superseded
-  by #42, with the false-closure corrected on the issue.
+- #40 merged (fe5149e): four sibling-site rules across 8 files.
+- #46 merged (029bc8c): behavioural claims in prose need a run, not a recollection.
+- `install.sh` run against the live install: fast-forwarded `a4bb5e1..029bc8c`,
+  14 skills linked into `~/.claude/skills` and `~/.codex/skills`, exit 0.
 
 ## Now
-One rule, in one file. Both panel reviewers independently picked #45 as the next PR, and
-both said land it alone, then write #32 under it.
+Fable is out of credits, so every panel in this repo currently has one working
+reviewer and does not know it. The measured failure is the reason this is a change
+rather than a config tweak: an unreachable model does **not** error, it hangs. Two
+separate runs, kept separate because they show different things — the *bounded* 90s
+probe exits 124 having written valid JSON with `is_error: true`, a null `.result`, and
+only the small side-model in `modelUsage`; an *unbounded* call in the same state was
+observed still running after eight minutes with both output files at zero bytes, and
+was killed by hand (no 124, no JSON — that is the whole point of the contrast). stderr
+was empty in both, so every "read stderr for the auth error" rule in these skills was
+unreachable for this case.
 
-The evidence is #40's own history: 8 codex bot rounds (6 review objects plus 2 clean
-wrappers — a clean round posts no review object, which is why the naive count reads 6),
-5 panel passes, 13 corrections to land
-four one-line rules — and the corrections were overwhelmingly to **sentences**, not code.
-Five factual claims about tool behaviour shipped false, each beside a *correct* fix, three
-of them introduced by the commit fixing the previous one. Every test suite was green
-throughout, because suites do not read prose.
+So: a `$CLAUDE_MODEL` ladder (`fable` → `opus`; a user pin *replaces* the ladder rather
+than heading it, so a named model fails instead of being substituted), resolved once per
+run by a bounded 90s probe, keyed on exit code **and** `is_error` **and** a non-empty
+`.result`. An exhausted ladder is **not** a new state: it means the Claude reviewer is
+unavailable, which every one of these skills already handled — so it drops out of the
+panel and the existing `DEGRADED` rules take over unchanged.
+Artifacts and source tags rename from the model (`fable`) to the slot (`claude`),
+because after a fallback a file named `pass-01.fable.txt` is a false provenance claim —
+the exact defect #46 landed a rule against.
 
-`skills/agents-md/references/discipline-block.md` is the home: it already carries the sibling
-rule for edits (`sed -i` reports success when it matched nothing), and the block's own
-admission bar — applies to every repo, agents get it wrong by default, every line traces
-to a concrete failure — is met on all three counts.
-
-**This PR must satisfy its own rule.** Every behavioural claim in it gets executed and the
-run recorded, including the ones in the rule's own text.
-
-Do NOT build a linter or script in THIS PR. Automation is possible — a doctest-style
-runner could execute the ```console blocks and compare status and output, which is what
-issue #49 proposes — but no *generic* script validates an arbitrary natural-language claim,
-so reviewer-plus-recorded-run is the enforcement the rule can rely on today.
-Do NOT retro-fit "Measured on" to existing sentences across the repo.
-Do NOT edit any skill other than `agents-md`.
+Budget: 14 files. Round 4 = the CUT, not another fix round: panel rounds 1-3 produced 41 findings, 0 rejected, 0 cut, all rooted in one over-built path. Removing that path is the corrective.
+Do NOT build: a retry/backoff policy, a model-capability matrix, per-pass re-probing,
+or a shared shell library — these are five prose skills, not a program.
 
 ## Next
-Issue #32 `verify-commit`, written under this rule. Then #30/#31 (drive Guard 2 — both
-reviewers previously said decline the watcher script and use `--max-rounds`), #33/#35,
-and the § 3a residue (#41, #43, #44).
+Issue #32 `verify-commit`. Then #30/#31 (drive Guard 2), #33/#35, and the § 3a
+residue (#41, #43, #44).
 
 ## Open questions for the human
-- `AGENTS.md` is still absent from this repo, so the block this PR edits is not installed
-  here. Orthogonal — the block's purpose is to travel to other repos — but it does mean
-  this repo does not yet hold itself to the rule it ships. Deferred to the #33 PR, where
-  `agents-md` installation is the subject rather than a side effect.
+- The ladder's second rung is `opus`, which is also the model that usually *drives*
+  these skills. `second-model-bead-audit` now **discloses** that overlap in the panel roster. It does
+  not downgrade the label for it: independence is judged against the graph's builder, so
+  on a Codex-built graph the Claude auditor stays `INDEPENDENT` whichever rung it landed
+  on. The mitigation shipped is therefore disclosure only — the deeper fix, a non-Claude
+  fallback rung so the second opinion is independent by construction, is a product
+  decision rather than a sweep.

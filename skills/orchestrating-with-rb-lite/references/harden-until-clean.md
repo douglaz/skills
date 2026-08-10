@@ -30,8 +30,8 @@ introducing bugs.
 
 ```
 loop:
-  codex_findings, fable_findings = review_panel(work_branch, base=review_base)  # parallel
-  findings = merge_and_dedupe(...)                     # tagged BOTH / CODEX / FABLE
+  codex_findings, claude_findings = review_panel(work_branch, base=review_base)  # parallel
+  findings = merge_and_dedupe(...)                     # tagged BOTH / CODEX / CLAUDE
   if no_real_findings(findings): break                 # DONE
   beads = [create_bead(f) for f in triage(findings)]
   sync_and_commit(beads)
@@ -74,10 +74,22 @@ fi
 # pre-created silently keeps their mode.
 REVIEW_DIR=$(mktemp -d "/tmp/harden-$(basename "$(git rev-parse --show-toplevel)")-$(echo "$WORK_BRANCH" | tr '/ ' '__')-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX") \
   || { echo "cannot create a private review directory"; exit 1; }
-PROMPT_FILE="$REVIEW_DIR/fable-prompt.txt"
+PROMPT_FILE="$REVIEW_DIR/claude-prompt.txt"
 ```
 
-Write the Fable reviewer's prompt once, into `$PROMPT_FILE`. Interpolate the base
+**Resolve the Claude reviewer's model before the first iteration**, into
+`$CLAUDE_MODEL`, with the bounded probe in
+[multi-reviewer-loop/references/reviewer-panel.md](../../multi-reviewer-loop/references/reviewer-panel.md)
+§ Resolving the Claude reviewer's model. That file owns the ladder, the probe and
+the evidence; this loop just uses the resolved `$CLAUDE_MODEL`, and treats an exhausted
+ladder as a reviewer it does not have.
+Do not hardcode a model here — an unreachable one hangs rather than erroring. With the
+bound added below it at least *ends*: 25 minutes gone and no findings, but exit 124,
+which the status capture there treats as a reviewer failure and never as clean.
+Unbounded it is the dangerous shape, because a reviewer that never exits produces no
+status to read at all. The probe turns the 25-minute version into a 90-second one.
+
+Write the Claude reviewer's prompt once, into `$PROMPT_FILE`. Interpolate the base
 with `printf` and keep the rubric in a **quoted** heredoc, so nothing in the text
 gets shell-expanded:
 
@@ -116,26 +128,68 @@ into a single opinion.
 
 ```bash
 PASS=$(printf '%02d' "$ITERATION")
+# Bound BOTH reviewers. Either can hang with no output and no exit, and an unreachable
+# model does exactly that — so without this the `wait` below never returns, the `jq`
+# unwrap is never reached, and the "proceed with the survivor" handling further down
+# never runs. That is a permanent stall, not a slow iteration, and it looks identical
+# to a reviewer still thinking.
+#
+# This panel is a HOST-shell dependency, and that is a stronger requirement than the
+# one SKILL.md states for rb-lite itself: under `nix run ... rb-lite --` the upstream
+# wrapper supplies GNU timeout to the RB-LITE process, so SKILL.md rightly says not to
+# reject that setup when the host shell lacks it. These two reviewers run outside that
+# wrapper. Harden mode therefore needs GNU timeout on the host regardless of how
+# rb-lite is resolved — or the panel below must be run inside the wrapped environment.
+# Validate rather than merely locate: `command -v timeout` cannot tell GNU's from
+# busybox's, and a busybox one fails every `--kill-after` invocation.
+TO=""
+for _c in timeout gtimeout; do
+  if command -v "$_c" >/dev/null 2>&1 && "$_c" --kill-after=1s 1s true >/dev/null 2>&1; then
+    TO=$(command -v "$_c"); break
+  fi
+done
+[ -n "$TO" ] || { echo "harden mode needs GNU timeout on the HOST (see note above)"; exit 1; }
+RC_TIMEOUT=1500
 
-codex review --base "$REVIEW_BASE" \
+"$TO" --kill-after=60 "$RC_TIMEOUT" \
+  codex review --base "$REVIEW_BASE" \
   -c 'model="gpt-5.6-sol"' -c 'model_reasoning_effort="xhigh"' \
-  >"$REVIEW_DIR/pass-$PASS.codex.txt" 2>"$REVIEW_DIR/pass-$PASS.codex.err" &
+  </dev/null >"$REVIEW_DIR/pass-$PASS.codex.txt" 2>"$REVIEW_DIR/pass-$PASS.codex.err" &
 CODEX_PID=$!
 
-claude -p "$(cat "$PROMPT_FILE")" \
-  --model fable --effort high --output-format json \
+"$TO" --kill-after=60 "$RC_TIMEOUT" \
+  claude -p "$(cat "$PROMPT_FILE")" \
+  --model "$CLAUDE_MODEL" --effort high --output-format json \
   --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
   --disallowedTools "Edit,Write,NotebookEdit" \
-  >"$REVIEW_DIR/pass-$PASS.fable.json" 2>"$REVIEW_DIR/pass-$PASS.fable.err" &
-FABLE_PID=$!
+  </dev/null >"$REVIEW_DIR/pass-$PASS.claude.json" 2>"$REVIEW_DIR/pass-$PASS.claude.err" &
+CLAUDE_PID=$!
 
-wait "$CODEX_PID"; CODEX_RC=$?
-wait "$FABLE_PID"; FABLE_RC=$?
+# `|| VAR=$?` so a 124/137 timeout does not kill the shell under `set -e` before the
+# other reviewer is reaped. Exit 124 (TERM) and 137 (the --kill-after KILL) are
+# reviewer failures, never clean.
+CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?
+CLAUDE_RC=0; wait "$CLAUDE_PID" || CLAUDE_RC=$?
 
-jq -er 'if .is_error then error(.result // "fable reviewer returned is_error")
-        else (.result // empty) end' \
-  <"$REVIEW_DIR/pass-$PASS.fable.json" >"$REVIEW_DIR/pass-$PASS.fable.txt"
+# `if`, not `jq ... ; JQ_RC=$?`. On a killed run the JSON is usually COMPLETE — measured
+# in multi-reviewer-loop's § Resolving transcript, the 90s-killed probe wrote a full
+# object — and it carries `is_error: true`, which is exactly what makes `jq -er` exit
+# non-zero via `error()`. Under `set -e` that kills the iteration right here, before the
+# survivor/DEGRADED handling below, turning the stall this timeout was added to prevent
+# into an abort one line later. (A genuinely truncated write would fail too; it is just
+# not the case the evidence shows.)
+if jq -er 'if .is_error then error(.result // "claude reviewer returned is_error")
+           else (.result // empty) end' \
+     <"$REVIEW_DIR/pass-$PASS.claude.json" >"$REVIEW_DIR/pass-$PASS.claude.txt"; then
+  JQ_RC=0
+else
+  JQ_RC=$?
+fi
 ```
+
+With the Claude reviewer unavailable — no ladder candidate answered — do not launch it,
+and skip its `wait` and unwrap with it. That is the existing one-reviewer path, not a
+new one: the survivor rule below already covers it.
 
 Four things to know about these commands:
 
@@ -143,7 +197,7 @@ Four things to know about these commands:
   exclusive — passing both fails arg parsing before any review runs.
 - **`codex review --base` does not see untracked files** (`--uncommitted` does,
   but cannot be combined with `--base`). Run `git add -N` on new source files
-  first, or codex and Fable are reviewing different diffs.
+  first, or codex and the Claude reviewer are reviewing different diffs.
 - **All three tool flags are needed.** `--tools` restricts the toolset,
   `--allowedTools` pre-approves it (without this, Bash calls are silently
   recorded as denials mid-review), `--disallowedTools` is belt-and-braces.
@@ -153,11 +207,21 @@ Four things to know about these commands:
   is degraded for it.
 
 Findings from both are lines starting with `[P0]`–`[P3]`. Count per reviewer,
-then merge into one deduped list, each entry tagged `BOTH`, `CODEX`, or `FABLE`.
+then merge into one deduped list, each entry tagged `BOTH`, `CODEX`, or `CLAUDE`.
 Dedupe on the claim, not the wording — the same defect described from two angles
 is **one bead**, never two, or you will build yourself a merge conflict.
 
-If one reviewer fails, proceed with the survivor and label the iteration
+**Report the resolved model on every iteration, including clean ones.** The per-finding
+templates below carry it, but a clean pass mints no beads and runs none of them — so a
+fallback on the iteration that finally came back clean would leave no record anywhere
+except the raw probe output, and the summary would say only that both reviewers were
+clean. Name the model and where it came from (ladder default, pin, or fallback from
+which model) in each iteration line and in the final report.
+
+If the Claude reviewer fails **mid-run** — a 124/137 timeout, or `is_error` — re-resolve
+the ladder once and rerun that iteration's reviewer on the next model before falling back
+to the survivor. Degrading with an untried rung is the outcome the ladder exists to
+prevent. If one reviewer fails, proceed with the survivor and label the iteration
 `DEGRADED`, in chat and in the beads commit message.
 
 ## 2. Triage before minting anything
@@ -178,7 +242,7 @@ only when you can point at code or tests that disprove it.
 **Sibling sweep — the step that saves whole iterations.** When a finding names
 one instance of a class ("these new routes lack auth"), grep the file for every
 sibling with the same shape and mint beads for those too. Six separate auth-gap
-beads collapsed into one sweep once this became explicit. The Fable reviewer
+beads collapsed into one sweep once this became explicit. The Claude reviewer
 catches more siblings than codex does alone, because it reads whole files — but
 it still chooses how far to read, so run the grep yourself. Classes that repeat:
 
@@ -238,7 +302,7 @@ the good JSONL discards the whole iteration's legitimate bead additions.
 br create --actor "$ACTOR" "<short, concrete title>" \
   --priority <0..4> \
   --type bug \
-  --labels <area>,code-review,review-src:<both|codex|fable> \
+  --labels <area>,code-review,review-src:<both|codex|claude> \
   --description "<finding summary, with file:line anchors>
 
 Acceptance criteria:
@@ -248,7 +312,7 @@ Acceptance criteria:
 - <at least one named test for the happy path and one for the rejection path>
 - <the repo's gate set passes on the final tree>
 
-Source: <codex | claude fable | both reviewers> review of $WORK_BRANCH vs $REVIEW_BASE, iteration <N>." \
+Source: <codex | claude/$CLAUDE_MODEL | both reviewers> review of $WORK_BRANCH vs $REVIEW_BASE, iteration <N>." \
   --json
 ```
 
@@ -292,7 +356,7 @@ unset BEADS_DIFF_REVIEWED
 # ...print and read the diff, then:
 : "${BEADS_DIFF_REVIEWED:?read THIS pass's diff, then set it to \"pass $ITERATION: <what you found>\"}"
 git add -- "$BEADS_JSONL"
-git commit -m "chore(beads): record review findings (iteration <N>, codex+fable)"
+git commit -m "chore(beads): record review findings (iteration <N>, codex+claude/<model>)"
 git push
 ```
 

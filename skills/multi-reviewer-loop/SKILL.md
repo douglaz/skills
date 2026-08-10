@@ -2,8 +2,8 @@
 name: multi-reviewer-loop
 description: >-
   Runs an iterative multi-reviewer review/fix/re-review loop on the current
-  branch: detects a review base, runs a two-reviewer panel (`codex review` plus
-  Claude Fable at high effort) in parallel each pass, merges and dedupes their
+  branch: detects a review base, runs a two-reviewer panel (`codex review` plus a
+  Claude reviewer at high effort) in parallel each pass, merges and dedupes their
   findings, treats findings as credible until disproven, fixes accepted items,
   validates the changed code, and repeats until both reviewers are clean on the
   current diff. A final consistency pass then checks that the changed files still
@@ -15,7 +15,7 @@ description: >-
   proactively after substantial implementation work or when a single review pass
   surfaced issues. Does not commit, open a PR, or reject findings without
   concrete evidence.
-argument-hint: "[max-passes] [--reviewers codex|fable|codex,fable] [focus instructions]"
+argument-hint: "[max-passes] [--reviewers codex|claude|codex,claude] [focus instructions]"
 allowed-tools:
   - Bash
   - Read
@@ -43,18 +43,37 @@ The default panel is two reviewers, run in parallel every pass:
 | Reviewer | Command | Notes |
 |---|---|---|
 | `codex` | `codex review --base "$DIFF_BASE" -c 'model="gpt-5.6-sol"' -c 'model_reasoning_effort="xhigh"'` | Diff-scoped, structured `[P*]` output |
-| `fable` | `claude -p "<review prompt>" --model fable --effort high --output-format json` | Repo-aware, reads beyond the diff |
+| `claude` | `claude -p "<review prompt>" --model "$CLAUDE_MODEL" --effort high --output-format json` | Repo-aware, reads beyond the diff |
+
+**The Claude slot is a role, not a model.** `$CLAUDE_MODEL` is resolved once per run
+by a bounded probe down a ladder — `fable`, then `opus`, or a user pin that *replaces*
+the ladder instead of heading it — because a model you cannot reach *hangs* rather than
+erroring, and finding that out inside a real pass costs the full 25-minute timeout.
+When no candidate answers, the Claude reviewer is simply unavailable — the same case as
+a missing CLI, handled by the same rule below. The probe, the measured evidence for it,
+and the mid-run re-resolution rule are in
+[references/reviewer-panel.md](references/reviewer-panel.md) § Resolving the Claude
+reviewer's model. Read it before the first pass.
 
 Both CLIs must be on `PATH` and authenticated. `jq` is needed to unwrap the
 Claude reviewer's JSON, and GNU `timeout` — named `timeout`, or `gtimeout` from
-Homebrew coreutils; resolve it once with `command -v` — to bound each reviewer — both CLIs can hang indefinitely, writing nothing and never exiting.
+Homebrew coreutils; resolve it once by **validating** each candidate with
+`--kill-after=1s 1s true`, not by `command -v` alone, which cannot tell GNU's from
+busybox's — to bound each reviewer, since both CLIs can hang indefinitely, writing
+nothing and never exiting.
 
 - If **both** are missing, stop and tell the user to install them.
 - If **one** is missing or unauthenticated, run the loop with the survivor and
   label every pass `DEGRADED` — a degraded loop can reach `CLEAN_DEGRADED`, never
   plain `CLEAN`.
-- Default to `gpt-5.6-sol` at `xhigh` for codex and `fable` at `--effort high`
-  for Claude. If the user or repo pins different models, honor that. If
+- **A model falling back is not a reviewer failing.** When the Claude slot resolves
+  to a later ladder entry, the panel is still two independent reviewers and can
+  reach plain `CLEAN`; report which model filled the slot. `DEGRADED` is for a slot
+  left **empty** — every ladder candidate failed, or codex did.
+- Default to `gpt-5.6-sol` at `xhigh` for codex and the first reachable ladder entry
+  at `--effort high` for Claude. If the user or repo pins different models, honor
+  that — a pin replaces the ladder rather than prefixing it, so a pinned model that
+  cannot be reached is a failure to report, not a licence to substitute. If
   `gpt-5.6-sol` is unavailable, retry once with the environment default model and
   note the fallback. If a flag is not recognized, retry without it and note the
   incompatibility; both CLIs change between versions.
@@ -90,9 +109,42 @@ Parse the user's request for arguments. In Claude Code, these arrive via
 Parse in this order, so a flag never leaks into the focus text:
 
 1. **`--reviewers <list>`** anywhere in the arguments: pin the panel to
-   `codex`, `fable`, or `codex,fable`, and remove both tokens from what remains.
-   Default is `codex,fable`. A single-reviewer run by explicit user request is
+   `codex`, `claude`, or `codex,claude`, and remove both tokens from what remains.
+   Default is `codex,claude`. A single-reviewer run by explicit user request is
    not "degraded" — report it as a pinned panel.
+
+   Accept a **model name** where the slot name goes — `--reviewers codex,opus` — and
+   treat it as pinning both the slot and its model. `fable` keeps working for the same
+   reason, and is now a pin rather than the default.
+
+   **Known names only: `fable`, `opus`.** A token that is neither a slot nor one of
+   those is an error — say so and stop, exactly as an unknown `--reviewers` value did
+   before this change. Treating anything unrecognised as a model pin turns a typo into
+   a silent one-reviewer run: `--reviewers codex,opsu` would pin a nonexistent model,
+   fail its only rung, drop the Claude reviewer, and hand back a `DEGRADED` codex-only
+   loop without ever mentioning the typo. `second-model-bead-audit` carries the same
+   list; extend both together.
+
+   A pin must actually reach the probe, which reads exactly one variable. Parsing it
+   into a local and never exporting it is not a pin — the run then silently uses the
+   default ladder and every report names the model the *ladder* picked:
+
+   ```bash
+   # BEFORE the parse loop — initialising it here is what keeps `set -u` happy on the
+   # no-pin path (every ordinary run) WITHOUT clearing a pin the parse just recorded.
+   CLAUDE_MODEL_PIN=""
+   # ... parse `--reviewers`, setting CLAUDE_MODEL_PIN when a token is a model name ...
+   # `--reviewers codex,opus` -> panel `codex,claude`, ladder pinned to `opus`.
+   # A pin REPLACES the ladder, so an unreachable pinned model fails the slot instead
+   # of substituting: the user asked for that model by name.
+   if [ -n "$CLAUDE_MODEL_PIN" ]; then export CLAUDE_REVIEWER_MODELS="$CLAUDE_MODEL_PIN"; fi
+   ```
+
+   The order is the whole point, and getting it wrong is silent: initialised *after*
+   the parse, the assignment clears the pin, the probe runs the default ladder, and a
+   user who asked for `opus` gets whichever model the ladder reached — reported as
+   valid. That is the substitution this rule exists to forbid, reintroduced by the line
+   meant to make the rule safe.
 2. **A leading positive integer** in what's left: use it as `MAX_PASSES` and
    remove it.
 3. **Everything still remaining** is focus text (possibly empty).
@@ -116,7 +168,7 @@ fix adds review surface). The last case is a cue to run a skeptical audit
 
 Two reviewers cost roughly twice as much per pass as one. That is the point —
 but if the user asks for a cheap check, `--reviewers codex` or
-`--reviewers fable` is the honest way to give it to them, not silently dropping
+`--reviewers claude` is the honest way to give it to them, not silently dropping
 a reviewer.
 
 ## Workflow
@@ -126,6 +178,24 @@ a reviewer.
 1. Confirm this is a git repo and check both reviewer CLIs (`codex`, `claude`)
    plus `jq`. Record which reviewers are actually available; that set is the
    panel for every pass.
+
+   **Resolve `$TO` here, unconditionally**, by validating each candidate:
+
+   ```bash
+   TO=""
+   for _c in timeout gtimeout; do
+     if command -v "$_c" >/dev/null 2>&1 && "$_c" --kill-after=1s 1s true >/dev/null 2>&1; then
+       TO=$(command -v "$_c"); break
+     fi
+   done
+   [ -n "$TO" ] || { echo "no GNU timeout (nor gtimeout) — cannot bound the reviewers"; exit 1; }
+   ```
+
+   Not inside § 1.5's model probe, even though that block can also resolve it. The
+   probe is skipped on a codex-only panel while § 2's launches are not, so a `$TO` that
+   originates there leaves `--reviewers codex` — a documented invocation — exiting
+   before it reviews anything, reporting a missing GNU `timeout` on a host that has one.
+   Validate rather than locate: `command -v` cannot tell GNU's from busybox's.
 
 2. Resolve `DIFF_BASE` in this order. Use the first candidate that resolves to a
    commit:
@@ -312,10 +382,15 @@ a reviewer.
 
    Store each pass separately, one file per reviewer:
    - `pass-01.codex.txt` / `pass-01.codex.stderr.txt`
-   - `pass-01.fable.txt` / `pass-01.fable.raw.json` / `pass-01.fable.stderr.txt`
+   - `pass-01.claude.txt` / `pass-01.claude.raw.json` / `pass-01.claude.stderr.txt`
    - `pass-01.merged.md` — the deduped finding table for that pass
    - `pass-01.notes.md` — dispositions and evidence
    - `summary.md`
+
+   Named for the **slot**, not the model, because the model can change mid-run. Which
+   model produced a file goes in `summary.md` and the pass header — never in the
+   filename, where a fallback would turn the name into a false claim about who wrote
+   it.
 
 4. Check whether there is anything to review.
    Treat these as reviewable changes:
@@ -327,7 +402,29 @@ a reviewer.
    If all are empty, stop: "No changes detected against `<DIFF_BASE>`.
    Nothing to review."
 
-5. **Make untracked source files visible to codex, or the panel reviews two
+5. **Resolve `$CLAUDE_MODEL`** with the bounded probe in
+   [references/reviewer-panel.md](references/reviewer-panel.md) § Resolving the Claude
+   reviewer's model, and print the model you got. Do this once, here — not per pass,
+   and not lazily inside the first pass, where an unreachable model burns the whole
+   `RC_TIMEOUT` before anyone learns it was unreachable.
+
+   **After** the no-work check above and **only if the panel includes the Claude
+   slot.** The probe spends up to 90 seconds per unreachable rung and costs a real
+   (if small) amount, so a `--reviewers codex` run must not pay it — and neither
+   should a run that is about to stop with "nothing to review".
+
+   If no candidate answers, the Claude reviewer is **unavailable for this run**. That
+   is not a new state: drop it from the panel and every existing rule applies
+   unchanged — do not launch it, run each pass on the survivor, label them `DEGRADED`,
+   and finish no better than `CLEAN_DEGRADED`. Say which models were tried.
+
+   **Unless it was the only reviewer.** On `--reviewers claude` or a model-only pin,
+   dropping it leaves an empty panel, and "continue on the survivor" has no survivor
+   to continue on. Report `BLOCKED` — nothing reviewed the code. Do not quietly
+   substitute codex: the user pinned a reviewer, and running a different one is the
+   substitution this whole section exists to prevent, one level up.
+
+6. **Make untracked source files visible to codex, or the panel reviews two
    different things.** Measured behavior of `codex review --base`: it covers
    committed *and* uncommitted changes to **tracked** files, but **not untracked
    files** — and `--uncommitted` (which does cover them) cannot be combined with
@@ -345,7 +442,7 @@ a reviewer.
    pass summary and **never report `CLEAN` from a codex-only panel while
    unreviewed untracked files exist** — nothing looked at them.
 
-6. If the working tree is dirty, continue, but say so explicitly.
+7. If the working tree is dirty, continue, but say so explicitly.
    Do not clean, reset, or overwrite unrelated user changes. Only edit files
    tied to real findings.
 
@@ -368,30 +465,40 @@ For each pass `N` from `1` to `MAX_PASSES`:
                    # `set -m`, not `setsid` — that is util-linux and absent on macOS,
                    # which this skill supports. See references/reviewer-panel.md.
    PASS_ID=$(printf '%02d' "$N")
-   TO=$(command -v timeout || command -v gtimeout) \
-     || { echo "no GNU timeout — see references/reviewer-panel.md"; exit 1; }
+   # Reuse the validated $TO from § 1.1 PREFLIGHT — not from § 1.5's probe, which is
+   # skipped on `--reviewers codex` and so cannot be its source. (Pointing this at the
+   # probe is what made codex-only runs abort here reporting a missing GNU timeout on a
+   # host that had one.) Do not re-resolve with `command -v timeout || command -v
+   # gtimeout` either: that picks a busybox `timeout` whenever it exists, and these
+   # calls then die instantly on `--kill-after` with nothing naming the dependency.
+   [ -n "${TO:-}" ] || { echo "no validated GNU timeout — see references/reviewer-panel.md"; exit 1; }
    "$TO" --kill-after=60 1500 codex review --base "$DIFF_BASE" \
      -c 'model="gpt-5.6-sol"' -c 'model_reasoning_effort="xhigh"' \
      </dev/null >"$REVIEW_DIR/pass-${PASS_ID}.codex.txt" 2>"$REVIEW_DIR/pass-${PASS_ID}.codex.stderr.txt" &
    CODEX_PID=$!
    "$TO" --kill-after=60 1500 \
-     claude -p "$(cat "$FABLE_PROMPT_FILE")" --model fable --effort high --output-format json \
+     claude -p "$(cat "$CLAUDE_PROMPT_FILE")" --model "$CLAUDE_MODEL" --effort high --output-format json \
      --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
      --disallowedTools "Edit,Write,NotebookEdit" \
-     </dev/null >"$REVIEW_DIR/pass-${PASS_ID}.fable.raw.json" 2>"$REVIEW_DIR/pass-${PASS_ID}.fable.stderr.txt" &
-   FABLE_PID=$!
+     </dev/null >"$REVIEW_DIR/pass-${PASS_ID}.claude.raw.json" 2>"$REVIEW_DIR/pass-${PASS_ID}.claude.stderr.txt" &
+   CLAUDE_PID=$!
    # `|| VAR=$?` — a timeout kill returns 124/137, and under `set -e` the bare
    # `; VAR=$?` form terminates the shell before the status is ever captured.
    CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?
-   FABLE_RC=0; wait "$FABLE_PID" || FABLE_RC=$?
+   CLAUDE_RC=0; wait "$CLAUDE_PID" || CLAUDE_RC=$?
    ```
+
+   That is the two-reviewer panel. On a one-reviewer panel — pinned, missing CLI, or an
+   exhausted ladder — launch only the reviewer in the panel and skip the other's launch,
+   `wait` and unwrap as a unit, which is how this skill has always handled a reviewer it
+   does not have.
 
    **Do not pass focus text as a `codex review` argument.** `codex review` rejects
    a `[PROMPT]` argument together with `--base` (`error: the argument '[PROMPT]'
    cannot be used with '--base <BRANCH>'`), so a focused run would fail arg
    parsing and silently degrade the panel to one reviewer. Focus reaches the panel
    through the Claude reviewer's prompt, which is where it belongs anyway. Say so
-   in the pass summary: codex reviewed the whole diff, Fable reviewed it with the
+   in the pass summary: codex reviewed the whole diff, the Claude reviewer reviewed it with the
    focus applied.
 
    Never run them sequentially just to read the first one's output — the panel's
@@ -403,7 +510,7 @@ For each pass `N` from `1` to `MAX_PASSES`:
    commit that should have carried it prints `nothing to commit, working tree
    clean` with the content absent from the file and from `HEAD`. Backgrounding
    both reviewers is exactly what puts this loop in the hazard window: codex's
-   findings are readable while Fable is still running, and acting on them there
+   findings are readable while the Claude reviewer is still running, and acting on them there
    is how the work disappears. If you must edit sooner, kill **both** reviewers by the
    PIDs you captured at launch and **then reap them** — `kill` only *sends* SIGTERM
    and returns immediately, so the wrapper and the reviewer are still shutting
@@ -411,9 +518,9 @@ For each pass `N` from `1` to `MAX_PASSES`:
 
    ```bash
    # BOTH reviewers, not just codex. The hatch abandons the pass, and this section's own
-   # rule is that every reviewer has exited before you edit — leaving Fable alive holds a
+   # rule is that every reviewer has exited before you edit — leaving the Claude one alive holds a
    # Bash-capable process against the tree you are about to change, and unreaped besides.
-   for _p in "$CODEX_PID" "$FABLE_PID"; do
+   for _p in "$CODEX_PID" "$CLAUDE_PID"; do
      kill "$_p" 2>/dev/null || true        # never `pkill -f`; already-exited is fine
    done
    # Bounded escalation. Signalling the `timeout` wrapper from outside forwards TERM but does
@@ -422,7 +529,7 @@ For each pass `N` from `1` to `MAX_PASSES`:
    # exactly the hung-reviewer case this hatch exists for. Give it a few seconds, then KILL
    # the process group.
    sleep 5
-   for _p in "$CODEX_PID" "$FABLE_PID"; do
+   for _p in "$CODEX_PID" "$CLAUDE_PID"; do
      # Signal the GROUP unconditionally, never `kill -0 "$_p"` first: that probes the
      # former group LEADER, and a wrapper that exits on TERM while a TERM-ignoring child
      # retains its PGID leaves the leader dead and the child running — the probe fails,
@@ -431,14 +538,14 @@ For each pass `N` from `1` to `MAX_PASSES`:
      kill -KILL -- "-$_p" 2>/dev/null || true
    done
    CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?   # reaping is what closes the window
-   FABLE_RC=0; wait "$FABLE_PID" || FABLE_RC=$?
+   CLAUDE_RC=0; wait "$CLAUDE_PID" || CLAUDE_RC=$?
    ```
 
    Both `||`s are load-bearing under `set -e`, and they guard different moments.
    `kill` fails if codex exited on its own between your decision and the signal —
    a race you cannot exclude — so an unguarded `kill` exits the shell before the
    `wait`. And `wait` on a TERM-killed process returns **143**, so an unguarded
-   `wait` exits it before the edit this hatch exists for. Either way Fable is left
+   `wait` exits it before the edit this hatch exists for. Either way the Claude reviewer is left
    running unreaped. § 2's own `wait`s carry the same `|| VAR=$?` for the same
    reason.
 
@@ -472,7 +579,7 @@ For each pass `N` from `1` to `MAX_PASSES`:
 
 4. Merge the two finding lists into `pass-NN.merged.md`. Dedupe on *claim*, not
    wording: same file, same code path, same defect = one merged finding. Tag each
-   merged finding with its source — `BOTH`, `CODEX`, `FABLE`, or `CONFLICT` when the two
+   merged finding with its source — `BOTH`, `CODEX`, `CLAUDE`, or `CONFLICT` when the two
    reviewers explicitly disagree about the same code (§ 3.4 — those rows are the
    highest-value ones in the pass) — and keep both
    reviewers' phrasings when they differ in what they'd have you do about it.
@@ -481,9 +588,13 @@ For each pass `N` from `1` to `MAX_PASSES`:
 
 5. Append a short entry to `summary.md` with:
    - pass number
+   - **the model that filled the Claude slot for this pass**, and whether it came from
+     the ladder default, a user pin, or a mid-run fallback. This is the durable record
+     the slot-based filenames deliberately do not carry — omit it and the provenance
+     gap the rename closed simply reopens somewhere else.
    - commands used, and each reviewer's exit status
    - counts by priority, per reviewer, plus merged/deduped totals
-   - agreement counts (`BOTH` / `CODEX`-only / `FABLE`-only)
+   - agreement counts (`BOTH` / `CODEX`-only / `CLAUDE`-only)
    - tokens line from stderr, if present
    - log file paths
 
@@ -501,8 +612,8 @@ For each pass `N` from `1` to `MAX_PASSES`:
    PASS N/MAX  [DEGRADED if a reviewer failed]
    Base: <DIFF_BASE>
    codex: P0=W P1=X P2=Y P3=Z  (ok|failed|ambiguous)
-   fable: P0=W P1=X P2=Y P3=Z  (ok|failed|ambiguous)
-   Merged: Total=T  (both=A codex-only=B fable-only=C)
+   claude (<model>): P0=W P1=X P2=Y P3=Z  (ok|failed|ambiguous)
+   Merged: Total=T  (both=A codex-only=B claude-only=C)
    Logs: <REVIEW_DIR>/pass-NN.*
    ```
 
@@ -581,7 +692,7 @@ Otherwise:
    **The other reviewer's silence is not counter-evidence.** The two reviewers
    have different visibility (codex is diff-scoped; the Claude reviewer reads the
    wider repo), so one missing what the other caught is expected. Rejecting a
-   `CODEX`-only or `FABLE`-only finding still takes the same concrete evidence
+   `CODEX`-only or `CLAUDE`-only finding still takes the same concrete evidence
    any rejection takes.
 
 4. When the reviewers **directly contradict** each other — one asserts a defect,
@@ -680,13 +791,13 @@ Otherwise:
    Fixed:
    - [P1][BOTH] <what changed>
    Deferred:
-   - [P2][FABLE] <why it remains open>
+   - [P2][CLAUDE] <why it remains open>
    Rejected with evidence:
    - [P3][CODEX] <why it is disproven>
    Cut/simplified (over-specification):
    - [P2][BOTH] <what was not built or shrunk, and what already covers the case>
    Contradictions resolved:
-   - <claim> — codex right / fable right, per <file:line>
+   - <claim> — codex right / claude right, per <file:line>
    Validation: <command/result or "no targeted verifier found">
    ```
 
@@ -741,9 +852,9 @@ finding precisely enough for someone else to act on, which by itself kills the v
   the same work with one rule — *use the CLI, never edit the file* — landed clean and the
   database still parsed. Name the tool, forbid the file, and require a read-back.
 - **Snapshot first — and non-destructively.** The implementer has write access, and
-  § 1.6 explicitly permits a dirty tree, so plain `git` is *not* your undo: `git checkout
+  § 1.7 explicitly permits a dirty tree, so plain `git` is *not* your undo: `git checkout
   .`, `git stash` and `git reset --hard` each discard the user's pre-existing work along
-  with the delegated edit, which § 1.6 forbids.
+  with the delegated edit, which § 1.7 forbids.
 
   Capture **three** things before granting access, and require the capture *commands* to
   succeed — never their output to be non-empty, since on a clean tree an empty patch is
@@ -766,7 +877,7 @@ finding precisely enough for someone else to act on, which by itself kills the v
     apply; `--no-textconv` because the conversion is not what is on disk.
   - `git status --porcelain -z`, NUL-delimited. Porcelain quotes paths that need it, so a
     `cut`-based parse hands back a literal `"caf\303\251.py"` that does not exist. This
-    is also what restores **intent-to-add** entries (` A `) afterwards: § 1.5's `git add
+    is also what restores **intent-to-add** entries (` A `) afterwards: § 1.6's `git add
     -N` runs only before the first pass, so a file demoted to `??` during a rollback drops
     out of every later `codex review --base`.
   - a **byte copy of every pre-existing untracked path in scope** — no patch contains
@@ -814,7 +925,7 @@ finding precisely enough for someone else to act on, which by itself kills the v
   5. re-run `git add -N` for every path the status snapshot recorded as `" A "` — a leading
      space, then `A`; `"A "` is an ordinary staged addition and must not be re-added
 
-  **`git stash create` cannot replace any of this.** It fails outright on the tree § 1.5
+  **`git stash create` cannot replace any of this.** It fails outright on the tree § 1.6
   builds:
 
   ```console
@@ -908,7 +1019,7 @@ the reviewer to hunt over-specification aggressively, with, per item: what it is
 why it isn't strictly required (what already covers the case), and a
 recommendation of CUT / SIMPLIFY / MARK-OPTIONAL.
 
-**Run the audit on the Claude Fable reviewer when it is available.** It reads the
+**Run the audit on the Claude reviewer when it is available.** It reads the
 whole repo rather than just the diff, so it can see what already covers a case —
 which is exactly the judgment a cut decision needs. `codex review` takes no
 custom prompt alongside `--base` (they are mutually exclusive), so an inverted
@@ -942,8 +1053,8 @@ file per pass and never re-read the file that summarises it.
 
 **Entry:** a normal panel pass came back clean.
 
-**Who runs it:** a reviewer that accepts a custom prompt. Fable by default — it
-opens files the diff does not show, which is what cross-file agreement needs. On
+**Who runs it:** a reviewer that accepts a custom prompt. The Claude slot by default
+— it opens files the diff does not show, which is what cross-file agreement needs. On
 a `--reviewers codex` pinned run use `codex exec --sandbox read-only` with the
 same prompt (it takes one; `codex review --base` does not — and the sandbox flag
 matters, since `codex exec` is a general coding agent that may try to *fix* a
@@ -1009,12 +1120,13 @@ Report:
 ```text
 MULTI-REVIEWER LOOP COMPLETE
 Status: CLEAN | CLEAN_DIFF_ONLY | CLEAN_DEGRADED | ISSUES_FIXED_UNCONFIRMED | ISSUES_REMAIN | BLOCKED
-Panel: codex (<ok|failed|not available>), fable (<ok|failed|not available>)
+Panel: codex (<ok|failed|not available>), claude/<model> (<ok|failed|not available>)
+Claude model: <resolved model> (<ladder default | user pin | fell back at pass N from <model>>)
 Passes run: N/MAX
 Base: <DIFF_BASE>
 Review dir: <REVIEW_DIR>
 Fixed: P0=W P1=X P2=Y P3=Z
-Agreement: both=A codex-only=B fable-only=C
+Agreement: both=A codex-only=B claude-only=C
 Deferred: <count or none>
 Rejected with evidence: <count or none>
 Cut/simplified (over-specification): <count or none>
@@ -1038,7 +1150,7 @@ Keep a copy of the latest pass under stable names:
 
 ```bash
 cp "$REVIEW_DIR/pass-${PASS_ID}.codex.txt" "$REVIEW_DIR/review.codex.txt" 2>/dev/null || true
-cp "$REVIEW_DIR/pass-${PASS_ID}.fable.txt" "$REVIEW_DIR/review.fable.txt" 2>/dev/null || true
+cp "$REVIEW_DIR/pass-${PASS_ID}.claude.txt" "$REVIEW_DIR/review.claude.txt" 2>/dev/null || true
 cp "$REVIEW_DIR/pass-${PASS_ID}.merged.md" "$REVIEW_DIR/review.merged.md" 2>/dev/null || true
 ```
 
@@ -1080,7 +1192,7 @@ Suggest this skill after a substantial implementation, after a single review
 found issues, or right before opening a PR or shipping.
 
 Suggested phrasing (adapt the invocation syntax to your environment):
-"Want me to run the multi-reviewer-loop — codex and Claude Fable reviewing in
+"Want me to run the multi-reviewer-loop — codex and a Claude reviewer in
 parallel — and iterate until both are clean or the remaining items are fixed,
 deferred, or disproven with evidence?"
 
