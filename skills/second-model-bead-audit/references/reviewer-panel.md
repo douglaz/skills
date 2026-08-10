@@ -365,8 +365,10 @@ done
 PANEL_REVIEWERS="$_norm"
 # A pin REPLACES the ladder; an unreachable pinned model fails the slot rather than
 # substituting, because the user named that model specifically. `if` rather than
-# `[ ... ] && ...` — the latter returns 1 on the no-pin path, which is the `set -e`
-# abort shape #37 already cost this repo once.
+# `[ ... ] && ...`: the latter returns 1 on the no-pin path, which is harmless mid-script
+# — bash exempts the left operand of `&&` from errexit — but lethal as a function's last
+# statement, the shape #37 already cost this repo once. Written as `if` so its safety
+# does not depend on where the line happens to sit.
 if [ -n "$CLAUDE_MODEL_PIN" ]; then export CLAUDE_REVIEWER_MODELS="$CLAUDE_MODEL_PIN"; fi
 ```
 
@@ -391,7 +393,7 @@ reason lost:
 ```bash
 _keep=""
 for _r in ${PANEL_REVIEWERS//,/ }; do
-  [ "$_r" = claude ] && continue
+  if [ "$_r" = claude ]; then continue; fi
   _keep="${_keep:+$_keep,}$_r"
 done
 PANEL_REVIEWERS="$_keep"

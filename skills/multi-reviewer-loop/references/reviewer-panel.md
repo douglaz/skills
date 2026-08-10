@@ -67,7 +67,9 @@ done
 CLAUDE_MODEL_LADDER="${CLAUDE_REVIEWER_MODELS:-fable opus}"
 CLAUDE_MODEL=""
 _pj=$(mktemp) || { echo "cannot create the probe scratch file"; exit 1; }
-trap 'rm -f "$_pj"' EXIT
+# Deleted inline at the end of this block, NOT via `trap ... EXIT`. Bash keeps one EXIT
+# trap per shell, and § 1's preflight already installed one for its own scratch file —
+# an unconditional trap here would silently replace it and leak that file instead.
 for _m in $CLAUDE_MODEL_LADDER; do
   _rc=0
   "$TO" --kill-after=15 90 claude -p 'Reply with exactly: PANEL_OK' \
@@ -86,6 +88,7 @@ for _m in $CLAUDE_MODEL_LADDER; do
 done
 # The loop exits 0 whether or not anything answered, so CHECK: an empty $CLAUDE_MODEL
 # would reach the CLI below as `--model ""`.
+rm -f "$_pj"
 if [ -n "$CLAUDE_MODEL" ]; then
   echo "claude reviewer: using $CLAUDE_MODEL"
 else
@@ -98,6 +101,11 @@ which is a case every skill here already handles — the same as a missing `clau
 or an unauthenticated CLI. Drop it from the panel and the existing rules take over
 unchanged: do not launch it, run the pass on the survivor, label every pass `DEGRADED`,
 and finish at `CLEAN_DEGRADED` at best (§ Tool dependencies in the skill).
+
+**Unless it was the only reviewer** — `--reviewers claude`, or a model-only pin. There
+is then no survivor, nothing reviewed the code, and the answer is `BLOCKED`, never a
+`CLEAN_DEGRADED` over an unread tree. Do not substitute codex for a reviewer the user
+pinned. `second-model-bead-audit` exits with the same verdict for the same case.
 
 That reuse is deliberate and was learned the expensive way. An earlier draft of this
 change threaded a separate `CLAUDE_SLOT` flag through launch, `wait`, unwrap and the
@@ -310,10 +318,14 @@ Both reviewers start together and neither sees the other's output.
 # exit 127 before either reviewer starts, on a machine meeting every documented dependency.
 set -m
 RC_TIMEOUT=1500   # 25 min; a normal pass is 5-15
-# Homebrew coreutils installs GNU timeout as `gtimeout`; hardcoding `timeout` makes both
-# reviewers exit command-not-found on macOS and the loop can never reach clean.
-TO=$(command -v timeout || command -v gtimeout) \
-  || { echo "no GNU timeout (nor gtimeout) — bound the pass another way; see below"; exit 1; }
+# REUSE the `$TO` the probe validated in § Resolving — do not re-resolve with
+# `command -v timeout || command -v gtimeout`. That form takes `timeout` whenever it
+# exists, so on a busybox-`timeout` host the probe would pick GNU `gtimeout` and
+# succeed while these two 25-minute calls died instantly on an unrecognised
+# `--kill-after`, with nothing attributing it to the dependency. (Homebrew coreutils
+# installs GNU timeout as `gtimeout`, which is why both names are tried at all.)
+[ -n "${TO:-}" ] \
+  || { echo "no validated GNU timeout — see § Resolving; bound the pass another way"; exit 1; }
 
 "$TO" --kill-after=60 "$RC_TIMEOUT" \
   codex review --base "$DIFF_BASE" \
@@ -561,10 +573,12 @@ fi
 Two cheap sanity checks worth running on the raw JSON:
 
 ```bash
-# `?` and `|| true`: both keys are absent on ordinary runs — `permission_denials` on
-# every clean one — and bare `jq` exits 5 there ("Cannot iterate over null"), which
-# under the `set -e` this section assumes ends the pass between the unwrap and the
-# merge. A sanity check must not be able to kill the thing it is checking.
+# `?` and `|| true` because `permission_denials` is absent on every clean run, and bare
+# `jq` exits 5 there ("Cannot iterate over null") — which under the `set -e` this
+# section assumes ends the pass between the unwrap and the merge. A sanity check must
+# not be able to kill the thing it is checking. (`modelUsage` is normally PRESENT — the
+# transcript in § Resolving records two entries on a successful probe — so its guard is
+# belt-and-braces for a malformed result, not the common case.)
 jq -r '.modelUsage? // {} | keys[]' <"$CLAUDE_RAW" || true      # confirm $CLAUDE_MODEL ran
 jq -r '.permission_denials[]?.tool_name' <"$CLAUDE_RAW" || true # WHICH tools, not how many
 ```
@@ -661,7 +675,7 @@ code yourself.
 | `codex` non-zero, auth error in stderr | `$CODEX_ERR` | Surface the exact error. Continue degraded on the Claude reviewer; tell the user to re-auth. |
 | `codex` reports the model is unavailable | `$CODEX_ERR` | Retry once with the environment default model; note the fallback in the summary. |
 | `jq` exits non-zero (`is_error: true`) | `.result` in `$CLAUDE_RAW` | Usually rate limit (429), overload (529), auth, or an exhausted model. Retry once after a short wait; if it fails again, re-resolve the ladder (§ Resolving) and re-run the pass on the next model — **once per run**. Degrade when that re-resolution is spent or the remaining candidates are exhausted, whichever comes first; on a ladder of three or more those are not the same moment, and § Resolving is the authority. |
-| The Claude reviewer's model is exhausted or unreachable mid-run | `$CLAUDE_RAW` on **stdout** — not stderr, which is empty | Re-resolve the ladder once and switch `$CLAUDE_MODEL` for the rest of the run, naming the pass it changed at. **If a later rung answers**, that is a substitution and the panel stays full. If none does — the last rung, or a pinned run, where a pin replaces the ladder and leaves nothing to advance to — the slot is empty and the pass is `DEGRADED`, ceiling `CLEAN_DEGRADED`. |
+| The Claude reviewer's model is exhausted or unreachable mid-run | `$CLAUDE_RAW` on **stdout** — not stderr, which is empty | Re-resolve the ladder once and switch `$CLAUDE_MODEL` for the rest of the run, naming the pass it changed at. **If a later rung answers**, that is a substitution and the panel stays full. If none does — the last rung, or a pinned run, where a pin replaces the ladder and leaves nothing to advance to — the slot is empty: `DEGRADED` with ceiling `CLEAN_DEGRADED` **when codex is still in the panel**, and `BLOCKED` when the Claude reviewer was the only one, since nothing then reviewed the code (SKILL.md § 1.5). |
 | Claude reviewer returns prose but no `[P*]` and no `No findings.` | `$CLAUDE_OUT` | Ambiguous, not clean. Re-run once; if it repeats, the prompt file is likely truncated — rewrite it. |
 | `.permission_denials` contains `Bash`/`Read`/`Glob`/`Grep` | `$CLAUDE_RAW` | The reviewer was blocked from looking. Confirm `--allowedTools` lists every tool in `--tools`, then re-run that reviewer. |
 | `.permission_denials` contains only `Edit`/`Write`/`NotebookEdit` | `$CLAUDE_RAW` | Working as intended — the read-only guard fired. Not a failure; do not re-run. |
@@ -821,8 +835,8 @@ effort, and the three tool flags), pointing at this prompt file and these output
 files:
 
 ```bash
-TO=$(command -v timeout || command -v gtimeout) \
-  || { echo "no GNU timeout — see the panel invocation above"; exit 1; }
+[ -n "${TO:-}" ] \
+  || { echo "no validated GNU timeout — see § Resolving"; exit 1; }   # reuse, don't re-resolve
 # Needs a model. With the Claude reviewer unavailable, use the `codex exec` form below
 # or report § 4b unrun — never call the CLI with an empty `--model`, which `set -u`
 # does not catch, on the pass that decides CLEAN vs CLEAN_DIFF_ONLY.
@@ -840,10 +854,18 @@ TO=$(command -v timeout || command -v gtimeout) \
   || CONSISTENCY_RC=$?   # `||`, so a 124/137 timeout under `set -e` does not kill the
                          # shell before the status is captured — and captured BEFORE any
                          # pipeline replaces it
-[[ "$CONSISTENCY_RC" -eq 0 ]] \
-  || { echo "consistency reviewer exited $CONSISTENCY_RC (124/137 = timeout) — NOT clean"; exit 1; }
-jq -er 'if .is_error then error(.result // "err") else (.result // empty) end' \
-  <"$CONSISTENCY_RAW" >"$CONSISTENCY_OUT"
+# Do NOT `exit 1` here, and do not leave the `jq` bare: both are the recovery's own
+# entry conditions, and either form ends the shell before the re-resolution below can
+# run — so the rung that would have finished the gate is never tried.
+CONSISTENCY_JQ_RC=0
+if [ "$CONSISTENCY_RC" -eq 0 ]; then
+  jq -er 'if .is_error then error(.result // "err") else (.result // empty) end' \
+    <"$CONSISTENCY_RAW" >"$CONSISTENCY_OUT" || CONSISTENCY_JQ_RC=$?
+fi
+if [ "$CONSISTENCY_RC" -ne 0 ] || [ "$CONSISTENCY_JQ_RC" -ne 0 ]; then
+  echo "consistency reviewer failed (rc=$CONSISTENCY_RC jq=$CONSISTENCY_JQ_RC; 124/137 = timeout) — NOT clean"
+  # -> re-resolve once and rerun, per the paragraph below, before giving up on § 4b
+fi
 ```
 
 A timed-out reviewer can still leave syntactically valid JSON on disk — killed during

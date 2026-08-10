@@ -57,7 +57,10 @@ reviewer's model. Read it before the first pass.
 
 Both CLIs must be on `PATH` and authenticated. `jq` is needed to unwrap the
 Claude reviewer's JSON, and GNU `timeout` — named `timeout`, or `gtimeout` from
-Homebrew coreutils; resolve it once with `command -v` — to bound each reviewer — both CLIs can hang indefinitely, writing nothing and never exiting.
+Homebrew coreutils; resolve it once by **validating** each candidate with
+`--kill-after=1s 1s true`, not by `command -v` alone, which cannot tell GNU's from
+busybox's — to bound each reviewer, since both CLIs can hang indefinitely, writing
+nothing and never exiting.
 
 - If **both** are missing, stop and tell the user to install them.
 - If **one** is missing or unauthenticated, run the loop with the survivor and
@@ -444,8 +447,10 @@ For each pass `N` from `1` to `MAX_PASSES`:
                    # `set -m`, not `setsid` — that is util-linux and absent on macOS,
                    # which this skill supports. See references/reviewer-panel.md.
    PASS_ID=$(printf '%02d' "$N")
-   TO=$(command -v timeout || command -v gtimeout) \
-     || { echo "no GNU timeout — see references/reviewer-panel.md"; exit 1; }
+   # Reuse the validated $TO from § 1.5's probe — `command -v timeout || command -v
+   # gtimeout` picks a busybox `timeout` whenever it exists, and these calls then die
+   # instantly on `--kill-after` with nothing naming the dependency.
+   [ -n "${TO:-}" ] || { echo "no validated GNU timeout — see references/reviewer-panel.md"; exit 1; }
    "$TO" --kill-after=60 1500 codex review --base "$DIFF_BASE" \
      -c 'model="gpt-5.6-sol"' -c 'model_reasoning_effort="xhigh"' \
      </dev/null >"$REVIEW_DIR/pass-${PASS_ID}.codex.txt" 2>"$REVIEW_DIR/pass-${PASS_ID}.codex.stderr.txt" &

@@ -254,15 +254,28 @@ is their whole job. Here it would stop a PR over a missing convenience binary, w
 is worse than opening it with the box unticked.
 
 Put the probe in a file and run it as a child, so its `exit 1`s end the child and not
-your shell:
+your shell — and make the child print **only the model** on stdout:
 
 ```bash
-# probe.sh = the block from multi-reviewer-loop § Resolving the Claude reviewer's
-# model, with `printf '%s' "$CLAUDE_MODEL"` as its last line. Redirect INSIDE the
-# substitution: on `VAR=$(cmd) 2>/dev/null` the redirect applies to the assignment,
-# not to the command substitution, so the probe's diagnostics still reach the terminal.
-CLAUDE_MODEL=$(bash probe.sh 2>/dev/null) || CLAUDE_MODEL=""
+# probe.sh:
+#   { <the block from multi-reviewer-loop § Resolving the Claude reviewer's model> ; } >&2
+#   printf '%s' "$CLAUDE_MODEL"
+CLAUDE_MODEL=$(bash probe.sh) || CLAUDE_MODEL=""
 ```
+
+**The `>&2` is the load-bearing part.** Every progress line in that block is a plain
+`echo`, i.e. stdout, so without it the command substitution captures the diagnostics
+*as the model name*. Both failure modes are silent: on a successful fallback
+`--model` receives `"claude reviewer: 'fable' did not answer (exit 124)⏎claude
+reviewer: using opus⏎opus"` and the call dies in argument parsing; on an exhausted
+ladder the block still exits 0 and still prints `no ladder candidate answered — …`,
+so `CLAUDE_MODEL` is **non-empty**, the skip below never fires, and the ship proceeds
+believing it has a model. That would make the whole `_skip`/`CLAUDE_RC=127` mechanism
+below dead code.
+
+Redirecting the *substitution* instead (`CLAUDE_MODEL=$(bash probe.sh 2>/dev/null)`)
+does not help and is a different bug: it discards stderr, which is empty, while the
+stdout it needs to suppress flows straight into the variable.
 
 If no ladder candidate answers, likewise skip and say so. No reachable model here means
 no pre-review happened — a thing to report, not to work around.
@@ -287,7 +300,16 @@ propose mechanism no correctness/security/data-loss requirement needs. Do not
 modify any file. Output exactly "No findings." if clean.
 EOF
 
-TO=$(command -v timeout || command -v gtimeout || true)
+# Validate, do not merely locate — the same rule the probe follows. A busybox `timeout`
+# ahead of GNU `gtimeout` is non-empty here, so the `elif` below would blame an
+# exhausted ladder for what is actually a missing dependency: the one misdiagnosis this
+# ordering exists to prevent.
+TO=""
+for _c in timeout gtimeout; do
+  if command -v "$_c" >/dev/null 2>&1 && "$_c" --kill-after=1s 1s true >/dev/null 2>&1; then
+    TO=$(command -v "$_c"); break
+  fi
+done
 # `if`, not `[ ... ] && _skip=...`: that form returns 1 whenever the condition is
 # false, and this repo has already shipped one `set -e` abort from exactly that shape
 # (install.sh --uninstall, #37). It is harmless mid-script and lethal as a function's
@@ -299,7 +321,7 @@ TO=$(command -v timeout || command -v gtimeout || true)
 _skip=""
 if [ -z "$TO" ]; then
   _skip="no GNU timeout (nor gtimeout) to bound the reviewer"
-elif [ -z "$CLAUDE_MODEL" ]; then
+elif [ -z "${CLAUDE_MODEL:-}" ]; then
   _skip="no ladder candidate answered"
 fi
 if [ -n "$_skip" ]; then

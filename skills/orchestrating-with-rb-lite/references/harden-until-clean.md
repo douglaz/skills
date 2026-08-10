@@ -83,10 +83,11 @@ PROMPT_FILE="$REVIEW_DIR/claude-prompt.txt"
 § Resolving the Claude reviewer's model. That file owns the ladder, the probe and
 the evidence; this loop just uses the resolved `$CLAUDE_MODEL`, and treats an exhausted
 ladder as a reviewer it does not have.
-Do not hardcode a model here — an unreachable one hangs rather than erroring, and with
-the bound added below that costs a whole 25-minute iteration and yields no findings,
-which is indistinguishable from a clean review if you are only watching for a non-zero
-exit.
+Do not hardcode a model here — an unreachable one hangs rather than erroring. With the
+bound added below it at least *ends*: 25 minutes gone and no findings, but exit 124,
+which the status capture there treats as a reviewer failure and never as clean.
+Unbounded it is the dangerous shape, because a reviewer that never exits produces no
+status to read at all. The probe turns the 25-minute version into a 90-second one.
 
 Write the Claude reviewer's prompt once, into `$PROMPT_FILE`. Interpolate the base
 with `printf` and keep the rubric in a **quoted** heredoc, so nothing in the text
