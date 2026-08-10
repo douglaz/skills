@@ -51,8 +51,18 @@ probe is one trivial prompt and cost **$0.032** on the model that answered, **$0
 on the one that did not.
 
 ```bash
-TO=$(command -v timeout || command -v gtimeout) \
-  || { echo "no GNU timeout (nor gtimeout) — cannot bound the probe"; exit 1; }
+# Pick a timeout that is actually GNU's. `command -v timeout || command -v gtimeout`
+# takes `timeout` whenever it merely EXISTS, so on a host with busybox `timeout` ahead
+# of GNU `gtimeout` every rung fails on `--kill-after` and the ladder reports "no model
+# answered" — a dependency problem diagnosed as an exhausted account. Validate each
+# candidate and keep the first that passes.
+TO=""
+for _c in timeout gtimeout; do
+  if command -v "$_c" >/dev/null 2>&1 && "$_c" --kill-after=1s 1s true >/dev/null 2>&1; then
+    TO=$(command -v "$_c"); break
+  fi
+done
+[ -n "$TO" ] || { echo "no GNU timeout (nor gtimeout) — cannot bound the probe"; exit 1; }
 # Unquoted on purpose: this is a space-separated ladder and the split IS the loop.
 CLAUDE_MODEL_LADDER="${CLAUDE_REVIEWER_MODELS:-fable opus}"
 CLAUDE_MODEL=""
@@ -146,10 +156,12 @@ before the second one is tried and before anything is printed, so on a host wher
 *second* entry was reachable the operator sees a silent non-zero exit rather than a
 working panel.
 
-**Do not key this on stderr.** The measured failure wrote **0 bytes** there — an
-"auth error in stderr" rule, which is what the failure table below used to say for
-this case, never fires on it. Everything diagnostic arrived as JSON on *stdout*,
-including from the run that was killed mid-stream.
+**Do not key this on stderr.** The measured failure wrote **0 bytes** there, so any
+rule that reads stderr to find out what went wrong never fires on it — which is why the
+"Both fail in the same pass" row below now names each reviewer's real location instead
+of sending you to "both stderr files". (The table's Claude-side row already pointed at
+`.result` on stdout; it was the both-failed row that misdirected.) Everything diagnostic
+arrived as JSON on *stdout*, including from the run killed mid-stream.
 
 ```console
 $ ( set +e ; TO=$(command -v timeout)
@@ -549,8 +561,12 @@ fi
 Two cheap sanity checks worth running on the raw JSON:
 
 ```bash
-jq -r '.modelUsage | keys[]' <"$CLAUDE_RAW"           # confirm $CLAUDE_MODEL actually ran
-jq -r '.permission_denials[].tool_name' <"$CLAUDE_RAW" # WHICH tools were denied, not how many
+# `?` and `|| true`: both keys are absent on ordinary runs — `permission_denials` on
+# every clean one — and bare `jq` exits 5 there ("Cannot iterate over null"), which
+# under the `set -e` this section assumes ends the pass between the unwrap and the
+# merge. A sanity check must not be able to kill the thing it is checking.
+jq -r '.modelUsage? // {} | keys[]' <"$CLAUDE_RAW" || true      # confirm $CLAUDE_MODEL ran
+jq -r '.permission_denials[]?.tool_name' <"$CLAUDE_RAW" || true # WHICH tools, not how many
 ```
 
 **Read the denied tool names, not the count.** The two kinds mean opposite
@@ -645,7 +661,7 @@ code yourself.
 | `codex` non-zero, auth error in stderr | `$CODEX_ERR` | Surface the exact error. Continue degraded on the Claude reviewer; tell the user to re-auth. |
 | `codex` reports the model is unavailable | `$CODEX_ERR` | Retry once with the environment default model; note the fallback in the summary. |
 | `jq` exits non-zero (`is_error: true`) | `.result` in `$CLAUDE_RAW` | Usually rate limit (429), overload (529), auth, or an exhausted model. Retry once after a short wait; if it fails again, re-resolve the ladder (§ Resolving) and re-run the pass on the next model — **once per run**. Degrade when that re-resolution is spent or the remaining candidates are exhausted, whichever comes first; on a ladder of three or more those are not the same moment, and § Resolving is the authority. |
-| The Claude reviewer's model is exhausted or unreachable mid-run | `$CLAUDE_RAW` on **stdout** — not stderr, which is empty | Re-resolve the ladder once and switch `$CLAUDE_MODEL` for the rest of the run, naming the pass it changed at. This is a substitution, not a degradation: the slot is still filled. |
+| The Claude reviewer's model is exhausted or unreachable mid-run | `$CLAUDE_RAW` on **stdout** — not stderr, which is empty | Re-resolve the ladder once and switch `$CLAUDE_MODEL` for the rest of the run, naming the pass it changed at. **If a later rung answers**, that is a substitution and the panel stays full. If none does — the last rung, or a pinned run, where a pin replaces the ladder and leaves nothing to advance to — the slot is empty and the pass is `DEGRADED`, ceiling `CLEAN_DEGRADED`. |
 | Claude reviewer returns prose but no `[P*]` and no `No findings.` | `$CLAUDE_OUT` | Ambiguous, not clean. Re-run once; if it repeats, the prompt file is likely truncated — rewrite it. |
 | `.permission_denials` contains `Bash`/`Read`/`Glob`/`Grep` | `$CLAUDE_RAW` | The reviewer was blocked from looking. Confirm `--allowedTools` lists every tool in `--tools`, then re-run that reviewer. |
 | `.permission_denials` contains only `Edit`/`Write`/`NotebookEdit` | `$CLAUDE_RAW` | Working as intended — the read-only guard fired. Not a failure; do not re-run. |
@@ -833,6 +849,12 @@ jq -er 'if .is_error then error(.result // "err") else (.result // empty) end' \
 A timed-out reviewer can still leave syntactically valid JSON on disk — killed during
 teardown, say — and `jq` succeeding on it would replace the 124/137 with 0. Capture the
 reviewer's own status first; a pass that did not finish is never clean.
+
+**The re-resolution rule applies here too.** A model can go unreachable between a clean
+panel pass and this one, and § 4b is mandatory for plain `CLEAN` — so a single failed
+invocation here would cap the whole run at `CLEAN_DIFF_ONLY` with a reachable rung
+untried. On a 124/137 or `is_error`, re-resolve once (advancing past the failed model,
+per § Resolving) and rerun this pass before concluding it cannot be run.
 
 On a `--reviewers codex` pinned run, use
 `codex exec --sandbox read-only "$(cat ...)" </dev/null` with the same prompt instead

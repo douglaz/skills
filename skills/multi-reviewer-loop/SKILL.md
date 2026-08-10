@@ -114,6 +114,14 @@ Parse in this order, so a flag never leaks into the focus text:
    treat it as pinning both the slot and its model. `fable` keeps working for the same
    reason, and is now a pin rather than the default.
 
+   **Known names only: `fable`, `opus`.** A token that is neither a slot nor one of
+   those is an error — say so and stop, exactly as an unknown `--reviewers` value did
+   before this change. Treating anything unrecognised as a model pin turns a typo into
+   a silent one-reviewer run: `--reviewers codex,opsu` would pin a nonexistent model,
+   fail its only rung, drop the Claude reviewer, and hand back a `DEGRADED` codex-only
+   loop without ever mentioning the typo. `second-model-bead-audit` carries the same
+   list; extend both together.
+
    A pin must actually reach the probe, which reads exactly one variable. Parsing it
    into a local and never exporting it is not a pin — the run then silently uses the
    default ladder and every report names the model the *ladder* picked:

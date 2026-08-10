@@ -132,8 +132,22 @@ PASS=$(printf '%02d' "$ITERATION")
 # unwrap is never reached, and the "proceed with the survivor" handling further down
 # never runs. That is a permanent stall, not a slow iteration, and it looks identical
 # to a reviewer still thinking.
-TO=$(command -v timeout || command -v gtimeout) \
-  || { echo "no GNU timeout (nor gtimeout) — cannot bound the reviewers"; exit 1; }
+#
+# This panel is a HOST-shell dependency, and that is a stronger requirement than the
+# one SKILL.md states for rb-lite itself: under `nix run ... rb-lite --` the upstream
+# wrapper supplies GNU timeout to the RB-LITE process, so SKILL.md rightly says not to
+# reject that setup when the host shell lacks it. These two reviewers run outside that
+# wrapper. Harden mode therefore needs GNU timeout on the host regardless of how
+# rb-lite is resolved — or the panel below must be run inside the wrapped environment.
+# Validate rather than merely locate: `command -v timeout` cannot tell GNU's from
+# busybox's, and a busybox one fails every `--kill-after` invocation.
+TO=""
+for _c in timeout gtimeout; do
+  if command -v "$_c" >/dev/null 2>&1 && "$_c" --kill-after=1s 1s true >/dev/null 2>&1; then
+    TO=$(command -v "$_c"); break
+  fi
+done
+[ -n "$TO" ] || { echo "harden mode needs GNU timeout on the HOST (see note above)"; exit 1; }
 RC_TIMEOUT=1500
 
 "$TO" --kill-after=60 "$RC_TIMEOUT" \
@@ -195,6 +209,13 @@ Findings from both are lines starting with `[P0]`–`[P3]`. Count per reviewer,
 then merge into one deduped list, each entry tagged `BOTH`, `CODEX`, or `CLAUDE`.
 Dedupe on the claim, not the wording — the same defect described from two angles
 is **one bead**, never two, or you will build yourself a merge conflict.
+
+**Report the resolved model on every iteration, including clean ones.** The per-finding
+templates below carry it, but a clean pass mints no beads and runs none of them — so a
+fallback on the iteration that finally came back clean would leave no record anywhere
+except the raw probe output, and the summary would say only that both reviewers were
+clean. Name the model and where it came from (ladder default, pin, or fallback from
+which model) in each iteration line and in the final report.
 
 If the Claude reviewer fails **mid-run** — a 124/137 timeout, or `is_error` — re-resolve
 the ladder once and rerun that iteration's reviewer on the next model before falling back

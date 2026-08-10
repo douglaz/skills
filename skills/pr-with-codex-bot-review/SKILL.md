@@ -243,21 +243,25 @@ place the failure is survivable but expensive: 25 minutes of wall clock before
 back; it is not what makes the failure detectable.
 
 **Treat the probe, the invocation and the unwrap as one optional operation**, because
-this reviewer is optional and the rest of the skill must survive without it. Check GNU
-`timeout` yourself *before* running the probe, and skip the whole step if it is
-missing: the canonical probe block opens with its own
-`|| { echo ...; exit 1; }` on a missing `timeout`, which would abort the ship before
-any skip logic here is reached. The panel skills can afford that `exit 1` — the panel
+this reviewer is optional and the rest of the skill must survive without it. The
+canonical probe block carries **two** `exit 1`s — a missing GNU `timeout`, and a failed
+`mktemp` for its scratch file — and either would abort the ship before any skip logic
+here is reached. Run the probe in a subshell and treat any non-zero exit as "no model",
+rather than gating on the one precondition you thought of: a full or unwritable
+`TMPDIR` stops a PR just as thoroughly as a missing convenience binary, and neither is
+a reason to. The panel skills can afford that `exit 1` — the panel
 is their whole job. Here it would stop a PR over a missing convenience binary, which
 is worse than opening it with the box unticked.
 
+Put the probe in a file and run it as a child, so its `exit 1`s end the child and not
+your shell:
+
 ```bash
-# Gate the probe itself. Everything below is skipped as one unit.
-CLAUDE_MODEL=""
-if command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then
-  : # run the ladder probe from multi-reviewer-loop § Resolving the Claude reviewer's
-    # model here; it sets CLAUDE_MODEL, empty when no candidate answered
-fi
+# probe.sh = the block from multi-reviewer-loop § Resolving the Claude reviewer's
+# model, with `printf '%s' "$CLAUDE_MODEL"` as its last line. Redirect INSIDE the
+# substitution: on `VAR=$(cmd) 2>/dev/null` the redirect applies to the assignment,
+# not to the command substitution, so the probe's diagnostics still reach the terminal.
+CLAUDE_MODEL=$(bash probe.sh 2>/dev/null) || CLAUDE_MODEL=""
 ```
 
 If no ladder candidate answers, likewise skip and say so. No reachable model here means

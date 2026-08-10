@@ -320,13 +320,15 @@ Set `PANEL_REVIEWERS` from the parsed `--reviewers` value. The default is
 Three steps, **in this order** — normalize, then probe, then dispatch. The order is the
 point: the probe reads the ladder, so a pin parsed *after* it has already been ignored.
 
-One thing has to happen before all three: **validate GNU `timeout`**. Step 3's check
-(`timeout --kill-after=1s 1s true`) is stronger than the probe's `command -v`, which
-cannot tell GNU's `timeout` from busybox's. Run step 3's check first. Otherwise a
-non-GNU `timeout` on `PATH` fails every rung's `--kill-after=15 90` invocation, the
-ladder concludes no candidate answered, and a `--reviewers claude` run dies reporting
-"the only requested reviewer had no reachable model" — a false diagnosis for a
-dependency problem this file already knows how to name precisely.
+One thing has to happen before all three: **validate GNU `timeout`**, using step 3's
+check (`timeout --kill-after=1s 1s true`) rather than a bare `command -v`, which cannot
+tell GNU's `timeout` from busybox's. Ordering that check first is necessary but not
+sufficient — the probe selects its own binary, so it must validate too, which is why
+§ Resolving now tries each candidate rather than taking `timeout` whenever it exists.
+Without both, a host with busybox `timeout` ahead of GNU `gtimeout` fails every rung's
+`--kill-after=15 90` invocation, the ladder concludes no candidate answered, and a
+`--reviewers claude` run dies reporting "the only requested reviewer had no reachable
+model" — a false diagnosis for a dependency problem this file can name precisely.
 
 ### 1. Normalize a model-name pin to its slot
 
@@ -353,8 +355,10 @@ for _r in "${_rv[@]}"; do
     # becomes a claude-slot pin on a nonexistent model, silently dropping the codex
     # auditor and leaving a one-reviewer panel that then fails its own pin. Before
     # this normalizer existed, the same typo exited 2 naming the bad token, which is
-    # strictly more useful. Extend this list when the ladder gains a rung.
-    fable|opus|sonnet) CLAUDE_MODEL_PIN="$_r"; _norm="${_norm:+$_norm,}claude" ;;
+    # strictly more useful. These are exactly the ladder's rungs — keep it that way, so
+    # a reader can tell rungs from extras — and extend this list, `multi-reviewer-loop`
+    # § Inputs, and SKILL.md's documented values together when the ladder grows.
+    fable|opus)   CLAUDE_MODEL_PIN="$_r"; _norm="${_norm:+$_norm,}claude" ;;
     *) echo "Unknown reviewer or model: $_r" >&2; exit 2 ;;
   esac
 done
