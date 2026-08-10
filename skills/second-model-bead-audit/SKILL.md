@@ -112,17 +112,20 @@ With a Codex-built graph, the Claude auditor supplies the independent vote; with
 Claude-built graph, Codex does. When authorship is mixed or unknown, the two-reviewer
 panel is still stronger than guessing which single auditor to invoke.
 
-**A model fallback can only ever weaken this label, so re-check it after one.** The
-ladder stays inside the Claude family, so a `fable`→`opus` substitution never *earns*
-`INDEPENDENT` on a Claude-built graph — it was `BUILDER-LINEAGE` before and it stays
-`BUILDER-LINEAGE`. The case worth naming is narrower and easy to miss: when the agent
-coordinating this audit is itself the fallback model, the "second model" becomes the
-*same* model as the driver. That is a separate process with its own context and a
-read-only tool set, so it is not literally the self-review the panel-health rules
-forbid — but it is one model checking work its own model produced, and reporting it as
-a clean second opinion without saying so is the substantive lie here. Label it
-`BUILDER-LINEAGE`, name the model, and say plainly that Codex is carrying the
-independent vote alone.
+**The label is relative to the graph's builder, and a fallback does not change who
+that was.** The ladder stays inside the Claude family, so on a *Claude-built* graph a
+`fable`→`opus` substitution was `BUILDER-LINEAGE` before and stays `BUILDER-LINEAGE`;
+on a *Codex-built* graph the Claude auditor is `INDEPENDENT` whichever rung it landed
+on. Do not downgrade it for matching the **coordinator** — the coordinator did not
+build the graph, and on a Codex-built graph that downgrade would strip the label from
+the one reviewer actually supplying the independent vote while leaving it on Codex,
+which is the reviewer sharing lineage with the builder.
+
+Coordinator-matching is worth **disclosing** rather than scoring. When the agent
+running this audit is itself the model that filled the Claude slot, say so in the
+panel roster: it is a separate process with its own context and a read-only tool set,
+so it is not the self-review the panel-health rules forbid, but a reader deciding how
+much the second opinion is worth should not have to infer it.
 
 ## Required outputs
 

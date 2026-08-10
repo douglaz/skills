@@ -236,9 +236,11 @@ routinely miss.
 Resolve `$CLAUDE_MODEL` with the ladder probe in
 [multi-reviewer-loop/references/reviewer-panel.md](../multi-reviewer-loop/references/reviewer-panel.md)
 § Resolving the Claude reviewer's model, and bound the call below the same way the
-probe is bounded. An unreachable model does not return an error you can check — it
-does not return at all, so the `CLAUDE_RC` check further down is never reached and
-the step simply stops, mid-ship, with no output in either file.
+probe is bounded. An unreachable model does not return an error you can check — it does
+not return at all, which is why the call below carries a `timeout`. With that bound in
+place the failure is survivable but expensive: 25 minutes of wall clock before
+`CLAUDE_RC` reports 124, on an *optional* step. The 90-second probe buys those minutes
+back; it is not what makes the failure detectable.
 
 **Treat the probe, the invocation and the unwrap as one optional operation**, because
 this reviewer is optional and the rest of the skill must survive without it. Check GNU
@@ -332,7 +334,10 @@ fi
 
 **Check both exit codes before believing the output.** `CLAUDE_RC != 0` or
 `JQ_RC != 0` means the review never ran — auth, rate limit (429), overload
-(529), or an unreachable model — and `$RD/claude.txt` will be empty. Do not pipe this straight
+(529), or an unreachable model — and `$RD/claude.txt` will be **missing**, not empty:
+`jq` runs only when `CLAUDE_RC` is 0, and the skip path never invokes the reviewer at
+all, so nothing creates it. Test with `[ -s ... ]` rather than `cat`, which under
+`set -e` would end the very ship step the skip path exists to let continue. Do not pipe this straight
 into `tee` and read the file: a failed reviewer and a clean reviewer both leave
 you with no findings on stdout, and the difference is the whole point. The clean
 signal is exit 0 plus exactly `No findings.`; empty output with exit 0 is
@@ -347,7 +352,13 @@ being the same sentence the moment the ladder falls through.
 The block is bounded even though it runs in the foreground. "You would notice a hang"
 is not a mechanism — an unreachable model is indistinguishable from a slow review
 while you watch it, and the measured behaviour is that it does not exit on its own.
-Every reviewer invocation in this repo is bounded for the same reason.
+
+Every reviewer invocation *this skill and the panel skills own* is bounded for the same
+reason. Not every one in the repo is: `orchestrating-with-rb-lite` documents reviewer
+commands that rb-lite itself dispatches, and those carry no timeout because this repo
+does not launch them. One of them pins `claude-opus-5` by hand, so it hangs on exactly
+the failure this change removes elsewhere — tracked separately rather than claimed as
+covered here.
 
 Triage it exactly like a bot finding: credible hypothesis, verify before agreeing
 or rejecting, fix what's real, and don't build mechanism no requirement needs.

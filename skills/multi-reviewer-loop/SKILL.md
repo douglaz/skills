@@ -120,6 +120,9 @@ Parse in this order, so a flag never leaks into the focus text:
 
    ```bash
    # `--reviewers codex,opus` -> panel `codex,claude`, ladder pinned to `opus`.
+   # Initialise it: on the no-pin path — every ordinary run — `set -u` would otherwise
+   # abort during argument parsing, before any reviewer starts.
+   CLAUDE_MODEL_PIN=""     # set by the parse above when a token is a model name
    # A pin REPLACES the ladder, so an unreachable pinned model fails the slot instead
    # of substituting: the user asked for that model by name.
    if [ -n "$CLAUDE_MODEL_PIN" ]; then export CLAUDE_REVIEWER_MODELS="$CLAUDE_MODEL_PIN"; fi
@@ -378,6 +381,12 @@ a reviewer.
    is not a new state: drop it from the panel and every existing rule applies
    unchanged — do not launch it, run each pass on the survivor, label them `DEGRADED`,
    and finish no better than `CLEAN_DEGRADED`. Say which models were tried.
+
+   **Unless it was the only reviewer.** On `--reviewers claude` or a model-only pin,
+   dropping it leaves an empty panel, and "continue on the survivor" has no survivor
+   to continue on. Report `BLOCKED` — nothing reviewed the code. Do not quietly
+   substitute codex: the user pinned a reviewer, and running a different one is the
+   substitution this whole section exists to prevent, one level up.
 
 6. **Make untracked source files visible to codex, or the panel reviews two
    different things.** Measured behavior of `codex review --base`: it covers

@@ -72,7 +72,7 @@ for _m in $CLAUDE_MODEL_LADDER; do
      && jq -e '(.is_error | not) and ((.result // "") != "")' <"$_pj" >/dev/null 2>&1; then
     CLAUDE_MODEL="$_m"; break
   fi
-  echo "claude reviewer: '$_m' did not answer (exit $_rc) — trying the next candidate"
+  echo "claude reviewer: '$_m' did not answer (exit $_rc)"
 done
 # The loop exits 0 whether or not anything answered, so CHECK: an empty $CLAUDE_MODEL
 # would reach the CLI below as `--model ""`.
@@ -107,7 +107,7 @@ from is the same one-step-removed sloppiness this section is about:
 ```console
 $ { echo 'set -euo pipefail'; extract_bash_block reviewer-panel.md; } > ladder.sh
 $ bash ladder.sh ; echo "LADDER_EXIT=$?"
-claude reviewer: 'fable' did not answer (exit 124) — trying the next candidate
+claude reviewer: 'fable' did not answer (exit 124)
 claude reviewer: using opus
 LADDER_EXIT=0
 ```
@@ -645,7 +645,7 @@ code yourself.
 | `.permission_denials` contains `Bash`/`Read`/`Glob`/`Grep` | `$CLAUDE_RAW` | The reviewer was blocked from looking. Confirm `--allowedTools` lists every tool in `--tools`, then re-run that reviewer. |
 | `.permission_denials` contains only `Edit`/`Write`/`NotebookEdit` | `$CLAUDE_RAW` | Working as intended — the read-only guard fired. Not a failure; do not re-run. |
 | Either reviewer times out (exit 124 **or 137**) | the partial output file | Treat as failed for that pass. Do not mine a truncated review for findings. 137 is the `--kill-after` path — counting only 124 spends another full timeout on the same hung reviewer. On the Claude side a timeout is also the signature of an unreachable model, so re-resolve the ladder once before concluding the reviewer is simply slow. |
-| Both fail in the same pass | both raw output files | Stop the loop. Nothing reviewed the code; report `BLOCKED`. Read the JSON on stdout, not the stderr files — a Claude-side failure leaves stderr empty. |
+| Both fail in the same pass | `$CODEX_ERR` **and** `$CLAUDE_RAW` | Stop the loop. Nothing reviewed the code; report `BLOCKED` with both reasons. Read each reviewer where its reason actually lives: codex writes its error to stderr, while a Claude-side failure leaves stderr empty and puts everything diagnostic in the JSON on stdout. |
 
 A pass whose Claude slot fell through to the **next model in the ladder** is not
 degraded — it is a full panel with a substitute, and it must name the substitute.
@@ -805,7 +805,10 @@ TO=$(command -v timeout || command -v gtimeout) \
 # Needs a model. With the Claude reviewer unavailable, use the `codex exec` form below
 # or report § 4b unrun — never call the CLI with an empty `--model`, which `set -u`
 # does not catch, on the pass that decides CLEAN vs CLEAN_DIFF_ONLY.
-[ -n "$CLAUDE_MODEL" ] \
+# `${CLAUDE_MODEL:-}`: on a `--reviewers codex` run the probe never ran, so this is
+# UNSET, not empty, and a bare `[ -n "$CLAUDE_MODEL" ]` aborts on the unbound variable
+# instead of printing the guidance it exists to print.
+[ -n "${CLAUDE_MODEL:-}" ] \
   || { echo "no Claude model for the consistency pass — use codex exec (below) or report it unrun"; exit 1; }
 "$TO" --kill-after=60 1500 \
   claude -p "$(cat "$REVIEW_DIR/claude-consistency-prompt.txt")" \

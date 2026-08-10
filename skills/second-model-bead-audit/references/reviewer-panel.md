@@ -339,9 +339,15 @@ _norm=""
 IFS=',' read -ra _rv <<<"$PANEL_REVIEWERS"
 for _r in "${_rv[@]}"; do
   case "$_r" in
-    codex|claude) _norm="${_norm:+$_norm,}$_r" ;;
-    "")           ;;
-    *)            CLAUDE_MODEL_PIN="$_r"; _norm="${_norm:+$_norm,}claude" ;;
+    codex|claude)      _norm="${_norm:+$_norm,}$_r" ;;
+    "")                ;;
+    # Known model names only. A bare `*)` catch-all turns a TYPO into a pin: `codx`
+    # becomes a claude-slot pin on a nonexistent model, silently dropping the codex
+    # auditor and leaving a one-reviewer panel that then fails its own pin. Before
+    # this normalizer existed, the same typo exited 2 naming the bad token, which is
+    # strictly more useful. Extend this list when the ladder gains a rung.
+    fable|opus|sonnet) CLAUDE_MODEL_PIN="$_r"; _norm="${_norm:+$_norm,}claude" ;;
+    *) echo "Unknown reviewer or model: $_r" >&2; exit 2 ;;
   esac
 done
 PANEL_REVIEWERS="$_norm"
@@ -371,6 +377,19 @@ launch, the `wait`, the unwrap, the `CLAUDE_STATE` table, the `DEGRADED` verdict
 already written for a reviewer that was not requested. Do not add a second flag beside
 `RUN_CLAUDE` for it; an earlier draft did, and each of the three review rounds that
 followed found an unbound variable or an uninitialised state on the new path.
+
+Dropping the **only** reviewer leaves `PANEL_REVIEWERS` empty, which the dispatch `case`
+below matches with `*)` and rejects as an invalid panel — exiting 2 during argument
+validation, with the real reason (an exhausted ladder) lost. Catch it here instead:
+
+```bash
+if [ -z "$PANEL_REVIEWERS" ]; then
+  echo "audit BLOCKED: the only requested reviewer had no reachable model" >&2
+  # BLOCKED with no launch verdict, per the recovery table — not an argument error,
+  # and never a silent substitution of the reviewer the user did not ask for.
+  exit 1
+fi
+```
 
 ### 3. Dispatch
 
@@ -462,10 +481,12 @@ coordinator pre-captures every `br`/`bv` output the reviewers need. Do not add
 ## Unwrap and validate the Claude auditor
 
 Run this only when the Claude auditor was requested — i.e. `$RUN_CLAUDE`, which an
-exhausted ladder has already turned off. This block is also the only place `JQ_RC` and
-`CLAUDE_INSPECTION_BLOCKED` are initialised, which is why skipping it on any path that
-still reaches the state table below is an unbound-variable abort under this file's
-`set -u`:
+exhausted ladder has already turned off. It is also the only place `JQ_RC` and
+`CLAUDE_INSPECTION_BLOCKED` are initialised; the state table below reads them, but every
+read there sits behind `$RUN_CLAUDE`, and `false && [ "$JQ_RC" -eq 0 ]` short-circuits
+before the expansion — so skipping this block on that path is safe under `set -u`.
+Keep both facts true together: any future read of these variables that is *not* behind
+`$RUN_CLAUDE` needs them initialised here or it aborts.
 
 ```bash
 if jq -er 'if .is_error then error(.result // "claude auditor returned is_error")

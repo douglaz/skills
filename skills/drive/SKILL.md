@@ -234,7 +234,8 @@ A phase closes on evidence or it does not close.
   while a review process is in flight, and take both checks the message hides:
 
   ```bash
-  # Stage the paths this change touched — NOT `git add -A`. On the dirty tree § 1.6
+  # Stage the paths this change touched — NOT `git add -A`. On the dirty tree
+  # multi-reviewer-loop § 1.7
   # permits, `-A` sweeps in another agent's edits and any untracked file lying around,
   # including a secret, and `git show --stat` only reveals that after the commit exists.
   git add -- <every path this change touched>   # NOT `git add -A`: on a dirty tree that

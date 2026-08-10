@@ -1,8 +1,14 @@
 # DRIVE — the Claude reviewer slot is a role, not a model, and it fails over
 
-**Scope:** the reviewer-model fallback across every skill that calls `claude -p` as a
-reviewer. Issues #30/#31/#32/#33/#35/#38/#41/#42/#43/#44/#47/#48/#49/#50 are separate
-PRs and NOT in scope.
+**Scope:** the reviewer-model fallback in every panel **this repo launches** —
+`multi-reviewer-loop`, `second-model-bead-audit`, `harden-until-clean`, and
+`pr-with-codex-bot-review`'s pre-push review. Explicitly NOT in scope: the reviewer
+commands `orchestrating-with-rb-lite` hands to **rb-lite** to dispatch (SKILL.md:111
+and the § reference panel), one of which pins `claude-opus-5` by hand and therefore
+still hangs on an exhausted model — this repo does not launch those processes and
+cannot bound them, so converting them is its own change. Filed, not fixed here.
+Issues #30/#31/#32/#33/#35/#38/#41/#42/#43/#44/#47/#48/#49/#50 are separate PRs and
+NOT in scope.
 **Phase:** HARDEN · **Bead:** n/a (direct-edit tier, doc-only) · **Branch:** claude-reviewer-fallback
 **Pending:** —
 **Gate:** `./install.test && ./skills/pr-with-codex-bot-review/scripts/bot-gate.test && ./skills/drive/scripts/drive-status.test`
