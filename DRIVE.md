@@ -3,9 +3,9 @@
 **Scope:** the reviewer-model fallback in every panel **this repo launches** —
 `multi-reviewer-loop`, `second-model-bead-audit`, `harden-until-clean`, and
 `pr-with-codex-bot-review`'s pre-push review. Explicitly NOT in scope: the reviewer
-commands `orchestrating-with-rb-lite` hands to **rb-lite** to dispatch (SKILL.md:111
-and the § reference panel), one of which pins `claude-opus-5` by hand and therefore
-still hangs on an exhausted model — this repo does not launch those processes and
+commands `orchestrating-with-rb-lite` hands to **rb-lite** to dispatch (SKILL.md:111,
+plus :1296/:1298 under `## Customizing the panel`) — three unbounded `claude -p`
+reviewers with hardcoded models, which still hang on an exhausted one — this repo does not launch those processes and
 cannot bound them, so converting them is its own change. Filed as #51, not fixed here.
 Issues #30/#31/#32/#33/#35/#38/#41/#42/#43/#44/#47/#48/#49/#50 are separate PRs and
 NOT in scope.
@@ -56,6 +56,9 @@ residue (#41, #43, #44).
 
 ## Open questions for the human
 - The ladder's second rung is `opus`, which is also the model that usually *drives*
-  these skills. `second-model-bead-audit` now says so and labels it
-  `BUILDER-LINEAGE`, but the deeper fix — a non-Claude fallback so the second opinion
-  stays genuinely independent — is a product decision, not a sweep.
+  these skills. `second-model-bead-audit` now **discloses** that overlap in the panel roster. It does
+  not downgrade the label for it: independence is judged against the graph's builder, so
+  on a Codex-built graph the Claude auditor stays `INDEPENDENT` whichever rung it landed
+  on. The mitigation shipped is therefore disclosure only — the deeper fix, a non-Claude
+  fallback rung so the second opinion is independent by construction, is a product
+  decision rather than a sweep.

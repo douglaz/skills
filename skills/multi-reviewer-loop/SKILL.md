@@ -119,14 +119,21 @@ Parse in this order, so a flag never leaks into the focus text:
    default ladder and every report names the model the *ladder* picked:
 
    ```bash
+   # BEFORE the parse loop — initialising it here is what keeps `set -u` happy on the
+   # no-pin path (every ordinary run) WITHOUT clearing a pin the parse just recorded.
+   CLAUDE_MODEL_PIN=""
+   # ... parse `--reviewers`, setting CLAUDE_MODEL_PIN when a token is a model name ...
    # `--reviewers codex,opus` -> panel `codex,claude`, ladder pinned to `opus`.
-   # Initialise it: on the no-pin path — every ordinary run — `set -u` would otherwise
-   # abort during argument parsing, before any reviewer starts.
-   CLAUDE_MODEL_PIN=""     # set by the parse above when a token is a model name
    # A pin REPLACES the ladder, so an unreachable pinned model fails the slot instead
    # of substituting: the user asked for that model by name.
    if [ -n "$CLAUDE_MODEL_PIN" ]; then export CLAUDE_REVIEWER_MODELS="$CLAUDE_MODEL_PIN"; fi
    ```
+
+   The order is the whole point, and getting it wrong is silent: initialised *after*
+   the parse, the assignment clears the pin, the probe runs the default ladder, and a
+   user who asked for `opus` gets whichever model the ladder reached — reported as
+   valid. That is the substitution this rule exists to forbid, reintroduced by the line
+   meant to make the rule safe.
 2. **A leading positive integer** in what's left: use it as `MAX_PASSES` and
    remove it.
 3. **Everything still remaining** is focus text (possibly empty).

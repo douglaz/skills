@@ -320,6 +320,14 @@ Set `PANEL_REVIEWERS` from the parsed `--reviewers` value. The default is
 Three steps, **in this order** — normalize, then probe, then dispatch. The order is the
 point: the probe reads the ladder, so a pin parsed *after* it has already been ignored.
 
+One thing has to happen before all three: **validate GNU `timeout`**. Step 3's check
+(`timeout --kill-after=1s 1s true`) is stronger than the probe's `command -v`, which
+cannot tell GNU's `timeout` from busybox's. Run step 3's check first. Otherwise a
+non-GNU `timeout` on `PATH` fails every rung's `--kill-after=15 90` invocation, the
+ladder concludes no candidate answered, and a `--reviewers claude` run dies reporting
+"the only requested reviewer had no reachable model" — a false diagnosis for a
+dependency problem this file already knows how to name precisely.
+
 ### 1. Normalize a model-name pin to its slot
 
 `--reviewers fable` and `--reviewers opus` are documented as valid, and the case
@@ -371,8 +379,21 @@ Run the bounded probe in
 without the probe the 900s `timeout` is the first thing that notices, and it reports the
 auditor as `failed` after fifteen minutes rather than as `substituted` after one.
 
-If no candidate answers, **drop `claude` from `PANEL_REVIEWERS`** and record why. That
-is all: `RUN_CLAUDE` then derives to `false` in step 3, and every existing guard — the
+If no candidate answers, **drop `claude` from `PANEL_REVIEWERS`** and record why —
+rebuilding the list rather than deleting a token, since `codex,claude` minus a token
+leaves `codex,`, which the dispatch `case` rejects as an invalid panel with the real
+reason lost:
+
+```bash
+_keep=""
+for _r in ${PANEL_REVIEWERS//,/ }; do
+  [ "$_r" = claude ] && continue
+  _keep="${_keep:+$_keep,}$_r"
+done
+PANEL_REVIEWERS="$_keep"
+```
+
+That is all: `RUN_CLAUDE` then derives to `false` in step 3, and every existing guard — the
 launch, the `wait`, the unwrap, the `CLAUDE_STATE` table, the `DEGRADED` verdict — is
 already written for a reviewer that was not requested. Do not add a second flag beside
 `RUN_CLAUDE` for it; an earlier draft did, and each of the three review rounds that
@@ -683,7 +704,7 @@ and rerun only after capturing a stable new baseline.
 |---|---|
 | Codex model unavailable | Retry once without `-m gpt-5.6-sol`; record the environment-default fallback. |
 | Codex auth/non-zero error | Surface stderr; continue `DEGRADED` with the Claude auditor. |
-| Claude `is_error`, rate limit, overload, or auth error | Retry once. If it fails again, **re-resolve the ladder once** and rerun on the next model before degrading — credits can expire between the probe and a 900s audit, and degrading with an untried rung is the exact outcome the ladder exists to prevent. `DEGRADED` only once every candidate has failed. |
+| Claude `is_error`, rate limit, overload, or auth error | Retry once. If it fails again, **re-resolve the ladder once** and rerun on the next model before degrading — credits can expire between the probe and a 900s audit, and degrading with an untried rung is the exact outcome the ladder exists to prevent. `DEGRADED` when that single re-resolution is spent or the candidates run out, whichever is first. |
 | Output ambiguous | Reread the prompt file and rerun that reviewer once. A second ambiguity is a reviewer failure. |
 | Reviewer timeout | Ignore partial output and mark that reviewer failed. On the Claude side a timeout is also the signature of an unreachable model, so re-resolve the ladder once (same one-re-resolution cap) before concluding the auditor is merely slow. |
 | A model pin cannot be reached | Report the slot as failed. Do **not** substitute: a pin replaces the ladder, and the user named that model specifically. |

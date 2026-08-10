@@ -334,10 +334,15 @@ fi
 
 **Check both exit codes before believing the output.** `CLAUDE_RC != 0` or
 `JQ_RC != 0` means the review never ran — auth, rate limit (429), overload
-(529), or an unreachable model — and `$RD/claude.txt` will be **missing**, not empty:
-`jq` runs only when `CLAUDE_RC` is 0, and the skip path never invokes the reviewer at
-all, so nothing creates it. Test with `[ -s ... ]` rather than `cat`, which under
-`set -e` would end the very ship step the skip path exists to let continue. Do not pipe this straight
+(529), or an unreachable model — and `$RD/claude.txt` is **not usable either way**, but
+it differs by branch and existence alone will not tell them apart. When `CLAUDE_RC` is
+non-zero the file is missing (`jq` never ran). When `JQ_RC` is non-zero it exists and
+is **empty**: the shell creates and truncates it before `jq` starts, and `jq -er` then
+aborts via `error()` having written nothing — which is every `is_error` case, i.e. rate
+limit, overload and exhausted model, the failures this whole section is about. So
+branch on the two status variables, and use `[ -s ... ]` rather than `[ -e ... ]` if
+you must ask the filesystem. Either test aborts the ship step under `set -e` when
+written bare, exactly as `cat` would; put it in an `if`. Do not pipe this straight
 into `tee` and read the file: a failed reviewer and a clean reviewer both leave
 you with no findings on stdout, and the difference is the whole point. The clean
 signal is exit 0 plus exactly `No findings.`; empty output with exit 0 is
@@ -354,11 +359,11 @@ is not a mechanism — an unreachable model is indistinguishable from a slow rev
 while you watch it, and the measured behaviour is that it does not exit on its own.
 
 Every reviewer invocation *this skill and the panel skills own* is bounded for the same
-reason. Not every one in the repo is: `orchestrating-with-rb-lite` documents reviewer
-commands that rb-lite itself dispatches, and those carry no timeout because this repo
-does not launch them. One of them pins `claude-opus-5` by hand, so it hangs on exactly
-the failure this change removes elsewhere — tracked separately rather than claimed as
-covered here.
+reason. Not every one in the repo is: `orchestrating-with-rb-lite` documents **three**
+unbounded `claude -p` reviewer commands that rb-lite itself dispatches — `SKILL.md:111`
+pinning `claude-opus-5`, and `:1296`/`:1298` pinning `opus` — which carry no timeout
+because this repo does not launch them. All three hang on exactly the failure this
+change removes elsewhere; tracked in #51 rather than claimed as covered here.
 
 Triage it exactly like a bot finding: credible hypothesis, verify before agreeing
 or rejecting, fix what's real, and don't build mechanism no requirement needs.

@@ -156,10 +156,13 @@ CLAUDE_PID=$!
 CODEX_RC=0; wait "$CODEX_PID" || CODEX_RC=$?
 CLAUDE_RC=0; wait "$CLAUDE_PID" || CLAUDE_RC=$?
 
-# `if`, not `jq ... ; JQ_RC=$?`. The timeout above made 124/137 reachable, and on that
-# path the JSON is truncated or empty, so `jq -er` exits non-zero — which under `set -e`
-# kills the iteration right here, before the survivor/DEGRADED handling below. That
-# would turn the stall this timeout was added to prevent into an abort one line later.
+# `if`, not `jq ... ; JQ_RC=$?`. On a killed run the JSON is usually COMPLETE — measured
+# in multi-reviewer-loop's § Resolving transcript, the 90s-killed probe wrote a full
+# object — and it carries `is_error: true`, which is exactly what makes `jq -er` exit
+# non-zero via `error()`. Under `set -e` that kills the iteration right here, before the
+# survivor/DEGRADED handling below, turning the stall this timeout was added to prevent
+# into an abort one line later. (A genuinely truncated write would fail too; it is just
+# not the case the evidence shows.)
 if jq -er 'if .is_error then error(.result // "claude reviewer returned is_error")
            else (.result // empty) end' \
      <"$REVIEW_DIR/pass-$PASS.claude.json" >"$REVIEW_DIR/pass-$PASS.claude.txt"; then

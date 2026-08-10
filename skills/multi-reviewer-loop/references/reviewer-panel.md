@@ -176,8 +176,12 @@ $ ( set +e ; TO=$(command -v timeout)
 ```
 
 Note `modelUsage` on the failed row: **only the small side model** appears, and
-`out_tokens` is 0 — the requested model never ran at all. That is why the § "Unwrapping"
-check on `modelUsage` below is load-bearing rather than a nicety.
+`out_tokens` is 0 — the requested model never ran at all. That is not what catches
+*this* failure, though: the row also carries `is_error: true`, so the unwrap's `jq -er`
+already routes it to the retry rule before `modelUsage` is consulted. The check earns
+its place on the case not recorded here — a run that exits 0 and looks clean while
+having quietly used a different model — which is why it is worth running even when
+nothing appears wrong.
 
 The observation is that the unreachable model did not answer. *Why* it was unreachable
 — exhausted credits, a plan that excludes it, an outage — is not something this probe
@@ -199,7 +203,8 @@ answering the probe — the ladder then re-selects it, and the "degrade only onc
 candidate has failed" promise quietly becomes "degrade without ever trying the next
 one". Once the remaining candidates are exhausted, or the run has already re-resolved,
 treat it as a failed reviewer and mark that pass `DEGRADED` — a flapping model must not
-spend the loop's passes on retries.
+spend the loop's passes on retries. On a two-rung ladder those two conditions coincide;
+on a longer one they do not, and this cap wins over the failure table's shorter phrasing.
 
 ## Setup, once per pass
 
@@ -639,7 +644,7 @@ code yourself.
 |---|---|---|
 | `codex` non-zero, auth error in stderr | `$CODEX_ERR` | Surface the exact error. Continue degraded on the Claude reviewer; tell the user to re-auth. |
 | `codex` reports the model is unavailable | `$CODEX_ERR` | Retry once with the environment default model; note the fallback in the summary. |
-| `jq` exits non-zero (`is_error: true`) | `.result` in `$CLAUDE_RAW` | Usually rate limit (429), overload (529), auth, or an exhausted model. Retry once after a short wait; if it fails again, re-resolve the ladder (§ Resolving) and re-run the pass on the next model. Degrade only once every candidate has failed. |
+| `jq` exits non-zero (`is_error: true`) | `.result` in `$CLAUDE_RAW` | Usually rate limit (429), overload (529), auth, or an exhausted model. Retry once after a short wait; if it fails again, re-resolve the ladder (§ Resolving) and re-run the pass on the next model — **once per run**. Degrade when that re-resolution is spent or the remaining candidates are exhausted, whichever comes first; on a ladder of three or more those are not the same moment, and § Resolving is the authority. |
 | The Claude reviewer's model is exhausted or unreachable mid-run | `$CLAUDE_RAW` on **stdout** — not stderr, which is empty | Re-resolve the ladder once and switch `$CLAUDE_MODEL` for the rest of the run, naming the pass it changed at. This is a substitution, not a degradation: the slot is still filled. |
 | Claude reviewer returns prose but no `[P*]` and no `No findings.` | `$CLAUDE_OUT` | Ambiguous, not clean. Re-run once; if it repeats, the prompt file is likely truncated — rewrite it. |
 | `.permission_denials` contains `Bash`/`Read`/`Glob`/`Grep` | `$CLAUDE_RAW` | The reviewer was blocked from looking. Confirm `--allowedTools` lists every tool in `--tools`, then re-run that reviewer. |
