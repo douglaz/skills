@@ -6,7 +6,7 @@
 commands `orchestrating-with-rb-lite` hands to **rb-lite** to dispatch (SKILL.md:111
 and the § reference panel), one of which pins `claude-opus-5` by hand and therefore
 still hangs on an exhausted model — this repo does not launch those processes and
-cannot bound them, so converting them is its own change. Filed, not fixed here.
+cannot bound them, so converting them is its own change. Filed as #51, not fixed here.
 Issues #30/#31/#32/#33/#35/#38/#41/#42/#43/#44/#47/#48/#49/#50 are separate PRs and
 NOT in scope.
 **Phase:** HARDEN · **Bead:** n/a (direct-edit tier, doc-only) · **Branch:** claude-reviewer-fallback
