@@ -325,7 +325,9 @@ Both reviewers start together and neither sees the other's output.
 # exit 127 before either reviewer starts, on a machine meeting every documented dependency.
 set -m
 RC_TIMEOUT=1500   # 25 min; a normal pass is 5-15
-# REUSE the `$TO` the probe validated in § Resolving — do not re-resolve with
+# REUSE the `$TO` validated in the skill's § 1.1 preflight — NOT the one § Resolving
+# may set, since that step is skipped on a codex-only panel and cannot be the source
+# for these launches. Do not re-resolve with
 # `command -v timeout || command -v gtimeout`. That form takes `timeout` whenever it
 # exists, so on a busybox-`timeout` host the probe would pick GNU `gtimeout` and
 # succeed while these two 25-minute calls died instantly on an unrecognised

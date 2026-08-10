@@ -465,9 +465,12 @@ For each pass `N` from `1` to `MAX_PASSES`:
                    # `set -m`, not `setsid` — that is util-linux and absent on macOS,
                    # which this skill supports. See references/reviewer-panel.md.
    PASS_ID=$(printf '%02d' "$N")
-   # Reuse the validated $TO from § 1.5's probe — `command -v timeout || command -v
-   # gtimeout` picks a busybox `timeout` whenever it exists, and these calls then die
-   # instantly on `--kill-after` with nothing naming the dependency.
+   # Reuse the validated $TO from § 1.1 PREFLIGHT — not from § 1.5's probe, which is
+   # skipped on `--reviewers codex` and so cannot be its source. (Pointing this at the
+   # probe is what made codex-only runs abort here reporting a missing GNU timeout on a
+   # host that had one.) Do not re-resolve with `command -v timeout || command -v
+   # gtimeout` either: that picks a busybox `timeout` whenever it exists, and these
+   # calls then die instantly on `--kill-after` with nothing naming the dependency.
    [ -n "${TO:-}" ] || { echo "no validated GNU timeout — see references/reviewer-panel.md"; exit 1; }
    "$TO" --kill-after=60 1500 codex review --base "$DIFF_BASE" \
      -c 'model="gpt-5.6-sol"' -c 'model_reasoning_effort="xhigh"' \
