@@ -12,8 +12,9 @@ NOT in scope.
 **Phase:** HARDEN · **Bead:** n/a (direct-edit tier, doc-only) · **Branch:** claude-reviewer-fallback
 **Pending:** —
 **Gate:** `./install.test && ./skills/pr-with-codex-bot-review/scripts/bot-gate.test && ./skills/drive/scripts/drive-status.test`
-· run on this branch at bash 5.3.9: `passed 12, failed 0` / `passed 124, failed 0` /
-`passed 70, failed 0`, each exit 0. Note what that does **not** cover: every file in
+· run at aeaceb3 on bash 5.3.9: `passed 12, failed 0` / `passed 124, failed 0` /
+`passed 70, failed 0`, each exit 0. Re-runnable at that commit — a SHA, not "on this
+branch", which names no reproducible point once the branch has six of them. Note what that does **not** cover: every file in
 this change is prose, and no suite reads prose. The evidence for this change is the
 recorded runs in the reference, not the suites.
 
