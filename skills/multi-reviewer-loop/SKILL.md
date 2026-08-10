@@ -179,6 +179,24 @@ a reviewer.
    plus `jq`. Record which reviewers are actually available; that set is the
    panel for every pass.
 
+   **Resolve `$TO` here, unconditionally**, by validating each candidate:
+
+   ```bash
+   TO=""
+   for _c in timeout gtimeout; do
+     if command -v "$_c" >/dev/null 2>&1 && "$_c" --kill-after=1s 1s true >/dev/null 2>&1; then
+       TO=$(command -v "$_c"); break
+     fi
+   done
+   [ -n "$TO" ] || { echo "no GNU timeout (nor gtimeout) — cannot bound the reviewers"; exit 1; }
+   ```
+
+   Not inside § 1.5's model probe, even though that block can also resolve it. The
+   probe is skipped on a codex-only panel while § 2's launches are not, so a `$TO` that
+   originates there leaves `--reviewers codex` — a documented invocation — exiting
+   before it reviews anything, reporting a missing GNU `timeout` on a host that has one.
+   Validate rather than locate: `command -v` cannot tell GNU's from busybox's.
+
 2. Resolve `DIFF_BASE` in this order. Use the first candidate that resolves to a
    commit:
    - PR base branch from `gh pr view`. **On a fork clone this needs the upstream and the

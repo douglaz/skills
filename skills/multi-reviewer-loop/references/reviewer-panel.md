@@ -56,12 +56,19 @@ on the one that did not.
 # of GNU `gtimeout` every rung fails on `--kill-after` and the ladder reports "no model
 # answered" — a dependency problem diagnosed as an exhausted account. Validate each
 # candidate and keep the first that passes.
-TO=""
-for _c in timeout gtimeout; do
-  if command -v "$_c" >/dev/null 2>&1 && "$_c" --kill-after=1s 1s true >/dev/null 2>&1; then
-    TO=$(command -v "$_c"); break
-  fi
-done
+#
+# Resolve it only if the caller has not already. This step is OPTIONAL (skipped on a
+# codex-only panel) while § 2's launches are not, so `$TO` must not originate here —
+# do it in preflight and let this block reuse it. Written to work either way so the
+# block still runs standalone.
+if [ -z "${TO:-}" ]; then
+  TO=""
+  for _c in timeout gtimeout; do
+    if command -v "$_c" >/dev/null 2>&1 && "$_c" --kill-after=1s 1s true >/dev/null 2>&1; then
+      TO=$(command -v "$_c"); break
+    fi
+  done
+fi
 [ -n "$TO" ] || { echo "no GNU timeout (nor gtimeout) — cannot bound the probe"; exit 1; }
 # Unquoted on purpose: this is a space-separated ladder and the split IS the loop.
 CLAUDE_MODEL_LADDER="${CLAUDE_REVIEWER_MODELS:-fable opus}"
