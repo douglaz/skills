@@ -213,26 +213,27 @@ A phase closes on evidence or it does not close.
   stage's, so a red gate reports 0. (See `references/autonomy-contract.md` § 2.)
 
   ```bash
-  _gate_log=$(mktemp) || { echo "cannot create gate log"; exit 1; }
-  _gate_had_errexit=0
-  case $- in *e*) _gate_had_errexit=1; set +e ;; esac
   (
+    _gate_log=$(mktemp) || { echo "cannot create gate log"; exit 1; }
+    trap 'rm -f "$_gate_log"' EXIT
+    _gate_had_errexit=0
+    case $- in *e*) _gate_had_errexit=1; set +e ;; esac
+    (
+      [ "$_gate_had_errexit" -eq 0 ] || set -e
+      <gate-cmd>
+    ) >"$_gate_log" 2>&1
+    _gate_rc=$?
     [ "$_gate_had_errexit" -eq 0 ] || set -e
-    <gate-cmd>
-  ) >"$_gate_log" 2>&1
-  _gate_rc=$?
-  [ "$_gate_had_errexit" -eq 0 ] || set -e
-  cat "$_gate_log" || { rm -f "$_gate_log"; echo "cannot read gate log"; exit 1; }
-  printf 'EXIT=%s\n' "$_gate_rc" \
-    || { rm -f "$_gate_log"; exit 1; }
-  rm -f "$_gate_log" || { echo "cannot remove gate log"; exit 1; }
-  ( exit "$_gate_rc" )
+    cat "$_gate_log" || { echo "cannot read gate log"; exit 1; }
+    printf 'EXIT=%s\n' "$_gate_rc" || exit 1
+    exit "$_gate_rc"
+  )
   ```
 
-  Run the whole gate in a subshell so an `&&` list shares the redirection while
-  a gate function keeps its original `errexit` behavior. Return the exact saved
-  status after reading and removing the fresh log without replacing an existing
-  `EXIT` trap. Quote the command and exit code in your report.
+  The nested subshell isolates cleanup from the caller's traps and removes the
+  log on handled termination; the inner one preserves function-level `errexit`
+  while capturing the whole gate. Return the exact saved status. Quote the
+  command and exit code in your report.
 - For a test you just wrote: make it **fail first** against the unfixed code, then pass. A
   green test that never could have gone red proves nothing.
 - Words that need a number or an exit code behind them: "passing", "working", "clean",

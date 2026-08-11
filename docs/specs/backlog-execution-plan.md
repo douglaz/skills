@@ -470,12 +470,14 @@ Use a portable no-shell reviewer boundary through the single runner from C1:
    the allowlist or the allowlist names a path that is no longer untracked;
 4. materialize a sanitized snapshot under that directory from the NUL-safe raw
    index path/mode set (`git ls-files --stage -z`) plus the current worktree
-   bytes; copy regular files byte-for-byte, recreate tracked symlinks from their
-   literal link target, preserve Git-relevant executable mode, and omit only
-   paths proven to be tracked deletions; fail closed on gitlinks, sparse/missing
-   paths that are not deletions, unmerged index stages, or any path/mode/digest
-   mismatch; do not use `git archive` or a checkout operation that honors
-   `export-ignore`, `export-subst`, or smudge filters;
+   bytes; first inspect `git ls-files -v -z` and refuse every
+   assume-unchanged or skip-worktree entry; copy regular files byte-for-byte,
+   preserve Git-relevant executable mode, and omit only paths proven to be
+   tracked deletions; refuse all tracked symlinks and gitlinks rather than risk a
+   target escaping the snapshot; also fail closed on sparse/missing paths that
+   are not deletions, unmerged index stages, or any path/mode/digest mismatch;
+   do not use `git archive` or a checkout operation that honors `export-ignore`,
+   `export-subst`, or smudge filters;
 5. copy only the allowlisted untracked regular files into both their snapshot
    paths and numbered bundle paths; do not copy `.git`, ignored files, or any
    unrelated untracked path;
@@ -485,8 +487,9 @@ Use a portable no-shell reviewer boundary through the single runner from C1:
    content digest; use `git hash-object --no-filters` on both the original and
    copy and require equality; fail closed on a non-regular type or any
    enumerate/copy/digest/manifest error;
-7. refuse any untracked file larger than 1 MiB or an aggregate untracked bundle
-   larger than 8 MiB before the external launch;
+7. before copying, refuse any tracked file larger than 16 MiB or a tracked
+   snapshot larger than 256 MiB, and refuse any untracked file larger than
+   1 MiB or an aggregate untracked bundle larger than 8 MiB;
 8. launch the reviewer with the sanitized snapshot—not the original worktree—as
    its working directory; give it snapshot-local diff and manifest paths and
    retain `Read,Glob,Grep` so it can inspect surrounding tracked files and every
@@ -503,8 +506,11 @@ distinguish them. Additional fixtures cover an unrelated untracked credential,
 a stale allowlist entry, an ignored `.env`, the 1 MiB per-file boundary, and the
 8 MiB aggregate boundary. Tracked fixtures with `export-ignore`,
 `export-subst`, and a smudge filter must appear byte-identical to the current
-worktree in the snapshot. The ignored file must be absent from the snapshot, and
-no refusal case may launch the reviewer.
+worktree in the snapshot. Further pre-launch refusal fixtures cover
+assume-unchanged, skip-worktree, an absolute symlink, a relative escaping
+symlink, the 16 MiB tracked-file boundary, and the 256 MiB tracked aggregate.
+The ignored file must be absent from the snapshot, and no refusal case may
+launch the reviewer.
 
 ## Workstream D — installer and upgrade correctness
 

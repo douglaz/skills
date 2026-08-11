@@ -514,9 +514,14 @@ gate_stdout="$WORK/discipline-gate.stdout"
 gate_stderr="$WORK/discipline-gate.stderr"
 status_stdout="$WORK/discipline-status.stdout"
 status_stderr="$WORK/discipline-status.stderr"
+term_stdout="$WORK/discipline-term.stdout"
+term_stderr="$WORK/discipline-term.stderr"
 gate_tmp="$WORK/discipline-gate-tmp"
 cleanup_marker="$WORK/existing-exit-cleanup"
 status_cleanup_marker="$WORK/existing-status-cleanup"
+term_cleanup_marker="$WORK/existing-term-cleanup"
+term_started="$WORK/discipline-term-started"
+term_rc_file="$WORK/discipline-term.rc"
 mkdir -p "$gate_tmp"
 capture_gate=false
 found_gate_start=false
@@ -527,15 +532,20 @@ found_gate_command=false
   printf '%s\n' 'trap '\''printf cleanup > "$CLEANUP_MARKER"'\'' EXIT'
   printf '%s\n' 'gate() { printf "first\n"; false; printf "should-not-run\n"; }'
   while IFS= read -r line; do
-    if [[ $line == '_gate_log=$(mktemp)'* ]]; then
+    if [[ $line == *'_gate_log=$(mktemp)'* ]]; then
       capture_gate=true
       found_gate_start=true
+      printf '%s\n' '('
     elif $capture_gate && [[ $line == '```' ]]; then
       break
     fi
     if $capture_gate; then
-      if [[ $line == '  <gate>' ]]; then
-        printf '%s\n' '  if [[ ${GATE_MODE:-function} == status ]]; then exit 124; else gate; fi'
+      if [[ $line == '    <gate>' ]]; then
+        printf '%s\n' '    if [[ ${GATE_MODE:-function} == status ]]; then exit 124'
+        printf '%s\n' '    elif [[ ${GATE_MODE:-function} == term ]]; then'
+        printf '%s\n' '      printf "sensitive-output\n"; : >"$STARTED"'
+        printf '%s\n' '      while :; do sleep 1; done'
+        printf '%s\n' '    else gate; fi'
         found_gate_command=true
       else
         printf '%s\n' "$line"
@@ -550,10 +560,32 @@ else
     bash "$gate_script" >"$gate_stdout" 2>"$gate_stderr"; rc=$?
   CLEANUP_MARKER="$status_cleanup_marker" TMPDIR="$gate_tmp" GATE_MODE=status \
     bash "$gate_script" >"$status_stdout" 2>"$status_stderr"; status_rc=$?
+  (
+    set -m
+    CLEANUP_MARKER="$term_cleanup_marker" TMPDIR="$gate_tmp" GATE_MODE=term \
+      STARTED="$term_started" \
+      bash "$gate_script" >"$term_stdout" 2>"$term_stderr" &
+    term_pid=$!
+    for _n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+      [[ -f "$term_started" ]] && break
+      sleep 0.05
+    done
+    if [[ ! -f "$term_started" ]]; then
+      kill -KILL -- "-$term_pid" 2>/dev/null
+      printf '%s' 125 > "$term_rc_file"
+    else
+      kill -TERM -- "-$term_pid"
+      wait "$term_pid"
+      printf '%s' "$?" > "$term_rc_file"
+    fi
+  )
+  term_rc=$(< "$term_rc_file")
   gate_output=$(< "$gate_stdout")
   gate_error=$(< "$gate_stderr")
   status_output=$(< "$status_stdout")
   status_error=$(< "$status_stderr")
+  term_output=$(< "$term_stdout")
+  term_error=$(< "$term_stderr")
   if [[ $rc -ne 1 ]]; then
     fail "$t" "failed gate wrapper exited $rc"
   elif [[ $gate_output != $'first\nEXIT=1' ]]; then
@@ -570,6 +602,12 @@ else
     fail "$t" "categorized status wrote stderr: $status_error"
   elif [[ ! -f "$status_cleanup_marker" || $(< "$status_cleanup_marker") != cleanup ]]; then
     fail "$t" "categorized-status run replaced the caller's EXIT trap"
+  elif [[ $term_rc -ne 143 ]]; then
+    fail "$t" "terminated gate wrapper exited $term_rc"
+  elif [[ -n "$term_output" || -n "$term_error" ]]; then
+    fail "$t" "terminated gate exposed output: stdout=$term_output stderr=$term_error"
+  elif [[ ! -f "$term_cleanup_marker" || $(< "$term_cleanup_marker") != cleanup ]]; then
+    fail "$t" "terminated run replaced the caller's EXIT trap"
   elif find "$gate_tmp" -mindepth 1 -print -quit | grep -q .; then
     fail "$t" "gate wrapper leaked its temporary log"
   else

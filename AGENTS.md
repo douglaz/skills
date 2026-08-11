@@ -66,28 +66,30 @@ exit 0. Group the entire gate, use a fresh log, save the real status, and return
 that status after reading the log:
 
 ```bash
-_gate_log=$(mktemp) || { echo "cannot create gate log"; exit 1; }
-_gate_had_errexit=0
-case $- in *e*) _gate_had_errexit=1; set +e ;; esac
 (
+  _gate_log=$(mktemp) || { echo "cannot create gate log"; exit 1; }
+  trap 'rm -f "$_gate_log"' EXIT
+  _gate_had_errexit=0
+  case $- in *e*) _gate_had_errexit=1; set +e ;; esac
+  (
+    [ "$_gate_had_errexit" -eq 0 ] || set -e
+    <gate>
+  ) >"$_gate_log" 2>&1
+  _gate_rc=$?
   [ "$_gate_had_errexit" -eq 0 ] || set -e
-  <gate>
-) >"$_gate_log" 2>&1
-_gate_rc=$?
-[ "$_gate_had_errexit" -eq 0 ] || set -e
-cat "$_gate_log" || { rm -f "$_gate_log"; echo "cannot read gate log"; exit 1; }
-printf 'EXIT=%s\n' "$_gate_rc" \
-  || { rm -f "$_gate_log"; exit 1; }
-rm -f "$_gate_log" || { echo "cannot remove gate log"; exit 1; }
-( exit "$_gate_rc" )
+  cat "$_gate_log" || { echo "cannot read gate log"; exit 1; }
+  printf 'EXIT=%s\n' "$_gate_rc" || exit 1
+  exit "$_gate_rc"
+)
 ```
 
-The subshell makes one redirection cover an `&&` gate instead of only its final
-command. Temporarily disabling parent `errexit` permits status capture; restoring
-it inside the subshell preserves a gate function's original fail-fast behavior.
-Immediate cleanup preserves any existing `EXIT` trap and makes repeated runs
-independent. The final subshell returns the saved status unchanged, including
-categorized statuses such as 2 or 124.
+The nested subshell isolates its cleanup trap from the caller and removes the
+private log on normal return, error, or handled termination. The inner subshell
+makes one redirection cover an `&&` gate instead of only its final command.
+Temporarily disabling wrapper `errexit` permits status capture; restoring it
+inside the inner subshell preserves a gate function's original fail-fast
+behavior. `exit` returns the saved status unchanged, including categorized
+statuses such as 2 or 124.
 
 **"Passing", "clean", "working", "verified", and "done" require a command and an
 exit code.** If you cannot show one, say what you actually observed instead. This
