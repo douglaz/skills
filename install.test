@@ -540,7 +540,6 @@ found_gate_command=false
   printf '%s\n' '#!/usr/bin/env bash'
   printf '%s\n' 'set -e'
   printf '%s\n' 'trap '\''printf cleanup > "$CLEANUP_MARKER"'\'' EXIT'
-  printf '%s\n' 'gate() { printf "first\n"; false; printf "should-not-run\n"; }'
   while IFS= read -r line; do
     if [[ $line == *'_gate_log=$(mktemp)'* ]]; then
       capture_gate=true
@@ -550,17 +549,20 @@ found_gate_command=false
       break
     fi
     if $capture_gate; then
-      if [[ $line == '    <gate>' ]]; then
-        printf '%s\n' '    if [[ ${GATE_MODE:-function} == status ]]; then exit 124'
-        printf '%s\n' '    elif [[ ${GATE_MODE:-function} == term ]]; then'
-        printf '%s\n' '      printf "sensitive-output\n"; : >"$STARTED"'
-        printf '%s\n' '      while :; do sleep 1; done'
-        printf '%s\n' '    elif [[ ${GATE_MODE:-function} == aggregate ]]; then'
-        printf '%s\n' '      printf "aggregate-first\n" && { : >"$AGG_STARTED"; sleep 0.2; false; } && printf "aggregate-last\n"'
-        printf '%s\n' '    elif [[ ${GATE_MODE:-function} == cleanup ]]; then'
-        printf '%s\n' '      printf "cleanup-output\n"; chmod a-w "$TMPDIR"'
-        printf '%s\n' '    else gate; fi'
+      if [[ ${line#"${line%%[![:space:]]*}"} == '<gate>' ]]; then
+        printf '%s\n' 'gate() { printf "first\n"; false; printf "should-not-run\n"; }'
+        printf '%s\n' 'if [[ ${GATE_MODE:-function} == status ]]; then exit 124'
+        printf '%s\n' 'elif [[ ${GATE_MODE:-function} == term ]]; then'
+        printf '%s\n' '  printf "sensitive-output\n"; : >"$STARTED"'
+        printf '%s\n' '  while :; do sleep 1; done'
+        printf '%s\n' 'elif [[ ${GATE_MODE:-function} == aggregate ]]; then'
+        printf '%s\n' '  printf "aggregate-first\n" && { : >"$AGG_STARTED"; sleep 0.2; false; } && printf "aggregate-last\n"'
+        printf '%s\n' 'elif [[ ${GATE_MODE:-function} == cleanup ]]; then'
+        printf '%s\n' '  printf "cleanup-output\n"; chmod a-w "$TMPDIR"'
+        printf '%s\n' 'else gate; fi'
         found_gate_command=true
+      elif [[ $line == ')' ]]; then
+        printf '%s\n' ') && printf "wrapper-success\n"'
       else
         printf '%s\n' "$line"
       fi
@@ -652,7 +654,7 @@ else
     fail "$t" "aggregate output escaped before the gate completed"
   elif [[ ! -f "$aggregate_cleanup_marker" || $(< "$aggregate_cleanup_marker") != cleanup ]]; then
     fail "$t" "aggregate run replaced the caller's EXIT trap"
-  elif [[ $cleanup_rc -ne 1 || $cleanup_output != $'cleanup-output\nEXIT=0' ]]; then
+  elif [[ $cleanup_rc -ne 1 || $cleanup_output != $'cleanup-output\nEXIT=1' ]]; then
     fail "$t" "cleanup failure became rc=$cleanup_rc stdout=$cleanup_output"
   elif [[ $cleanup_error != *"cannot remove gate log"* ]]; then
     fail "$t" "cleanup failure was not reported: $cleanup_error"

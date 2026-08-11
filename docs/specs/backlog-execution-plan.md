@@ -496,7 +496,9 @@ Use a portable no-shell reviewer boundary through the single runner from C1:
 8. before materializing the diff, enumerate both old and new blob IDs for every
    base-to-worktree change, reject any base-side/deleted blob larger than 16 MiB
    or aggregate old/new blob material larger than 256 MiB, then generate the
-   diff into the private bundle and reject it above 64 MiB;
+   diff into the private bundle with configured external diff helpers and
+   text-conversion disabled (`--no-ext-diff --no-textconv`) and reject it above
+   64 MiB;
 9. launch the reviewer with the sanitized snapshot—not the original worktree—as
    its working directory; give it snapshot-local diff and manifest paths and
    retain `Read,Glob,Grep` so it can inspect surrounding tracked files and every
@@ -517,8 +519,11 @@ worktree in the snapshot. Further pre-launch refusal fixtures cover
 assume-unchanged, skip-worktree, an absolute symlink, a relative escaping
 symlink, the 16 MiB tracked-file boundary, and the 256 MiB tracked aggregate.
 A staged-deletion fixture covers the 16 MiB base-side boundary and a separate
-fixture covers the 64 MiB generated-diff boundary. The ignored file must be
-absent from the snapshot, and no refusal case may launch the reviewer.
+fixture covers the 64 MiB generated-diff boundary. A hostile Git configuration
+fixture installs both `diff.external` and an attribute-backed textconv driver
+and proves neither helper executes and the native diff is bundled. The ignored
+file must be absent from the snapshot, and no refusal case may launch the
+reviewer.
 
 ## Workstream D — installer and upgrade correctness
 
