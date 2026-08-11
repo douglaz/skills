@@ -459,25 +459,33 @@ Use a portable no-shell reviewer boundary through the single runner from C1:
    `--disallowedTools`;
 2. have the orchestrator build a review bundle in a private 0700 temporary
    directory outside the worktree before launch;
-3. put the tracked diff in the bundle and enumerate untracked files with
-   `git ls-files --others --exclude-standard -z`;
-4. copy each untracked regular file to a numbered bundle path and generate a
+3. require a caller-supplied NUL-delimited allowlist of intended untracked paths
+   whenever untracked files exist; enumerate with
+   `git ls-files --others --exclude-standard -z`, compare byte-for-byte, and
+   refuse the panel before any external launch if an untracked path is outside
+   the allowlist or the allowlist names a path that is no longer untracked;
+4. put the tracked diff in the bundle, then copy each allowlisted untracked
+   regular file to a numbered bundle path and generate a
    tested JSON manifest containing its JSON-escaped original path, numbered copy,
    type, Git-relevant mode (`100755` when executable, otherwise `100644`), and
    content digest; use `git hash-object --no-filters` on both the original and
    copy and require equality; fail closed on a non-regular type or any
    enumerate/copy/digest/manifest error;
-5. give the reviewer the diff and manifest paths and retain `Read,Glob,Grep` so
+5. refuse any untracked file larger than 1 MiB or an aggregate untracked bundle
+   larger than 8 MiB before the external launch;
+6. give the reviewer the diff and manifest paths and retain `Read,Glob,Grep` so
    it can inspect surrounding tracked files and every numbered untracked copy;
    the prompt must say that both sources form the reviewed change; and
-6. if a supported Claude CLI cannot enforce the denied Bash tool, mark that
+7. if a supported Claude CLI cannot enforce the denied Bash tool, mark that
    reviewer unavailable/degraded—never silently regrant Bash.
 
 This is the Linux/macOS boundary; do not add `bwrap` or `sandbox-exec`.
 Prompt text while granting Bash does not satisfy this issue.
 Required bundle fixtures include an untracked executable whose content is
 identical at modes 100644 and 100755; the manifest and reviewer input must
-distinguish them.
+distinguish them. Additional fixtures cover an unrelated untracked credential,
+a stale allowlist entry, the 1 MiB per-file boundary, and the 8 MiB aggregate
+boundary; none may launch the reviewer when refused.
 
 ## Workstream D — installer and upgrade correctness
 
@@ -575,17 +583,25 @@ Run all three upstream gates even when an earlier one fails, capture each real
 status separately, and require all three to be zero:
 
 ```bash
-just_test_rc=0
-nix_build_rc=0
-flake_check_rc=0
-just test > /tmp/f2-just-test.log 2>&1 || just_test_rc=$?
-nix build > /tmp/f2-nix-build.log 2>&1 || nix_build_rc=$?
-nix flake check > /tmp/f2-flake-check.log 2>&1 || flake_check_rc=$?
-printf 'just_test=%s nix_build=%s flake_check=%s\n' \
-  "$just_test_rc" "$nix_build_rc" "$flake_check_rc"
-test "$just_test_rc" -eq 0 &&
-  test "$nix_build_rc" -eq 0 &&
-  test "$flake_check_rc" -eq 0
+(
+  f2_gate_dir=$(mktemp -d) || exit 1
+  chmod 700 "$f2_gate_dir" || { rm -rf "$f2_gate_dir"; exit 1; }
+  trap 'rm -rf "$f2_gate_dir"' EXIT
+  just_test_rc=0
+  nix_build_rc=0
+  flake_check_rc=0
+  just test >"$f2_gate_dir/just-test.log" 2>&1 || just_test_rc=$?
+  nix build >"$f2_gate_dir/nix-build.log" 2>&1 || nix_build_rc=$?
+  nix flake check >"$f2_gate_dir/flake-check.log" 2>&1 || flake_check_rc=$?
+  cat "$f2_gate_dir/just-test.log" || exit 1
+  cat "$f2_gate_dir/nix-build.log" || exit 1
+  cat "$f2_gate_dir/flake-check.log" || exit 1
+  printf 'just_test=%s nix_build=%s flake_check=%s\n' \
+    "$just_test_rc" "$nix_build_rc" "$flake_check_rc"
+  test "$just_test_rc" -eq 0 &&
+    test "$nix_build_rc" -eq 0 &&
+    test "$flake_check_rc" -eq 0
+)
 ```
 
 Open and land the minimal rb-lite checkpoint-hook PR through the upstream

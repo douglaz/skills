@@ -44,12 +44,15 @@ lie: `grep` defaults to regex (use `-Fq --`), `git show ... | grep` returns 141 
 than occurrences, and demanding *zero* occurrences rejects a correct partial removal.
 
 ```bash
-_chk=$(mktemp) || { echo "cannot create the scratch file — do NOT report the commit verified"; exit 1; }
-trap 'rm -f "$_chk"' EXIT
-# ...the three loops, using `grep -Fq --` / `grep -Fo | wc -l || true` on a captured file.
+(
+  _chk=$(mktemp) || { echo "cannot create the scratch file — do NOT report the commit verified"; exit 1; }
+  trap 'rm -f "$_chk"' EXIT
+  # ...the three loops, using `grep -Fq --` / `grep -Fo | wc -l || true` on a captured file.
+)
 ```
 
-A clean `git status` is neither check.
+The subshell keeps that temporary cleanup from replacing an `EXIT` trap owned by
+the caller. A clean `git status` is neither check.
 
 The same tools also corrupt without failing. In a `sed` replacement string `&`
 means "the whole match", so substituting a value containing `&&` — any shell
