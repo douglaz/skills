@@ -444,7 +444,7 @@ The coordinating skills agent verifies the upstream PR URL, merge SHA, and all
 three gate exit codes. It then records and closes F2 only through a reviewed
 skills-repository path:
 
-- carry the evidence plus `br update F2 -s closed` and the explicit
+- carry the evidence update, `br close <F2-bead-id>`, and the explicit
   `br sync --flush-only` into the next `executor-skills` branch after first
   confirming the JSONL is clean against `HEAD`; or
 - if no next skills branch exists, create a dedicated metadata branch from
@@ -453,6 +453,11 @@ skills-repository path:
 
 Do not mutate the skills Beads store from the rb-lite checkout, on an active
 unrelated skills branch, or directly on skills `master`.
+
+Here `F2` means the resolved generated bead ID, not the plan alias. The terminal
+mutation is `br close <F2-bead-id>`—not `br update ... -s closed`—followed by
+the checked explicit sync. The evidence is added to the bead before that close
+with `br update <F2-bead-id> --notes ...` on the same reviewed closure branch.
 
 Publishing the required upstream release is a separate human-authority
 checkpoint recorded in `DRIVE.md`; local controller BUILD remains blocked until
@@ -562,10 +567,18 @@ Constraints:
 - B0 and F2r are explicit decision/authority beads. They remain blocked for
   human input even when their graph prerequisites are satisfied.
 - The upstream F2 implementation/PR may proceed before F2r authorization.
-- The skills scheduler may select only:
-  `br ready -l drive-open-issues -l executor-skills`. It routes
-  `executor-rb-lite` to the cross-repository procedure above and never sends
-  `authority-human` to an implementer.
+- The scheduler queries each lane separately because repeated label filters use
+  AND semantics:
+
+  ```bash
+  br ready -l drive-open-issues -l executor-skills
+  br ready -l drive-open-issues -l executor-rb-lite
+  br ready -l drive-open-issues -l authority-human
+  ```
+
+  The first lane runs in this repository, the second routes to the
+  cross-repository procedure above, and the third is reported for human action
+  but never sent to an implementer.
 
 ## Beads graph to create
 
