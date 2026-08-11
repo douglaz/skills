@@ -214,16 +214,18 @@ A phase closes on evidence or it does not close.
 
   ```bash
   _gate_log=$(mktemp) || { echo "cannot create gate log"; exit 1; }
-  trap 'rm -f "$_gate_log"' EXIT
   _gate_rc=0
   { <gate-cmd>; } >"$_gate_log" 2>&1 || _gate_rc=$?
-  cat "$_gate_log" || { echo "cannot read gate log"; exit 1; }
-  printf 'EXIT=%s\n' "$_gate_rc" || exit 1
+  cat "$_gate_log" || { rm -f "$_gate_log"; echo "cannot read gate log"; exit 1; }
+  printf 'EXIT=%s\n' "$_gate_rc" \
+    || { rm -f "$_gate_log"; exit 1; }
+  rm -f "$_gate_log" || { echo "cannot remove gate log"; exit 1; }
   test "$_gate_rc" -eq 0
   ```
 
   Group the whole gate so an `&&` list shares the redirection; return the saved
-  status after reading the fresh log. Quote the command and exit code in your report.
+  status after reading and removing the fresh log without replacing an existing
+  `EXIT` trap. Quote the command and exit code in your report.
 - For a test you just wrote: make it **fail first** against the unfixed code, then pass. A
   green test that never could have gone red proves nothing.
 - Words that need a number or an exit code behind them: "passing", "working", "clean",

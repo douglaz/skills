@@ -22,8 +22,10 @@ take.
 
 ## Now
 
-Write and review the buildable execution plan. Budget: `AGENTS.md`, `DRIVE.md`,
-and one spec; documentation only. Do NOT implement any GitHub issue in SHAPE.
+Write and review the buildable execution plan. Expanded review-discovered
+bootstrap budget: `AGENTS.md`, `DRIVE.md`, one spec, the canonical gate wrapper,
+its two Drive consumers, and one `install.test` regression fixture (~100 LOC).
+Do NOT implement any of the 29 planned GitHub issues in SHAPE.
 
 ## Next
 

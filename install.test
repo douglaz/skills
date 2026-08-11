@@ -512,11 +512,15 @@ discipline_block=${DISCIPLINE_BLOCK:-"$HERE/skills/agents-md/references/discipli
 gate_script="$WORK/discipline-gate.sh"
 gate_stdout="$WORK/discipline-gate.stdout"
 gate_stderr="$WORK/discipline-gate.stderr"
+gate_tmp="$WORK/discipline-gate-tmp"
+cleanup_marker="$WORK/existing-exit-cleanup"
+mkdir -p "$gate_tmp"
 capture_gate=false
 found_gate_start=false
 found_gate_command=false
 {
   printf '%s\n' '#!/usr/bin/env bash'
+  printf '%s\n' 'trap '\''printf cleanup > "$CLEANUP_MARKER"'\'' EXIT'
   while IFS= read -r line; do
     if [[ $line == '_gate_log=$(mktemp)'* ]]; then
       capture_gate=true
@@ -537,7 +541,8 @@ found_gate_command=false
 if ! $found_gate_start || ! $found_gate_command; then
   fail "$t" "could not extract the canonical gate wrapper"
 else
-  bash "$gate_script" >"$gate_stdout" 2>"$gate_stderr"; rc=$?
+  CLEANUP_MARKER="$cleanup_marker" TMPDIR="$gate_tmp" \
+    bash "$gate_script" >"$gate_stdout" 2>"$gate_stderr"; rc=$?
   gate_output=$(< "$gate_stdout")
   gate_error=$(< "$gate_stderr")
   if [[ $rc -ne 1 ]]; then
@@ -548,6 +553,10 @@ else
     fail "$t" "unexpected stderr: $gate_error"
   elif [[ $gate_output == *should-not-run* ]]; then
     fail "$t" "gate continued past the failed && command"
+  elif [[ ! -f "$cleanup_marker" || $(< "$cleanup_marker") != cleanup ]]; then
+    fail "$t" "gate wrapper replaced the caller's EXIT trap"
+  elif find "$gate_tmp" -mindepth 1 -print -quit | grep -q .; then
+    fail "$t" "gate wrapper leaked its temporary log"
   else
     pass "$t"
   fi

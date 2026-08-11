@@ -64,17 +64,19 @@ that status after reading the log:
 
 ```bash
 _gate_log=$(mktemp) || { echo "cannot create gate log"; exit 1; }
-trap 'rm -f "$_gate_log"' EXIT
 _gate_rc=0
 { <gate>; } >"$_gate_log" 2>&1 || _gate_rc=$?
-cat "$_gate_log" || { echo "cannot read gate log"; exit 1; }
-printf 'EXIT=%s\n' "$_gate_rc" || exit 1
+cat "$_gate_log" || { rm -f "$_gate_log"; echo "cannot read gate log"; exit 1; }
+printf 'EXIT=%s\n' "$_gate_rc" \
+  || { rm -f "$_gate_log"; exit 1; }
+rm -f "$_gate_log" || { echo "cannot remove gate log"; exit 1; }
 test "$_gate_rc" -eq 0
 ```
 
 The braces make one redirection cover an `&&` gate instead of only its final
-command. The saved status and final `test` keep a diagnostic `cat` or `printf`
-from turning a failed gate into success.
+command. Immediate cleanup preserves any existing `EXIT` trap and makes repeated
+runs independent. The saved status and final `test` keep a diagnostic `cat` or
+`printf` from turning a failed gate into success.
 
 **"Passing", "clean", "working", "verified", and "done" require a command and an
 exit code.** If you cannot show one, say what you actually observed instead. This
