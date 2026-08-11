@@ -29,26 +29,45 @@ Turn the current flat issue list into a sequenced, testable delivery program tha
   This was measured on 2026-08-11 with stdout and stderr captured separately:
 
   ```text
-  $ br --version
+  $ br --version >/tmp/br-version.stdout 2>/tmp/br-version.stderr
+  $ br_version_rc=$?; printf 'STDOUT:\n'; cat /tmp/br-version.stdout
+  $ printf 'STDERR:\n'; cat /tmp/br-version.stderr
+  $ printf 'EXIT=%s\n' "$br_version_rc"
+  STDOUT:
   br 0.2.19
+  STDERR:
   EXIT=0
 
-  $ br --no-auto-flush --no-auto-import where
-  STDOUT: <empty>
-  STDERR: Error: Beads not initialized: run 'br init' first
-          Hint: Run: br init
+  $ br --no-auto-flush --no-auto-import where \
+      >/tmp/br-where.stdout 2>/tmp/br-where.stderr
+  $ br_where_rc=$?; printf 'STDOUT:\n'; cat /tmp/br-where.stdout
+  $ printf 'STDERR:\n'; cat /tmp/br-where.stderr
+  $ printf 'EXIT=%s\n' "$br_where_rc"
+  STDOUT:
+  STDERR:
+  Error: Beads not initialized: run 'br init' first
+  Hint: Run: br init
   EXIT=2
 
-  $ bd --version
+  $ bd --version >/tmp/bd-version.stdout 2>/tmp/bd-version.stderr
+  $ bd_version_rc=$?; printf 'STDOUT:\n'; cat /tmp/bd-version.stdout
+  $ printf 'STDERR:\n'; cat /tmp/bd-version.stderr
+  $ printf 'EXIT=%s\n' "$bd_version_rc"
+  STDOUT:
   bd version 0.44.0 (dev)
+  STDERR:
   EXIT=0
 
-  $ bd where
-  STDOUT: <empty>
-  STDERR: Error: no beads database found
-          Hint: run 'bd init' to create a database in the current directory
-                or use 'bd --no-db' to work with JSONL only (no SQLite)
-                or set BEADS_DIR to point to your .beads directory
+  $ bd where >/tmp/bd-where.stdout 2>/tmp/bd-where.stderr
+  $ bd_where_rc=$?; printf 'STDOUT:\n'; cat /tmp/bd-where.stdout
+  $ printf 'STDERR:\n'; cat /tmp/bd-where.stderr
+  $ printf 'EXIT=%s\n' "$bd_where_rc"
+  STDOUT:
+  STDERR:
+  Error: no beads database found
+  Hint: run 'bd init' to create a database in the current directory
+        or use 'bd --no-db' to work with JSONL only (no SQLite)
+        or set BEADS_DIR to point to your .beads directory
   EXIT=1
   ```
 - The previous `DRIVE.md` described PR #64 after it had already merged. This plan
@@ -186,6 +205,12 @@ refuse unsupported dirty delegated paths and use a disposable worktree. B1 stays
 blocked until this bead records the answer; the bead never treats silence as
 approval.
 
+B0 may close only if the human accepts the planned fail-closed refusal boundary.
+If the human chooses full dirty in-scope preservation, leave B0 open, return the
+drive to SHAPE, specify and review that larger preservation mechanism, then amend
+the graph with a reviewed design bead that blocks B1. The choice never makes B1
+ready against the current plan.
+
 ### B1. Delegated-edit isolation mechanism — issues #41, #43, #34, #65
 
 **Priority:** P0. **Effort:** large design/build. **Depends on:** B0.
@@ -299,9 +324,19 @@ bounding. Remove stale local guidance without waiting for the larger controller.
 
 **Priority:** P1. **Effort:** large design. **Depends on:** C1.
 
-Choose an enforced boundary—OS sandbox or disposable review copy/worktree—and
-implement it through the single runner from C1. Prompt text and
-`--disallowedTools` while granting Bash do not satisfy this issue.
+Use a portable no-shell reviewer boundary through the single runner from C1:
+
+1. remove `Bash` from `--allowedTools` and include it in
+   `--disallowedTools`;
+2. have the orchestrator write the tracked diff to a private 0700 temporary
+   directory outside the worktree before launch;
+3. give the reviewer the diff path and retain `Read,Glob,Grep` so it can inspect
+   surrounding files and relevant untracked source without shell access; and
+4. if a supported Claude CLI cannot enforce the denied Bash tool, mark that
+   reviewer unavailable/degraded—never silently regrant Bash.
+
+This is the Linux/macOS boundary; do not add `bwrap` or `sandbox-exec`.
+Prompt text while granting Bash does not satisfy this issue.
 
 ## Workstream D — installer and upgrade correctness
 
@@ -406,9 +441,18 @@ repository's branch workflow. The child must own its lifecycle and quiescent
 boundary. Do not implement #30's log-tail sidecar.
 
 The coordinating skills agent verifies the upstream PR URL, merge SHA, and all
-three gate exit codes, records them in the skills F2 bead with `br update`, then
-closes and explicitly flushes that bead in `/home/master/p/skills`. There is no
-Beads mutation in the rb-lite checkout.
+three gate exit codes. It then records and closes F2 only through a reviewed
+skills-repository path:
+
+- carry the evidence plus `br update F2 -s closed` and the explicit
+  `br sync --flush-only` into the next `executor-skills` branch after first
+  confirming the JSONL is clean against `HEAD`; or
+- if no next skills branch exists, create a dedicated metadata branch from
+  current `master`, make only the evidence/closure JSONL change, run the skills
+  gate and panel, and merge that PR.
+
+Do not mutate the skills Beads store from the rb-lite checkout, on an active
+unrelated skills branch, or directly on skills `master`.
 
 Publishing the required upstream release is a separate human-authority
 checkpoint recorded in `DRIVE.md`; local controller BUILD remains blocked until
@@ -552,7 +596,6 @@ The drive is complete only when:
 ## Known unknowns
 
 - Bash 4.0–4.3 availability for #61's live compatibility gate.
-- The portable isolation boundary for #59.
 - The exact upstream rb-lite checkpoint API and release for #48.
 - Whether #66 requires content digests after stable-ID reproduction.
 - The human B1 decision between refusal and dirty in-scope preservation.
