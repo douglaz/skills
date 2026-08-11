@@ -25,8 +25,32 @@ Turn the current flat issue list into a sequenced, testable delivery program tha
 - Open pull requests: none at plan creation.
 - The open issues have no labels, assignees, or milestones. Priorities in this
   plan are inferred from failure impact and evidence in the issue bodies.
-- Beads is not initialized: there is no `.beads` directory, database, or JSONL;
-  both `br where` and `bd where` fail with not-initialized errors.
+- Beads is not initialized: there is no `.beads` directory, database, or JSONL.
+  This was measured on 2026-08-11 with stdout and stderr captured separately:
+
+  ```text
+  $ br --version
+  br 0.2.19
+  EXIT=0
+
+  $ br --no-auto-flush --no-auto-import where
+  STDOUT: <empty>
+  STDERR: Error: Beads not initialized: run 'br init' first
+          Hint: Run: br init
+  EXIT=2
+
+  $ bd --version
+  bd version 0.44.0 (dev)
+  EXIT=0
+
+  $ bd where
+  STDOUT: <empty>
+  STDERR: Error: no beads database found
+          Hint: run 'bd init' to create a database in the current directory
+                or use 'bd --no-db' to work with JSONL only (no SQLite)
+                or set BEADS_DIR to point to your .beads directory
+  EXIT=1
+  ```
 - The previous `DRIVE.md` described PR #64 after it had already merged. This plan
   replaces that stale record rather than continuing its HARDEN phase.
 - Exact issue scope:
@@ -128,28 +152,37 @@ insufficient.
 
 ### A3. Remaining merge-evidence findings — issue #65
 
-**Priority:** P1. **Effort:** small beads, not one PR. **Depends on:** A1.
+**Effort:** three small beads, not one PR. **Depends on:** A1.
 
-Separate beads must:
+Create:
 
-- preserve the first degraded exit-4 response across re-entry;
-- create post-merge evidence through a unique private file with checked writes;
-  and
-- exclude closure PRs from the work-PR resume query.
+- **A3a, P1:** preserve the first degraded exit-4 response across re-entry;
+- **A3b, P1:** create post-merge evidence through a unique private file with
+  checked writes; and
+- **A3c, P1:** exclude closure PRs from the work-PR resume query.
 
 ### A4. Bounded plan-format follow-ups — issue #65
 
-**Priority:** P3. **Effort:** extra small, separate from admission logic.
+**Effort:** two extra-small beads, separate from admission logic.
 
-- Clarify Drive's project-status/resume routing exception without changing its
-  trigger-evaluation outcomes.
-- Convert the moved backlog examples to fenced Markdown.
+- **A4a, P3:** clarify Drive's project-status/resume routing exception without
+  changing its trigger-evaluation outcomes.
+- **A4b, P3:** convert the moved backlog examples to fenced Markdown.
 
 ## Workstream B — delegated-edit state integrity
 
+### B0. Dirty-state preservation decision — issues #41, #43, #34, #65
+
+**Priority:** P0. **Effort:** human decision record.
+
+Record the human choice from `DRIVE.md` as a Beads decision bead. Recommendation:
+refuse unsupported dirty delegated paths and use a disposable worktree. B1 stays
+blocked until this bead records the answer; the bead never treats silence as
+approval.
+
 ### B1. Delegated-edit isolation mechanism — issues #41, #43, #34, #65
 
-**Priority:** P0. **Effort:** large design/build.
+**Priority:** P0. **Effort:** large design/build. **Depends on:** B0.
 
 **Likely files**
 
@@ -176,6 +209,11 @@ Prefer a disposable clean worktree or copy:
 Use separate reads for the no-renames restore list and the rename-aware refusal
 decision. Do not revive #34's retracted PGID-reuse sentinel.
 
+Before BUILD, stop for the human design decision recorded in `DRIVE.md`.
+Recommendation: refuse unsupported dirty delegated paths and use the disposable
+worktree path. Full dirty in-scope preservation is a separate, larger mechanism
+and must not be inferred from this plan.
+
 **Required fixtures**
 
 - non-ASCII and newline-containing pathnames;
@@ -189,19 +227,22 @@ decision. Do not revive #34's retracted PGID-reuse sentinel.
 
 ### B2. Remaining #34 safety children
 
-Split from B1:
+Split from B1 with one priority per child:
 
-- unsafe red evidence must report INCOMPLETE/BLOCKED rather than land;
-- file-level inversion must not destroy colocated tests;
-- panel shutdown/escape behavior needs a tested owner;
-- `grep ... || true` must not convert execution errors to success; and
-- post-flush comparison must use saved pre-flush bytes, not `HEAD`.
+- **B2a, P1:** unsafe red evidence must report INCOMPLETE/BLOCKED rather
+  than land.
+- **B2b, P1:** file-level inversion must not destroy colocated tests.
+- **B2c, P2:** panel shutdown/escape behavior must use C1's tested owner.
+- **B2d, P2:** `grep ... || true` must not convert execution errors to
+  success; use G1's verification owner.
+- **B2e, P1:** post-flush comparison must use saved pre-flush bytes, not
+  `HEAD`.
 
 ## Workstream C — reviewer runner reliability and isolation
 
 ### C1. Bounded panel correctness — issues #53–#58 and #60
 
-**Priority:** P1/P2. **Effort:** medium as one shared mechanism.
+**Priority:** P1. **Effort:** medium as one shared mechanism.
 
 **Likely files**
 
@@ -209,7 +250,27 @@ Split from B1:
 - `skills/second-model-bead-audit/references/reviewer-panel.md`
 - `skills/orchestrating-with-rb-lite/references/harden-until-clean.md`
 - `skills/pr-with-codex-bot-review/SKILL.md`
-- a tested shared runner/helper if review identifies a stable owner
+- new required owner:
+  `skills/multi-reviewer-loop/scripts/claude-reviewer-runner`
+- required tests:
+  `skills/multi-reviewer-loop/scripts/claude-reviewer-runner.test`
+
+**Required owner/API**
+
+The runner is a mandatory deliverable, not an optional refactor. It provides:
+
+```text
+claude-reviewer-runner probe --models <comma-list>
+claude-reviewer-runner run --model <name> --prompt-file <path> \
+  --timeout-seconds <n> --result-file <private-path>
+```
+
+`probe` prints exactly one selected model and exits 0, exits 3 when no candidate
+answers, and uses a distinct non-3 failure for missing dependencies or malformed
+probe output. `run` requires a non-empty model, bounds the child, writes only the
+caller-provided private result path, and propagates a categorized status.
+Callers retain both requested and effective panel state and use the runner for
+launch, wait, and unwrap. The runner must not edit the reviewed worktree.
 
 **Order**
 
@@ -253,7 +314,7 @@ the same implementation, not a second patch.
 
 ### D2. Re-exec provenance — issue #62 and #65 marker diagnostic
 
-**Priority:** P1/P2. **Effort:** medium. **Depends on:** D1 test harness.
+**Priority:** P1. **Effort:** medium. **Depends on:** D1 test harness.
 
 Continue re-exec for piped installs and a pulled installer at the same canonical
 install path. A readable installer from another checkout must continue executing
@@ -289,17 +350,21 @@ drain, and orchestration guidance.
 
 ### E2. Generated agent protocol conflict — issue #33
 
-**Priority:** P1/P2. **Effort:** medium after split.
+**Effort:** split into bounded children.
 
-Separate:
+Create:
 
-- semantic review or omission of a generated `br agents` session protocol that
-  contradicts branch/review gates;
-- noninteractive prompt behavior;
-- exit-143 and parallel-panel diagnostic corrections; and
-- the skeptic-convergence observation, which belongs with F1 fact ownership.
+- **E2a, P1:** semantic review or omission of a generated `br agents` session
+  protocol that contradicts branch/review gates.
+- **E2b, P2:** noninteractive prompt behavior.
+- **E2c, P2:** exit-143 and parallel-panel diagnostic corrections.
+
+The skeptic-convergence observation is not a fourth E2 bead; F1 owns it together
+with #47's fact-ownership policy.
 
 ### E3. Exact closure command — issue #65
+
+**Priority:** P2. **Effort:** extra small.
 
 Align harden-until-clean with the canonical fail-closed closure command and
 explicit flush behavior.
@@ -317,13 +382,23 @@ delta-only review or defer all P3 findings as the remedy for duplicated facts.
 
 **Priority:** P1. **Effort:** large/external dependency.
 
-Open and land the minimal rb-lite checkpoint hook and release it. The child must
-own its lifecycle and quiescent boundary. Do not implement #30's log-tail
-sidecar.
+Open and land the minimal rb-lite checkpoint hook. The child must own its
+lifecycle and quiescent boundary. Do not implement #30's log-tail sidecar.
+Publishing the required upstream release is a separate human-authority
+checkpoint recorded in `DRIVE.md`; local controller BUILD remains blocked until
+that release exists.
+
+### F2r. Publish the upstream checkpoint release — issue #48
+
+**Priority:** P1. **Effort:** human-authority gate. **Depends on:** F2.
+
+Record explicit human authorization, publish the release, and record its
+immutable version/reference. This bead must not start or close merely because F2
+merged.
 
 ### F3. Foreground Drive controller — issues #48, #30, #31, #35
 
-**Priority:** P1. **Effort:** extra large. **Depends on:** C1 and F2.
+**Priority:** P1. **Effort:** extra large. **Depends on:** C1 and F2r.
 
 Implement:
 
@@ -356,7 +431,7 @@ This is post-commit evidence and is not B1's delegated-edit isolation mechanism.
 
 ### G2. Executable-document harness — issue #49
 
-**Priority:** P2. **Effort:** large. **Depends on:** G1 where reusable.
+**Priority:** P2. **Effort:** large. **Depends on:** G1.
 
 Extract and run executable examples in a disposable environment, and
 experimentally validate the harness's own claims.
@@ -368,24 +443,52 @@ experimentally validate the harness's own claims.
 Reassess whether the 183-word behavioral-claims rule can shrink once mechanisms
 own its detail. Leaving it intact is an acceptable evidence-based disposition.
 
-## Dependency and parallelism summary
+## Complete execution-bead table
 
-First ready lanes after graph approval:
+The GRAPH transfer creates exactly one execution bead per row. This table is the
+authoritative priority and dependency source; prose above supplies the body.
 
-1. A1 (#42 bot-gate tip scope).
-2. D1 (#61/#38 installer compatibility).
-3. E1 (#44/#65 JSONL path ownership).
-4. B1 design and fixture specification, without parallel edits to its files.
-5. F2 upstream checkpoint design may proceed while local lanes build.
+| Bead | Priority | GitHub | Depends on | Deliverable |
+|---|---:|---|---|---|
+| A1 | P0 | #42 | — | Tip-scope bot review objects |
+| A2 | P1 | #66 | A1 | Traceable per-thread disposition |
+| A3a | P1 | #65 | A1 | Preserve first degraded exit-4 evidence |
+| A3b | P1 | #65 | A1 | Private unique post-merge evidence |
+| A3c | P1 | #65 | A1 | Exclude closure PRs from work-PR resume |
+| A4a | P3 | #65 | — | Drive routing wording and trigger fixture |
+| A4b | P3 | #65 | — | Fence moved backlog examples |
+| B0 | P0 | #41, #43, #34, #65 | — | Record the human dirty-state decision |
+| B1 | P0 | #41, #43, #34, #65 | B0 | Delegated-edit isolation |
+| B2a | P1 | #34 | — | Unsafe red evidence blocks completion |
+| B2b | P1 | #34 | — | Preserve colocated tests during inversion |
+| B2c | P2 | #34 | C1 | Tested panel shutdown/escape |
+| B2d | P2 | #34 | G1 | Do not mask verification execution errors |
+| B2e | P1 | #34 | — | Compare flush against saved bytes |
+| C1 | P1 | #53–#58, #60 | — | Shared bounded Claude reviewer runner |
+| C2 | P1 | #51 | C1 | Bound rb-lite reviewer model |
+| C3 | P1 | #59 | C1 | Enforced reviewer isolation |
+| D1 | P2 | #61, #38, #65 | — | Old-Bash argv and empty discovery |
+| D2 | P1 | #62, #65 | D1 | Re-exec provenance and marker diagnostic |
+| D3 | P2 | #63 | D1 | YAML-equivalent companion names |
+| E1 | P1 | #44, #65 | — | Fail-closed JSONL path ownership |
+| E2a | P1 | #33 | — | Resolve generated protocol conflict |
+| E2b | P2 | #33 | E2a | Noninteractive generated behavior |
+| E2c | P2 | #33 | E2a | Correct panel diagnostics |
+| E3 | P2 | #65 | E1 | Exact fail-closed closure command |
+| F1 | P2 | #47, #33 | — | Deduplication and fact ownership |
+| F2 | P1 | #48 | — | Upstream synchronous checkpoint seam |
+| F2r | P1 | #48 | F2 | Human-authorized release publication |
+| F3 | P1 | #48, #30, #31, #35 | C1, F2r | Foreground Drive controller |
+| G1 | P2 | #32, #34 | — | Read-only commit verifier |
+| G2 | P2 | #49 | G1 | Executable-document harness |
+| G3 | P3 | #50 | G1, G2 | Managed-block length decision |
 
 Constraints:
 
-- A2 follows A1.
-- C3 follows C1.
-- F3 follows C1 and F2.
-- D2 follows D1's compatibility harness.
-- G2 follows G1 when it reuses verification primitives.
 - Only one owner edits the delegated-edit or panel-runner file set at a time.
+- B0 and F2r are explicit decision/authority beads. They remain blocked for
+  human input even when their graph prerequisites are satisfied.
+- The upstream F2 implementation/PR may proceed before F2r authorization.
 
 ## Beads graph to create
 
@@ -393,10 +496,10 @@ After review, transfer this plan into:
 
 - one epic covering the exact 29-issue scope;
 - seven workstream parent beads A–G;
-- one child bead per numbered deliverable above;
-- explicit dependency edges from the summary;
+- one execution child per row in the complete execution-bead table;
+- every dependency edge in that table;
 - GitHub URLs and named gate commands in every child; and
-- P0/P1 priorities before P2/P3 maintenance.
+- the exact priority in the table.
 
 The first scoped `br ready` result must contain A1. D1 and E1 may also be ready.
 B1 begins with a design/fixture bead rather than direct prose edits. F2 must
@@ -419,5 +522,5 @@ The drive is complete only when:
 - The portable isolation boundary for #59.
 - The exact upstream rb-lite checkpoint API and release for #48.
 - Whether #66 requires content digests after stable-ID reproduction.
-- Whether B1 can safely support dirty in-scope delegation; refusal is preferred
-  until fixtures prove preservation.
+- The human B1 decision between refusal and dirty in-scope preservation.
+- Human authorization to publish the F2 upstream release.

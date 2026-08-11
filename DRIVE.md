@@ -32,4 +32,9 @@ audit → start A1, GitHub issue #42, through rb-lite.
 
 ## Open questions for the human
 
-None.
+- Before B1 BUILD: choose between refusing unsupported dirty delegated paths
+  (recommended: disposable worktree plus fail-closed refusal) and supporting
+  dirty in-scope preservation through the larger snapshot mechanism. This is a
+  user-state/data-loss design checkpoint.
+- Before F2 release: authorize publishing the required upstream rb-lite release.
+  Opening and reviewing its branch/PR may proceed; publishing the release may not.

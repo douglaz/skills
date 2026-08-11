@@ -101,4 +101,6 @@ second untested while looking verified. If the test drives anything live — a r
 database, a running service, real money — do the red run in a disposable environment
 or not at all: a deliberately broken build can perform the harmful operation before
 any assertion notices.
+
+Gate for this repo: `./install.test && ./skills/pr-with-codex-bot-review/scripts/bot-gate.test && ./skills/drive/scripts/drive-status.test`
 <!-- end-agent-discipline -->
