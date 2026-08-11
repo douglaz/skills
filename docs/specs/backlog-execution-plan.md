@@ -21,10 +21,38 @@ Turn the current flat issue list into a sequenced, testable delivery program tha
 ## Current facts
 
 - Repository: `douglaz/skills`, default branch `master`.
-- Open GitHub issues: 29.
-- Open pull requests: none at plan creation.
-- The open issues have no labels, assignees, or milestones. Priorities in this
-  plan are inferred from failure impact and evidence in the issue bodies.
+- Open GitHub issues: 29; open pull requests: none; no open issue has a label,
+  assignee, or milestone. Priorities in this plan are inferred from failure
+  impact and evidence in the issue bodies. Measured on 2026-08-11:
+
+  ```text
+  $ gh --version >/tmp/gh-version.stdout 2>/tmp/gh-version.stderr
+  $ gh_version_rc=$?; cat /tmp/gh-version.stdout
+  gh version 2.97.0 (nixpkgs)
+  https://github.com/cli/cli/releases/tag/v2.97.0
+  $ cat /tmp/gh-version.stderr; printf 'EXIT=%s\n' "$gh_version_rc"
+  EXIT=0
+
+  $ gh issue list --state open --limit 200 \
+      --json number,labels,assignees,milestone \
+      --jq '{count:length,numbers:(map(.number)|sort),
+             with_labels:(map(select(.labels|length>0))|length),
+             with_assignees:(map(select(.assignees|length>0))|length),
+             with_milestones:(map(select(.milestone != null))|length)}' \
+      >/tmp/gh-issues.stdout 2>/tmp/gh-issues.stderr
+  $ gh_issues_rc=$?; cat /tmp/gh-issues.stdout
+  {"count":29,"numbers":[30,31,32,33,34,35,38,41,42,43,44,47,48,49,50,51,53,54,55,56,57,58,59,60,61,62,63,65,66],"with_assignees":0,"with_labels":0,"with_milestones":0}
+  $ cat /tmp/gh-issues.stderr; printf 'EXIT=%s\n' "$gh_issues_rc"
+  EXIT=0
+
+  $ gh pr list --state open --limit 200 --json number \
+      --jq '{count:length,numbers:(map(.number)|sort)}' \
+      >/tmp/gh-prs.stdout 2>/tmp/gh-prs.stderr
+  $ gh_prs_rc=$?; cat /tmp/gh-prs.stdout
+  {"count":0,"numbers":[]}
+  $ cat /tmp/gh-prs.stderr; printf 'EXIT=%s\n' "$gh_prs_rc"
+  EXIT=0
+  ```
 - Beads is not initialized: there is no `.beads` directory, database, or JSONL.
   This was measured on 2026-08-11 with stdout and stderr captured separately:
 
@@ -107,6 +135,40 @@ execution state and dependencies.
   rejected with evidence.
 - Never hand-edit the exported JSONL. Use `br` and require an explicit
   `br sync --flush-only`.
+
+The flat graph and separate executor queries are pinned by this disposable-repo
+probe on `br 0.2.19`; every shown command exited 0:
+
+```text
+$ T=$(mktemp -d); git -C "$T" init -q; cd "$T"; br init --prefix zz
+$ parent=$(br create --silent -t epic -p P3 \
+    -l drive-open-issues,executor-skills 'tracking parent')
+$ child=$(br create --silent -t task -p P1 \
+    -l drive-open-issues,executor-skills --parent "$parent" 'child work')
+$ both=$(br create --silent -t task -p P2 \
+    -l drive-open-issues,executor-skills 'both labels')
+$ one=$(br create --silent -t task -p P2 \
+    -l drive-open-issues 'one label')
+
+$ ready_before=$(br ready --json --limit 0)
+$ jq -c 'map(.title) | sort' <<<"$ready_before"
+["both labels","child work","one label"]
+
+$ ready_and=$(br ready --json --limit 0 \
+    -l drive-open-issues -l executor-skills)
+$ jq -c 'map(.title) | sort' <<<"$ready_and"
+["both labels","child work"]
+
+$ br close "$child"; br sync --flush-only
+$ ready_after=$(br ready --json --limit 0)
+$ jq -c 'map(.title) | sort' <<<"$ready_after"
+["both labels","one label","tracking parent"]
+```
+
+The second query shows repeated label filters are ANDed. The final query shows
+that a tracking parent becomes ready after its last child closes. Both behaviors
+are load-bearing: the scheduler must query executor lanes separately, and the
+graph must not contain non-executable parents.
 
 ## Priority definitions
 
@@ -201,19 +263,29 @@ Create:
 **Priority:** P0. **Effort:** human decision record.
 
 Record the human choice from `DRIVE.md` as a Beads decision bead. Recommendation:
-refuse unsupported dirty delegated paths and use a disposable worktree. B1 stays
-blocked until this bead records the answer; the bead never treats silence as
-approval.
+refuse unsupported dirty delegated paths and use a disposable worktree. B1d
+stays blocked until this bead records the answer; the bead never treats silence
+as approval.
 
 B0 may close only if the human accepts the planned fail-closed refusal boundary.
 If the human chooses full dirty in-scope preservation, leave B0 open, return the
 drive to SHAPE, specify and review that larger preservation mechanism, then amend
-the graph with a reviewed design bead that blocks B1. The choice never makes B1
-ready against the current plan.
+the scope of B1d and re-audit the graph. The choice never makes B1d or B1 ready
+against the current plan.
+
+### B1d. Delegated-edit isolation design and fixtures — issues #41, #43, #34, #65
+
+**Priority:** P0. **Effort:** medium design. **Depends on:** B0.
+
+Write `docs/specs/delegated-edit-isolation.md` with the exact helper API, path
+state matrix, refusal contract, patch/apply transaction, file/LOC budget, and one
+named red fixture per state class below. Review that design with pinned Codex
+xhigh until it has no P0/P1. Do not edit production skill prose or implement the
+helper in B1d.
 
 ### B1. Delegated-edit isolation mechanism — issues #41, #43, #34, #65
 
-**Priority:** P0. **Effort:** large design/build. **Depends on:** B0.
+**Priority:** P0. **Effort:** large build. **Depends on:** B1d.
 
 **Likely files**
 
@@ -468,9 +540,14 @@ skills-repository path:
 - carry the evidence update, `br close <F2-bead-id>`, and the explicit
   `br sync --flush-only` into the next `executor-skills` branch after first
   confirming the JSONL is clean against `HEAD`; or
-- if no next skills branch exists, create a dedicated metadata branch from
-  current `master`, make only the evidence/closure JSONL change, run the skills
-  gate and panel, and merge that PR.
+- if no next skills branch is immediately available, run the canonical metadata
+  closure transaction: create `metadata/close-f2-checkpoint` from current
+  `master`; make the evidence/closure JSONL change plus the `DRIVE.md`
+  Done/Now/Next update; push and open a PR whose body contains
+  `bead-closure: <F2-bead-id>`; once GitHub assigns `N`, amend `DRIVE.md` to
+  `Pending: metadata PR douglaz/skills#N`; rerun the skills gate and panel on the
+  amended tree; force-push with lease; and merge that PR. Do not record DONE
+  while other scoped rows remain.
 
 Do not mutate the skills Beads store from the rb-lite checkout, on an active
 unrelated skills branch, or directly on skills `master`.
@@ -557,7 +634,8 @@ the body. Every row gets label `drive-open-issues`; B0 and F2r get
 | A4a | P3 | #65 | — | Drive routing wording and trigger fixture |
 | A4b | P3 | #65 | — | Fence moved backlog examples |
 | B0 | P0 | #41, #43, #34, #65 | — | Record the human dirty-state decision |
-| B1 | P0 | #41, #43, #34, #65 | B0 | Delegated-edit isolation |
+| B1d | P0 | #41, #43, #34, #65 | B0 | Delegated-edit design and fixture contract |
+| B1 | P0 | #41, #43, #34, #65 | B1d | Delegated-edit isolation implementation |
 | B2a | P1 | #34 | — | Unsafe red evidence blocks completion |
 | B2b | P1 | #34 | — | Preserve colocated tests during inversion |
 | B2c | P2 | #34 | C1 | Tested panel shutdown/escape |
@@ -608,12 +686,14 @@ After review, transfer this plan into:
 - exactly one flat execution/decision bead per row in the complete
   execution-bead table, with no tracking parent or epic;
 - every dependency edge in that table;
-- GitHub URLs and named gate commands in every child; and
+- GitHub URLs and named gate commands in every executor bead;
+- the decision/publication evidence named for B0 and F2r instead of an
+  implementation gate; and
 - the exact priority and executor labels in the table.
 
 The first scoped `br ready` result must contain A1. D1 and E1 may also be ready.
-B1 begins with a design/fixture bead rather than direct prose edits. F2 must
-record its upstream issue/PR URL before it can become in progress.
+B1d must close before B1 can enter BUILD. F2 must record its upstream issue/PR
+URL before it can become in progress.
 
 ## Completion
 
