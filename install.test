@@ -507,5 +507,51 @@ LINKS
 if [[ -n "$link_failures" ]]; then fail "$t" "$link_failures"
 else pass "$t"; fi
 
+t="discipline gate wrapper returns an early && failure"
+discipline_block=${DISCIPLINE_BLOCK:-"$HERE/skills/agents-md/references/discipline-block.md"}
+gate_script="$WORK/discipline-gate.sh"
+gate_stdout="$WORK/discipline-gate.stdout"
+gate_stderr="$WORK/discipline-gate.stderr"
+capture_gate=false
+found_gate_start=false
+found_gate_command=false
+{
+  printf '%s\n' '#!/usr/bin/env bash'
+  while IFS= read -r line; do
+    if [[ $line == '_gate_log=$(mktemp)'* ]]; then
+      capture_gate=true
+      found_gate_start=true
+    elif $capture_gate && [[ $line == '```' ]]; then
+      break
+    fi
+    if $capture_gate; then
+      if [[ $line == '{ <gate>; } >"$_gate_log" 2>&1 || _gate_rc=$?' ]]; then
+        printf '%s\n' "{ printf 'first\\n' && false && printf 'should-not-run\\n'; } >\"\$_gate_log\" 2>&1 || _gate_rc=\$?"
+        found_gate_command=true
+      else
+        printf '%s\n' "$line"
+      fi
+    fi
+  done < "$discipline_block"
+} > "$gate_script"
+if ! $found_gate_start || ! $found_gate_command; then
+  fail "$t" "could not extract the canonical gate wrapper"
+else
+  bash "$gate_script" >"$gate_stdout" 2>"$gate_stderr"; rc=$?
+  gate_output=$(< "$gate_stdout")
+  gate_error=$(< "$gate_stderr")
+  if [[ $rc -ne 1 ]]; then
+    fail "$t" "failed gate wrapper exited $rc"
+  elif [[ $gate_output != $'first\nEXIT=1' ]]; then
+    fail "$t" "unexpected stdout: $gate_output"
+  elif [[ -n "$gate_error" ]]; then
+    fail "$t" "unexpected stderr: $gate_error"
+  elif [[ $gate_output == *should-not-run* ]]; then
+    fail "$t" "gate continued past the failed && command"
+  else
+    pass "$t"
+  fi
+fi
+
 printf '\npassed %d, failed %d\n' "$PASS" "$FAIL"
 [[ $FAIL -eq 0 ]]

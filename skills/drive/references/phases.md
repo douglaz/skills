@@ -200,7 +200,13 @@ Two non-negotiables:
 
 1. **Run it yourself**, unpiped:
    ```bash
-   <gate-cmd> > /tmp/gate.log 2>&1; echo "EXIT=$?"
+   _gate_log=$(mktemp) || { echo "cannot create gate log"; exit 1; }
+   trap 'rm -f "$_gate_log"' EXIT
+   _gate_rc=0
+   { <gate-cmd>; } >"$_gate_log" 2>&1 || _gate_rc=$?
+   cat "$_gate_log" || { echo "cannot read gate log"; exit 1; }
+   printf 'EXIT=%s\n' "$_gate_rc" || exit 1
+   test "$_gate_rc" -eq 0
    ```
 2. **Make it fail first — once per property, on the right assertion.** Point the new test
    at the unfixed code and watch it go red. A test that could never have failed proves

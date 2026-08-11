@@ -81,13 +81,22 @@ grep for the result afterwards.
 
 **Never pipe a gate through `tail`, `head`, or `grep`.** A pipeline's exit status
 is the last command's, and `tail` always succeeds, so a failing build reports
-exit 0. Redirect and capture the real code:
+exit 0. Group the entire gate, use a fresh log, save the real status, and return
+that status after reading the log:
 
-```
-<gate> > /tmp/gate.log 2>&1; echo "EXIT=$?"
+```bash
+_gate_log=$(mktemp) || { echo "cannot create gate log"; exit 1; }
+trap 'rm -f "$_gate_log"' EXIT
+_gate_rc=0
+{ <gate>; } >"$_gate_log" 2>&1 || _gate_rc=$?
+cat "$_gate_log" || { echo "cannot read gate log"; exit 1; }
+printf 'EXIT=%s\n' "$_gate_rc" || exit 1
+test "$_gate_rc" -eq 0
 ```
 
-Then read the log. Note the `;` — not `|`.
+The braces make one redirection cover an `&&` gate instead of only its final
+command. The saved status and final `test` keep a diagnostic `cat` or `printf`
+from turning a failed gate into success.
 
 **"Passing", "clean", "working", "verified", and "done" require a command and an
 exit code.** If you cannot show one, say what you actually observed instead. This

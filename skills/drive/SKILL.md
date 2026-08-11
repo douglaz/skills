@@ -213,10 +213,17 @@ A phase closes on evidence or it does not close.
   stage's, so a red gate reports 0. (See `references/autonomy-contract.md` § 2.)
 
   ```bash
-  <gate-cmd> > /tmp/gate.log 2>&1; echo "EXIT=$?"
+  _gate_log=$(mktemp) || { echo "cannot create gate log"; exit 1; }
+  trap 'rm -f "$_gate_log"' EXIT
+  _gate_rc=0
+  { <gate-cmd>; } >"$_gate_log" 2>&1 || _gate_rc=$?
+  cat "$_gate_log" || { echo "cannot read gate log"; exit 1; }
+  printf 'EXIT=%s\n' "$_gate_rc" || exit 1
+  test "$_gate_rc" -eq 0
   ```
 
-  Then read the log. Quote the command and the exit code in your report.
+  Group the whole gate so an `&&` list shares the redirection; return the saved
+  status after reading the fresh log. Quote the command and exit code in your report.
 - For a test you just wrote: make it **fail first** against the unfixed code, then pass. A
   green test that never could have gone red proves nothing.
 - Words that need a number or an exit code behind them: "passing", "working", "clean",
