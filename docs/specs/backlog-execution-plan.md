@@ -568,7 +568,18 @@ Beads JSONL. Require:
 
 ```bash
 _bw=$(br where --json) || exit
-BEADS_JSONL=$(printf '%s' "$_bw" | jq -er .jsonl_path) || exit
+BEADS_JSONL=$(
+  printf '%s' "$_bw" |
+    jq -ers '
+      if length == 1 and
+         ((.[0] | type) == "object") and
+         ((.[0].jsonl_path | type) == "string") and
+         ((.[0].jsonl_path | length) > 0)
+      then .[0].jsonl_path
+      else error("expected exactly one non-empty string jsonl_path")
+      end
+    '
+) || exit
 ```
 
 or one tested fact owner with equivalent fail-closed behavior.
@@ -618,37 +629,23 @@ That agent must read `/home/master/p/rb-lite/AGENTS.md`, create
 `feat/drive-checkpoint-hook` from current `origin/main`, and use
 `orchestrating-with-rb-lite` in that checkout for the Codex-heavy implementation.
 Run all three upstream gates even when an earlier one fails, capture each real
-status separately, and require all three to be zero:
+status separately, and require all three to be zero. Put the following
+self-contained body between the delimiter lines of the exact canonical gate
+wrapper in the skills repository's managed `AGENTS.md`; do not introduce a
+second trap, temporary-log owner, or cancellation lifecycle:
 
 ```bash
-(
-  f2_gate_dir=$(mktemp -d) || exit 1
-  chmod 700 "$f2_gate_dir" || { rm -rf "$f2_gate_dir"; exit 1; }
-  f2_gate_cleanup() {
-    f2_cleanup_rc=$?
-    if ! rm -rf "$f2_gate_dir"; then
-      echo "cannot remove F2 gate logs" >&2
-      [ "$f2_cleanup_rc" -ne 0 ] || f2_cleanup_rc=1
-    fi
-    trap - EXIT
-    exit "$f2_cleanup_rc"
-  }
-  trap f2_gate_cleanup EXIT
-  just_test_rc=0
-  nix_build_rc=0
-  flake_check_rc=0
-  just test >"$f2_gate_dir/just-test.log" 2>&1 || just_test_rc=$?
-  nix build >"$f2_gate_dir/nix-build.log" 2>&1 || nix_build_rc=$?
-  nix flake check >"$f2_gate_dir/flake-check.log" 2>&1 || flake_check_rc=$?
-  cat "$f2_gate_dir/just-test.log" || exit 1
-  cat "$f2_gate_dir/nix-build.log" || exit 1
-  cat "$f2_gate_dir/flake-check.log" || exit 1
-  printf 'just_test=%s nix_build=%s flake_check=%s\n' \
-    "$just_test_rc" "$nix_build_rc" "$flake_check_rc"
-  test "$just_test_rc" -eq 0 &&
-    test "$nix_build_rc" -eq 0 &&
-    test "$flake_check_rc" -eq 0
-)
+just_test_rc=0
+nix_build_rc=0
+flake_check_rc=0
+if just test; then :; else just_test_rc=$?; fi
+if nix build; then :; else nix_build_rc=$?; fi
+if nix flake check; then :; else flake_check_rc=$?; fi
+printf 'just_test=%s nix_build=%s flake_check=%s\n' \
+  "$just_test_rc" "$nix_build_rc" "$flake_check_rc"
+test "$just_test_rc" -eq 0 &&
+  test "$nix_build_rc" -eq 0 &&
+  test "$flake_check_rc" -eq 0
 ```
 
 Open and land the minimal rb-lite checkpoint-hook PR through the upstream
