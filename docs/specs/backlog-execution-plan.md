@@ -137,32 +137,58 @@ execution state and dependencies.
   `br sync --flush-only`.
 
 The flat graph and separate executor queries are pinned by this disposable-repo
-probe on `br 0.2.19`; every shown command exited 0:
+probe on `br 0.2.19`. Each `br` command captured stdout and stderr separately:
 
 ```text
-$ T=$(mktemp -d); git -C "$T" init -q; cd "$T"; br init --prefix zz
-$ parent=$(br create --silent -t epic -p P3 \
-    -l drive-open-issues,executor-skills 'tracking parent')
-$ child=$(br create --silent -t task -p P1 \
-    -l drive-open-issues,executor-skills --parent "$parent" 'child work')
-$ both=$(br create --silent -t task -p P2 \
-    -l drive-open-issues,executor-skills 'both labels')
-$ one=$(br create --silent -t task -p P2 \
-    -l drive-open-issues 'one label')
-
-$ ready_before=$(br ready --json --limit 0)
-$ jq -c 'map(.title) | sort' <<<"$ready_before"
+$ T=$(mktemp -d); git -C "$T" init -q; cd "$T"
+$ br init --prefix zz >/tmp/init.out 2>/tmp/init.err; init_rc=$?
+$ br create --silent -t epic -p P3 \
+    -l drive-open-issues,executor-skills 'tracking parent' \
+    >/tmp/parent.out 2>/tmp/parent.err; parent_rc=$?
+$ parent=$(cat /tmp/parent.out)
+$ br create --silent -t task -p P1 \
+    -l drive-open-issues,executor-skills --parent "$parent" 'child work' \
+    >/tmp/child.out 2>/tmp/child.err; child_rc=$?
+$ child=$(cat /tmp/child.out)
+$ br create --silent -t task -p P2 \
+    -l drive-open-issues,executor-skills 'both labels' \
+    >/tmp/both.out 2>/tmp/both.err; both_rc=$?
+$ br create --silent -t task -p P2 -l drive-open-issues 'one label' \
+    >/tmp/one.out 2>/tmp/one.err; one_rc=$?
+$ br ready --json --limit 0 \
+    >/tmp/before.out 2>/tmp/before.err; before_rc=$?
+$ jq -c 'map(.title) | sort' /tmp/before.out
 ["both labels","child work","one label"]
 
-$ ready_and=$(br ready --json --limit 0 \
-    -l drive-open-issues -l executor-skills)
-$ jq -c 'map(.title) | sort' <<<"$ready_and"
+$ br ready --json --limit 0 -l drive-open-issues -l executor-skills \
+    >/tmp/and.out 2>/tmp/and.err; and_rc=$?
+$ jq -c 'map(.title) | sort' /tmp/and.out
 ["both labels","child work"]
 
-$ br close "$child"; br sync --flush-only
-$ ready_after=$(br ready --json --limit 0)
-$ jq -c 'map(.title) | sort' <<<"$ready_after"
+$ br close "$child" >/tmp/close.out 2>/tmp/close.err; close_rc=$?
+$ br sync --flush-only >/tmp/sync.out 2>/tmp/sync.err; sync_rc=$?
+$ br ready --json --limit 0 \
+    >/tmp/after.out 2>/tmp/after.err; after_rc=$?
+$ jq -c 'map(.title) | sort' /tmp/after.out
 ["both labels","one label","tracking parent"]
+
+$ printf 'init=%s parent=%s child=%s both=%s one=%s before=%s and=%s close=%s sync=%s after=%s\n' \
+    "$init_rc" "$parent_rc" "$child_rc" "$both_rc" "$one_rc" \
+    "$before_rc" "$and_rc" "$close_rc" "$sync_rc" "$after_rc"
+init=0 parent=0 child=0 both=0 one=0 before=0 and=0 close=0 sync=0 after=0
+
+$ wc -c /tmp/{init,parent,child,both,one,before,and,close,sync,after}.err
+0 /tmp/init.err
+0 /tmp/parent.err
+0 /tmp/child.err
+0 /tmp/both.err
+0 /tmp/one.err
+0 /tmp/before.err
+0 /tmp/and.err
+0 /tmp/close.err
+0 /tmp/sync.err
+0 /tmp/after.err
+0 total
 ```
 
 The second query shows repeated label filters are ANDed. The final query shows
@@ -549,9 +575,12 @@ Run all three upstream gates even when an earlier one fails, capture each real
 status separately, and require all three to be zero:
 
 ```bash
-just test > /tmp/f2-just-test.log 2>&1; just_test_rc=$?
-nix build > /tmp/f2-nix-build.log 2>&1; nix_build_rc=$?
-nix flake check > /tmp/f2-flake-check.log 2>&1; flake_check_rc=$?
+just_test_rc=0
+nix_build_rc=0
+flake_check_rc=0
+just test > /tmp/f2-just-test.log 2>&1 || just_test_rc=$?
+nix build > /tmp/f2-nix-build.log 2>&1 || nix_build_rc=$?
+nix flake check > /tmp/f2-flake-check.log 2>&1 || flake_check_rc=$?
 printf 'just_test=%s nix_build=%s flake_check=%s\n' \
   "$just_test_rc" "$nix_build_rc" "$flake_check_rc"
 test "$just_test_rc" -eq 0 &&
