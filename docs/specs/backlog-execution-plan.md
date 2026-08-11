@@ -293,7 +293,8 @@ The runner is a mandatory deliverable, not an optional refactor. It provides:
 ```text
 claude-reviewer-runner probe --models <comma-list>
 claude-reviewer-runner run --model <name> --prompt-file <path> \
-  --timeout-seconds <n> --result-file <private-path>
+  --timeout-seconds <n> --result-file <private-path> \
+  --tool-policy <auditor-readonly|panel-legacy-shell|panel-no-shell>
 ```
 
 `probe` prints exactly one selected model and exits 0, exits 3 when no candidate
@@ -301,7 +302,16 @@ answers, and uses a distinct non-3 failure for missing dependencies or malformed
 probe output. `run` requires a non-empty model, bounds the child, writes only the
 caller-provided private result path, and propagates a categorized status.
 Callers retain both requested and effective panel state and use the runner for
-launch, wait, and unwrap. The runner must not edit the reviewed worktree.
+launch, wait, and unwrap. Policies are fixed enums rather than caller-provided
+tool strings:
+
+- `auditor-readonly` preserves the bead auditor's current `Read,Glob,Grep`
+  policy;
+- `panel-legacy-shell` preserves the existing multi-reviewer permissions only
+  until C3 migrates that caller; and
+- `panel-no-shell` is C3's enforced `Read,Glob,Grep` policy with Bash denied.
+
+The runner must not broaden a caller's policy or edit the reviewed worktree.
 
 **Order**
 
@@ -315,10 +325,13 @@ launch, wait, and unwrap. The runner must not edit the reviewed worktree.
 
 ### C2. rb-lite reviewer model bounding — issue #51
 
-**Priority:** P1. **Effort:** small/medium plus possible upstream change.
+**Priority:** P1. **Effort:** small/medium.
 
-Generate a reviewer file using the resolved model or add upstream reviewer
-bounding. Remove stale local guidance without waiting for the larger controller.
+Keep C2 in this repository. Resolve the model before rb-lite starts, generate a
+private reviewers file that uses that exact model and a finite timeout, and pass
+it through rb-lite's existing `--reviewers-file` interface. Do not choose the
+upstream implementation option in #51. Remove stale local hardcoded-model
+guidance without waiting for the larger controller.
 
 ### C3. Enforced reviewer isolation — issue #59
 
@@ -328,11 +341,19 @@ Use a portable no-shell reviewer boundary through the single runner from C1:
 
 1. remove `Bash` from `--allowedTools` and include it in
    `--disallowedTools`;
-2. have the orchestrator write the tracked diff to a private 0700 temporary
+2. have the orchestrator build a review bundle in a private 0700 temporary
    directory outside the worktree before launch;
-3. give the reviewer the diff path and retain `Read,Glob,Grep` so it can inspect
-   surrounding files and relevant untracked source without shell access; and
-4. if a supported Claude CLI cannot enforce the denied Bash tool, mark that
+3. put the tracked diff in the bundle and enumerate untracked files with
+   `git ls-files --others --exclude-standard -z`;
+4. copy each untracked regular file to a numbered bundle path and generate a
+   tested JSON manifest containing its JSON-escaped original path, numbered copy,
+   type, and content digest; use `git hash-object --no-filters` on both the
+   original and copy and require equality; fail closed on a non-regular type or
+   any enumerate/copy/digest/manifest error;
+5. give the reviewer the diff and manifest paths and retain `Read,Glob,Grep` so
+   it can inspect surrounding tracked files and every numbered untracked copy;
+   the prompt must say that both sources form the reviewed change; and
+6. if a supported Claude CLI cannot enforce the denied Bash tool, mark that
    reviewer unavailable/degraded—never silently regrant Bash.
 
 This is the Linux/macOS boundary; do not add `bwrap` or `sandbox-exec`.
