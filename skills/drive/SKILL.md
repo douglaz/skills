@@ -214,16 +214,23 @@ A phase closes on evidence or it does not close.
 
   ```bash
   _gate_log=$(mktemp) || { echo "cannot create gate log"; exit 1; }
-  _gate_rc=0
-  { <gate-cmd>; } >"$_gate_log" 2>&1 || _gate_rc=$?
+  _gate_had_errexit=0
+  case $- in *e*) _gate_had_errexit=1; set +e ;; esac
+  (
+    [ "$_gate_had_errexit" -eq 0 ] || set -e
+    <gate-cmd>
+  ) >"$_gate_log" 2>&1
+  _gate_rc=$?
+  [ "$_gate_had_errexit" -eq 0 ] || set -e
   cat "$_gate_log" || { rm -f "$_gate_log"; echo "cannot read gate log"; exit 1; }
   printf 'EXIT=%s\n' "$_gate_rc" \
     || { rm -f "$_gate_log"; exit 1; }
   rm -f "$_gate_log" || { echo "cannot remove gate log"; exit 1; }
-  test "$_gate_rc" -eq 0
+  ( exit "$_gate_rc" )
   ```
 
-  Group the whole gate so an `&&` list shares the redirection; return the saved
+  Run the whole gate in a subshell so an `&&` list shares the redirection while
+  a gate function keeps its original `errexit` behavior. Return the exact saved
   status after reading and removing the fresh log without replacing an existing
   `EXIT` trap. Quote the command and exit code in your report.
 - For a test you just wrote: make it **fail first** against the unfixed code, then pass. A

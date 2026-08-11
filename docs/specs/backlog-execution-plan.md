@@ -464,19 +464,24 @@ Use a portable no-shell reviewer boundary through the single runner from C1:
    `git ls-files --others --exclude-standard -z`, compare byte-for-byte, and
    refuse the panel before any external launch if an untracked path is outside
    the allowlist or the allowlist names a path that is no longer untracked;
-4. put the tracked diff in the bundle, then copy each allowlisted untracked
-   regular file to a numbered bundle path and generate a
+4. materialize a sanitized snapshot under that directory from `git archive
+   HEAD`, apply the tracked binary diff there, and copy only the allowlisted
+   untracked regular files into both their snapshot paths and numbered bundle
+   paths; do not copy `.git`, ignored files, or any unrelated untracked path;
+5. generate a
    tested JSON manifest containing its JSON-escaped original path, numbered copy,
    type, Git-relevant mode (`100755` when executable, otherwise `100644`), and
    content digest; use `git hash-object --no-filters` on both the original and
    copy and require equality; fail closed on a non-regular type or any
    enumerate/copy/digest/manifest error;
-5. refuse any untracked file larger than 1 MiB or an aggregate untracked bundle
+6. refuse any untracked file larger than 1 MiB or an aggregate untracked bundle
    larger than 8 MiB before the external launch;
-6. give the reviewer the diff and manifest paths and retain `Read,Glob,Grep` so
-   it can inspect surrounding tracked files and every numbered untracked copy;
-   the prompt must say that both sources form the reviewed change; and
-7. if a supported Claude CLI cannot enforce the denied Bash tool, mark that
+7. launch the reviewer with the sanitized snapshot—not the original worktree—as
+   its working directory; give it snapshot-local diff and manifest paths and
+   retain `Read,Glob,Grep` so it can inspect surrounding tracked files and every
+   numbered untracked copy; the prompt must say that both sources form the
+   reviewed change; and
+8. if a supported Claude CLI cannot enforce the denied Bash tool, mark that
    reviewer unavailable/degraded—never silently regrant Bash.
 
 This is the Linux/macOS boundary; do not add `bwrap` or `sandbox-exec`.
@@ -484,8 +489,9 @@ Prompt text while granting Bash does not satisfy this issue.
 Required bundle fixtures include an untracked executable whose content is
 identical at modes 100644 and 100755; the manifest and reviewer input must
 distinguish them. Additional fixtures cover an unrelated untracked credential,
-a stale allowlist entry, the 1 MiB per-file boundary, and the 8 MiB aggregate
-boundary; none may launch the reviewer when refused.
+a stale allowlist entry, an ignored `.env`, the 1 MiB per-file boundary, and the
+8 MiB aggregate boundary. The ignored file must be absent from the snapshot,
+and no refusal case may launch the reviewer.
 
 ## Workstream D — installer and upgrade correctness
 
@@ -570,7 +576,7 @@ delta-only review or defer all P3 findings as the remedy for duplicated facts.
 
 ### F2. Synchronous checkpoint seam — issue #48 upstream portion
 
-**Priority:** P1. **Effort:** large/external dependency.
+**Priority:** P1. **Effort:** large/external dependency. **Depends on:** C2.
 
 **Executor:** `executor-rb-lite`.
 
@@ -774,7 +780,7 @@ the body. Every row gets label `drive-open-issues`; B0 and F2r get
 | E2c | P2 | #33 | E2a | Correct panel diagnostics |
 | E3 | P2 | #65 | E1 | Exact fail-closed closure command |
 | F1 | P2 | #47, #33 | — | Deduplication and fact ownership |
-| F2 | P1 | #48 | — | Upstream synchronous checkpoint seam |
+| F2 | P1 | #48 | C2 | Upstream synchronous checkpoint seam |
 | F2r | P1 | #48 | F2 | Human-authorized release publication |
 | F3 | P1 | #48, #30, #31, #35 | C1, F2r | Foreground Drive controller |
 | G1 | P2 | #32, #34 | — | Read-only commit verifier |

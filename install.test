@@ -512,15 +512,20 @@ discipline_block=${DISCIPLINE_BLOCK:-"$HERE/skills/agents-md/references/discipli
 gate_script="$WORK/discipline-gate.sh"
 gate_stdout="$WORK/discipline-gate.stdout"
 gate_stderr="$WORK/discipline-gate.stderr"
+status_stdout="$WORK/discipline-status.stdout"
+status_stderr="$WORK/discipline-status.stderr"
 gate_tmp="$WORK/discipline-gate-tmp"
 cleanup_marker="$WORK/existing-exit-cleanup"
+status_cleanup_marker="$WORK/existing-status-cleanup"
 mkdir -p "$gate_tmp"
 capture_gate=false
 found_gate_start=false
 found_gate_command=false
 {
   printf '%s\n' '#!/usr/bin/env bash'
+  printf '%s\n' 'set -e'
   printf '%s\n' 'trap '\''printf cleanup > "$CLEANUP_MARKER"'\'' EXIT'
+  printf '%s\n' 'gate() { printf "first\n"; false; printf "should-not-run\n"; }'
   while IFS= read -r line; do
     if [[ $line == '_gate_log=$(mktemp)'* ]]; then
       capture_gate=true
@@ -529,8 +534,8 @@ found_gate_command=false
       break
     fi
     if $capture_gate; then
-      if [[ $line == '{ <gate>; } >"$_gate_log" 2>&1 || _gate_rc=$?' ]]; then
-        printf '%s\n' "{ printf 'first\\n' && false && printf 'should-not-run\\n'; } >\"\$_gate_log\" 2>&1 || _gate_rc=\$?"
+      if [[ $line == '  <gate>' ]]; then
+        printf '%s\n' '  if [[ ${GATE_MODE:-function} == status ]]; then exit 124; else gate; fi'
         found_gate_command=true
       else
         printf '%s\n' "$line"
@@ -543,8 +548,12 @@ if ! $found_gate_start || ! $found_gate_command; then
 else
   CLEANUP_MARKER="$cleanup_marker" TMPDIR="$gate_tmp" \
     bash "$gate_script" >"$gate_stdout" 2>"$gate_stderr"; rc=$?
+  CLEANUP_MARKER="$status_cleanup_marker" TMPDIR="$gate_tmp" GATE_MODE=status \
+    bash "$gate_script" >"$status_stdout" 2>"$status_stderr"; status_rc=$?
   gate_output=$(< "$gate_stdout")
   gate_error=$(< "$gate_stderr")
+  status_output=$(< "$status_stdout")
+  status_error=$(< "$status_stderr")
   if [[ $rc -ne 1 ]]; then
     fail "$t" "failed gate wrapper exited $rc"
   elif [[ $gate_output != $'first\nEXIT=1' ]]; then
@@ -555,6 +564,12 @@ else
     fail "$t" "gate continued past the failed && command"
   elif [[ ! -f "$cleanup_marker" || $(< "$cleanup_marker") != cleanup ]]; then
     fail "$t" "gate wrapper replaced the caller's EXIT trap"
+  elif [[ $status_rc -ne 124 || $status_output != 'EXIT=124' ]]; then
+    fail "$t" "categorized status became rc=$status_rc stdout=$status_output"
+  elif [[ -n "$status_error" ]]; then
+    fail "$t" "categorized status wrote stderr: $status_error"
+  elif [[ ! -f "$status_cleanup_marker" || $(< "$status_cleanup_marker") != cleanup ]]; then
+    fail "$t" "categorized-status run replaced the caller's EXIT trap"
   elif find "$gate_tmp" -mindepth 1 -print -quit | grep -q .; then
     fail "$t" "gate wrapper leaked its temporary log"
   else
