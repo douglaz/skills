@@ -81,23 +81,54 @@ that status after reading the log:
   _gate_had_errexit=0
   case $- in *e*) _gate_had_errexit=1; set +e ;; esac
   _gate_had_monitor=0
-  case $- in *m*) _gate_had_monitor=1 ;; *) set -m ;; esac
-  "${BASH:-bash}" -e -s >"$_gate_log" 2>&1 <<'__AGENT_GATE__' &
-<gate>
-__AGENT_GATE__
-  _gate_pid=$!
+  case $- in *m*) _gate_had_monitor=1 ;; esac
+  _gate_pid=
+  _gate_pending_signal=
+  _gate_pending_signal_rc=
+  _gate_wait_for_exit() {
+    if (( BASH_VERSINFO[0] > 4 ||
+          (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 3) )); then
+      wait -f "$_gate_pid"
+      return $?
+    fi
+    while :; do
+      wait "$_gate_pid"
+      _gate_wait_rc=$?
+      kill -0 "$_gate_pid" 2>/dev/null || return "$_gate_wait_rc"
+      sleep 0.05
+    done
+  }
   _gate_forward_signal() {
     _gate_signal=$1
     _gate_signal_rc=$2
+    if [ -z "$_gate_pid" ]; then
+      _gate_pending_signal=$_gate_signal
+      _gate_pending_signal_rc=$_gate_signal_rc
+      return
+    fi
     trap - HUP INT TERM
     kill -"$_gate_signal" -- "-$_gate_pid" 2>/dev/null || :
-    wait "$_gate_pid" 2>/dev/null || :
+    kill -CONT -- "-$_gate_pid" 2>/dev/null || :
+    _gate_wait_for_exit 2>/dev/null || :
     exit "$_gate_signal_rc"
   }
   trap '_gate_forward_signal HUP 129' HUP
   trap '_gate_forward_signal INT 130' INT
   trap '_gate_forward_signal TERM 143' TERM
-  wait "$_gate_pid"
+  [ "$_gate_had_monitor" -ne 0 ] || set -m
+  if [ -n "$_gate_pending_signal" ]; then
+    trap - HUP INT TERM
+    [ "$_gate_had_monitor" -ne 0 ] || set +m
+    exit "$_gate_pending_signal_rc"
+  fi
+  "${BASH:-bash}" -eo pipefail -s >"$_gate_log" 2>&1 <<'__AGENT_GATE__' &
+<gate>
+__AGENT_GATE__
+  _gate_pid=$!
+  if [ -n "$_gate_pending_signal" ]; then
+    _gate_forward_signal "$_gate_pending_signal" "$_gate_pending_signal_rc"
+  fi
+  _gate_wait_for_exit
   _gate_rc=$?
   trap - HUP INT TERM
   [ "$_gate_had_monitor" -ne 0 ] || set +m
@@ -119,14 +150,15 @@ __AGENT_GATE__
 The nested subshell isolates its cleanup trap from the caller and removes the
 private log on normal return, error, or handled termination. The fresh Bash
 keeps fail-fast active even when a caller places the wrapper in `if`, `&&`, or
-`||`; put self-contained gate commands between its delimiter lines. Temporary
-job control gives the gate a dedicated process group; HUP, INT, and TERM are
-forwarded to that group and its leader is reaped before the wrapper returns the
-conventional status. Temporarily disabling wrapper `errexit` permits status
-capture. Cleanup happens before the reported final status: read or cleanup
-failure turns success into failure but preserves an existing nonzero/signal
-status. `exit` returns that final status, including categorized statuses such as
-2 or 124.
+`||`; put self-contained gate commands between its delimiter lines. It enables
+`pipefail` too. Temporary job control gives the gate a dedicated process group;
+traps installed before launch forward HUP, INT, and TERM to that group, resume a
+stopped group so the signal is handled, and wait for actual termination before
+returning the conventional status. Temporarily disabling wrapper `errexit`
+permits status capture. Cleanup happens before the reported final status: read
+or cleanup failure turns success into failure but preserves an existing
+nonzero/signal status. `exit` returns that final status, including categorized
+statuses such as 2 or 124.
 
 **"Passing", "clean", "working", "verified", and "done" require a command and an
 exit code.** If you cannot show one, say what you actually observed instead. This
