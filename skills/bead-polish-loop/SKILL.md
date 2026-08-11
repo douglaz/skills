@@ -73,8 +73,11 @@ _st=$(git status --porcelain -- "$BEADS_JSONL") \
 printf '%s' "$_st"
 ```
 
-If it is not empty, resolve it first — recovery
-case (a) in [orchestrating-with-rb-lite](../orchestrating-with-rb-lite/SKILL.md) step 11. After the first flush the choice
+If it is not empty, resolve it first — recovery case (a) in
+exact companion skill [`rb-lite-backlog-drain`, step 11](../rb-lite-backlog-drain/SKILL.md#backlog-step-11).
+**Companion unavailable: stop, rerun the same installer command once, reload it, and do
+not improvise this procedure.**
+After the first flush the choice
 is gone.
 
 ## Session shape
@@ -191,7 +194,7 @@ run `second-model-bead-audit` by default after the graph meets these gates.
    re-serialization with every id on both sides is normal, ids on only one side or a
    `description` you did not touch is the tell. Recovery — and why `br sync --import-only`
    cannot do it — is in
-   [orchestrating-with-rb-lite](../orchestrating-with-rb-lite/SKILL.md) step 11, with one
+   [exact companion skill `rb-lite-backlog-drain`, step 11](../rb-lite-backlog-drain/SKILL.md#backlog-step-11), with one
    caveat: its replay step assumes a SINGLE mutation, the drain's case. A polish round
    batches several rewrites, so enumerate the complete intended delta (the step 4 replay manifest, NOT
    the step 6 round summary — the summary records decisions, not commands, ids or order) before restoring — and restore from the side you established holds the good bodies, not

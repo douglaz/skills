@@ -180,7 +180,10 @@ recorded acceptance of the reduced review coverage.
    # reverted — exit 0, no warning — and an audit over a truncated graph reviews text the
    # reviewers will never see. Check BEFORE flushing: afterwards the file matches the index
    # again, so the diff comes back empty and the loss is undetectable. Recovery is in
-   # ../orchestrating-with-rb-lite/SKILL.md step 11.
+   # exact companion skill rb-lite-backlog-drain, step 11:
+   # ../rb-lite-backlog-drain/SKILL.md#backlog-step-11.
+   # Companion unavailable: stop, rerun the same installer command once, reload it, and
+   # do not improvise this procedure.
    _bw=$(br where --json) || { echo "cannot resolve the JSONL"; exit 1; }
    BEADS_JSONL=$(printf '%s' "$_bw" | jq -er .jsonl_path) || { echo "cannot resolve the JSONL"; exit 1; }
    # INSPECT, do not gate on cleanliness: the normal bead-polish-loop handoff arrives with

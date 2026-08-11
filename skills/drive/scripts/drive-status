@@ -103,7 +103,8 @@ if $_GITHUB_REMOTE && command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   # Probe, do not prefer. A fork can host its own PRs, so forcing `.parent` misses them —
   # or finds an unrelated parent PR with the same number and validates clearance against
   # its base. Pick the candidate whose PR head is this checkout's HEAD; that is the only
-  # question with one answer. bot-gate and § 8 resolve the same way.
+  # question with one answer. bot-gate and exact companion skill
+  # `pr-with-codex-bot-review-merge` resolve the same way.
   # A failed self lookup degrades the head-label selector below into a bare branch name,
   # which finds nothing on exactly the fork clones it exists for — absence by broken
   # query. Mark the probe unknown rather than let that read as "no PR".
@@ -143,7 +144,8 @@ if $_GITHUB_REMOTE && command -v gh >/dev/null 2>&1 && [[ -n "$BRANCH" ]]; then
   # break that tie, and breaking on the parent picked one of two PRs by iteration order.
   # A head match is still the tiebreak when it singles ONE out (local HEAD ahead of a stale
   # PR head is routine mid-HARDEN); two open PRs that a head cannot separate are refused,
-  # the same double-match rule bot-gate and § 8 enforce for number-keyed lookups.
+  # the same double-match rule bot-gate and exact companion skill
+  # `pr-with-codex-bot-review-merge` enforce for number-keyed lookups.
   _UP=""; _FOUND=""; _OPEN_N=0; _HEADMATCH_N=0; _HEADMATCH_REPO=""
   for _c in ${_CANDS[@]+"${_CANDS[@]}"}; do
     _sel="$BRANCH"

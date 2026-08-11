@@ -174,7 +174,8 @@ br sync --flush-only || { echo "flush failed — do not audit an unwritten graph
 # would have objected to is already gone. Field-diff it, key the +/- lines by `id`, and
 # assert only the fields you meant to change moved. Ids on one side only, or a
 # `description` this session did not write, is the tell. Recovery:
-# ../../orchestrating-with-rb-lite/SKILL.md step 11.
+# exact companion skill rb-lite-backlog-drain, step 11:
+# ../../rb-lite-backlog-drain/SKILL.md#backlog-step-11.
 git diff -- "$BEADS_JSONL"
 ```
 
