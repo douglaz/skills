@@ -202,19 +202,24 @@ graph must not contain non-executable parents.
 - `skills/pr-with-codex-bot-review/scripts/bot-gate`
 - `skills/pr-with-codex-bot-review/scripts/bot-gate.test`
 - `skills/pr-with-codex-bot-review/SKILL.md` only if the observable contract changes
+- `docs/adr/0004-the-bot-gate-claims-absence-of-evidence-not-clearance.md`
 
 **Deliverable**
 
 Add a normal-push fixture showing that a review object anchored to a prior tip
 cannot satisfy request coverage for the current tip, then restrict ordinary
 coverage anchors accordingly. Preserve explicitly documented degraded-forge
-behavior.
+behavior. Amend ADR 0004's rejected tip-scoping discussion so the durable
+decision record distinguishes the old all-anchor proposal from A1's
+normal-push/current-tip rule and no longer recommends restoring prior-tip review
+objects.
 
 **Done when**
 
 - the new fixture fails against the unfixed gate for the intended assertion;
 - it passes after the implementation;
 - all existing `bot-gate.test` cases pass; and
+- ADR 0004 states the same anchor rule as the gate; and
 - the aggregate repository gate exits 0.
 
 ### A2. Traceable review-thread disposition — issue #66
@@ -561,6 +566,31 @@ boundary. It must also expose a stable machine-readable capability probe,
 contains `"synchronous_checkpoint":1`. Pin that command and malformed/missing
 capability cases in upstream tests. Do not implement #30's log-tail sidecar.
 
+The upstream interface is fixed for F2:
+
+```text
+rb-lite run ... --checkpoint-cmd CMD
+```
+
+- invoke `CMD` synchronously with stdin closed and no implementer/reviewer child
+  alive at `post_implementer` after each successful implementer
+  iteration/fingerprint and at `post_review` after every reviewer joins but
+  before the panel result is acted on;
+- provide `RB_LITE_CHECKPOINT`, `BASE`, `RUN_DIR`, `ROUND`, and `ITERATION`, plus
+  `REVIEW_PANEL_RESULT=clean|findings|failed` at `post_review`;
+- save checkpoint stdout, stderr, and status in `RUN_DIR`;
+- status 0 continues, status 20 preserves the diff/artifacts and returns a
+  distinct `checkpoint_stopped` terminal status, and every other nonzero returns
+  `checkpoint_failed`;
+- include checkpoint name, round, iteration, and hook status in the single
+  terminal JSON object, with fixed distinct rb-lite process exit codes for both
+  terminal statuses.
+
+Deterministic upstream tests must cover both boundaries, the stabilizing
+iteration, actual joined-panel result, 0/20/other statuses, preserved artifacts,
+and TERM/INT child reaping. The hook does not parse a Drive contract, persist a
+state database, poll logs, reset/cut the diff, or learn BUILD/HARDEN/LAND.
+
 The coordinating skills agent verifies the upstream PR URL, merge SHA, and all
 three gate exit codes. It then records and closes F2 only through a reviewed
 skills-repository path:
@@ -610,6 +640,12 @@ Implement:
   command too, and fail preflight if neither qualifies;
 - declared round limits passed to rb-lite;
 - separate production and test LOC budgets;
+- validate the contract before launch so every allowed path belongs to exactly
+  one production/test budget class or to an explicit unbudgeted exemption;
+  overlapping or unclassified allowed paths are contract errors;
+- at each checkpoint, return the controlled-stop status for every changed path
+  outside the allowlist, outside all declared classes/exemptions, or over its
+  class budget—no path may escape both counters;
 - distinct churn and scope brake reasons;
 - acceptance-criterion re-read before cutback;
 - gate execution after a cutback;
@@ -623,7 +659,10 @@ controller umbrella.
 
 F3 fixtures must put a stale pre-checkpoint `rb-lite` first on PATH and prove
 the resolver selects the immutable F2r fallback; a missing or malformed
-capability response must fail closed rather than run the stale binary.
+capability response must fail closed rather than run the stale binary. Separate
+fixtures must cover an outside-lock path, an allowed-but-unclassified path,
+overlapping classes, an explicit unbudgeted exemption, and independent
+production/test budget breaches.
 
 ## Workstream G — executable evidence and documentation
 
@@ -747,7 +786,7 @@ The drive is complete only when:
 ## Known unknowns
 
 - Bash 4.0–4.3 availability for #61's live compatibility gate.
-- The exact upstream rb-lite checkpoint API and release for #48.
+- The exact immutable rb-lite release reference remains pending F2r authority.
 - Whether #66 requires content digests after stable-ID reproduction.
 - The human B1 decision between refusal and dirty in-scope preservation.
 - Human authorization to publish the F2 upstream release.
