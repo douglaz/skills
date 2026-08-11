@@ -65,8 +65,10 @@ Turn the current flat issue list into a sequenced, testable delivery program tha
   ./skills/drive/scripts/drive-status.test
   ```
 
-  A bead may add a narrower red/green command, but the aggregate gate still runs
-  before clearance and landing.
+  An `executor-skills` bead may add a narrower red/green command, but the
+  aggregate gate still runs before clearance and landing. F2 uses the upstream
+  gate specified in its section. Human-authority beads require a decision or
+  publication record rather than the skills gate.
 
 ## Tracker contract
 
@@ -74,9 +76,13 @@ GitHub owns external issue identity, discussion, and closure. Beads owns local
 execution state and dependencies.
 
 - Initialize Beads only after this plan passes its SHAPE review.
-- Create one plan epic and bounded child beads, not one bead per checkbox in an
-  issue when several checkboxes enforce the same invariant.
+- Create only the bounded execution and decision beads in the complete table.
+  Do not create root/workstream epics or parent beads: normal `br` parent
+  semantics make a completed umbrella ready, and the branch drain would mistake
+  it for implementation work.
 - Put `GitHub: https://github.com/douglaz/skills/issues/N` in every bead.
+- Label every bead `drive-open-issues` and add exactly one executor label:
+  `executor-skills`, `executor-rb-lite`, or `authority-human`.
 - A Beads close never closes a GitHub issue automatically.
 - Close a GitHub umbrella only after every accepted child is merged or explicitly
   rejected with evidence.
@@ -382,8 +388,28 @@ delta-only review or defer all P3 findings as the remedy for duplicated facts.
 
 **Priority:** P1. **Effort:** large/external dependency.
 
-Open and land the minimal rb-lite checkpoint hook. The child must own its
-lifecycle and quiescent boundary. Do not implement #30's log-tail sidecar.
+**Executor:** `executor-rb-lite`.
+
+Run this bead through a separately spawned agent whose current repository is
+`/home/master/p/rb-lite`; do not hand it to the skills-repository backlog drain.
+That agent must read `/home/master/p/rb-lite/AGENTS.md`, create
+`feat/drive-checkpoint-hook` from current `origin/main`, and use
+`orchestrating-with-rb-lite` in that checkout for the Codex-heavy implementation.
+The upstream gate is:
+
+```bash
+just test && nix build && nix flake check
+```
+
+Open and land the minimal rb-lite checkpoint-hook PR through the upstream
+repository's branch workflow. The child must own its lifecycle and quiescent
+boundary. Do not implement #30's log-tail sidecar.
+
+The coordinating skills agent verifies the upstream PR URL, merge SHA, and all
+three gate exit codes, records them in the skills F2 bead with `br update`, then
+closes and explicitly flushes that bead in `/home/master/p/skills`. There is no
+Beads mutation in the rb-lite checkout.
+
 Publishing the required upstream release is a separate human-authority
 checkpoint recorded in `DRIVE.md`; local controller BUILD remains blocked until
 that release exists.
@@ -445,8 +471,11 @@ own its detail. Leaving it intact is an acceptable evidence-based disposition.
 
 ## Complete execution-bead table
 
-The GRAPH transfer creates exactly one execution bead per row. This table is the
-authoritative priority and dependency source; prose above supplies the body.
+The GRAPH transfer creates exactly one execution or decision bead per row. This
+table is the authoritative priority and dependency source; prose above supplies
+the body. Every row gets label `drive-open-issues`; B0 and F2r get
+`authority-human`, F2 gets `executor-rb-lite`, and every other row gets
+`executor-skills`.
 
 | Bead | Priority | GitHub | Depends on | Deliverable |
 |---|---:|---|---|---|
@@ -489,17 +518,20 @@ Constraints:
 - B0 and F2r are explicit decision/authority beads. They remain blocked for
   human input even when their graph prerequisites are satisfied.
 - The upstream F2 implementation/PR may proceed before F2r authorization.
+- The skills scheduler may select only:
+  `br ready -l drive-open-issues -l executor-skills`. It routes
+  `executor-rb-lite` to the cross-repository procedure above and never sends
+  `authority-human` to an implementer.
 
 ## Beads graph to create
 
 After review, transfer this plan into:
 
-- one epic covering the exact 29-issue scope;
-- seven workstream parent beads A–G;
-- one execution child per row in the complete execution-bead table;
+- exactly one flat execution/decision bead per row in the complete
+  execution-bead table, with no tracking parent or epic;
 - every dependency edge in that table;
 - GitHub URLs and named gate commands in every child; and
-- the exact priority in the table.
+- the exact priority and executor labels in the table.
 
 The first scoped `br ready` result must contain A1. D1 and E1 may also be ready.
 B1 begins with a design/fixture bead rather than direct prose edits. F2 must
@@ -510,8 +542,9 @@ record its upstream issue/PR URL before it can become in progress.
 The drive is complete only when:
 
 1. every accepted child is merged through its own reviewed branch;
-2. each aggregate issue (#34, #48, #65) has every child merged or rejected with
-   evidence;
+2. for every GitHub issue referenced by multiple table rows—including #33, #34,
+   #48, and #65—all matching rows are merged or rejected with evidence before
+   that issue closes;
 3. the scoped Beads graph has no open item;
 4. the aggregate repository gate exits 0 on final `master`; and
 5. GitHub issue closure and Beads closure records agree.
