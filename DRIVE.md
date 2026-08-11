@@ -24,8 +24,11 @@ take.
 
 Write and review the buildable execution plan. Expanded review-discovered
 bootstrap budget: `AGENTS.md`, `DRIVE.md`, one spec, the canonical gate wrapper,
-its two Drive consumers, and one `install.test` regression fixture (~100 LOC).
-Do NOT implement any of the 29 planned GitHub issues in SHAPE.
+two Drive references to that sole owner, and one `install.test` regression
+fixture (~300 LOC; reviewed hard stop 600). This replaces the earlier ~100 LOC
+estimate after independent review required conditional-shell, pipeline, cleanup,
+signal, stopped-process, and synchronization coverage. Do NOT implement any of
+the 29 planned GitHub issues in SHAPE.
 
 ## Next
 

@@ -198,88 +198,9 @@ Either way the non-negotiables below apply.
 
 Two non-negotiables:
 
-1. **Run it yourself**, unpiped:
-   ```bash
-   (
-     _gate_log=$(mktemp) || { echo "cannot create gate log"; exit 1; }
-     _gate_cleanup() {
-       _gate_cleanup_rc=$?
-       if ! rm -f "$_gate_log"; then
-         echo "cannot remove gate log" >&2
-         [ "$_gate_cleanup_rc" -ne 0 ] || _gate_cleanup_rc=1
-       fi
-       trap - EXIT
-       exit "$_gate_cleanup_rc"
-     }
-     trap _gate_cleanup EXIT
-     _gate_had_errexit=0
-     case $- in *e*) _gate_had_errexit=1; set +e ;; esac
-     _gate_had_monitor=0
-     case $- in *m*) _gate_had_monitor=1 ;; esac
-     _gate_pid=
-     _gate_pending_signal=
-     _gate_pending_signal_rc=
-     _gate_wait_for_exit() {
-       if (( BASH_VERSINFO[0] > 4 ||
-             (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 3) )); then
-         wait -f "$_gate_pid"
-         return $?
-       fi
-       while :; do
-         wait "$_gate_pid"
-         _gate_wait_rc=$?
-         kill -0 "$_gate_pid" 2>/dev/null || return "$_gate_wait_rc"
-         sleep 0.05
-       done
-     }
-     _gate_forward_signal() {
-       _gate_signal=$1
-       _gate_signal_rc=$2
-       if [ -z "$_gate_pid" ]; then
-         _gate_pending_signal=$_gate_signal
-         _gate_pending_signal_rc=$_gate_signal_rc
-         return
-       fi
-       trap - HUP INT TERM
-       kill -"$_gate_signal" -- "-$_gate_pid" 2>/dev/null || :
-       kill -CONT -- "-$_gate_pid" 2>/dev/null || :
-       _gate_wait_for_exit 2>/dev/null || :
-       exit "$_gate_signal_rc"
-     }
-     trap '_gate_forward_signal HUP 129' HUP
-     trap '_gate_forward_signal INT 130' INT
-     trap '_gate_forward_signal TERM 143' TERM
-     [ "$_gate_had_monitor" -ne 0 ] || set -m
-     if [ -n "$_gate_pending_signal" ]; then
-       trap - HUP INT TERM
-       [ "$_gate_had_monitor" -ne 0 ] || set +m
-       exit "$_gate_pending_signal_rc"
-     fi
-     "${BASH:-bash}" -eo pipefail -s >"$_gate_log" 2>&1 <<'__AGENT_GATE__' &
-<gate-cmd>
-__AGENT_GATE__
-     _gate_pid=$!
-     if [ -n "$_gate_pending_signal" ]; then
-       _gate_forward_signal "$_gate_pending_signal" "$_gate_pending_signal_rc"
-     fi
-     _gate_wait_for_exit
-     _gate_rc=$?
-     trap - HUP INT TERM
-     [ "$_gate_had_monitor" -ne 0 ] || set +m
-     [ "$_gate_had_errexit" -eq 0 ] || set -e
-     if ! cat "$_gate_log"; then
-       echo "cannot read gate log" >&2
-       [ "$_gate_rc" -ne 0 ] || _gate_rc=1
-     fi
-     if ! rm -f "$_gate_log"; then
-       echo "cannot remove gate log" >&2
-       [ "$_gate_rc" -ne 0 ] || _gate_rc=1
-     fi
-     trap - EXIT
-     printf 'EXIT=%s\n' "$_gate_rc" || exit 1
-     exit "$_gate_rc"
-   )
-   ```
+1. **Run it yourself**, unpiped, through the exact fail-closed gate wrapper in
+   the applicable `AGENTS.md` Working agreement. That managed block is the sole
+   wrapper owner; do not duplicate or adapt it in Drive.
 2. **Make it fail first — once per property, on the right assertion.** Point the new test
    at the unfixed code and watch it go red. A test that could never have failed proves
    nothing. Two refinements that decide whether the red run means anything:

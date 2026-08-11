@@ -508,8 +508,11 @@ if [[ -n "$link_failures" ]]; then fail "$t" "$link_failures"
 else pass "$t"; fi
 
 t="discipline gate wrapper returns an early && failure"
-discipline_block=${DISCIPLINE_BLOCK:-"$HERE/skills/agents-md/references/discipline-block.md"}
+repository_discipline_block="$HERE/skills/agents-md/references/discipline-block.md"
+discipline_block=${DISCIPLINE_BLOCK:-"$repository_discipline_block"}
 gate_script="$WORK/discipline-gate.sh"
+canonical_gate_block="$WORK/discipline-canonical-gate.block"
+managed_gate_block="$WORK/discipline-managed-gate.block"
 gate_stdout="$WORK/discipline-gate.stdout"
 gate_stderr="$WORK/discipline-gate.stderr"
 status_stdout="$WORK/discipline-status.stdout"
@@ -599,7 +602,29 @@ possible_gate_start=false
     fi
   done < "$discipline_block"
 } > "$gate_script"
-if ! $found_gate_start || ! $found_gate_command || ! $found_final_wait; then
+awk '
+  /Never pipe a gate through/ { section=1 }
+  section && /^```bash$/ { block=1; next }
+  block && /^```$/ { exit }
+  block { print }
+' "$discipline_block" >"$canonical_gate_block"
+awk '
+  /Never pipe a gate through/ { section=1 }
+  section && /^```bash$/ { block=1; next }
+  block && /^```$/ { exit }
+  block { print }
+' "$HERE/AGENTS.md" >"$managed_gate_block"
+gate_copy_failure=
+if [[ $discipline_block == "$repository_discipline_block" ]] &&
+    ! cmp -s "$canonical_gate_block" "$managed_gate_block"; then
+  gate_copy_failure="managed AGENTS gate wrapper diverges from its canonical owner"
+elif grep -Fq -- '_gate_log=$(mktemp)' "$HERE/skills/drive/SKILL.md" ||
+    grep -Fq -- '_gate_log=$(mktemp)' "$HERE/skills/drive/references/phases.md"; then
+  gate_copy_failure="Drive duplicated the canonical AGENTS gate wrapper"
+fi
+if [[ -n "$gate_copy_failure" ]]; then
+  fail "$t" "$gate_copy_failure"
+elif ! $found_gate_start || ! $found_gate_command || ! $found_final_wait; then
   fail "$t" "could not extract the canonical gate wrapper"
 else
   CLEANUP_MARKER="$cleanup_marker" TMPDIR="$gate_tmp" \
@@ -638,7 +663,21 @@ else
       sleep 0.05
     done
     if [[ ! -f "$stop_started" || ! -s "$stop_child_pid_file" ]]; then
-      kill -KILL "$stop_script_pid" 2>/dev/null
+      kill -STOP "$stop_script_pid" 2>/dev/null || true
+      for ((_n=1; _n<=100; _n++)); do
+        [[ -s "$stop_child_pid_file" ]] && break
+        sleep 0.01
+      done
+      if [[ -s "$stop_child_pid_file" ]]; then
+        read -r stop_child_pid stop_wrapper_pid <"$stop_child_pid_file"
+        kill -TERM "$stop_wrapper_pid" 2>/dev/null || true
+        kill -TERM -- "-$stop_child_pid" 2>/dev/null || true
+        kill -CONT -- "-$stop_child_pid" 2>/dev/null || true
+      else
+        kill -KILL "$stop_script_pid" 2>/dev/null || true
+      fi
+      kill -CONT "$stop_script_pid" 2>/dev/null || true
+      wait "$stop_script_pid" 2>/dev/null || true
       printf '%s' 125 >"$stop_rc_file"
     else
       read -r stop_child_pid stop_wrapper_pid <"$stop_child_pid_file"
@@ -673,7 +712,11 @@ else
       [[ -f "$aggregate_started" ]] && break
       sleep 0.02
     done
-    wc -c <"$aggregate_stdout" >"$aggregate_early_file"
+    if [[ -f "$aggregate_started" ]]; then
+      wc -c <"$aggregate_stdout" >"$aggregate_early_file"
+    else
+      printf '%s\n' -1 >"$aggregate_early_file"
+    fi
     : >"$aggregate_release"
     wait "$aggregate_pid"
     printf '%s' "$?" >"$aggregate_rc_file"
@@ -744,6 +787,8 @@ else
     fail "$t" "aggregate gate became rc=$aggregate_rc stdout=$aggregate_output"
   elif [[ -n "$aggregate_error" || $aggregate_output == *aggregate-last* ]]; then
     fail "$t" "aggregate gate leaked or continued: stderr=$aggregate_error"
+  elif [[ $aggregate_early -lt 0 ]]; then
+    fail "$t" "aggregate gate never reached the pre-completion checkpoint"
   elif [[ $aggregate_early -ne 0 ]]; then
     fail "$t" "aggregate output escaped before the gate completed"
   elif [[ ! -f "$aggregate_cleanup_marker" || $(< "$aggregate_cleanup_marker") != cleanup ]]; then

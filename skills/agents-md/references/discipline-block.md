@@ -108,8 +108,7 @@ that status after reading the log:
   _gate_pending_signal=
   _gate_pending_signal_rc=
   _gate_wait_for_exit() {
-    if (( BASH_VERSINFO[0] > 4 ||
-          (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 3) )); then
+    if (( BASH_VERSINFO[0] >= 5 )); then
       wait -f "$_gate_pid"
       return $?
     fi
