@@ -89,17 +89,27 @@ that status after reading the log:
 
 ```bash
 (
-  _gate_log=$(mktemp) || { echo "cannot create gate log"; exit 1; }
+  _gate_dir=$(mktemp -d) || { echo "cannot create gate directory"; exit 1; }
+  _gate_log="$_gate_dir/output.log"
+  _gate_script="$_gate_dir/gate.bash"
   _gate_cleanup() {
     _gate_cleanup_rc=$?
-    if ! rm -f "$_gate_log"; then
-      echo "cannot remove gate log" >&2
+    if ! rm -rf "$_gate_dir"; then
+      echo "cannot remove gate directory" >&2
       [ "$_gate_cleanup_rc" -ne 0 ] || _gate_cleanup_rc=1
     fi
     trap - EXIT
     exit "$_gate_cleanup_rc"
   }
   trap _gate_cleanup EXIT
+  chmod 700 "$_gate_dir" || { echo "cannot protect gate directory"; exit 1; }
+  if ! cat >"$_gate_script" <<'__AGENT_GATE__'
+<gate>
+__AGENT_GATE__
+  then
+    echo "cannot write gate script"
+    exit 1
+  fi
   _gate_had_errexit=0
   case $- in *e*) _gate_had_errexit=1; set +e ;; esac
   _gate_had_monitor=0
@@ -108,7 +118,8 @@ that status after reading the log:
   _gate_pending_signal=
   _gate_pending_signal_rc=
   _gate_wait_for_exit() {
-    if (( BASH_VERSINFO[0] >= 5 )); then
+    if (( BASH_VERSINFO[0] > 5 ||
+          (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )); then
       wait -f "$_gate_pid"
       return $?
     fi
@@ -118,6 +129,22 @@ that status after reading the log:
       kill -0 "$_gate_pid" 2>/dev/null || return "$_gate_wait_rc"
       sleep 0.05
     done
+  }
+  _gate_finish_group() {
+    kill -0 -- "-$_gate_pid" 2>/dev/null || return 0
+    kill -TERM -- "-$_gate_pid" 2>/dev/null || :
+    kill -CONT -- "-$_gate_pid" 2>/dev/null || :
+    for ((_gate_finish_n=0; _gate_finish_n<20; _gate_finish_n++)); do
+      kill -0 -- "-$_gate_pid" 2>/dev/null || return 0
+      sleep 0.01
+    done
+    kill -KILL -- "-$_gate_pid" 2>/dev/null || :
+    for ((_gate_finish_n=0; _gate_finish_n<100; _gate_finish_n++)); do
+      kill -0 -- "-$_gate_pid" 2>/dev/null || return 0
+      sleep 0.01
+    done
+    echo "cannot terminate gate process group" >&2
+    return 1
   }
   _gate_forward_signal() {
     _gate_signal=$1
@@ -131,6 +158,7 @@ that status after reading the log:
     kill -"$_gate_signal" -- "-$_gate_pid" 2>/dev/null || :
     kill -CONT -- "-$_gate_pid" 2>/dev/null || :
     _gate_wait_for_exit 2>/dev/null || :
+    _gate_finish_group || exit 125
     exit "$_gate_signal_rc"
   }
   trap '_gate_forward_signal HUP 129' HUP
@@ -142,16 +170,22 @@ that status after reading the log:
     [ "$_gate_had_monitor" -ne 0 ] || set +m
     exit "$_gate_pending_signal_rc"
   fi
-  BASH_ENV= "${BASH:-bash}" --noprofile --norc -eo pipefail -s \
-    >"$_gate_log" 2>&1 <<'__AGENT_GATE__' &
-<gate>
-__AGENT_GATE__
+  BASH_ENV= "${BASH:-bash}" --noprofile --norc -eo pipefail \
+    "$_gate_script" </dev/null >"$_gate_log" 2>&1 &
   _gate_pid=$!
   if [ -n "$_gate_pending_signal" ]; then
     _gate_forward_signal "$_gate_pending_signal" "$_gate_pending_signal_rc"
   fi
   _gate_wait_for_exit
   _gate_rc=$?
+  _gate_group_lingered=0
+  kill -0 -- "-$_gate_pid" 2>/dev/null && _gate_group_lingered=1
+  if ! _gate_finish_group; then
+    [ "$_gate_rc" -ne 0 ] || _gate_rc=1
+  elif [ "$_gate_group_lingered" -ne 0 ] && [ "$_gate_rc" -eq 0 ]; then
+    echo "gate left background processes running" >&2
+    _gate_rc=1
+  fi
   trap - HUP INT TERM
   [ "$_gate_had_monitor" -ne 0 ] || set +m
   [ "$_gate_had_errexit" -eq 0 ] || set -e
@@ -159,8 +193,8 @@ __AGENT_GATE__
     echo "cannot read gate log" >&2
     [ "$_gate_rc" -ne 0 ] || _gate_rc=1
   fi
-  if ! rm -f "$_gate_log"; then
-    echo "cannot remove gate log" >&2
+  if ! rm -rf "$_gate_dir"; then
+    echo "cannot remove gate directory" >&2
     [ "$_gate_rc" -ne 0 ] || _gate_rc=1
   fi
   trap - EXIT
@@ -172,14 +206,14 @@ __AGENT_GATE__
 The nested subshell isolates its cleanup trap from the caller and removes the
 private log on normal return, error, or handled termination. The fresh Bash
 keeps fail-fast active even when a caller places the wrapper in `if`, `&&`, or
-`||`; put self-contained gate commands between its delimiter lines. It clears
-`BASH_ENV`, disables startup files, and enables `pipefail`. Temporary job control
-gives the gate a dedicated process group;
-traps installed before launch forward HUP, INT, and TERM to that group, resume a
-stopped group so the signal is handled, and wait for actual termination before
-returning the conventional status. Temporarily disabling wrapper `errexit`
-permits status capture. Cleanup happens before the reported final status: read
-or cleanup failure turns success into failure but preserves an existing
+`||`; put self-contained gate commands between its delimiter lines. The gate
+runs from a private script with closed stdin, clears `BASH_ENV`, disables startup
+files, and enables `pipefail`. Temporary job control gives it a dedicated process
+group; traps installed before launch forward HUP, INT, and TERM to that group,
+resume a stopped group, wait for actual termination, and escalate boundedly when
+a descendant ignores the signal. Temporarily disabling wrapper `errexit` permits
+status capture. Cleanup happens before the reported final status: read, lingering
+process, or cleanup failure turns success into failure but preserves an existing
 nonzero/signal status. `exit` returns that final status, including categorized
 statuses such as 2 or 124.
 
