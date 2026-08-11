@@ -142,7 +142,8 @@ that status after reading the log:
     [ "$_gate_had_monitor" -ne 0 ] || set +m
     exit "$_gate_pending_signal_rc"
   fi
-  "${BASH:-bash}" -eo pipefail -s >"$_gate_log" 2>&1 <<'__AGENT_GATE__' &
+  BASH_ENV= "${BASH:-bash}" --noprofile --norc -eo pipefail -s \
+    >"$_gate_log" 2>&1 <<'__AGENT_GATE__' &
 <gate>
 __AGENT_GATE__
   _gate_pid=$!
@@ -171,8 +172,9 @@ __AGENT_GATE__
 The nested subshell isolates its cleanup trap from the caller and removes the
 private log on normal return, error, or handled termination. The fresh Bash
 keeps fail-fast active even when a caller places the wrapper in `if`, `&&`, or
-`||`; put self-contained gate commands between its delimiter lines. It enables
-`pipefail` too. Temporary job control gives the gate a dedicated process group;
+`||`; put self-contained gate commands between its delimiter lines. It clears
+`BASH_ENV`, disables startup files, and enables `pipefail`. Temporary job control
+gives the gate a dedicated process group;
 traps installed before launch forward HUP, INT, and TERM to that group, resume a
 stopped group so the signal is handled, and wait for actual termination before
 returning the conventional status. Temporarily disabling wrapper `errexit`

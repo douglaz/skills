@@ -515,6 +515,8 @@ canonical_gate_block="$WORK/discipline-canonical-gate.block"
 managed_gate_block="$WORK/discipline-managed-gate.block"
 gate_stdout="$WORK/discipline-gate.stdout"
 gate_stderr="$WORK/discipline-gate.stderr"
+bashenv_stdout="$WORK/discipline-bashenv.stdout"
+bashenv_stderr="$WORK/discipline-bashenv.stderr"
 status_stdout="$WORK/discipline-status.stdout"
 status_stderr="$WORK/discipline-status.stderr"
 pipeline_stdout="$WORK/discipline-pipeline.stdout"
@@ -531,6 +533,7 @@ gate_tmp="$WORK/discipline-gate-tmp"
 cleanup_tmp="$WORK/discipline-cleanup-tmp"
 cleanup_bin="$WORK/discipline-cleanup-bin"
 cleanup_marker="$WORK/existing-exit-cleanup"
+bashenv_cleanup_marker="$WORK/existing-bashenv-cleanup"
 status_cleanup_marker="$WORK/existing-status-cleanup"
 pipeline_cleanup_marker="$WORK/existing-pipeline-cleanup"
 term_cleanup_marker="$WORK/existing-term-cleanup"
@@ -543,13 +546,16 @@ term_child_pid_file="$WORK/discipline-term-child.pid"
 stop_started="$WORK/discipline-stop-started"
 stop_rc_file="$WORK/discipline-stop.rc"
 stop_child_pid_file="$WORK/discipline-stop-child.pid"
+stop_deadline_marker="$WORK/discipline-stop-deadline"
 aggregate_started="$WORK/discipline-aggregate-started"
 aggregate_release="$WORK/discipline-aggregate-release"
 aggregate_rc_file="$WORK/discipline-aggregate.rc"
 aggregate_early_file="$WORK/discipline-aggregate.early"
+bashenv_file="$WORK/hostile-bash-env"
 mkdir -p "$gate_tmp" "$cleanup_tmp" "$cleanup_bin"
 printf '%s\n' '#!/bin/sh' 'exit 1' >"$cleanup_bin/rm"
 chmod +x "$cleanup_bin/rm"
+printf '%s\n' 'exit 0' >"$bashenv_file"
 capture_gate=false
 found_gate_start=false
 found_gate_command=false
@@ -559,6 +565,7 @@ possible_gate_start=false
   printf '%s\n' '#!/usr/bin/env bash'
   printf '%s\n' 'set -e'
   printf '%s\n' 'trap '\''printf cleanup > "$CLEANUP_MARKER"'\'' EXIT'
+  printf '%s\n' 'if [[ -n ${HOSTILE_BASH_ENV:-} ]]; then export BASH_ENV=$HOSTILE_BASH_ENV; fi'
   while IFS= read -r line; do
     if ! $capture_gate; then
       if $possible_gate_start && [[ $line == *'_gate_log=$(mktemp)'* ]]; then
@@ -629,6 +636,9 @@ elif ! $found_gate_start || ! $found_gate_command || ! $found_final_wait; then
 else
   CLEANUP_MARKER="$cleanup_marker" TMPDIR="$gate_tmp" \
     bash "$gate_script" >"$gate_stdout" 2>"$gate_stderr"; rc=$?
+  CLEANUP_MARKER="$bashenv_cleanup_marker" TMPDIR="$gate_tmp" \
+    HOSTILE_BASH_ENV="$bashenv_file" \
+    bash "$gate_script" >"$bashenv_stdout" 2>"$bashenv_stderr"; bashenv_rc=$?
   CLEANUP_MARKER="$status_cleanup_marker" TMPDIR="$gate_tmp" GATE_MODE=status \
     bash "$gate_script" >"$status_stdout" 2>"$status_stderr"; status_rc=$?
   CLEANUP_MARKER="$pipeline_cleanup_marker" TMPDIR="$gate_tmp" GATE_MODE=pipeline \
@@ -697,8 +707,26 @@ else
         printf '%s' 126 >"$stop_rc_file"
       else
         kill -TERM "$stop_wrapper_pid"
+        (
+          sleep 2
+          : >"$stop_deadline_marker"
+          kill -TERM "$stop_wrapper_pid" 2>/dev/null || true
+          kill -TERM -- "-$stop_child_pid" 2>/dev/null || true
+          kill -CONT -- "-$stop_child_pid" 2>/dev/null || true
+          sleep 0.05
+          kill -KILL "$stop_wrapper_pid" "$stop_script_pid" 2>/dev/null || true
+          kill -KILL -- "-$stop_child_pid" 2>/dev/null || true
+        ) &
+        stop_watchdog_pid=$!
         wait "$stop_script_pid"
-        printf '%s' "$?" >"$stop_rc_file"
+        stop_wait_rc=$?
+        if [[ -f "$stop_deadline_marker" ]]; then
+          stop_wait_rc=124
+        else
+          kill "$stop_watchdog_pid" 2>/dev/null || true
+        fi
+        wait "$stop_watchdog_pid" 2>/dev/null || true
+        printf '%s' "$stop_wait_rc" >"$stop_rc_file"
       fi
     fi
   )
@@ -727,6 +755,8 @@ else
     bash "$gate_script" >"$cleanup_stdout" 2>"$cleanup_stderr"; cleanup_rc=$?
   gate_output=$(< "$gate_stdout")
   gate_error=$(< "$gate_stderr")
+  bashenv_output=$(< "$bashenv_stdout")
+  bashenv_error=$(< "$bashenv_stderr")
   status_output=$(< "$status_stdout")
   status_error=$(< "$status_stderr")
   pipeline_output=$(< "$pipeline_stdout")
@@ -750,6 +780,12 @@ else
     fail "$t" "gate continued past the failed && command"
   elif [[ ! -f "$cleanup_marker" || $(< "$cleanup_marker") != cleanup ]]; then
     fail "$t" "gate wrapper replaced the caller's EXIT trap"
+  elif [[ $bashenv_rc -ne 1 || $bashenv_output != $'first\nEXIT=1' ]]; then
+    fail "$t" "hostile BASH_ENV bypassed the gate: rc=$bashenv_rc stdout=$bashenv_output"
+  elif [[ -n "$bashenv_error" ]]; then
+    fail "$t" "hostile-BASH_ENV run wrote stderr: $bashenv_error"
+  elif [[ ! -f "$bashenv_cleanup_marker" || $(< "$bashenv_cleanup_marker") != cleanup ]]; then
+    fail "$t" "hostile-BASH_ENV run replaced the caller's EXIT trap"
   elif [[ $status_rc -ne 124 || $status_output != 'EXIT=124' ]]; then
     fail "$t" "categorized status became rc=$status_rc stdout=$status_output"
   elif [[ -n "$status_error" ]]; then
