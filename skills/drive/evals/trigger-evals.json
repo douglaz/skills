@@ -8,7 +8,8 @@
     "Keep a positive control in the set (N1 below). It fires first-tool on multi-reviewer-loop, so if N1 stops working the environment is broken, not the description."
   ],
   "fixture": "git repo with docs/specs/<slug>.md, a Cargo.toml, and 2 ready beads -- drive-status reports BUILD.",
-  "last_measured": "2026-08-01, claude-opus-5, 3 runs per positive",
+  "last_measured": "2026-08-10, claude-opus-5; 3 runs for evals 1, 2, and 7; 1 run for controls 11 and 18",
+  "measurement_note": "Measured in disposable copies of the documented fixture with drive-status reporting BUILD. A trigger counts when Skill(<name>) appears anywhere in the stream-json tool sequence.",
   "evals": [
     {
       "id": 1,
@@ -20,7 +21,7 @@
       "id": 2,
       "query": "where are we on the rustnroll multiplayer work and what's next?",
       "should_trigger": true,
-      "measured": "3/3"
+      "measured": "2/3"
     },
     {
       "id": 3,
@@ -46,8 +47,8 @@
       "id": 7,
       "query": "review and fix this branch until both reviewers are clean, then open the PR and squash merge it",
       "should_trigger": true,
-      "measured": "0/2",
-      "known_limitation": "Triggers nothing -- not drive, not multi-reviewer-loop -- because it names outcomes rather than tools. Deliberately NOT fixed: the gap spans two skills' descriptions and tuning both against one query would risk the cells that currently measure clean. Superseded by the invocation contract above: explicit invocation covers this case."
+      "measured": "3/3",
+      "history": "Measured 0/2 before the 2026-08-10 description rewrite. Do not tune either description against one query; explicit invocation remains the required path."
     },
     {
       "id": 8,
@@ -124,5 +125,5 @@
       "should_trigger": false
     }
   ],
-  "invocation_contract": "Explicit invocation (`/drive ...`) is the expected path and the one that must work. Auto-triggering from a bare goal is a bonus, not a requirement -- do NOT spend rounds tuning the description to raise it, and do not treat a should_trigger miss as a defect. Decision made 2026-08-02 after measuring; the numbers below are a baseline to detect regressions in, not a target to optimise."
+  "invocation_contract": "Explicit invocation (`/drive ...`) is the expected path and the one that must work. Auto-triggering from a bare goal is a bonus, not a requirement -- do NOT spend rounds tuning the description to raise it, and do not treat a should_trigger miss as a defect. Decision made 2026-08-02 after measuring; a future manual run may establish a new baseline, but it is not an optimization target."
 }

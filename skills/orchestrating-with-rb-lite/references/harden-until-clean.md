@@ -286,13 +286,14 @@ _st=$(git status --porcelain -- "$BEADS_JSONL") \
 printf '%s' "$_st"
 ```
 
-If it is not empty, resolve it first — recovery
-case (a) in [orchestrating-with-rb-lite](../SKILL.md) step 11. After the first flush the choice
+If it is not empty, resolve it first — recovery case (a) in
+[exact companion skill `rb-lite-backlog-drain`, step 11](../../rb-lite-backlog-drain/SKILL.md#backlog-step-11). After the first flush the choice
 is gone.
 
 **Start a replay manifest before minting.** Section 3 runs one `br create` per finding,
-each auto-flushing, and the damage check comes after all of them. If it fires, step 11's
-recovery deletes the cache and requires every intended mutation replayed — so record the
+each auto-flushing, and the damage check comes after all of them. If it fires,
+[exact companion skill `rb-lite-backlog-drain`, step 11 recovery](../../rb-lite-backlog-drain/SKILL.md#backlog-step-11) deletes the cache
+and requires every intended mutation replayed — so record the
 `br` commands with their generated ids and field values as you go. Without it, restoring
 the good JSONL discards the whole iteration's legitimate bead additions.
 
@@ -369,15 +370,16 @@ field-level changes: a full re-serialization with every id on both sides is
 normal; ids on only one side, or a `description` this iteration did not write, is
 the tell. Never hand-edit the JSONL — that is what makes the cache stale, since a
 hand edit does not advance `updated_at`. Recovery is in
-[SKILL.md](../SKILL.md) step 11.
+[exact companion skill `rb-lite-backlog-drain`, step 11](../../rb-lite-backlog-drain/SKILL.md#backlog-step-11).
 
 If the iteration ran degraded, say which reviewer was missing in that commit
 message. Months later it explains why iteration N looks thin.
 
 ## 4. Drain the beads
 
-Hand off to the **Backlog-drain workflow** in the main skill and follow it
-exactly: one bead, one branch, one rb-lite run, local gates, one **work** PR, one
+Hand off to exact companion skill
+[`rb-lite-backlog-drain`](../../rb-lite-backlog-drain/SKILL.md) and follow it exactly:
+one bead, one branch, one rb-lite run, local gates, one **work** PR, one
 squash merge, one `br close`. (Closing the last bead in a scope needs its own small
 metadata PR — that is bookkeeping, not a second work PR, and the rule still holds.) Nothing about draining changes here.
 
@@ -388,11 +390,13 @@ Two rules from the drain workflow matter more in this mode than usual:
 - **Evidence-first closure.** The closure has to say which merge satisfied the bead:
   put the merge SHA and PR number in the **closure commit message**. `br close` also
   takes `--reason`, but the drain path closes with `br update <id> -s closed` for the
-  flush behaviour the main skill explains — so the commit message is where this
-  evidence reliably lands. A bead closed without the merged fix just reappears in the
-  next review, and you will not know why.
+  flush behaviour that
+  [exact companion skill `rb-lite-backlog-drain`, step 11](../../rb-lite-backlog-drain/SKILL.md#backlog-step-11)
+  explains — so the commit message is where this evidence reliably lands. A bead closed
+  without the merged fix just reappears in the next review, and you will not know why.
   The `bead-closure: <bead-id>` marker is a SEPARATE obligation and does not move here:
-  step 12's recovery query reads each PR's `.body` and nothing else, so a marker left
+  [exact companion skill `rb-lite-backlog-drain`, step 12 recovery](../../rb-lite-backlog-drain/SKILL.md#backlog-step-12) reads each
+  PR's `.body` and nothing else, so a marker left
   only in the commit message is invisible to a fresh clone — which is the state that
   rebuilds merged work. Evidence in the commit message, marker in the PR body, both.
 

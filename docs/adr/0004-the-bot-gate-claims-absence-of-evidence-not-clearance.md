@@ -13,8 +13,9 @@ Accepted. Supersedes the settle-window and skipped-file clauses described in
 current tip is observable. That is not the same as deciding the bots have finished, and
 this ADR exists because the difference is the whole point: GitHub exposes no terminal
 signal, so exit 0 is `NO_PENDING_EVIDENCE`, never "the bots cleared this".
-It is a merge *prerequisite*, not merge authorization: § 8 of the skill runs the
-base-freshness ancestor test before merging, which this gate never looks at, and the skill
+It is a merge *prerequisite*, not merge authorization: the skill's
+[exact companion merge skill](../../skills/pr-with-codex-bot-review-merge/SKILL.md)
+runs the base-freshness ancestor test before merging, which this gate never looks at, and the skill
 explicitly forbids chaining `bot-gate && gh pr merge`.
 
 That prohibition postdates the problem below. The chain WAS the documented usage while

@@ -1,22 +1,16 @@
 ---
 name: drive
 description: >-
-  Use this whenever the user hands over a GOAL instead of a single action and expects
-  you to keep working until it is reached. Make sure to use it even when the user never
-  says the word "drive" — a request that spans more than one phase of the software
-  lifecycle is a drive, and running the phases ad hoc instead is the mistake this skill
-  exists to prevent. Trigger phrases: "drive this", "drive the project", "take X from
-  spec to merged", "from idea to merged", "handle it end to end", "run the whole
-  pipeline", "work on X until it's done", "keep going until the beads/backlog are
-  drained", "don't stop and ask me between steps", "I'll check back later", plus any
-  request that names a feature, epic or milestone rather than a file, or that states a
-  finish condition rather than an action. Also use it to answer "where are we / what's
-  next" on a project, and to resume a half-finished project in a fresh session. It
-  sequences the specialist lifecycle skills — spec, then beads, then build, then tests,
-  then the reviewer panel, then the PR and merge, then the next bead — and enforces the
-  evidence gate between each, so prefer it over invoking any single one of those skills
-  directly whenever the work spans more than one of those phases. Skip it only for a
-  single bounded action, a one-off edit, a question, or debugging and ops work.
+  Drive a software goal across lifecycle phases until its finish condition is met.
+  Use when work spans spec, beads, build, tests, reviewer convergence, PR/merge, or
+  multiple backlog items—even if the user never says "drive". Trigger on "drive
+  this", "end to end", "from idea/spec to merged", "run the whole pipeline",
+  "until it's done", "drain the backlog", "don't stop and ask me between steps",
+  "I'll check back later", feature/epic/milestone goals, project status, or resuming
+  half-finished work. It routes to specialist skills and enforces
+  evidence at every transition. Skip for a single bounded action, one-off edit,
+  question, or debugging/ops task. Prefer Drive over invoking phase skills directly
+  whenever the work crosses phases.
 argument-hint: "[goal or bead id] [--phase shape|graph|build|prove|harden|land]"
 compatibility: >-
   Inherits the prerequisites of whichever phases a project actually reaches:
@@ -298,7 +292,10 @@ A phase closes on evidence or it does not close.
   `.beads.jsonl` and `<name>.beads.jsonl` are supported too, and a hardcoded path diffs
   nothing on those — a false all-clear in the direction that loses text. Detail and
   recovery:
-  [orchestrating-with-rb-lite](../orchestrating-with-rb-lite/SKILL.md) step 11.
+  load exact companion skill `rb-lite-backlog-drain` and follow
+  [step 11](../rb-lite-backlog-drain/SKILL.md#backlog-step-11).
+  **Companion unavailable: stop, rerun the same installer command once, reload it, and do
+  not improvise this procedure.**
 
 
 The rules above are what closes a *phase*. The fuller set on not lying about *edits* —

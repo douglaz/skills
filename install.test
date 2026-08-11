@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.test — fixture tests for the installer's uninstall and link paths.
+# install.test — installer fixtures and repository-level harness compatibility checks.
 #
 # Written because `--uninstall` carried two independent `set -e` aborts that both
 # reported success:
@@ -35,7 +35,7 @@ fail() { FAIL=$((FAIL+1)); printf '  FAIL %s\n         %s\n' "$1" "$2"; }
 new_fixture() {  # $1 = space-separated skill names to create in the clone
   local base s
   base=$(mktemp -d "$WORK/fixture.XXXXXX")
-  mkdir -p "$base"/{clone/.git,home/.claude/skills,codexhome/skills,bin}
+  mkdir -p "$base"/{clone/.git,clone/skills,home/.claude/skills,codexhome/skills,bin}
   for s in $1; do
     mkdir -p "$base/clone/skills/$s"
     printf 'stub\n' > "$base/clone/skills/$s/SKILL.md"
@@ -45,6 +45,26 @@ new_fixture() {  # $1 = space-separated skill names to create in the clone
   printf '#!/usr/bin/env bash\nexit 0\n' > "$base/bin/git"
   chmod +x "$base/bin/git"
   printf '%s' "$base"
+}
+
+new_repo_fixture() {
+  local base skill_dir
+  base=$(new_fixture "")
+  for skill_dir in "$HERE"/skills/*/; do
+    [[ -f "$skill_dir/SKILL.md" ]] || continue
+    ln -s "${skill_dir%/}" "$base/clone/skills/$(basename "$skill_dir")"
+  done
+  printf '%s' "$base"
+}
+
+repository_skill_files() {
+  local base="$1" skill_dir
+  for skill_dir in "$base"/skills/*/; do
+    skill_dir=${skill_dir%/}
+    # Matches .gitignore: eval-creator `*-workspace` scaffolds are not skills.
+    [[ $skill_dir == *-workspace ]] && continue
+    [[ -f "$skill_dir/SKILL.md" ]] && printf '%s\n' "$skill_dir/SKILL.md"
+  done
 }
 
 link_skill() {  # $1 = base, $2 = skill — pre-link into both targets
@@ -158,6 +178,333 @@ b=$(new_fixture "alpha")
 out=$(run "$b" --target claude nosuch); rc=$?
 if [[ $rc -eq 0 ]]; then fail "$t" "exit 0 for a skill that does not exist"
 elif [[ "$out" != *"not found"* ]]; then fail "$t" "no warning naming the missing skill"
+else pass "$t"; fi
+
+t="the documented stdin-piped installer can parse --help"
+out=$(bash -s -- --help < "$INSTALL" 2>&1); rc=$?
+if [[ $rc -ne 0 ]]; then fail "$t" "exit $rc: $out"
+elif [[ "$out" != *"Usage:"* ]]; then fail "$t" "usage text missing"
+else pass "$t"; fi
+
+t="the stdin-piped installer re-execs and skips a second pull"
+b=$(new_fixture "alpha")
+cp "$INSTALL" "$b/clone/install.sh"
+printf '%s\n' '#!/usr/bin/env bash' 'n=0' '[[ -f "$GIT_COUNT_FILE" ]] && read -r n < "$GIT_COUNT_FILE"' 'n=$((n + 1))' 'printf "%s\n" "$n" > "$GIT_COUNT_FILE"' > "$b/bin/git"
+chmod +x "$b/bin/git"
+GIT_COUNT_FILE="$b/git-count" HOME="$b/home" CODEX_HOME="$b/codexhome" \
+  PATH="$b/bin:$PATH" bash -s -- --dir "$b/clone" --target claude alpha \
+  < "$INSTALL" >/dev/null; rc=$?
+if [[ $rc -ne 0 ]]; then fail "$t" "exit $rc"
+elif [[ ! -L "$b/home/.claude/skills/alpha" ]]; then fail "$t" "alpha link missing"
+elif [[ $(< "$b/git-count") != 1 ]]; then fail "$t" "git ran more than once"
+else pass "$t"; fi
+
+t="a pulled installer re-execs its updated bytes with the original arguments"
+b=$(new_fixture "alpha")
+cp "$INSTALL" "$b/clone/install.sh"
+printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$*" > "$HOME/reexec-observed"' > "$b/clone/install.sh.updated"
+printf '%s\n' '#!/usr/bin/env bash' 'cp "$SELF_UPDATE_SOURCE" "$SELF_UPDATE_TARGET.next" && mv "$SELF_UPDATE_TARGET.next" "$SELF_UPDATE_TARGET"' > "$b/bin/git"
+chmod +x "$b/bin/git"
+SELF_UPDATE_SOURCE="$b/clone/install.sh.updated" SELF_UPDATE_TARGET="$b/clone/install.sh" \
+  HOME="$b/home" CODEX_HOME="$b/codexhome" PATH="$b/bin:$PATH" \
+  bash "$b/clone/install.sh" --dir "$b/clone" --target claude alpha >/dev/null; rc=$?
+observed=$(< "$b/home/reexec-observed")
+if [[ $rc -ne 0 ]]; then fail "$t" "exit $rc"
+elif [[ "$observed" != "--dir $b/clone --target claude alpha" ]]; then
+  fail "$t" "updated installer observed wrong argv: $observed"
+else pass "$t"; fi
+
+t="a pulled installer re-execs safely with empty arguments"
+b=$(new_fixture "alpha")
+mkdir -p "$b/data"
+mv "$b/clone" "$b/data/douglaz-skills"
+cp "$INSTALL" "$b/data/douglaz-skills/install.sh"
+printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$#" > "$HOME/reexec-argc"' > "$b/data/douglaz-skills/install.sh.updated"
+printf '%s\n' '#!/usr/bin/env bash' 'cp "$SELF_UPDATE_SOURCE" "$SELF_UPDATE_TARGET.next" && mv "$SELF_UPDATE_TARGET.next" "$SELF_UPDATE_TARGET"' > "$b/bin/git"
+chmod +x "$b/bin/git"
+SELF_UPDATE_SOURCE="$b/data/douglaz-skills/install.sh.updated" \
+  SELF_UPDATE_TARGET="$b/data/douglaz-skills/install.sh" XDG_DATA_HOME="$b/data" \
+  HOME="$b/home" CODEX_HOME="$b/codexhome" PATH="$b/bin:$PATH" \
+  bash "$b/data/douglaz-skills/install.sh" >/dev/null; rc=$?
+if [[ $rc -ne 0 ]]; then fail "$t" "exit $rc"
+elif [[ ! -f "$b/home/reexec-argc" ]]; then fail "$t" "updated installer did not run"
+elif [[ $(< "$b/home/reexec-argc") != 0 ]]; then fail "$t" "updated installer received arguments"
+else pass "$t"; fi
+
+t="selective installs include required companions without unrelated skills"
+dependency_failures=""
+while IFS='|' read -r consumer companion; do
+  b=$(new_repo_fixture)
+  run "$b" --target both "$consumer" >/dev/null; rc=$?
+  if [[ $rc -ne 0 ]]; then
+    dependency_failures+="$consumer exited $rc; "
+  elif [[ ! -L "$b/home/.claude/skills/$companion" ]]; then
+    dependency_failures+="$consumer omitted Claude $companion; "
+  elif [[ ! -L "$b/codexhome/skills/$companion" ]]; then
+    dependency_failures+="$consumer omitted Codex $companion; "
+  elif [[ -L "$b/home/.claude/skills/voice-dna" || -L "$b/codexhome/skills/voice-dna" ]]; then
+    dependency_failures+="$consumer installed unrelated voice-dna; "
+  fi
+done <<'DEPENDENCIES'
+multi-reviewer-loop|multi-reviewer-loop-delegating-edits
+multi-reviewer-loop-delegating-edits|multi-reviewer-loop
+orchestrating-with-rb-lite|rb-lite-backlog-drain
+rb-lite-backlog-drain|orchestrating-with-rb-lite
+pr-with-codex-bot-review|pr-with-codex-bot-review-merge
+pr-with-codex-bot-review-merge|pr-with-codex-bot-review
+drive|rb-lite-backlog-drain
+drive|orchestrating-with-rb-lite
+drive|pr-with-codex-bot-review-merge
+drive|pr-with-codex-bot-review
+bead-polish-loop|rb-lite-backlog-drain
+bead-polish-loop|orchestrating-with-rb-lite
+plan-to-beads-transfer|rb-lite-backlog-drain
+plan-to-beads-transfer|orchestrating-with-rb-lite
+second-model-bead-audit|rb-lite-backlog-drain
+second-model-bead-audit|orchestrating-with-rb-lite
+DEPENDENCIES
+if [[ -n "$dependency_failures" ]]; then fail "$t" "$dependency_failures"
+else pass "$t"; fi
+
+t="selective upgrades repair companions per target without cross-target migration"
+upgrade_failures=""
+while IFS='|' read -r owner companion; do
+  b=$(new_repo_fixture)
+  ln -s "$b/clone/skills/$owner" "$b/home/.claude/skills/$owner"
+  mkdir -p "$b/codexhome/skills/$owner"
+  printf 'mine\n' > "$b/codexhome/skills/$owner/SKILL.md"
+  run "$b" --target both --migrate-existing voice-dna >/dev/null; rc=$?
+  if [[ $rc -ne 0 ]]; then
+    upgrade_failures+="$owner upgrade exited $rc; "
+  elif [[ ! -L "$b/home/.claude/skills/$companion" ]]; then
+    upgrade_failures+="$owner omitted Claude $companion; "
+  elif [[ -e "$b/codexhome/skills/$companion" || -L "$b/codexhome/skills/$companion" ]]; then
+    upgrade_failures+="$owner leaked $companion into Codex; "
+  elif [[ -L "$b/codexhome/skills/$owner" || $(< "$b/codexhome/skills/$owner/SKILL.md") != mine ]]; then
+    upgrade_failures+="$owner migrated the unrequested Codex directory; "
+  fi
+done <<'UPGRADES'
+multi-reviewer-loop|multi-reviewer-loop-delegating-edits
+orchestrating-with-rb-lite|rb-lite-backlog-drain
+pr-with-codex-bot-review|pr-with-codex-bot-review-merge
+UPGRADES
+if [[ -n "$upgrade_failures" ]]; then fail "$t" "$upgrade_failures"
+else pass "$t"; fi
+
+t="upgrade repair is one hop and shared failure paths count once"
+b=$(new_repo_fixture)
+ln -s "$b/clone/skills/drive" "$b/home/.claude/skills/drive"
+run "$b" --target claude voice-dna >/dev/null; rc=$?
+if [[ $rc -ne 0 ]]; then fail "$t" "asymmetric repair exited $rc"
+elif [[ ! -L "$b/home/.claude/skills/rb-lite-backlog-drain" \
+     || ! -L "$b/home/.claude/skills/pr-with-codex-bot-review-merge" ]]; then
+  fail "$t" "drive's direct companions were not repaired"
+elif [[ -e "$b/home/.claude/skills/orchestrating-with-rb-lite" \
+     || -e "$b/home/.claude/skills/pr-with-codex-bot-review" ]]; then
+  fail "$t" "repair expanded through newly installed companion links"
+else
+  for owner in bead-polish-loop plan-to-beads-transfer second-model-bead-audit; do
+    ln -s "$b/clone/skills/$owner" "$b/codexhome/skills/$owner"
+  done
+  printf 'blocked\n' > "$b/codexhome/skills/rb-lite-backlog-drain"
+  out=$(run "$b" --target codex voice-dna 2>&1); rc=$?
+  warning_count=$(grep -Fc 'required companion path exists but is not a loadable skill' <<< "$out")
+  if [[ $rc -eq 0 ]]; then fail "$t" "blocked companion returned success"
+  elif [[ $warning_count -ne 1 ]]; then fail "$t" "blocked path warned $warning_count times"
+  elif [[ "$out" != *"skipped=1"* ]]; then fail "$t" "blocked path was not counted once"
+  else
+    b=$(new_repo_fixture)
+    for owner in bead-polish-loop plan-to-beads-transfer second-model-bead-audit; do
+      ln -s "$b/clone/skills/$owner" "$b/codexhome/skills/$owner"
+    done
+    mv "$b/clone/skills/rb-lite-backlog-drain" \
+      "$b/clone/skills/rb-lite-backlog-drain.missing"
+    out=$(run "$b" --target codex voice-dna 2>&1); rc=$?
+    warning_count=$(grep -Fc 'required companion source is missing' <<< "$out")
+    if [[ $rc -eq 0 ]]; then fail "$t" "missing companion returned success"
+    elif [[ $warning_count -ne 1 ]]; then fail "$t" "missing source warned $warning_count times"
+    elif [[ "$out" != *"missing=1"* ]]; then fail "$t" "missing source was not counted once"
+    else pass "$t"; fi
+  fi
+fi
+
+t="upgrade repair replaces dangling companions and rejects wrong declared names"
+b=$(new_repo_fixture)
+ln -s "$b/clone/skills/orchestrating-with-rb-lite" \
+  "$b/home/.claude/skills/orchestrating-with-rb-lite"
+ln -s "$b/clone/skills/rb-lite-backlog-drain-OLD" \
+  "$b/home/.claude/skills/rb-lite-backlog-drain"
+out=$(run "$b" --target claude voice-dna 2>&1); rc=$?
+if [[ $rc -ne 0 ]]; then fail "$t" "dangling-link repair exited $rc: $out"
+elif [[ ! -L "$b/home/.claude/skills/rb-lite-backlog-drain" ]]; then
+  fail "$t" "dangling companion was not replaced"
+elif [[ $(readlink "$b/home/.claude/skills/rb-lite-backlog-drain") \
+     != "$b/clone/skills/rb-lite-backlog-drain" ]]; then
+  fail "$t" "dangling companion points at the wrong source"
+else
+  b=$(new_repo_fixture)
+  ln -s "$b/clone/skills/orchestrating-with-rb-lite" \
+    "$b/home/.claude/skills/orchestrating-with-rb-lite"
+  mkdir -p "$b/home/.claude/skills/rb-lite-backlog-drain"
+  printf '%s\n' '---' 'name: wrong-skill' 'description: wrong' '---' > \
+    "$b/home/.claude/skills/rb-lite-backlog-drain/SKILL.md"
+  out=$(run "$b" --target claude voice-dna 2>&1); rc=$?
+  if [[ $rc -eq 0 ]]; then fail "$t" "wrong-name companion returned success"
+  elif [[ "$out" != *"required companion path exists but is not a loadable skill"* ]]; then
+    fail "$t" "wrong-name companion emitted no warning"
+  elif [[ "$out" != *"skipped=1"* ]]; then fail "$t" "wrong-name path was not counted"
+  else pass "$t"; fi
+fi
+
+t="ignored workspace directories stay out of installer and validation inventories"
+b=$(new_fixture "alpha eval-workspace")
+inventory=$(repository_skill_files "$b/clone")
+run "$b" --target both >/dev/null; rc=$?
+if [[ $rc -ne 0 ]]; then fail "$t" "all-skill install exited $rc"
+elif [[ "$inventory" != "$b/clone/skills/alpha/SKILL.md" ]]; then
+  fail "$t" "validation inventory was not exactly alpha: $inventory"
+elif [[ ! -L "$b/home/.claude/skills/alpha" || ! -L "$b/codexhome/skills/alpha" ]]; then
+  fail "$t" "ordinary alpha skill was not installed"
+elif [[ -L "$b/home/.claude/skills/eval-workspace" || -L "$b/codexhome/skills/eval-workspace" ]]; then
+  fail "$t" "ignored eval-workspace was installed"
+else pass "$t"; fi
+
+# ── harness compatibility ────────────────────────────────────────────────────────
+
+# Evidence measured 2026-08-10 with Tau 0.1.0 (e341951, model-visible `skill` tool):
+# `rg -n 'MAX_SKILL_CONTENT_BYTES|read_skill_source_prefix' crates/tau-harness-tools/src/lib.rs`
+# reported `MAX_SKILL_CONTENT_BYTES: usize = 64 * 1024` and showed the loader passing
+# that bound directly to the raw source-prefix reader (no line-number rendering). In a
+# PTY-combined stream, invoking the old 97,161-byte skill through Tau's model-visible
+# `skill` tool warned that it was truncated to 65,536 bytes. Every current source is at
+# or below the bound checked here.
+# A skill can therefore install and parse while its load-bearing tail is never shown.
+# The same Tau revision defines `MAX_DESCRIPTION_LENGTH: usize = 1024` in
+# `crates/tau-skills/src/lib.rs`; the folded-description check below implements the
+# repository's current `description: >-` convention without adding a YAML dependency.
+folded_description_bytes() {
+  LC_ALL=C awk '
+    NR == 1 { if ($0 != "---") exit; next }
+    $0 == "---" { exit }
+    $0 == "description: >-" { in_description=1; next }
+    in_description && /^[[:space:]]*$/ { invalid=1; exit }
+    in_description && /^  / {
+      line=$0; sub(/^  /, "", line)
+      if (seen) total++
+      total += length(line); seen=1; next
+    }
+    in_description { exit }
+    END { if (in_description && !invalid && seen) print total }
+  ' "$1"
+}
+
+mapfile -t skill_files < <(repository_skill_files "$HERE")
+t="skills repository contains discoverable skills"
+if [[ ${#skill_files[@]} -eq 0 ]]; then fail "$t" "no skills/*/SKILL.md files found"
+else
+  pass "$t"
+  body_failures=""; description_failures=""
+  for skill_file in "${skill_files[@]}"; do
+    if ! bytes=$(LC_ALL=C wc -c < "$skill_file"); then
+      body_failures+="${skill_file#"$HERE/"} (could not measure); "
+      continue
+    fi
+    if [[ $bytes -gt 65536 ]]; then
+      body_failures+="${skill_file#"$HERE/"} ($bytes bytes); "
+    fi
+    description_bytes=$(folded_description_bytes "$skill_file")
+    if [[ ! $description_bytes =~ ^[0-9]+$ ]]; then
+      description_failures+="${skill_file#"$HERE/"} (unsupported description form); "
+    elif [[ $description_bytes -gt 1024 ]]; then
+      description_failures+="${skill_file#"$HERE/"} ($description_bytes bytes); "
+    fi
+  done
+
+  t="every SKILL.md fits Tau's 64 KiB skill-source prefix"
+  if [[ -n "$body_failures" ]]; then fail "$t" "$body_failures"
+  else pass "$t"; fi
+
+  t="every single-paragraph folded skill description fits Tau's 1,024-byte bound"
+  if [[ -n "$description_failures" ]]; then fail "$t" "$description_failures"
+  else pass "$t"; fi
+fi
+
+# These are the companion procedures most likely to be loaded under pressure. Pin their
+# exact model-invocable names, stable anchors, and every critical handoff rather than
+# attempting to validate all Markdown links with a second parser.
+t="critical companion-skill handoffs remain loadable"
+link_failures=""
+backlog_ref="$HERE/skills/rb-lite-backlog-drain/SKILL.md"
+for required_ref in \
+  skills/multi-reviewer-loop-delegating-edits/SKILL.md \
+  skills/pr-with-codex-bot-review-merge/SKILL.md; do
+  if [[ ! -f "$HERE/$required_ref" ]]; then
+    link_failures+="$required_ref missing; "
+  fi
+done
+for anchor in 7 8 11 12; do
+  if ! grep -Fq -- "<a id=\"backlog-step-$anchor\"></a>" "$backlog_ref"; then
+    link_failures+="backlog-step-$anchor anchor missing; "
+  fi
+done
+while IFS='|' read -r consumer target; do
+  if [[ $target == "##"* || $target == "name: "* ]]; then
+    grep -Fxq -- "$target" "$HERE/$consumer" || link_failures+="$consumer lacks $target; "
+  elif ! grep -Fq -- "$target" "$HERE/$consumer"; then
+    link_failures+="$consumer lacks $target; "
+  fi
+done <<'LINKS'
+skills/rb-lite-backlog-drain/SKILL.md|name: rb-lite-backlog-drain
+skills/rb-lite-backlog-drain/SKILL.md|user-invocable: false
+skills/multi-reviewer-loop-delegating-edits/SKILL.md|name: multi-reviewer-loop-delegating-edits
+skills/multi-reviewer-loop-delegating-edits/SKILL.md|user-invocable: false
+skills/pr-with-codex-bot-review-merge/SKILL.md|name: pr-with-codex-bot-review-merge
+skills/pr-with-codex-bot-review-merge/SKILL.md|user-invocable: false
+skills/orchestrating-with-rb-lite/SKILL.md|../rb-lite-backlog-drain/SKILL.md#backlog-step-11
+skills/orchestrating-with-rb-lite/SKILL.md|[`rb-lite-backlog-drain`](../rb-lite-backlog-drain/SKILL.md)
+skills/orchestrating-with-rb-lite/references/harden-until-clean.md|../../rb-lite-backlog-drain/SKILL.md#backlog-step-11
+skills/multi-reviewer-loop/SKILL.md|../multi-reviewer-loop-delegating-edits/SKILL.md
+skills/pr-with-codex-bot-review/SKILL.md|../pr-with-codex-bot-review-merge/SKILL.md
+skills/rb-lite-backlog-drain/SKILL.md|../orchestrating-with-rb-lite/SKILL.md#backlog-task-template
+skills/rb-lite-backlog-drain/SKILL.md|../orchestrating-with-rb-lite/SKILL.md#exit-codes-and-json-schema
+skills/rb-lite-backlog-drain/SKILL.md|../orchestrating-with-rb-lite/SKILL.md#verify-the-landed-diff
+skills/rb-lite-backlog-drain/SKILL.md|../orchestrating-with-rb-lite/SKILL.md#tool-dependencies
+skills/multi-reviewer-loop-delegating-edits/SKILL.md|../multi-reviewer-loop/SKILL.md#1-preflight
+skills/pr-with-codex-bot-review-merge/SKILL.md|../pr-with-codex-bot-review/SKILL.md#8a-the-merge-report-must-quote-the-gate
+skills/pr-with-codex-bot-review-merge/SKILL.md|GATE_JSON=$("$BOT_GATE" <N> --json) || GATE_RC=$?
+skills/pr-with-codex-bot-review-merge/SKILL.md|unset REVIEWED_TIP
+skills/pr-with-codex-bot-review-merge/SKILL.md|merge-gate-<N>.json
+skills/pr-with-codex-bot-review-merge/SKILL.md|pr-with-codex-bot-review § 8b
+skills/pr-with-codex-bot-review-merge/SKILL.md|# DEGRADED REENTRY A: stop here after repository and BOT_GATE resolution.
+skills/pr-with-codex-bot-review-merge/SKILL.md|# DEGRADED REENTRY B: resume here after completing main-skill § 8b.
+skills/pr-with-codex-bot-review/SKILL.md|LIVE_GATE_JSON=$("$BOT_GATE" <N> --json) || LIVE_GATE_RC=$?
+skills/pr-with-codex-bot-review/SKILL.md|"$LIVE_GATE_TIP" = "$AUTHORIZED_TIP"
+skills/pr-with-codex-bot-review/SKILL.md|_LIVE_TREE=$(git status --porcelain)
+skills/pr-with-codex-bot-review/SKILL.md|orchestrating-with-rb-lite` § **Tool dependencies**
+skills/pr-with-codex-bot-review/SKILL.md|orchestrating-with-rb-lite` § **Customizing the panel**
+skills/orchestrating-with-rb-lite/SKILL.md|## Backlog task template
+skills/orchestrating-with-rb-lite/SKILL.md|## Exit codes and JSON schema
+skills/orchestrating-with-rb-lite/SKILL.md|## Verify the landed diff
+skills/orchestrating-with-rb-lite/SKILL.md|## Tool dependencies
+skills/orchestrating-with-rb-lite/SKILL.md|## Customizing the panel
+skills/multi-reviewer-loop/SKILL.md|### 1. Preflight
+skills/pr-with-codex-bot-review/SKILL.md|### 8a. The merge report must quote the gate
+skills/pr-with-codex-bot-review/SKILL.md|### 8b. When the forge itself is degraded
+skills/drive/SKILL.md|../rb-lite-backlog-drain/SKILL.md#backlog-step-11
+skills/drive/references/phases.md|../../rb-lite-backlog-drain/SKILL.md#backlog-step-11
+skills/bead-polish-loop/SKILL.md|../rb-lite-backlog-drain/SKILL.md#backlog-step-11
+skills/plan-to-beads-transfer/SKILL.md|../rb-lite-backlog-drain/SKILL.md#backlog-step-11
+skills/second-model-bead-audit/SKILL.md|../rb-lite-backlog-drain/SKILL.md#backlog-step-11
+skills/second-model-bead-audit/references/reviewer-panel.md|../../rb-lite-backlog-drain/SKILL.md#backlog-step-11
+skills/multi-reviewer-loop/SKILL.md|Companion unavailable: do not delegate
+skills/pr-with-codex-bot-review/SKILL.md|Companion unavailable: stop
+skills/orchestrating-with-rb-lite/SKILL.md|Companion unavailable: stop
+skills/drive/SKILL.md|Companion unavailable: stop
+skills/bead-polish-loop/SKILL.md|Companion unavailable: stop
+skills/plan-to-beads-transfer/SKILL.md|Companion unavailable: stop
+skills/second-model-bead-audit/SKILL.md|Companion unavailable: stop
+LINKS
+if [[ -n "$link_failures" ]]; then fail "$t" "$link_failures"
 else pass "$t"; fi
 
 printf '\npassed %d, failed %d\n' "$PASS" "$FAIL"

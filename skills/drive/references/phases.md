@@ -518,8 +518,9 @@ Read its "Files skipped from review" list and re-trigger unless the skip was exp
 creates a new commit; that equality is unsatisfiable by construction.
 
 Pin the head in the merge itself, using **the tip `bot-gate` checked** rather than a fresh
-`git rev-parse HEAD` — see `pr-with-codex-bot-review` § 8, which captures it from the
-gate's JSON. A re-read pins whatever is current, so an amend landing after the gate gets
+`git rev-parse HEAD` — see the
+[exact companion skill `pr-with-codex-bot-review-merge`](../../pr-with-codex-bot-review-merge/SKILL.md),
+which captures it from the gate's JSON. A re-read pins whatever is current, so an amend landing after the gate gets
 pinned to itself and is accepted
 (`-R` because a bare PR number resolves against the current repo, which on a fork is yours)
 (the **full** OID; the wrapper's SHA may be abbreviated, which would refuse every merge).
@@ -712,7 +713,9 @@ clone boundary, so a snippet that assumes one silently rejects every PR (`$id !=
 misses the closure it exists to find.
 
 Keyed on the **`bead-closure:` marker plus the bead id**, not on the id alone: every work
-PR body carries the bead id too (rb-lite's step 8 requires it), so an id-only filter
+PR body carries the bead id too
+([exact companion skill `rb-lite-backlog-drain`, step 8](../../rb-lite-backlog-drain/SKILL.md#backlog-step-8)
+requires it), so an id-only filter
 returns the merged work PR for any bead whose work landed — on a fresh clone that reads
 as closure history for a closure that was never opened, and the resume guard clears
 itself on the wrong PR. Not a branch-naming convention either — nothing here mandates
@@ -726,7 +729,9 @@ the metadata PR being opened leaves exactly that state: work on the base, bead s
 in the JSONL, no marker anywhere for the first query to find. Reading empty as
 "unfinished" there re-enters BUILD and duplicates merged work. The second query in the
 block is what tells those apart: it asks the same snapshot whether the bead's WORK
-already merged (every work PR body carries the bead id — rb-lite's step 8 requires it).
+already merged (every work PR body carries the bead id —
+[exact companion skill `rb-lite-backlog-drain`, step 8](../../rb-lite-backlog-drain/SKILL.md#backlog-step-8)
+requires it).
 
 Read any hit before acting on it. **Take the repository from the hit's `url`, never from
 the number alone** — these results merge the parent's PRs with the fork's, and #42 exists
@@ -794,7 +799,7 @@ Ids on only one side, or a `description` this phase did not write, is the tell. 
 hand-edit that file (a hand
 edit does not advance `updated_at`, which is what makes the cache stale and undetectable);
 write bead text with `br update -d/--notes`. Recovery is in
-[orchestrating-with-rb-lite](../../orchestrating-with-rb-lite/SKILL.md) step 11.
+[exact companion skill `rb-lite-backlog-drain`, step 11](../../rb-lite-backlog-drain/SKILL.md#backlog-step-11).
 
 A flush
 over a graph that was already committed and unchanged legitimately reports nothing, so a

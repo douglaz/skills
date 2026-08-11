@@ -65,8 +65,11 @@ _st=$(git status --porcelain -- "$BEADS_JSONL") \
 printf '%s' "$_st"
 ```
 
-If it is not empty, resolve it first — recovery
-case (a) in [orchestrating-with-rb-lite](../orchestrating-with-rb-lite/SKILL.md) step 11. After the first flush the choice
+If it is not empty, resolve it first — recovery case (a) in
+[exact companion skill `rb-lite-backlog-drain`, step 11](../rb-lite-backlog-drain/SKILL.md#backlog-step-11).
+**Companion unavailable: stop, rerun the same installer command once, reload it, and do
+not improvise this procedure.**
+After the first flush the choice
 is gone.
 
 ## Translation readiness test
@@ -150,7 +153,7 @@ order.
     hardcoded path diffs nothing on the others) — ids on only one side, or a
     `description` you did not touch, is the tell. Recovery, and why `br sync --import-only`
     cannot do it, is in
-    [orchestrating-with-rb-lite](../orchestrating-with-rb-lite/SKILL.md) step 11 — but note
+    [exact companion skill `rb-lite-backlog-drain`, step 11](../rb-lite-backlog-drain/SKILL.md#backlog-step-11) — but note
     its replay step assumes a SINGLE mutation, the drain's case. A transfer has a whole
     graph in flight, so enumerate the complete intended delta (the replay manifest you started before step 4 —
     NOT the coverage matrix, which maps plan elements to beads and preserves no ids, field

@@ -324,7 +324,9 @@ otherwise be an already-running round's submission), no `eyes` reaction newer th
 wrapper, no base mutation lacking such a provably-fresh later review request (a retarget
 grows the diff without moving the head), and zero unresolved threads from either gated bot. It fails closed on any API error or missing tool **in the signals that feed those six** —
 a CodeRabbit query failure is reported and does not block, deliberately. Exit 0, 1 blocked,
-2 usage, 3 cannot determine, and "cannot determine" is never clearance.
+2 usage, 3 cannot determine, and 4 `BLOCKED_UNATTRIBUTED`. Exits 1 and 4 both refuse the
+merge; exit 4 means a round finished without evidence naming its tree, so waiting may not
+help. "Cannot determine" is never clearance.
 
 CodeRabbit's status is printed and ignored. It is a PR-level signal, not evidence about a
 tree: measured on this repo, CodeRabbit stamped `success`/"Review completed" on a commit
@@ -420,6 +422,27 @@ symlink, the installer now treats that as a conflict and exits non-zero after
 reporting the partial install. When the directory looks like a copied skill
 from this repo, rerun with `--migrate-existing` to rename it to
 `<skill>.backup.<timestamp>` and replace it with a symlink.
+
+Repository validation intentionally requires each frontmatter description to use one
+single-paragraph `description: >-` block. Tau accepts more YAML scalar forms, but this
+narrow authoring convention lets `install.test` enforce its 1,024-byte limit without a
+runtime YAML dependency.
+
+Some large workflows are split into exact-name companion skills so Tau can discover
+the continuation through its normal skill loader without exposing a source filesystem
+path. Their descriptions mark them as internal companions: load them only when the
+owning or an explicitly compatible sibling workflow names them, not as standalone
+workflow selectors. They remain model-loadable by exact name but are hidden from direct
+user invocation. A selective install
+automatically includes every required companion of the named skills. After updating the
+shared clone, the installer also repairs direct missing companions beside already-managed
+referring skills inside each selected target; it does not recursively add newly exposed
+standalone workflows or copy an existing skill from one target to another.
+
+One-time upgrade note: an installer process from before companion support cannot change
+the code already running in its shell after `git pull`. If that old process performed a
+selective update, run the same install command once more so the updated installer adds the
+new companion links. Current installers re-exec updated bytes automatically.
 
 Install specific skills:
 

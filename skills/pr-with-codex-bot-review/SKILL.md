@@ -1,21 +1,13 @@
 ---
 name: pr-with-codex-bot-review
 description: >-
-  How to open and land a pull request through GitHub's `chatgpt-codex-connector` review bot
-  (the one that auto-comments "Codex Review" on PRs), gating also on `coderabbitai[bot]`
-  when it is configured on the repo. Covers writing the PR body, running local gates, a
-  local Claude pre-review before push so bot rounds start from the good diff, the
-  codex bot's actual behavior — auto-fires on substantive code PRs, often silent on
-  docs-only PRs, line-level findings live in PR review comments not the review body —
-  re-triggering with `@codex review`, addressing findings via amend + force-push, knowing
-  when to merge despite bot silence, and the squash-merge + branch-reset pattern. THE
-  MERGE DECISION IS MADE BY THE BUNDLED `scripts/bot-gate`, NOT BY JUDGMENT — run it and
-  quote its output; the manual reaction-and-comment procedure it replaced is gone, and
-  was wrong three different ways before it was. Use this skill whenever the user asks to
-  open a PR, "ship this", "merge it", "let the bot review", "land the change", or right
-  after substantial code work that's ready for review. Also when the user asks why the
-  bot "isn't reviewing", how to interpret what it left behind, or what to do when GitHub
-  itself is degraded and no review can be attributed to the tree being merged.
+  Open and land a pull request through GitHub's `chatgpt-codex-connector` review
+  bot, also accounting for CodeRabbit when configured. Covers local gates and Claude
+  pre-review, structured PRs, CI, bot re-triggers, finding disposition, degraded-forge
+  evidence, squash merge, and safe branch reset. The bundled `scripts/bot-gate` owns
+  the merge admission decision: require its exit status and quote its output. Use for
+  "open a PR", "ship this", "merge it", "let the bot review", "land the change",
+  bot-silence diagnosis, or substantial code ready for review.
 argument-hint: "[pr-number-or-branch]"
 allowed-tools:
   - Bash
@@ -23,6 +15,7 @@ allowed-tools:
   - Edit
   - Write
   - Grep
+  - Skill
 ---
 
 # pr-with-codex-bot-review
@@ -386,8 +379,10 @@ while you watch it, and the measured behaviour is that it does not exit on its o
 
 Every reviewer invocation *this skill and the panel skills own* is bounded for the same
 reason. Not every one in the repo is: `orchestrating-with-rb-lite` documents **three**
-unbounded `claude -p` reviewer commands that rb-lite itself dispatches — `SKILL.md:111`
-pinning `claude-opus-5`, and `:1296`/`:1298` pinning `opus` — which carry no timeout
+unbounded `claude -p` reviewer commands that rb-lite itself dispatches — the default
+reviewer command in `orchestrating-with-rb-lite` § **Tool dependencies** pins
+`claude-opus-5`, and two under `orchestrating-with-rb-lite` § **Customizing the panel**
+pin `opus` — all carry no timeout
 because this repo does not launch them. All three hang on exactly the failure this
 change removes elsewhere; tracked in #51 rather than claimed as covered here.
 
@@ -662,8 +657,9 @@ condition:
      gh pr merge 42 …` — and it merges on a condition the gate never checked: the gate
      reasons about the *head*, and says nothing about whether the base branch advanced
      while the bot rounds were running. A behind branch squash-merges into a composition
-     no reviewer saw. § 8 is the merge sequence and it checks that; run it, don't inline a
-     shorter version of it here.
+     no reviewer saw. Exact companion skill
+     [`pr-with-codex-bot-review-merge`](../pr-with-codex-bot-review-merge/SKILL.md)
+     checks that; run it, don't inline a shorter version here.
 
      `scripts/bot-gate.test` runs it against a stubbed `gh` with canned API responses —
      one case per defect a reviewer actually found — the suite prints its own count, so
@@ -753,9 +749,10 @@ condition:
   Filter reactions on `content=="+1"` when you do read them: a fresh `eyes` means the bot
   is *still reviewing*, and an unfiltered query counts it as approval-shaped activity.
 
-  Then pin the merge to **the tip this gate just checked** — § 8 captures it from the
-  gate's own JSON. Re-reading `git rev-parse HEAD` at merge time looks equivalent and is
-  not: it re-adopts whatever is current, so an amend landing in between gets pinned to
+  Then pin the merge to **the tip this gate just checked** — the
+  [exact companion skill `pr-with-codex-bot-review-merge`](../pr-with-codex-bot-review-merge/SKILL.md)
+  captures it from the gate's own JSON. Re-reading `git rev-parse HEAD` at merge time is
+  not equivalent: it re-adopts whatever is current, so an amend landing in between gets pinned to
   itself and GitHub *accepts* it. The pin only guards when it names the reviewed tree.
 - CI is green.
 - CodeRabbit's status is **read, not required** — the gate does not act on it. A `SUCCESS`
@@ -799,175 +796,20 @@ ignoring the actual signal.**
 
 ### 8. Squash-merge and clean up
 
-```bash
-# Two checks, because a FAILED `git status` also prints nothing: a corrupt index would
-# read as a clean tree, in the merging direction.
-_ST=$(git status --porcelain) || { echo "cannot read the worktree — do NOT merge"; exit 1; }
-[ -z "$_ST" ] || { echo "tree dirty — do NOT merge"; exit 1; }
-# Resolve by matching HEAD, not by preferring the parent. A fork can host its own PRs, and
-# both repos can carry PR number N — so parent-first targets a missing or unrelated PR and
-# the real one can never be landed. `bot-gate` resolves the same way for the same reason.
-# BOTH matching is ambiguous, not a tiebreak: the same branch can be opened as a PR against
-# the parent AND the fork, and the two PRs were gated separately — silently merging the
-# parent's can land a PR whose reviews nobody checked. Refuse and make the caller say
-# which repo.
-# Guarded, because a failed lookup is not an answer: an unguarded SELF empties the loop's
-# only sure candidate, and a failed parent lookup silently reads as "not a fork" — dropping
-# the very candidate whose second PR the ambiguity refusal below exists to catch.
-SELF=$(gh repo view --json nameWithOwner -q .nameWithOwner) \
-  || { echo "cannot resolve this repository — do NOT merge"; exit 1; }
-UP=$(gh repo view --json parent -q 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else "" end') \
-  || { echo "cannot resolve the fork parent — a PR there would be invisible; do NOT merge"; exit 1; }
-# "No such PR" and "the query failed" share an exit code, so absence is read out of gh's
-# own error text; any other failure may be hiding the second match. bot-gate makes the
-# same split, but this loop picks the repo the MERGE targets, so it cannot lean on that.
-# PullRequest-level not-found only: both candidates are repos the API just named, so a
-# Repository-level "could not resolve" or an HTTP 404 is lost access, not absence.
-_GH_ERR=$(mktemp); trap 'rm -f "$_GH_ERR"' EXIT   # both scripts do this; the snippets leaked it || { echo "mktemp failed"; exit 1; }
-R=""; _M=0
-for _c in ${UP:+"$UP"} "$SELF"; do
-  if ! _h=$(gh pr view <N> -R "$_c" --json headRefOid -q .headRefOid 2>"$_GH_ERR"); then
-    grep -qiE 'could not resolve to a pullrequest|no pull requests found' "$_GH_ERR" \
-      || { echo "cannot query PR <N> in $_c — absence not established; do NOT merge"; exit 1; }
-    _h=""
-  fi
-  if [ "$_h" = "$(git rev-parse HEAD)" ]; then
-    _M=$((_M+1)); [ -n "$R" ] || R="$_c"
-  fi
-done
-[ "$_M" -le 1 ] || { echo "PR <N> matches this head in BOTH $UP and $SELF — ambiguous; re-run with the intended repo pinned in every -R"; exit 1; }
-[ -n "$R" ] || { echo "no PR <N> whose head is this tree in ${UP:+$UP or }$SELF"; exit 1; }
-PR_REFS=$(gh pr view <N> -R "$R" --json baseRefName,headRefName) \
-  || { echo "cannot resolve the PR branches"; exit 1; }
-BASE=$(printf %s "$PR_REFS" | jq -r '.baseRefName // ""')
-HEAD_BRANCH=$(printf %s "$PR_REFS" | jq -r '.headRefName // ""')
-[ -n "$BASE" ] && [ -n "$HEAD_BRANCH" ] \
-  || { echo "cannot resolve the PR branches"; exit 1; }
-
-# Check the exit status. `--delete-branch` makes gh switch branches as a side effect, so a
-# FAILED merge still leaves you somewhere plausible-looking; without this the steps below
-# "confirm $BASE is healthy" on a tree where nothing landed, and any caller that closes a
-# tracker item after this block closes it for a merge that never happened.
-# $REVIEWED_TIP is the SHA bot-gate checked in § 7, not a fresh `git rev-parse HEAD`.
-# Re-reading HEAD here re-adopts whatever is current — a late amend or concurrent
-# automation that pushed after the gate returned — and pins the merge to that, so GitHub
-# ACCEPTS the unreviewed head instead of refusing it. The pin is only a guard if it names
-# the tree that was actually reviewed.
-# Run the gate and REQUIRE its exit status. A command substitution swallows it: bot-gate
-# prints its JSON — `tip` included — before exiting 1 on BLOCKED, so `$(... | jq -r .tip)`
-# yields a perfectly good SHA from a run that said do not merge, and jq's own exit 0 hides
-# it. An amend landing between § 7 and here then produces a BLOCKED gate whose tip is the
-# new head, the equality check compares the new head to itself and passes, and the merge
-# takes the unreviewed tree — the exact outcome this pin exists to refuse.
-# Re-resolved here: this block re-derives $R and $BASE so it can run standalone, and an
-# unset $BOT_GATE would execute an empty command and report "do NOT merge" for a gate that
-# was merely not found.
-for d in "$HOME/.claude/skills/pr-with-codex-bot-review" \
-         "${CODEX_HOME:-$HOME/.codex}/skills/pr-with-codex-bot-review" \
-         "$HOME/.agents/skills/pr-with-codex-bot-review"; do
-  [ -x "$d/scripts/bot-gate" ] && { BOT_GATE="$d/scripts/bot-gate"; break; }
-done
-[ -n "${BOT_GATE:-}" ] || { echo "bot-gate not found — resolve it as in § 7"; exit 1; }
-GATE_JSON=$("$BOT_GATE" <N> --json) || { echo "bot-gate says do NOT merge"; exit 1; }
-[ "$(printf %s "$GATE_JSON" | jq -r .verdict)" = "NO_PENDING_EVIDENCE" ] \
-  || { echo "gate verdict is not NO_PENDING_EVIDENCE"; exit 1; }
-REVIEWED_TIP=$(printf %s "$GATE_JSON" | jq -r .tip)
-# The forge's own clone URL, not a hardcoded github.com one. `$R` is only `owner/repo`,
-# so on GitHub Enterprise the literal host either fails or — worse — resolves an unrelated
-# PUBLIC repo of the same name and validates ancestry against a stranger's branch.
-R_URL=$(gh repo view "$R" --json url -q .url 2>/dev/null) \
-  || { echo "cannot resolve the clone URL for $R — do NOT merge"; exit 1; }
-R_URL="$R_URL.git"
-# Fetch the base AFTER the potentially slow bot gate. Fetching it before the API sweep lets
-# the merge target advance during the gate, making the ancestry result stale at merge time.
-git fetch "$R_URL" "+refs/heads/$BASE:refs/remotes/upstream/$BASE" \
-  || { echo "cannot fetch the merge target — base unknown, do NOT merge"; echo "  (on a private repo cloned over SSH this is usually missing git credentials for https, not a missing base)"; exit 1; }
-git merge-base --is-ancestor "refs/remotes/upstream/$BASE" HEAD \
-  || { echo "REBASE FIRST — $BASE advanced since the review"; exit 1; }
-[ "$REVIEWED_TIP" = "$(git rev-parse HEAD)" ] \
-  || { echo "local HEAD moved since the gate ran — re-run § 7"; exit 1; }
-# LAST, immediately before the merge. Ancestry answers "did $BASE advance"; it cannot
-# answer "is $BASE still the target". A RETARGET points the PR at a different branch
-# entirely: $BASE then names the old one, everything above validates that one, and
-# `gh pr merge` squashes onto whatever the PR points at now — with the head unmoved, so
-# --match-head-commit stays satisfied. Read it here rather than beside the gate because
-# every check between the read and the merge widens the window. The window is not zero and
-# cannot be: GitHub offers no base pin to match --match-head-commit. It is now one API call
-# wide instead of a fetch plus two checks, and a retarget is one click.
-BASE_NOW=$(gh pr view <N> -R "$R" --json baseRefName -q .baseRefName) \
-  || { echo "cannot re-read the merge target — do NOT merge"; exit 1; }
-[ -n "$BASE_NOW" ] && [ "$BASE_NOW" = "$BASE" ] \
-  || { echo "the PR was retargeted ($BASE -> ${BASE_NOW:-unknown}) — the panel reviewed a diff against $BASE; re-run § 7"; exit 1; }
-gh pr merge <N> -R "$R" --squash --delete-branch --match-head-commit "$REVIEWED_TIP" \
-  || { echo "merge did not land — do NOT proceed"; exit 1; }
-
-# `gh pr merge` returning 0 means the PR was accepted for merging — which, in a repo with a
-# required merge queue, means ENQUEUED, not landed. Fetching now would read the still-old
-# base and any caller that closes a tracker item here would close it for a merge that has
-# not happened. Wait for the state to actually reach MERGED.
-_n=0
-while [ "$_n" -lt 60 ]; do
-  _n=$((_n+1))
-  _ST=$(gh pr view <N> -R "$R" --json state -q .state 2>/dev/null || echo "")
-  [ "$_ST" = "MERGED" ] && break
-  [ "$_ST" = "CLOSED" ] && { echo "PR was closed without merging"; exit 1; }
-  sleep 10
-done
-[ "$_ST" = "MERGED" ] || { echo "PR still not merged (state=$_ST) — do NOT proceed"; exit 1; }
-
-# Keep $GATE_JSON: the merge report has to QUOTE it (see below). Do not re-run the gate to
-# produce the quote — the PR is merged by now, so a fresh run describes a different world.
-printf '%s\n' "$GATE_JSON" > "${TMPDIR:-/tmp}/merge-evidence-<N>.json"
-
-# Re-fetch after the merge: the ref above predates the squash commit. Reset from where the
-# merge actually landed — `origin` is your fork and may not contain it at all. Fetch before
-# checkout, because in a single-branch fork clone neither a local `$BASE` nor `origin/$BASE`
-# exists, so `git checkout "$BASE"` fails and an unguarded reset then runs against whatever
-# branch is still checked out.
-git fetch "$R_URL" "+refs/heads/$BASE:refs/remotes/upstream/$BASE" \
-  || { echo "cannot fetch the merge target"; exit 1; }
-# `checkout -B` repoints the branch ref unconditionally, and a clean worktree does not
-# protect COMMITTED work: a local bead closure or DRIVE.md update on $BASE awaiting its
-# metadata PR — a state this skill's own LAND flow produces — becomes unreachable except
-# via reflog. The exception is a same-name fork PR: local $BASE is the verified feature
-# head, and a squash commit does not descend from it. Matching the reviewed OID distinguishes
-# that head from later local-only commits, which must still stop the reset.
-if git show-ref --verify --quiet "refs/heads/$BASE" \
-   && ! git merge-base --is-ancestor "$BASE" "refs/remotes/upstream/$BASE"; then
-  if [ "$HEAD_BRANCH" != "$BASE" ] \
-     || [ "$(git rev-parse "refs/heads/$BASE")" != "$REVIEWED_TIP" ]; then
-    echo "local $BASE has commits upstream does not — refusing to reset; push or rebase them first"
-    exit 1
-  fi
-fi
-# Re-check the worktree HERE, not only at the top of this block: the merge-queue wait
-# above can run ten minutes, and `checkout -B` silently CARRIES any nonconflicting tracked
-# modification made meanwhile onto the fresh base — the build below then "confirms" a tree
-# that is not the branch tip. FULL status, untracked included: the top-of-block check ran
-# BEFORE the wait, so it cannot vouch for a file created during it — and checkout does not
-# remove an untracked file, so it sits in the "fresh" base worktree where the build and
-# whatever branches from here inherit it, unreviewed and invisible to `-uno`.
-_ST=$(git status --porcelain) || { echo "cannot re-read the worktree — not resetting"; exit 1; }
-[ -z "$_ST" ] || { echo "worktree changed while waiting for the merge — resolve that, then reset to $BASE by hand"; exit 1; }
-git checkout -B "$BASE" "refs/remotes/upstream/$BASE" \
-  || { echo "cannot reset to the merge target — do NOT treat what follows as a check of it"; exit 1; }
-nix build                                    # confirm the base is healthy
-```
-
-`--match-head-commit` takes the **full 40-char OID**, which is why the snippet pins
-`$REVIEWED_TIP` from the gate's JSON: it is already the full SHA, and it is the tip the
-gate actually checked. Do not substitute `git rev-parse HEAD` here — that re-reads the
-current head, so an amend after the gate ran gets pinned to itself and merges unreviewed.
-Nor the wrapper's body SHA, which may be abbreviated and would make every merge refuse
-with no hint why.
-
-Check before merging, and make it `exit 1` rather than print: a bare `git status
---porcelain` exits 0 either way, and `--delete-branch` makes `gh pr merge` switch branches
-itself — so a dirty tree aborts *after* the squash has already landed. Stash if the change
-matters; discard only after looking, because `git checkout -- .` is not recoverable.
-
-`checkout -B` rather than `pull` because squash-merge rewrites history — the branch is
-repointed at the merge target, not merged with it.
+Load exact companion skill
+[`pr-with-codex-bot-review-merge`](../pr-with-codex-bot-review-merge/SKILL.md)
+before merging. It contains the required gate re-check, repository disambiguation,
+base-freshness and retarget checks, merge-queue wait, evidence capture, safe branch
+reset, and post-merge build. Run that sequence as written for the normal
+`NO_PENDING_EVIDENCE` path. For a deliberate `BLOCKED_UNATTRIBUTED` degraded merge,
+start the companion normally and complete its repository disambiguation first. When its
+gate call returns exit 4, § 8b may replace only the gate-admission predicate: preserve
+the original gate JSON, pin its tip to the locally verified and attested tree, then
+resume at the companion's `DEGRADED REENTRY B` marker. Base and retarget checks,
+merge-queue wait, evidence capture, and safe reset remain mandatory. § 8a governs
+reporting in either case.
+**Companion unavailable: stop, rerun the same installer command once, reload it, and do
+not improvise this procedure.**
 
 ### 8a. The merge report must quote the gate
 
@@ -1039,6 +881,51 @@ verdict and exit code, what you ran locally with which SHA, what the status page
 who attested to what. The failure this section exists to prevent is not merging during an
 outage — that is sometimes correct — it is **improvising a merge policy during one and
 leaving no trace of the trade you made.**
+
+The merge companion preserves the first exit-4 response under the git directory before
+its unset-tip guard aborts; keep that file as incident evidence, not merge admission.
+After the human authorizes the degraded substitution above, return to the shell that
+already completed the companion's repository disambiguation. If that shell exited, rerun
+the companion from its start through its `DEGRADED REENTRY A` marker, stopping before
+the initial gate call. Then run
+the gate **again** immediately before re-entry. A live exit 0 uses the normal verdict; a
+live exit 4 may use the authorized degraded substitution; every other exit still blocks.
+Set `AUTHORIZED_TIP` to the exact SHA covered by both the recorded local CI and the human
+authorization before running this block:
+
+```bash
+[ -n "${AUTHORIZED_TIP:-}" ] \
+  || { echo "set AUTHORIZED_TIP to the SHA covered by local CI and human authorization"; exit 1; }
+[ "$(git rev-parse HEAD)" = "$AUTHORIZED_TIP" ] \
+  || { echo "HEAD moved after degraded authorization; repeat § 8b for this tree"; exit 1; }
+unset REVIEWED_TIP
+LIVE_GATE_RC=0
+LIVE_GATE_JSON=$("$BOT_GATE" <N> --json) || LIVE_GATE_RC=$?
+if [ "$LIVE_GATE_RC" -eq 0 ]; then
+  [ "$(printf %s "$LIVE_GATE_JSON" | jq -r .verdict)" = "NO_PENDING_EVIDENCE" ] \
+    || { echo "live gate exit 0 carried the wrong verdict"; exit 1; }
+elif [ "$LIVE_GATE_RC" -eq 4 ]; then
+  [ "$(printf %s "$LIVE_GATE_JSON" | jq -r .verdict)" = "BLOCKED_UNATTRIBUTED" ] \
+    || { echo "live gate exit 4 carried the wrong verdict"; exit 1; }
+else
+  echo "live gate now blocks with exit $LIVE_GATE_RC — do NOT merge"
+  exit 1
+fi
+GATE_JSON=$LIVE_GATE_JSON
+LIVE_GATE_TIP=$(printf %s "$GATE_JSON" | jq -er .tip) \
+  || { echo "live gate JSON has no tip"; exit 1; }
+[ "$LIVE_GATE_TIP" = "$AUTHORIZED_TIP" ] \
+  || { echo "live gate names a tree that was not authorized; repeat § 8b"; exit 1; }
+REVIEWED_TIP=$AUTHORIZED_TIP
+_LIVE_TREE=$(git status --porcelain) \
+  || { echo "cannot inspect the worktree after degraded authorization"; exit 1; }
+[ -z "$_LIVE_TREE" ] \
+  || { echo "worktree changed during degraded authorization — do NOT merge"; exit 1; }
+```
+
+Now resume at the companion's `DEGRADED REENTRY B` marker. Preserve both the initial incident JSON and
+this live `GATE_JSON` in the § 8a report; do not present an initial exit 4 as the state at
+merge time if the live recheck returned something else.
 
 ## Iteration patterns observed
 

@@ -1,65 +1,42 @@
-# DRIVE — the Claude reviewer slot is a role, not a model, and it fails over
+# DRIVE — keep shared skills fully loadable in Tau
 
-**Scope:** the reviewer-model fallback in every panel **this repo launches** —
-`multi-reviewer-loop`, `second-model-bead-audit`, `harden-until-clean`, and
-`pr-with-codex-bot-review`'s pre-push review. Explicitly NOT in scope: the reviewer
-commands `orchestrating-with-rb-lite` hands to **rb-lite** to dispatch (SKILL.md:111,
-plus :1296/:1298 under `## Customizing the panel`) — three unbounded `claude -p`
-reviewers with hardcoded models, which still hang on an exhausted one — this repo does not launch those processes and
-cannot bound them, so converting them is its own change. Filed as #51, not fixed here.
-Issues #30/#31/#32/#33/#35/#38/#41/#42/#43/#44/#47/#48/#49/#50 are separate PRs and
-NOT in scope.
-**Phase:** HARDEN · **Bead:** n/a (direct-edit tier, doc-only) · **Branch:** claude-reviewer-fallback
+**Scope:** keep each top-level `SKILL.md` inside Tau's 64 KiB source-prefix limit
+and each folded description inside its 1,024-byte limit. Move long procedural detail
+into exact-name companion skills without changing the workflow, then pin both limits
+in `install.test`.
+**Phase:** HARDEN · **Bead:** n/a (direct repository-maintenance change)
+· **Branch:** `fix/tau-skill-limits`
 **Pending:** —
 **Gate:** `./install.test && ./skills/pr-with-codex-bot-review/scripts/bot-gate.test && ./skills/drive/scripts/drive-status.test`
-· run at aeaceb3 on bash 5.3.9: `passed 12, failed 0` / `passed 124, failed 0` /
-`passed 70, failed 0`, each exit 0. Re-runnable at that commit — a SHA, not "on this
-branch", which names no reproducible point once the branch has six of them. Note what that does **not** cover: every file in
-this change is prose, and no suite reads prose. The evidence for this change is the
-recorded runs in the reference, not the suites.
+· run 2026-08-10 on the working tree based at `ffe024ff93a6e7a6a40c87f8e49ed3888f95cb24`
+with bash 5.3.15: `passed 25, failed 0` / `passed 124, failed 0` /
+`passed 70, failed 0`, each exit 0.
 
 ## Done
-- #37 merged (291a6ce): install.sh's two uninstall aborts, plus `install.test`.
-- #40 merged (fe5149e): four sibling-site rules across 8 files.
-- #46 merged (029bc8c): behavioural claims in prose need a run, not a recollection.
-- `install.sh` run against the live install: fast-forwarded `a4bb5e1..029bc8c`,
-  14 skills linked into `~/.claude/skills` and `~/.codex/skills`, exit 0.
+
+- Measured Tau 0.1.0's raw 65,536-byte skill-source prefix and 1,024-byte description
+  bounds against the implementation in `~/p/tau`.
+- Extracted the long procedures from `multi-reviewer-loop`,
+  `orchestrating-with-rb-lite`, and `pr-with-codex-bot-review` into required companion
+  skills while retaining the entry points and stable recovery anchors in their main
+  skills. Exact companion names work with Tau's source-opaque skill loader and avoid
+  selecting a different duplicate installation through process-local filesystem state.
+- Shortened oversized descriptions and added dependency-free compatibility checks.
+- Mutation-tested over-limit, missing-skill, unsupported-description, and broken-link
+  failures; separately verified ignored workspace directories are excluded from the
+  skill inventory.
+- Ran iterative independent Codex and Opus review and addressed the accepted findings.
 
 ## Now
-Fable is out of credits, so every panel in this repo currently has one working
-reviewer and does not know it. The measured failure is the reason this is a change
-rather than a config tweak: an unreachable model does **not** error, it hangs. Two
-separate runs, kept separate because they show different things — the *bounded* 90s
-probe exits 124 having written valid JSON with `is_error: true`, a null `.result`, and
-only the small side-model in `modelUsage`; an *unbounded* call in the same state was
-observed still running after eight minutes with both output files at zero bytes, and
-was killed by hand (no 124, no JSON — that is the whole point of the contrast). stderr
-was empty in both, so every "read stderr for the auth error" rule in these skills was
-unreachable for this case.
 
-So: a `$CLAUDE_MODEL` ladder (`fable` → `opus`; a user pin *replaces* the ladder rather
-than heading it, so a named model fails instead of being substituted), resolved once per
-run by a bounded 90s probe, keyed on exit code **and** `is_error` **and** a non-empty
-`.result`. An exhausted ladder is **not** a new state: it means the Claude reviewer is
-unavailable, which every one of these skills already handled — so it drops out of the
-panel and the existing `DEGRADED` rules take over unchanged.
-Artifacts and source tags rename from the model (`fable`) to the slot (`claude`),
-because after a fallback a file named `pass-01.fable.txt` is a false provenance claim —
-the exact defect #46 landed a rule against.
-
-Budget: 14 files. Round 4 = the CUT, not another fix round: panel rounds 1-3 produced 41 findings, 0 rejected, 0 cut, all rooted in one over-built path. Removing that path is the corrective.
-Do NOT build: a retry/backoff policy, a model-capability matrix, per-pass re-probing,
-or a shared shell library — these are five prose skills, not a program.
+Require one clean parallel reviewer confirmation plus the review loop's consistency
+pass on the amended tree.
 
 ## Next
-Issue #32 `verify-commit`. Then #30/#31 (drive Guard 2), #33/#35, and the § 3a
-residue (#41, #43, #44).
+
+Commit the reviewed tree, push `fix/tau-skill-limits`, and open the PR with the local
+gate and reviewer evidence.
 
 ## Open questions for the human
-- The ladder's second rung is `opus`, which is also the model that usually *drives*
-  these skills. `second-model-bead-audit` now **discloses** that overlap in the panel roster. It does
-  not downgrade the label for it: independence is judged against the graph's builder, so
-  on a Codex-built graph the Claude auditor stays `INDEPENDENT` whichever rung it landed
-  on. The mitigation shipped is therefore disclosure only — the deeper fix, a non-Claude
-  fallback rung so the second opinion is independent by construction, is a product
-  decision rather than a sweep.
+
+None.
