@@ -107,9 +107,7 @@ Turn the current flat issue list into a sequenced, testable delivery program tha
 - Repository gate for branches in this plan:
 
   ```bash
-  ./install.test &&
-  ./skills/pr-with-codex-bot-review/scripts/bot-gate.test &&
-  ./skills/drive/scripts/drive-status.test
+  ./check.sh
   ```
 
   An `executor-skills` bead may add a narrower red/green command, but the

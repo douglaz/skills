@@ -70,9 +70,22 @@ that status after reading the log:
   _gate_dir=$(mktemp -d) || { echo "cannot create gate directory"; exit 1; }
   _gate_log="$_gate_dir/output.log"
   _gate_script="$_gate_dir/gate.bash"
+  _gate_runner="$_gate_dir/supervisor.py"
+  _gate_remove_dir() {
+    _gate_remove_rc=0
+    for _gate_file in "$_gate_log" "$_gate_script" "$_gate_runner"; do
+      if [ -e "$_gate_file" ] && ! unlink "$_gate_file"; then
+        _gate_remove_rc=1
+      fi
+    done
+    if ! rmdir "$_gate_dir"; then
+      _gate_remove_rc=1
+    fi
+    return "$_gate_remove_rc"
+  }
   _gate_cleanup() {
     _gate_cleanup_rc=$?
-    if ! rm -rf "$_gate_dir"; then
+    if ! _gate_remove_dir; then
       echo "cannot remove gate directory" >&2
       [ "$_gate_cleanup_rc" -ne 0 ] || _gate_cleanup_rc=1
     fi
@@ -88,124 +101,189 @@ __AGENT_GATE__
     echo "cannot write gate script"
     exit 1
   fi
-  _gate_had_errexit=0
-  case $- in *e*) _gate_had_errexit=1; set +e ;; esac
-  _gate_had_monitor=0
-  case $- in *m*) _gate_had_monitor=1 ;; esac
-  _gate_pid=
-  _gate_pending_signal=
-  _gate_pending_signal_rc=
-  _gate_wait_for_exit() {
-    if (( BASH_VERSINFO[0] > 5 ||
-          (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )); then
-      wait -f "$_gate_pid"
-      return $?
-    fi
-    while :; do
-      wait "$_gate_pid"
-      _gate_wait_rc=$?
-      kill -0 "$_gate_pid" 2>/dev/null || return "$_gate_wait_rc"
-      sleep 0.05
-    done
-  }
-  _gate_finish_group() {
-    kill -0 -- "-$_gate_pid" 2>/dev/null || return 0
-    kill -TERM -- "-$_gate_pid" 2>/dev/null || :
-    kill -CONT -- "-$_gate_pid" 2>/dev/null || :
-    for ((_gate_finish_n=0; _gate_finish_n<20; _gate_finish_n++)); do
-      kill -0 -- "-$_gate_pid" 2>/dev/null || return 0
-      sleep 0.01
-    done
-    kill -KILL -- "-$_gate_pid" 2>/dev/null || :
-    for ((_gate_finish_n=0; _gate_finish_n<100; _gate_finish_n++)); do
-      kill -0 -- "-$_gate_pid" 2>/dev/null || return 0
-      sleep 0.01
-    done
-    echo "cannot terminate gate process group" >&2
-    return 1
-  }
-  _gate_wait_after_signal() {
-    (
-      sleep 0.2
-      kill -KILL -- "-$_gate_pid" 2>/dev/null || :
-    ) &
-    _gate_watchdog_pid=$!
-    _gate_wait_for_exit
-    _gate_signal_wait_rc=$?
-    kill "$_gate_watchdog_pid" 2>/dev/null || :
-    wait "$_gate_watchdog_pid" 2>/dev/null || :
-    return "$_gate_signal_wait_rc"
-  }
-  _gate_forward_signal() {
-    _gate_signal=$1
-    _gate_signal_rc=$2
-    if [ -z "$_gate_pid" ]; then
-      _gate_pending_signal=$_gate_signal
-      _gate_pending_signal_rc=$_gate_signal_rc
-      return
-    fi
-    trap - HUP INT TERM
-    kill -"$_gate_signal" -- "-$_gate_pid" 2>/dev/null || :
-    kill -CONT -- "-$_gate_pid" 2>/dev/null || :
-    _gate_wait_after_signal 2>/dev/null || :
-    _gate_finish_group || exit 125
-    exit "$_gate_signal_rc"
-  }
-  trap '_gate_forward_signal HUP 129' HUP
-  trap '_gate_forward_signal INT 130' INT
-  trap '_gate_forward_signal TERM 143' TERM
-  [ "$_gate_had_monitor" -ne 0 ] || set -m
-  if [ -n "$_gate_pending_signal" ]; then
-    trap - HUP INT TERM
-    [ "$_gate_had_monitor" -ne 0 ] || set +m
-    exit "$_gate_pending_signal_rc"
-  fi
-  BASH_ENV= "${BASH:-bash}" --noprofile --norc -eo pipefail \
-    "$_gate_script" </dev/null >"$_gate_log" 2>&1 &
-  _gate_pid=$!
-  if [ -n "$_gate_pending_signal" ]; then
-    _gate_forward_signal "$_gate_pending_signal" "$_gate_pending_signal_rc"
-  fi
-  _gate_wait_for_exit
-  _gate_rc=$?
-  _gate_group_lingered=0
-  kill -0 -- "-$_gate_pid" 2>/dev/null && _gate_group_lingered=1
-  if ! _gate_finish_group; then
-    [ "$_gate_rc" -ne 0 ] || _gate_rc=1
-  elif [ "$_gate_group_lingered" -ne 0 ] && [ "$_gate_rc" -eq 0 ]; then
-    echo "gate left background processes running" >&2
-    _gate_rc=1
-  fi
-  trap - HUP INT TERM
-  [ "$_gate_had_monitor" -ne 0 ] || set +m
-  [ "$_gate_had_errexit" -eq 0 ] || set -e
-  if ! cat "$_gate_log"; then
-    echo "cannot read gate log" >&2
-    [ "$_gate_rc" -ne 0 ] || _gate_rc=1
-  fi
-  if ! rm -rf "$_gate_dir"; then
-    echo "cannot remove gate directory" >&2
-    [ "$_gate_rc" -ne 0 ] || _gate_rc=1
+  if ! cat >"$_gate_runner" <<'__AGENT_SUPERVISOR__'
+import os
+import signal
+import subprocess
+import sys
+import time
+
+root, bash = sys.argv[1:3]
+log_path = os.path.join(root, "output.log")
+gate_path = os.path.join(root, "gate.bash")
+runner_path = os.path.join(root, "supervisor.py")
+managed_signals = (signal.SIGHUP, signal.SIGINT, signal.SIGQUIT, signal.SIGTERM)
+child = None
+cancelled = None
+
+class GateCancelled(BaseException):
+    def __init__(self, signum):
+        self.signum = signum
+
+
+def receive_signal(signum, _frame):
+    raise GateCancelled(signum)
+
+
+def ignore_managed_signals():
+    for signum in managed_signals:
+        signal.signal(signum, signal.SIG_IGN)
+
+
+def group_alive(pgid):
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def stop_group(signum):
+    if child is None:
+        return True
+    pgid = child.pid
+    try:
+        os.killpg(pgid, signum)
+    except ProcessLookupError:
+        pass
+    try:
+        os.killpg(pgid, signal.SIGCONT)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + 0.2
+    while group_alive(pgid) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    if group_alive(pgid):
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    try:
+        child.wait(timeout=1.0)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        try:
+            child.wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            return False
+    deadline = time.monotonic() + 1.0
+    while group_alive(pgid) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    return not group_alive(pgid)
+
+
+def remove_private_dir():
+    ok = True
+    for path in (log_path, gate_path, runner_path):
+        if os.path.lexists(path):
+            result = subprocess.run(
+                ["unlink", path],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            ok = result.returncode == 0 and ok
+    result = subprocess.run(
+        ["rmdir", root],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0 and ok
+
+
+for managed_signal in managed_signals:
+    signal.signal(managed_signal, receive_signal)
+
+rc = 1
+try:
+    environment = os.environ.copy()
+    environment["BASH_ENV"] = ""
+    with open(log_path, "wb") as output:
+        child = subprocess.Popen(
+            [bash, "--noprofile", "--norc", "-eo", "pipefail", gate_path],
+            stdin=subprocess.DEVNULL,
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            env=environment,
+            start_new_session=True,
+        )
+        rc = child.wait()
+        if rc < 0:
+            rc = 128 - rc
+        if group_alive(child.pid):
+            if not stop_group(signal.SIGTERM):
+                print("cannot terminate gate process group", file=sys.stderr)
+                rc = rc if rc != 0 else 1
+            elif rc == 0:
+                print("gate left background processes running", file=sys.stderr)
+                rc = 1
+except GateCancelled as cancellation:
+    cancelled = cancellation.signum
+    ignore_managed_signals()
+    if not stop_group(cancellation.signum):
+        print("cannot terminate gate process group", file=sys.stderr)
+    rc = 128 + cancellation.signum
+except BaseException as error:
+    ignore_managed_signals()
+    if child is not None and group_alive(child.pid):
+        stop_group(signal.SIGTERM)
+    print(f"cannot run gate: {error}", file=sys.stderr)
+    rc = rc if rc != 0 else 1
+else:
+    ignore_managed_signals()
+
+if cancelled is None:
+    try:
+        with open(log_path, "rb") as output:
+            while True:
+                chunk = output.read(65536)
+                if not chunk:
+                    break
+                sys.stdout.buffer.write(chunk)
+        sys.stdout.buffer.flush()
+    except BaseException as error:
+        print(f"cannot read gate log: {error}", file=sys.stderr)
+        rc = rc if rc != 0 else 1
+
+if not remove_private_dir():
+    print("cannot remove gate directory", file=sys.stderr)
+    rc = rc if rc != 0 else 1
+
+if cancelled is None:
+    try:
+        print(f"EXIT={rc}")
+    except BaseException:
+        rc = rc if rc != 0 else 1
+sys.exit(rc)
+__AGENT_SUPERVISOR__
+  then
+    echo "cannot write gate supervisor"
+    exit 1
   fi
   trap - EXIT
-  printf 'EXIT=%s\n' "$_gate_rc" || exit 1
-  exit "$_gate_rc"
+  exec python3 "$_gate_runner" "$_gate_dir" "${BASH:-bash}"
 )
 ```
 
-The nested subshell isolates its cleanup trap from the caller and removes the
-private log on normal return, error, or handled termination. The fresh Bash
-keeps fail-fast active even when a caller places the wrapper in `if`, `&&`, or
-`||`; put self-contained gate commands between its delimiter lines. The gate
-runs from a private script with closed stdin, clears `BASH_ENV`, disables startup
-files, and enables `pipefail`. Temporary job control gives it a dedicated process
-group; traps installed before launch forward HUP, INT, and TERM to that group,
-resume a stopped group, wait with a deadline, and escalate boundedly when the
-leader or a descendant ignores the signal. Temporarily disabling wrapper
-`errexit` permits status capture. Cleanup happens before the reported final
-status: read, lingering process, or cleanup failure turns success into failure
-but preserves an existing nonzero/signal status. `exit` returns that final
-status, including categorized statuses such as 2 or 124.
+The subshell isolates setup cleanup from the caller, then `exec` makes the Python
+supervisor the wrapper process. Put self-contained gate commands between the
+delimiter lines. The supervisor runs them in a fresh Bash from a private script
+with closed stdin, cleared `BASH_ENV`, disabled startup files, and `pipefail`.
+It creates a dedicated process group, handles HUP, INT, QUIT, and TERM even when
+the invoking shell inherited an ignored signal, resumes stopped work, waits with
+a deadline, and escalates boundedly when the leader or a descendant ignores the
+signal. Cleanup happens before the reported final status: supervisor, read,
+lingering-process, or cleanup failure turns success into failure but preserves
+an existing nonzero/signal status. The wrapper returns that final status,
+including categorized statuses such as 2 or 124.
 
 **"Passing", "clean", "working", "verified", and "done" require a command and an
 exit code.** If you cannot show one, say what you actually observed instead. This

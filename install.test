@@ -516,6 +516,8 @@ canonical_gate_block="$WORK/discipline-canonical-gate.block"
 managed_gate_block="$WORK/discipline-managed-gate.block"
 gate_stdout="$WORK/discipline-gate.stdout"
 gate_stderr="$WORK/discipline-gate.stderr"
+paste_stdout="$WORK/discipline-paste.stdout"
+paste_stderr="$WORK/discipline-paste.stderr"
 bashenv_stdout="$WORK/discipline-bashenv.stdout"
 bashenv_stderr="$WORK/discipline-bashenv.stderr"
 stdin_stdout="$WORK/discipline-stdin.stdout"
@@ -526,6 +528,8 @@ pipeline_stdout="$WORK/discipline-pipeline.stdout"
 pipeline_stderr="$WORK/discipline-pipeline.stderr"
 term_stdout="$WORK/discipline-term.stdout"
 term_stderr="$WORK/discipline-term.stderr"
+quit_stdout="$WORK/discipline-quit.stdout"
+quit_stderr="$WORK/discipline-quit.stderr"
 stop_stdout="$WORK/discipline-stop.stdout"
 stop_stderr="$WORK/discipline-stop.stderr"
 aggregate_stdout="$WORK/discipline-aggregate.stdout"
@@ -536,11 +540,13 @@ gate_tmp="$WORK/discipline-gate-tmp"
 cleanup_tmp="$WORK/discipline-cleanup-tmp"
 cleanup_bin="$WORK/discipline-cleanup-bin"
 cleanup_marker="$WORK/existing-exit-cleanup"
+paste_cleanup_marker="$WORK/existing-paste-cleanup"
 bashenv_cleanup_marker="$WORK/existing-bashenv-cleanup"
 stdin_cleanup_marker="$WORK/existing-stdin-cleanup"
 status_cleanup_marker="$WORK/existing-status-cleanup"
 pipeline_cleanup_marker="$WORK/existing-pipeline-cleanup"
 term_cleanup_marker="$WORK/existing-term-cleanup"
+quit_cleanup_marker="$WORK/existing-quit-cleanup"
 stop_cleanup_marker="$WORK/existing-stop-cleanup"
 aggregate_cleanup_marker="$WORK/existing-aggregate-cleanup"
 cleanup_failure_marker="$WORK/existing-cleanup-failure"
@@ -548,6 +554,10 @@ term_started="$WORK/discipline-term-started"
 term_rc_file="$WORK/discipline-term.rc"
 term_child_pid_file="$WORK/discipline-term-child.pid"
 term_deadline_marker="$WORK/discipline-term-deadline"
+quit_started="$WORK/discipline-quit-started"
+quit_rc_file="$WORK/discipline-quit.rc"
+quit_child_pid_file="$WORK/discipline-quit-child.pid"
+quit_deadline_marker="$WORK/discipline-quit-deadline"
 stop_started="$WORK/discipline-stop-started"
 stop_rc_file="$WORK/discipline-stop.rc"
 stop_child_pid_file="$WORK/discipline-stop-child.pid"
@@ -559,12 +569,13 @@ aggregate_early_file="$WORK/discipline-aggregate.early"
 bashenv_file="$WORK/hostile-bash-env"
 mkdir -p "$gate_tmp" "$cleanup_tmp" "$cleanup_bin"
 printf '%s\n' '#!/bin/sh' 'exit 1' >"$cleanup_bin/rm"
-chmod +x "$cleanup_bin/rm"
+mv "$cleanup_bin/rm" "$cleanup_bin/unlink"
+chmod +x "$cleanup_bin/unlink"
 printf '%s\n' 'exit 0' >"$bashenv_file"
 capture_gate=false
 found_gate_start=false
 found_gate_command=false
-found_final_wait=false
+found_supervisor=false
 possible_gate_start=false
 {
   printf '%s\n' '#!/usr/bin/env bash'
@@ -588,10 +599,11 @@ possible_gate_start=false
       break
     fi
     if $capture_gate; then
-      [[ $line == *'wait -f "$_gate_pid"'* ]] && found_final_wait=true
+      [[ $line == *'exec python3 "$_gate_runner"'* ]] && found_supervisor=true
       if [[ ${line#"${line%%[![:space:]]*}"} == '<gate>' ]]; then
         printf '%s\n' 'gate() { printf "first\n"; false; printf "should-not-run\n"; }'
         printf '%s\n' 'if [[ ${GATE_MODE:-function} == status ]]; then exit 124'
+        printf '%s\n' 'elif [[ ${GATE_MODE:-function} == success ]]; then printf "paste-success\n"'
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == pipeline ]]; then'
         printf '%s\n' '  printf "pipeline-first\n"; false | true; printf "pipeline-last\n"'
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == term ]]; then'
@@ -659,14 +671,18 @@ if [[ $discipline_block == "$repository_discipline_block" ]] &&
 elif grep -Fq -- '_gate_dir=$(mktemp -d)' "$HERE/skills/drive/SKILL.md" ||
     grep -Fq -- '_gate_dir=$(mktemp -d)' "$HERE/skills/drive/references/phases.md"; then
   gate_copy_failure="Drive duplicated the canonical AGENTS gate wrapper"
+elif grep -Eq '(^|[[:space:]])rm[[:space:]]+-' "$canonical_gate_block"; then
+  gate_copy_failure="canonical gate cleanup is rejected by managed command execution"
 fi
 if [[ -n "$gate_copy_failure" ]]; then
   fail "$t" "$gate_copy_failure"
-elif ! $found_gate_start || ! $found_gate_command || ! $found_final_wait; then
+elif ! $found_gate_start || ! $found_gate_command || ! $found_supervisor; then
   fail "$t" "could not extract the canonical gate wrapper"
 else
   CLEANUP_MARKER="$cleanup_marker" TMPDIR="$gate_tmp" \
     bash "$gate_script" >"$gate_stdout" 2>"$gate_stderr"; rc=$?
+  CLEANUP_MARKER="$paste_cleanup_marker" TMPDIR="$gate_tmp" GATE_MODE=success \
+    bash -c "$(<"$gate_script")" >"$paste_stdout" 2>"$paste_stderr"; paste_rc=$?
   CLEANUP_MARKER="$bashenv_cleanup_marker" TMPDIR="$gate_tmp" \
     HOSTILE_BASH_ENV="$bashenv_file" \
     bash "$gate_script" >"$bashenv_stdout" 2>"$bashenv_stderr"; bashenv_rc=$?
@@ -714,6 +730,44 @@ else
     fi
   )
   term_rc=$(< "$term_rc_file")
+  (
+    CLEANUP_MARKER="$quit_cleanup_marker" TMPDIR="$gate_tmp" GATE_MODE=term \
+      STARTED="$quit_started" CHILD_PID_FILE="$quit_child_pid_file" \
+      bash "$gate_script" >"$quit_stdout" 2>"$quit_stderr" &
+    quit_pid=$!
+    for _n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+      [[ -f "$quit_started" ]] && break
+      sleep 0.05
+    done
+    if [[ ! -f "$quit_started" ]]; then
+      kill -KILL "$quit_pid" 2>/dev/null
+      printf '%s' 125 >"$quit_rc_file"
+    else
+      read -r quit_child_pid quit_wrapper_pid _ <"$quit_child_pid_file"
+      kill -QUIT "$quit_wrapper_pid"
+      (
+        sleep 2
+        : >"$quit_deadline_marker"
+        kill -QUIT "$quit_wrapper_pid" 2>/dev/null || true
+        kill -QUIT -- "-$quit_child_pid" 2>/dev/null || true
+        kill -CONT -- "-$quit_child_pid" 2>/dev/null || true
+        sleep 0.05
+        kill -KILL "$quit_wrapper_pid" "$quit_pid" 2>/dev/null || true
+        kill -KILL -- "-$quit_child_pid" 2>/dev/null || true
+      ) &
+      quit_watchdog_pid=$!
+      wait "$quit_pid"
+      quit_wait_rc=$?
+      if [[ -f "$quit_deadline_marker" ]]; then
+        quit_wait_rc=124
+      else
+        kill "$quit_watchdog_pid" 2>/dev/null || true
+      fi
+      wait "$quit_watchdog_pid" 2>/dev/null || true
+      printf '%s' "$quit_wait_rc" >"$quit_rc_file"
+    fi
+  )
+  quit_rc=$(< "$quit_rc_file")
   (
     CLEANUP_MARKER="$stop_cleanup_marker" TMPDIR="$gate_tmp" GATE_MODE=stop \
       STARTED="$stop_started" CHILD_PID_FILE="$stop_child_pid_file" \
@@ -806,6 +860,8 @@ else
     bash "$gate_script" >"$cleanup_stdout" 2>"$cleanup_stderr"; cleanup_rc=$?
   gate_output=$(< "$gate_stdout")
   gate_error=$(< "$gate_stderr")
+  paste_output=$(< "$paste_stdout")
+  paste_error=$(< "$paste_stderr")
   bashenv_output=$(< "$bashenv_stdout")
   bashenv_error=$(< "$bashenv_stderr")
   stdin_output=$(< "$stdin_stdout")
@@ -816,6 +872,8 @@ else
   pipeline_error=$(< "$pipeline_stderr")
   term_output=$(< "$term_stdout")
   term_error=$(< "$term_stderr")
+  quit_output=$(< "$quit_stdout")
+  quit_error=$(< "$quit_stderr")
   stop_output=$(< "$stop_stdout")
   stop_error=$(< "$stop_stderr")
   aggregate_output=$(< "$aggregate_stdout")
@@ -833,6 +891,12 @@ else
     fail "$t" "gate continued past the failed && command"
   elif [[ ! -f "$cleanup_marker" || $(< "$cleanup_marker") != cleanup ]]; then
     fail "$t" "gate wrapper replaced the caller's EXIT trap"
+  elif [[ $paste_rc -ne 0 || $paste_output != $'paste-success\nEXIT=0\nwrapper-success' ]]; then
+    fail "$t" "pasted gate wrapper became rc=$paste_rc stdout=$paste_output"
+  elif [[ -n "$paste_error" ]]; then
+    fail "$t" "pasted gate wrapper wrote stderr: $paste_error"
+  elif [[ ! -f "$paste_cleanup_marker" || $(< "$paste_cleanup_marker") != cleanup ]]; then
+    fail "$t" "pasted gate wrapper replaced the caller's EXIT trap"
   elif [[ $bashenv_rc -ne 1 || $bashenv_output != $'first\nEXIT=1' ]]; then
     fail "$t" "hostile BASH_ENV bypassed the gate: rc=$bashenv_rc stdout=$bashenv_output"
   elif [[ -n "$bashenv_error" ]]; then
@@ -869,6 +933,18 @@ else
     fail "$t" "terminated gate exposed output: stdout=$term_output stderr=$term_error"
   elif [[ ! -f "$term_cleanup_marker" || $(< "$term_cleanup_marker") != cleanup ]]; then
     fail "$t" "terminated run replaced the caller's EXIT trap"
+  elif [[ $quit_rc -ne 131 ]]; then
+    fail "$t" "QUIT gate wrapper exited $quit_rc"
+  elif [[ ! -s "$quit_child_pid_file" ]]; then
+    fail "$t" "PID-only QUIT fixture did not record the gate process"
+  elif read -r quit_child_pid _ quit_descendant_pid <"$quit_child_pid_file" &&
+      { kill -0 "$quit_child_pid" 2>/dev/null ||
+        kill -0 "$quit_descendant_pid" 2>/dev/null; }; then
+    fail "$t" "PID-only QUIT left the gate process group alive"
+  elif [[ -n "$quit_output" || -n "$quit_error" ]]; then
+    fail "$t" "QUIT gate exposed output: stdout=$quit_output stderr=$quit_error"
+  elif [[ ! -f "$quit_cleanup_marker" || $(< "$quit_cleanup_marker") != cleanup ]]; then
+    fail "$t" "QUIT run replaced the caller's EXIT trap"
   elif [[ $stop_rc -ne 143 ]]; then
     fail "$t" "stopped gate escaped before termination: rc=$stop_rc"
   elif read -r stop_child_pid _ <"$stop_child_pid_file" &&
