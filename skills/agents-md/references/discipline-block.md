@@ -90,7 +90,16 @@ that status after reading the log:
 ```bash
 (
   _gate_log=$(mktemp) || { echo "cannot create gate log"; exit 1; }
-  trap 'rm -f "$_gate_log"' EXIT
+  _gate_cleanup() {
+    _gate_cleanup_rc=$?
+    if ! rm -f "$_gate_log"; then
+      echo "cannot remove gate log" >&2
+      [ "$_gate_cleanup_rc" -ne 0 ] || _gate_cleanup_rc=1
+    fi
+    trap - EXIT
+    exit "$_gate_cleanup_rc"
+  }
+  trap _gate_cleanup EXIT
   _gate_had_errexit=0
   case $- in *e*) _gate_had_errexit=1; set +e ;; esac
   (
@@ -110,8 +119,9 @@ private log on normal return, error, or handled termination. The inner subshell
 makes one redirection cover an `&&` gate instead of only its final command.
 Temporarily disabling wrapper `errexit` permits status capture; restoring it
 inside the inner subshell preserves a gate function's original fail-fast
-behavior. `exit` returns the saved status unchanged, including categorized
-statuses such as 2 or 124.
+behavior. Cleanup failure turns success into failure but preserves an existing
+nonzero/signal status. `exit` otherwise returns the saved status unchanged,
+including categorized statuses such as 2 or 124.
 
 **"Passing", "clean", "working", "verified", and "done" require a command and an
 exit code.** If you cannot show one, say what you actually observed instead. This

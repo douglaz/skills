@@ -427,7 +427,10 @@ of `multi-reviewer-loop`, `second-model-bead-audit`,
 `pr-with-codex-bot-review`, and `orchestrating-with-rb-lite`; transitive
 dependency expansion keeps a selective Drive install covered. `install.test`
 must exercise each direct selective install on both Claude and Codex targets,
-upgrade repair, a missing companion, and a wrong declared companion name.
+upgrade repair, a missing companion, and a wrong declared companion name. It
+must also run explicit legacy-only `~/.agents/skills` selective-install,
+upgrade-repair, and missing-companion fixtures with no modern Claude/Codex target
+present.
 
 **Order**
 
@@ -490,12 +493,16 @@ Use a portable no-shell reviewer boundary through the single runner from C1:
 7. before copying, refuse any tracked file larger than 16 MiB or a tracked
    snapshot larger than 256 MiB, and refuse any untracked file larger than
    1 MiB or an aggregate untracked bundle larger than 8 MiB;
-8. launch the reviewer with the sanitized snapshot—not the original worktree—as
+8. before materializing the diff, enumerate both old and new blob IDs for every
+   base-to-worktree change, reject any base-side/deleted blob larger than 16 MiB
+   or aggregate old/new blob material larger than 256 MiB, then generate the
+   diff into the private bundle and reject it above 64 MiB;
+9. launch the reviewer with the sanitized snapshot—not the original worktree—as
    its working directory; give it snapshot-local diff and manifest paths and
    retain `Read,Glob,Grep` so it can inspect surrounding tracked files and every
    numbered untracked copy; the prompt must say that both sources form the
    reviewed change; and
-9. if a supported Claude CLI cannot enforce the denied Bash tool, mark that
+10. if a supported Claude CLI cannot enforce the denied Bash tool, mark that
    reviewer unavailable/degraded—never silently regrant Bash.
 
 This is the Linux/macOS boundary; do not add `bwrap` or `sandbox-exec`.
@@ -509,8 +516,9 @@ a stale allowlist entry, an ignored `.env`, the 1 MiB per-file boundary, and the
 worktree in the snapshot. Further pre-launch refusal fixtures cover
 assume-unchanged, skip-worktree, an absolute symlink, a relative escaping
 symlink, the 16 MiB tracked-file boundary, and the 256 MiB tracked aggregate.
-The ignored file must be absent from the snapshot, and no refusal case may
-launch the reviewer.
+A staged-deletion fixture covers the 16 MiB base-side boundary and a separate
+fixture covers the 64 MiB generated-diff boundary. The ignored file must be
+absent from the snapshot, and no refusal case may launch the reviewer.
 
 ## Workstream D — installer and upgrade correctness
 
@@ -611,7 +619,16 @@ status separately, and require all three to be zero:
 (
   f2_gate_dir=$(mktemp -d) || exit 1
   chmod 700 "$f2_gate_dir" || { rm -rf "$f2_gate_dir"; exit 1; }
-  trap 'rm -rf "$f2_gate_dir"' EXIT
+  f2_gate_cleanup() {
+    f2_cleanup_rc=$?
+    if ! rm -rf "$f2_gate_dir"; then
+      echo "cannot remove F2 gate logs" >&2
+      [ "$f2_cleanup_rc" -ne 0 ] || f2_cleanup_rc=1
+    fi
+    trap - EXIT
+    exit "$f2_cleanup_rc"
+  }
+  trap f2_gate_cleanup EXIT
   just_test_rc=0
   nix_build_rc=0
   flake_check_rc=0

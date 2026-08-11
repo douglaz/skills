@@ -215,7 +215,16 @@ A phase closes on evidence or it does not close.
   ```bash
   (
     _gate_log=$(mktemp) || { echo "cannot create gate log"; exit 1; }
-    trap 'rm -f "$_gate_log"' EXIT
+    _gate_cleanup() {
+      _gate_cleanup_rc=$?
+      if ! rm -f "$_gate_log"; then
+        echo "cannot remove gate log" >&2
+        [ "$_gate_cleanup_rc" -ne 0 ] || _gate_cleanup_rc=1
+      fi
+      trap - EXIT
+      exit "$_gate_cleanup_rc"
+    }
+    trap _gate_cleanup EXIT
     _gate_had_errexit=0
     case $- in *e*) _gate_had_errexit=1; set +e ;; esac
     (
@@ -231,9 +240,10 @@ A phase closes on evidence or it does not close.
   ```
 
   The nested subshell isolates cleanup from the caller's traps and removes the
-  log on handled termination; the inner one preserves function-level `errexit`
-  while capturing the whole gate. Return the exact saved status. Quote the
-  command and exit code in your report.
+  log on handled termination; cleanup failure turns success into failure without
+  replacing an existing nonzero/signal status. The inner subshell preserves
+  function-level `errexit` while capturing the whole gate. Return the exact
+  saved status. Quote the command and exit code in your report.
 - For a test you just wrote: make it **fail first** against the unfixed code, then pass. A
   green test that never could have gone red proves nothing.
 - Words that need a number or an exit code behind them: "passing", "working", "clean",

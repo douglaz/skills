@@ -516,13 +516,23 @@ status_stdout="$WORK/discipline-status.stdout"
 status_stderr="$WORK/discipline-status.stderr"
 term_stdout="$WORK/discipline-term.stdout"
 term_stderr="$WORK/discipline-term.stderr"
+aggregate_stdout="$WORK/discipline-aggregate.stdout"
+aggregate_stderr="$WORK/discipline-aggregate.stderr"
+cleanup_stdout="$WORK/discipline-cleanup.stdout"
+cleanup_stderr="$WORK/discipline-cleanup.stderr"
 gate_tmp="$WORK/discipline-gate-tmp"
+cleanup_tmp="$WORK/discipline-cleanup-tmp"
 cleanup_marker="$WORK/existing-exit-cleanup"
 status_cleanup_marker="$WORK/existing-status-cleanup"
 term_cleanup_marker="$WORK/existing-term-cleanup"
+aggregate_cleanup_marker="$WORK/existing-aggregate-cleanup"
+cleanup_failure_marker="$WORK/existing-cleanup-failure"
 term_started="$WORK/discipline-term-started"
 term_rc_file="$WORK/discipline-term.rc"
-mkdir -p "$gate_tmp"
+aggregate_started="$WORK/discipline-aggregate-started"
+aggregate_rc_file="$WORK/discipline-aggregate.rc"
+aggregate_early_file="$WORK/discipline-aggregate.early"
+mkdir -p "$gate_tmp" "$cleanup_tmp"
 capture_gate=false
 found_gate_start=false
 found_gate_command=false
@@ -545,6 +555,10 @@ found_gate_command=false
         printf '%s\n' '    elif [[ ${GATE_MODE:-function} == term ]]; then'
         printf '%s\n' '      printf "sensitive-output\n"; : >"$STARTED"'
         printf '%s\n' '      while :; do sleep 1; done'
+        printf '%s\n' '    elif [[ ${GATE_MODE:-function} == aggregate ]]; then'
+        printf '%s\n' '      printf "aggregate-first\n" && { : >"$AGG_STARTED"; sleep 0.2; false; } && printf "aggregate-last\n"'
+        printf '%s\n' '    elif [[ ${GATE_MODE:-function} == cleanup ]]; then'
+        printf '%s\n' '      printf "cleanup-output\n"; chmod a-w "$TMPDIR"'
         printf '%s\n' '    else gate; fi'
         found_gate_command=true
       else
@@ -580,12 +594,34 @@ else
     fi
   )
   term_rc=$(< "$term_rc_file")
+  (
+    CLEANUP_MARKER="$aggregate_cleanup_marker" TMPDIR="$gate_tmp" \
+      GATE_MODE=aggregate AGG_STARTED="$aggregate_started" \
+      bash "$gate_script" >"$aggregate_stdout" 2>"$aggregate_stderr" &
+    aggregate_pid=$!
+    for _n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+      [[ -f "$aggregate_started" ]] && break
+      sleep 0.02
+    done
+    wc -c <"$aggregate_stdout" >"$aggregate_early_file"
+    wait "$aggregate_pid"
+    printf '%s' "$?" >"$aggregate_rc_file"
+  )
+  aggregate_rc=$(< "$aggregate_rc_file")
+  CLEANUP_MARKER="$cleanup_failure_marker" TMPDIR="$cleanup_tmp" GATE_MODE=cleanup \
+    bash "$gate_script" >"$cleanup_stdout" 2>"$cleanup_stderr"; cleanup_rc=$?
+  chmod u+w "$cleanup_tmp"
   gate_output=$(< "$gate_stdout")
   gate_error=$(< "$gate_stderr")
   status_output=$(< "$status_stdout")
   status_error=$(< "$status_stderr")
   term_output=$(< "$term_stdout")
   term_error=$(< "$term_stderr")
+  aggregate_output=$(< "$aggregate_stdout")
+  aggregate_error=$(< "$aggregate_stderr")
+  aggregate_early=$(< "$aggregate_early_file")
+  cleanup_output=$(< "$cleanup_stdout")
+  cleanup_error=$(< "$cleanup_stderr")
   if [[ $rc -ne 1 ]]; then
     fail "$t" "failed gate wrapper exited $rc"
   elif [[ $gate_output != $'first\nEXIT=1' ]]; then
@@ -608,6 +644,22 @@ else
     fail "$t" "terminated gate exposed output: stdout=$term_output stderr=$term_error"
   elif [[ ! -f "$term_cleanup_marker" || $(< "$term_cleanup_marker") != cleanup ]]; then
     fail "$t" "terminated run replaced the caller's EXIT trap"
+  elif [[ $aggregate_rc -ne 1 || $aggregate_output != $'aggregate-first\nEXIT=1' ]]; then
+    fail "$t" "aggregate gate became rc=$aggregate_rc stdout=$aggregate_output"
+  elif [[ -n "$aggregate_error" || $aggregate_output == *aggregate-last* ]]; then
+    fail "$t" "aggregate gate leaked or continued: stderr=$aggregate_error"
+  elif [[ $aggregate_early -ne 0 ]]; then
+    fail "$t" "aggregate output escaped before the gate completed"
+  elif [[ ! -f "$aggregate_cleanup_marker" || $(< "$aggregate_cleanup_marker") != cleanup ]]; then
+    fail "$t" "aggregate run replaced the caller's EXIT trap"
+  elif [[ $cleanup_rc -ne 1 || $cleanup_output != $'cleanup-output\nEXIT=0' ]]; then
+    fail "$t" "cleanup failure became rc=$cleanup_rc stdout=$cleanup_output"
+  elif [[ $cleanup_error != *"cannot remove gate log"* ]]; then
+    fail "$t" "cleanup failure was not reported: $cleanup_error"
+  elif [[ ! -f "$cleanup_failure_marker" || $(< "$cleanup_failure_marker") != cleanup ]]; then
+    fail "$t" "cleanup-failure run replaced the caller's EXIT trap"
+  elif ! find "$cleanup_tmp" -mindepth 1 -type f -print -quit | grep -q .; then
+    fail "$t" "cleanup-failure fixture left no log to substantiate the failure"
   elif find "$gate_tmp" -mindepth 1 -print -quit | grep -q .; then
     fail "$t" "gate wrapper leaked its temporary log"
   else
