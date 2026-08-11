@@ -7,7 +7,7 @@ take.
 **Phase:** SHAPE · **Bead:** n/a (graph pending)
 · **Branch:** `plan/backlog-execution`
 **Pending:** —
-**Gate:** `./install.test && ./skills/pr-with-codex-bot-review/scripts/bot-gate.test && ./skills/drive/scripts/drive-status.test`
+**Gate:** `./check.sh`
 · not yet run on this branch.
 
 ## Done
@@ -24,11 +24,12 @@ take.
 
 Write and review the buildable execution plan. Expanded review-discovered
 bootstrap budget: `AGENTS.md`, `DRIVE.md`, one spec, the canonical gate wrapper,
-two Drive references to that sole owner, and one `install.test` regression
-fixture (~300 LOC; reviewed hard stop 600). This replaces the earlier ~100 LOC
-estimate after independent review required conditional-shell, pipeline, cleanup,
-signal, stopped-process, and synchronization coverage. Do NOT implement any of
-the 29 planned GitHub issues in SHAPE.
+its detectable `check.sh` entry point, two Drive references to that sole owner,
+and one `install.test` regression fixture (~400 LOC; reviewed hard stop 800).
+This replaces the earlier ~100 LOC estimate after independent review required
+conditional-shell, pipeline, cleanup, signal, stopped-process, stdin, startup,
+and synchronization coverage. Do NOT implement any of the 29 planned GitHub
+issues in SHAPE.
 
 ## Next
 

@@ -595,6 +595,7 @@ possible_gate_start=false
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == pipeline ]]; then'
         printf '%s\n' '  printf "pipeline-first\n"; false | true; printf "pipeline-last\n"'
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == term ]]; then'
+        printf '%s\n' '  trap "" HUP INT TERM'
         printf '%s\n' '  bash -c '\''trap "" HUP INT TERM; while :; do sleep 1; done'\'' & term_descendant=$!'
         printf '%s\n' '  printf "%s %s %s\n" "$BASHPID" "$PPID" "$term_descendant" >"$CHILD_PID_FILE"'
         printf '%s\n' '  printf "sensitive-output\n"; : >"$STARTED"; wait "$term_descendant"'
@@ -655,8 +656,8 @@ gate_copy_failure=
 if [[ $discipline_block == "$repository_discipline_block" ]] &&
     ! cmp -s "$canonical_gate_block" "$managed_gate_block"; then
   gate_copy_failure="managed AGENTS gate wrapper diverges from its canonical owner"
-elif grep -Fq -- '_gate_log=$(mktemp)' "$HERE/skills/drive/SKILL.md" ||
-    grep -Fq -- '_gate_log=$(mktemp)' "$HERE/skills/drive/references/phases.md"; then
+elif grep -Fq -- '_gate_dir=$(mktemp -d)' "$HERE/skills/drive/SKILL.md" ||
+    grep -Fq -- '_gate_dir=$(mktemp -d)' "$HERE/skills/drive/references/phases.md"; then
   gate_copy_failure="Drive duplicated the canonical AGENTS gate wrapper"
 fi
 if [[ -n "$gate_copy_failure" ]]; then

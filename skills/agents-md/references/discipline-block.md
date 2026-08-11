@@ -146,6 +146,18 @@ __AGENT_GATE__
     echo "cannot terminate gate process group" >&2
     return 1
   }
+  _gate_wait_after_signal() {
+    (
+      sleep 0.2
+      kill -KILL -- "-$_gate_pid" 2>/dev/null || :
+    ) &
+    _gate_watchdog_pid=$!
+    _gate_wait_for_exit
+    _gate_signal_wait_rc=$?
+    kill "$_gate_watchdog_pid" 2>/dev/null || :
+    wait "$_gate_watchdog_pid" 2>/dev/null || :
+    return "$_gate_signal_wait_rc"
+  }
   _gate_forward_signal() {
     _gate_signal=$1
     _gate_signal_rc=$2
@@ -157,7 +169,7 @@ __AGENT_GATE__
     trap - HUP INT TERM
     kill -"$_gate_signal" -- "-$_gate_pid" 2>/dev/null || :
     kill -CONT -- "-$_gate_pid" 2>/dev/null || :
-    _gate_wait_for_exit 2>/dev/null || :
+    _gate_wait_after_signal 2>/dev/null || :
     _gate_finish_group || exit 125
     exit "$_gate_signal_rc"
   }
@@ -210,12 +222,12 @@ keeps fail-fast active even when a caller places the wrapper in `if`, `&&`, or
 runs from a private script with closed stdin, clears `BASH_ENV`, disables startup
 files, and enables `pipefail`. Temporary job control gives it a dedicated process
 group; traps installed before launch forward HUP, INT, and TERM to that group,
-resume a stopped group, wait for actual termination, and escalate boundedly when
-a descendant ignores the signal. Temporarily disabling wrapper `errexit` permits
-status capture. Cleanup happens before the reported final status: read, lingering
-process, or cleanup failure turns success into failure but preserves an existing
-nonzero/signal status. `exit` returns that final status, including categorized
-statuses such as 2 or 124.
+resume a stopped group, wait with a deadline, and escalate boundedly when the
+leader or a descendant ignores the signal. Temporarily disabling wrapper
+`errexit` permits status capture. Cleanup happens before the reported final
+status: read, lingering process, or cleanup failure turns success into failure
+but preserves an existing nonzero/signal status. `exit` returns that final
+status, including categorized statuses such as 2 or 124.
 
 **"Passing", "clean", "working", "verified", and "done" require a command and an
 exit code.** If you cannot show one, say what you actually observed instead. This
