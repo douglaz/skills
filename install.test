@@ -522,6 +522,7 @@ cleanup_stdout="$WORK/discipline-cleanup.stdout"
 cleanup_stderr="$WORK/discipline-cleanup.stderr"
 gate_tmp="$WORK/discipline-gate-tmp"
 cleanup_tmp="$WORK/discipline-cleanup-tmp"
+cleanup_bin="$WORK/discipline-cleanup-bin"
 cleanup_marker="$WORK/existing-exit-cleanup"
 status_cleanup_marker="$WORK/existing-status-cleanup"
 term_cleanup_marker="$WORK/existing-term-cleanup"
@@ -529,23 +530,34 @@ aggregate_cleanup_marker="$WORK/existing-aggregate-cleanup"
 cleanup_failure_marker="$WORK/existing-cleanup-failure"
 term_started="$WORK/discipline-term-started"
 term_rc_file="$WORK/discipline-term.rc"
+term_child_pid_file="$WORK/discipline-term-child.pid"
 aggregate_started="$WORK/discipline-aggregate-started"
+aggregate_release="$WORK/discipline-aggregate-release"
 aggregate_rc_file="$WORK/discipline-aggregate.rc"
 aggregate_early_file="$WORK/discipline-aggregate.early"
-mkdir -p "$gate_tmp" "$cleanup_tmp"
+mkdir -p "$gate_tmp" "$cleanup_tmp" "$cleanup_bin"
+printf '%s\n' '#!/bin/sh' 'exit 1' >"$cleanup_bin/rm"
+chmod +x "$cleanup_bin/rm"
 capture_gate=false
 found_gate_start=false
 found_gate_command=false
+possible_gate_start=false
 {
   printf '%s\n' '#!/usr/bin/env bash'
   printf '%s\n' 'set -e'
   printf '%s\n' 'trap '\''printf cleanup > "$CLEANUP_MARKER"'\'' EXIT'
   while IFS= read -r line; do
-    if [[ $line == *'_gate_log=$(mktemp)'* ]]; then
-      capture_gate=true
-      found_gate_start=true
-      printf '%s\n' '('
-    elif $capture_gate && [[ $line == '```' ]]; then
+    if ! $capture_gate; then
+      if $possible_gate_start && [[ $line == *'_gate_log=$(mktemp)'* ]]; then
+        capture_gate=true
+        found_gate_start=true
+        printf '%s\n' '('
+      else
+        possible_gate_start=false
+        [[ $line == '(' ]] && possible_gate_start=true
+        continue
+      fi
+    elif [[ $line == '```' ]]; then
       break
     fi
     if $capture_gate; then
@@ -553,12 +565,13 @@ found_gate_command=false
         printf '%s\n' 'gate() { printf "first\n"; false; printf "should-not-run\n"; }'
         printf '%s\n' 'if [[ ${GATE_MODE:-function} == status ]]; then exit 124'
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == term ]]; then'
-        printf '%s\n' '  printf "sensitive-output\n"; : >"$STARTED"'
-        printf '%s\n' '  while :; do sleep 1; done'
+        printf '%s\n' '  sleep 30 & term_descendant=$!'
+        printf '%s\n' '  printf "%s %s %s\n" "$BASHPID" "$PPID" "$term_descendant" >"$CHILD_PID_FILE"'
+        printf '%s\n' '  printf "sensitive-output\n"; : >"$STARTED"; wait "$term_descendant"'
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == aggregate ]]; then'
-        printf '%s\n' '  printf "aggregate-first\n" && { : >"$AGG_STARTED"; sleep 0.2; false; } && printf "aggregate-last\n"'
+        printf '%s\n' '  printf "aggregate-first\n" && { : >"$AGG_STARTED"; while [[ ! -f "$AGG_RELEASE" ]]; do sleep 0.01; done; false; } && printf "aggregate-last\n"'
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == cleanup ]]; then'
-        printf '%s\n' '  printf "cleanup-output\n"; chmod a-w "$TMPDIR"'
+        printf '%s\n' '  printf "cleanup-output\n"'
         printf '%s\n' 'else gate; fi'
         found_gate_command=true
       elif [[ $line == ')' ]]; then
@@ -577,9 +590,8 @@ else
   CLEANUP_MARKER="$status_cleanup_marker" TMPDIR="$gate_tmp" GATE_MODE=status \
     bash "$gate_script" >"$status_stdout" 2>"$status_stderr"; status_rc=$?
   (
-    set -m
     CLEANUP_MARKER="$term_cleanup_marker" TMPDIR="$gate_tmp" GATE_MODE=term \
-      STARTED="$term_started" \
+      STARTED="$term_started" CHILD_PID_FILE="$term_child_pid_file" \
       bash "$gate_script" >"$term_stdout" 2>"$term_stderr" &
     term_pid=$!
     for _n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
@@ -587,10 +599,11 @@ else
       sleep 0.05
     done
     if [[ ! -f "$term_started" ]]; then
-      kill -KILL -- "-$term_pid" 2>/dev/null
+      kill -KILL "$term_pid" 2>/dev/null
       printf '%s' 125 > "$term_rc_file"
     else
-      kill -TERM -- "-$term_pid"
+      read -r term_child_pid term_wrapper_pid _ <"$term_child_pid_file"
+      kill -TERM "$term_wrapper_pid"
       wait "$term_pid"
       printf '%s' "$?" > "$term_rc_file"
     fi
@@ -598,7 +611,7 @@ else
   term_rc=$(< "$term_rc_file")
   (
     CLEANUP_MARKER="$aggregate_cleanup_marker" TMPDIR="$gate_tmp" \
-      GATE_MODE=aggregate AGG_STARTED="$aggregate_started" \
+      GATE_MODE=aggregate AGG_STARTED="$aggregate_started" AGG_RELEASE="$aggregate_release" \
       bash "$gate_script" >"$aggregate_stdout" 2>"$aggregate_stderr" &
     aggregate_pid=$!
     for _n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
@@ -606,13 +619,14 @@ else
       sleep 0.02
     done
     wc -c <"$aggregate_stdout" >"$aggregate_early_file"
+    : >"$aggregate_release"
     wait "$aggregate_pid"
     printf '%s' "$?" >"$aggregate_rc_file"
   )
   aggregate_rc=$(< "$aggregate_rc_file")
   CLEANUP_MARKER="$cleanup_failure_marker" TMPDIR="$cleanup_tmp" GATE_MODE=cleanup \
+    PATH="$cleanup_bin:$PATH" \
     bash "$gate_script" >"$cleanup_stdout" 2>"$cleanup_stderr"; cleanup_rc=$?
-  chmod u+w "$cleanup_tmp"
   gate_output=$(< "$gate_stdout")
   gate_error=$(< "$gate_stderr")
   status_output=$(< "$status_stdout")
@@ -642,6 +656,12 @@ else
     fail "$t" "categorized-status run replaced the caller's EXIT trap"
   elif [[ $term_rc -ne 143 ]]; then
     fail "$t" "terminated gate wrapper exited $term_rc"
+  elif [[ ! -s "$term_child_pid_file" ]]; then
+    fail "$t" "PID-only TERM fixture did not record the gate process"
+  elif read -r term_child_pid _ term_descendant_pid <"$term_child_pid_file" &&
+      { kill -0 "$term_child_pid" 2>/dev/null ||
+        kill -0 "$term_descendant_pid" 2>/dev/null; }; then
+    fail "$t" "PID-only TERM left the gate process group alive"
   elif [[ -n "$term_output" || -n "$term_error" ]]; then
     fail "$t" "terminated gate exposed output: stdout=$term_output stderr=$term_error"
   elif [[ ! -f "$term_cleanup_marker" || $(< "$term_cleanup_marker") != cleanup ]]; then

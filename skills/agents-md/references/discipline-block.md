@@ -102,10 +102,27 @@ that status after reading the log:
   trap _gate_cleanup EXIT
   _gate_had_errexit=0
   case $- in *e*) _gate_had_errexit=1; set +e ;; esac
-  "${BASH:-bash}" -e -s >"$_gate_log" 2>&1 <<'__AGENT_GATE__'
+  _gate_had_monitor=0
+  case $- in *m*) _gate_had_monitor=1 ;; *) set -m ;; esac
+  "${BASH:-bash}" -e -s >"$_gate_log" 2>&1 <<'__AGENT_GATE__' &
 <gate>
 __AGENT_GATE__
+  _gate_pid=$!
+  _gate_forward_signal() {
+    _gate_signal=$1
+    _gate_signal_rc=$2
+    trap - HUP INT TERM
+    kill -"$_gate_signal" -- "-$_gate_pid" 2>/dev/null || :
+    wait "$_gate_pid" 2>/dev/null || :
+    exit "$_gate_signal_rc"
+  }
+  trap '_gate_forward_signal HUP 129' HUP
+  trap '_gate_forward_signal INT 130' INT
+  trap '_gate_forward_signal TERM 143' TERM
+  wait "$_gate_pid"
   _gate_rc=$?
+  trap - HUP INT TERM
+  [ "$_gate_had_monitor" -ne 0 ] || set +m
   [ "$_gate_had_errexit" -eq 0 ] || set -e
   if ! cat "$_gate_log"; then
     echo "cannot read gate log" >&2
@@ -124,11 +141,14 @@ __AGENT_GATE__
 The nested subshell isolates its cleanup trap from the caller and removes the
 private log on normal return, error, or handled termination. The fresh Bash
 keeps fail-fast active even when a caller places the wrapper in `if`, `&&`, or
-`||`; put self-contained gate commands between its delimiter lines. Temporarily
-disabling wrapper `errexit` permits status capture. Cleanup happens before the
-reported final status: read or cleanup failure turns success into failure but
-preserves an existing nonzero/signal status. `exit` returns that final status,
-including categorized statuses such as 2 or 124.
+`||`; put self-contained gate commands between its delimiter lines. Temporary
+job control gives the gate a dedicated process group; HUP, INT, and TERM are
+forwarded to that group and its leader is reaped before the wrapper returns the
+conventional status. Temporarily disabling wrapper `errexit` permits status
+capture. Cleanup happens before the reported final status: read or cleanup
+failure turns success into failure but preserves an existing nonzero/signal
+status. `exit` returns that final status, including categorized statuses such as
+2 or 124.
 
 **"Passing", "clean", "working", "verified", and "done" require a command and an
 exit code.** If you cannot show one, say what you actually observed instead. This

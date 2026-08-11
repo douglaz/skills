@@ -214,10 +214,27 @@ Two non-negotiables:
      trap _gate_cleanup EXIT
      _gate_had_errexit=0
      case $- in *e*) _gate_had_errexit=1; set +e ;; esac
-     "${BASH:-bash}" -e -s >"$_gate_log" 2>&1 <<'__AGENT_GATE__'
+     _gate_had_monitor=0
+     case $- in *m*) _gate_had_monitor=1 ;; *) set -m ;; esac
+     "${BASH:-bash}" -e -s >"$_gate_log" 2>&1 <<'__AGENT_GATE__' &
 <gate-cmd>
 __AGENT_GATE__
+     _gate_pid=$!
+     _gate_forward_signal() {
+       _gate_signal=$1
+       _gate_signal_rc=$2
+       trap - HUP INT TERM
+       kill -"$_gate_signal" -- "-$_gate_pid" 2>/dev/null || :
+       wait "$_gate_pid" 2>/dev/null || :
+       exit "$_gate_signal_rc"
+     }
+     trap '_gate_forward_signal HUP 129' HUP
+     trap '_gate_forward_signal INT 130' INT
+     trap '_gate_forward_signal TERM 143' TERM
+     wait "$_gate_pid"
      _gate_rc=$?
+     trap - HUP INT TERM
+     [ "$_gate_had_monitor" -ne 0 ] || set +m
      [ "$_gate_had_errexit" -eq 0 ] || set -e
      if ! cat "$_gate_log"; then
        echo "cannot read gate log" >&2
