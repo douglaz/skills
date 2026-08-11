@@ -353,10 +353,13 @@ Split from B1 with one priority per child:
 - `skills/second-model-bead-audit/references/reviewer-panel.md`
 - `skills/orchestrating-with-rb-lite/references/harden-until-clean.md`
 - `skills/pr-with-codex-bot-review/SKILL.md`
-- new required owner:
-  `skills/multi-reviewer-loop/scripts/claude-reviewer-runner`
-- required tests:
-  `skills/multi-reviewer-loop/scripts/claude-reviewer-runner.test`
+- new exact companion owner:
+  `skills/claude-reviewer-runner/SKILL.md`
+- required implementation and tests:
+  `skills/claude-reviewer-runner/scripts/claude-reviewer-runner`
+  and
+  `skills/claude-reviewer-runner/scripts/claude-reviewer-runner.test`
+- `install.sh` and `install.test`
 
 **Required owner/API**
 
@@ -384,6 +387,16 @@ tool strings:
 - `panel-no-shell` is C3's enforced `Read,Glob,Grep` policy with Bash denied.
 
 The runner must not broaden a caller's policy or edit the reviewed worktree.
+
+Every caller resolves the executable from the exact installed
+`claude-reviewer-runner` companion path across Claude, Codex, and Agents targets,
+then falls back to the checkout path only when no installation resolves.
+`companion_dependencies()` must install this companion for selective installs
+of `multi-reviewer-loop`, `second-model-bead-audit`,
+`pr-with-codex-bot-review`, and `orchestrating-with-rb-lite`; transitive
+dependency expansion keeps a selective Drive install covered. `install.test`
+must exercise each direct selective install on both Claude and Codex targets,
+upgrade repair, a missing companion, and a wrong declared companion name.
 
 **Order**
 
@@ -419,9 +432,10 @@ Use a portable no-shell reviewer boundary through the single runner from C1:
    `git ls-files --others --exclude-standard -z`;
 4. copy each untracked regular file to a numbered bundle path and generate a
    tested JSON manifest containing its JSON-escaped original path, numbered copy,
-   type, and content digest; use `git hash-object --no-filters` on both the
-   original and copy and require equality; fail closed on a non-regular type or
-   any enumerate/copy/digest/manifest error;
+   type, Git-relevant mode (`100755` when executable, otherwise `100644`), and
+   content digest; use `git hash-object --no-filters` on both the original and
+   copy and require equality; fail closed on a non-regular type or any
+   enumerate/copy/digest/manifest error;
 5. give the reviewer the diff and manifest paths and retain `Read,Glob,Grep` so
    it can inspect surrounding tracked files and every numbered untracked copy;
    the prompt must say that both sources form the reviewed change; and
@@ -430,6 +444,9 @@ Use a portable no-shell reviewer boundary through the single runner from C1:
 
 This is the Linux/macOS boundary; do not add `bwrap` or `sandbox-exec`.
 Prompt text while granting Bash does not satisfy this issue.
+Required bundle fixtures include an untracked executable whose content is
+identical at modes 100644 and 100755; the manifest and reviewer input must
+distinguish them.
 
 ## Workstream D — installer and upgrade correctness
 
@@ -523,15 +540,26 @@ Run this bead through a separately spawned agent whose current repository is
 That agent must read `/home/master/p/rb-lite/AGENTS.md`, create
 `feat/drive-checkpoint-hook` from current `origin/main`, and use
 `orchestrating-with-rb-lite` in that checkout for the Codex-heavy implementation.
-The upstream gate is:
+Run all three upstream gates even when an earlier one fails, capture each real
+status separately, and require all three to be zero:
 
 ```bash
-just test && nix build && nix flake check
+just test > /tmp/f2-just-test.log 2>&1; just_test_rc=$?
+nix build > /tmp/f2-nix-build.log 2>&1; nix_build_rc=$?
+nix flake check > /tmp/f2-flake-check.log 2>&1; flake_check_rc=$?
+printf 'just_test=%s nix_build=%s flake_check=%s\n' \
+  "$just_test_rc" "$nix_build_rc" "$flake_check_rc"
+test "$just_test_rc" -eq 0 &&
+  test "$nix_build_rc" -eq 0 &&
+  test "$flake_check_rc" -eq 0
 ```
 
 Open and land the minimal rb-lite checkpoint-hook PR through the upstream
 repository's branch workflow. The child must own its lifecycle and quiescent
-boundary. Do not implement #30's log-tail sidecar.
+boundary. It must also expose a stable machine-readable capability probe,
+`rb-lite capabilities --json`, whose successful checkpoint-capable result
+contains `"synchronous_checkpoint":1`. Pin that command and malformed/missing
+capability cases in upstream tests. Do not implement #30's log-tail sidecar.
 
 The coordinating skills agent verifies the upstream PR URL, merge SHA, and all
 three gate exit codes. It then records and closes F2 only through a reviewed
@@ -575,6 +603,11 @@ merged.
 
 Implement:
 
+- resolve rb-lite candidates by capability, not path presence or version text:
+  reject a PATH candidate unless `rb-lite capabilities --json` exits 0 and
+  reports `"synchronous_checkpoint":1`; otherwise fall back to
+  `nix run github:douglaz/rb-lite/<F2r-immutable-commit> --`, probe that exact
+  command too, and fail preflight if neither qualifies;
 - declared round limits passed to rb-lite;
 - separate production and test LOC budgets;
 - distinct churn and scope brake reasons;
@@ -587,6 +620,10 @@ Implement:
 Close #30, #31, and #35 only after their observed failures are deterministic
 fixtures. #47 remains an independent policy deliverable even if #48 tracks the
 controller umbrella.
+
+F3 fixtures must put a stale pre-checkpoint `rb-lite` first on PATH and prove
+the resolver selects the immutable F2r fallback; a missing or malformed
+capability response must fail closed rather than run the stale binary.
 
 ## Workstream G — executable evidence and documentation
 
