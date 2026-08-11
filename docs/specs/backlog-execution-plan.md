@@ -456,7 +456,11 @@ guidance without waiting for the larger controller.
 Use a portable no-shell reviewer boundary through the single runner from C1:
 
 1. remove `Bash` from `--allowedTools` and include it in
-   `--disallowedTools`;
+   `--disallowedTools`; require `--no-session-persistence`, `--safe-mode`,
+   `--strict-mcp-config`, `--mcp-config '{"mcpServers":{}}'`, and an exact
+   built-in `Read,Glob,Grep` tool list; pass only the private bundle through
+   `--add-dir`; if the installed CLI lacks any isolation flag, mark the reviewer
+   unavailable/degraded before launch;
 2. have the orchestrator build a review bundle in a private 0700 temporary
    directory outside the worktree before launch;
 3. require a caller-supplied NUL-delimited allowlist of intended untracked paths
@@ -464,24 +468,31 @@ Use a portable no-shell reviewer boundary through the single runner from C1:
    `git ls-files --others --exclude-standard -z`, compare byte-for-byte, and
    refuse the panel before any external launch if an untracked path is outside
    the allowlist or the allowlist names a path that is no longer untracked;
-4. materialize a sanitized snapshot under that directory from `git archive
-   HEAD`, apply the tracked binary diff there, and copy only the allowlisted
-   untracked regular files into both their snapshot paths and numbered bundle
-   paths; do not copy `.git`, ignored files, or any unrelated untracked path;
-5. generate a
+4. materialize a sanitized snapshot under that directory from the NUL-safe raw
+   index path/mode set (`git ls-files --stage -z`) plus the current worktree
+   bytes; copy regular files byte-for-byte, recreate tracked symlinks from their
+   literal link target, preserve Git-relevant executable mode, and omit only
+   paths proven to be tracked deletions; fail closed on gitlinks, sparse/missing
+   paths that are not deletions, unmerged index stages, or any path/mode/digest
+   mismatch; do not use `git archive` or a checkout operation that honors
+   `export-ignore`, `export-subst`, or smudge filters;
+5. copy only the allowlisted untracked regular files into both their snapshot
+   paths and numbered bundle paths; do not copy `.git`, ignored files, or any
+   unrelated untracked path;
+6. generate a
    tested JSON manifest containing its JSON-escaped original path, numbered copy,
    type, Git-relevant mode (`100755` when executable, otherwise `100644`), and
    content digest; use `git hash-object --no-filters` on both the original and
    copy and require equality; fail closed on a non-regular type or any
    enumerate/copy/digest/manifest error;
-6. refuse any untracked file larger than 1 MiB or an aggregate untracked bundle
+7. refuse any untracked file larger than 1 MiB or an aggregate untracked bundle
    larger than 8 MiB before the external launch;
-7. launch the reviewer with the sanitized snapshot—not the original worktree—as
+8. launch the reviewer with the sanitized snapshot—not the original worktree—as
    its working directory; give it snapshot-local diff and manifest paths and
    retain `Read,Glob,Grep` so it can inspect surrounding tracked files and every
    numbered untracked copy; the prompt must say that both sources form the
    reviewed change; and
-8. if a supported Claude CLI cannot enforce the denied Bash tool, mark that
+9. if a supported Claude CLI cannot enforce the denied Bash tool, mark that
    reviewer unavailable/degraded—never silently regrant Bash.
 
 This is the Linux/macOS boundary; do not add `bwrap` or `sandbox-exec`.
@@ -490,8 +501,10 @@ Required bundle fixtures include an untracked executable whose content is
 identical at modes 100644 and 100755; the manifest and reviewer input must
 distinguish them. Additional fixtures cover an unrelated untracked credential,
 a stale allowlist entry, an ignored `.env`, the 1 MiB per-file boundary, and the
-8 MiB aggregate boundary. The ignored file must be absent from the snapshot,
-and no refusal case may launch the reviewer.
+8 MiB aggregate boundary. Tracked fixtures with `export-ignore`,
+`export-subst`, and a smudge filter must appear byte-identical to the current
+worktree in the snapshot. The ignored file must be absent from the snapshot, and
+no refusal case may launch the reviewer.
 
 ## Workstream D — installer and upgrade correctness
 
