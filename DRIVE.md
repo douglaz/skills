@@ -4,11 +4,12 @@
 `docs/specs/backlog-execution-plan.md` (#30–#66, exact set in that plan); the
 Beads graph created from the reviewed plan will be the ONLY work this drive may
 take.
-**Phase:** GRAPH · **Bead:** n/a (apply the reviewed 37-edge bootstrap graph)
+**Phase:** LAND · **Bead:** n/a (planning/bootstrap graph)
 · **Branch:** `plan/backlog-execution`
 **Pending:** —
 **Gate:** `./check.sh`
-· last green 2026-08-12 on the `9965c24` tree (exit 0).
+· last green 2026-08-12 on the `7d88c46` tree (exit 0; 26 installer,
+124 bot-gate, and 70 drive-status fixtures passed).
 
 ## Done
 
@@ -60,19 +61,32 @@ take.
   findings (one non-blocking P2 on fixture-only startup-timeout orphan cleanup);
   and `./check.sh` exited 0 with 26 installer, 124 bot-gate, and 70 drive-status
   fixtures.
+- Updated all 33 beads in place to the final reviewed 37-edge graph at
+  `7d88c46`, preserving every generated ID. Exact field/body, lint, cycle,
+  sync-health, and frontier audits passed: E1 (`skills-iog`) is the sole ready
+  bead.
+- Completed the independent second-model bead audit against immutable JSONL
+  snapshot
+  `481a8b9192717cbf2df26a08d1c76bdf4d3910875f9f1c3dee810ed2a3c0de44`.
+  Pinned `gpt-5.6-sol`/xhigh and Fable/high both read all 33 bodies and voted
+  PASS with no blocking or important findings. Fable's two optional nits do
+  not change the graph: exact tests already exist in the five cited bodies,
+  and keyword-driven `bv` executor-label suggestions conflict with the
+  authoritative one-lane contract.
+- Reran `./check.sh` on `7d88c46`; all 220 fixtures passed.
 
 ## Now
 
-Update the existing 33 flat beads in place from 24 to 37 edges while preserving
-every generated ID. Verify that E1 is the sole ready bead, then rerun focused
-fresh-eyes polish and the independent second-model graph audit.
+Land this fully reviewed planning/bootstrap branch without changing the audited
+graph. Refresh clean master after merge, reserve the single `executor-skills`
+lane, and dispatch sole-ready E1 through rb-lite.
 
 ## Next
 
-Return to GRAPH → update/polish/audit the 33 beads → land the planning/bootstrap
-branch → bootstrap E1 and then E3 exactly as plan global rule 8 requires → only
-then start A1, GitHub issue #42, through rb-lite → continue the highest-priority
-unblocked lane while respecting the two human-authority checkpoints.
+Bootstrap E1 and then E3 exactly as plan global rule 8 requires, including each
+exclusive reviewed closure-metadata PR. Only then start A1, GitHub issue #42,
+through rb-lite and continue the highest-priority unblocked lane while
+respecting the two human-authority checkpoints.
 
 ## Open questions for the human
 
