@@ -409,7 +409,7 @@ if os.path.lexists(pending):
 ' "$_gate_dir" "$_gate_pending" \
   "$_gate_log" "$_gate_script" "$_gate_runner" "$_gate_pending" &
 _gate_exec_watchdog=$!
-exec "$_gate_python" -I "$_gate_runner" "$_gate_dir" "${BASH:-bash}" \
+command exec "$_gate_python" -I "$_gate_runner" "$_gate_dir" "${BASH:-bash}" \
   "$_gate_exec_watchdog" "$_gate_pending"
 ```
 

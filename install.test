@@ -619,7 +619,8 @@ possible_gate_start=false
       break
     fi
     if $capture_gate; then
-      [[ $line == *'exec "$_gate_python" '* && $line == *'"$_gate_runner"'* ]] &&
+      [[ $line == *'command exec "$_gate_python" '* &&
+          $line == *'"$_gate_runner"'* ]] &&
         found_supervisor=true
       if [[ ${line#"${line%%[![:space:]]*}"} == '<gate>' ]]; then
         printf '%s\n' 'gate() { printf "first\n"; false; printf "should-not-run\n"; }'
@@ -659,8 +660,8 @@ possible_gate_start=false
   done < "$discipline_block"
 } > "$gate_script"
 awk '
-  /^exec "\$_gate_python" -I "\$_gate_runner"/ {
-    sub(/^exec "\$_gate_python"/, "exec /definitely/missing/python3")
+  /^command exec "\$_gate_python" -I "\$_gate_runner"/ {
+    sub(/^command exec "\$_gate_python"/, "command exec /definitely/missing/python3")
   }
   { print }
 ' "$gate_script" >"$execfail_gate_script"
@@ -742,8 +743,9 @@ else
   (
     false() { return 0; }
     cat() { return 0; }
+    exec() { return 0; }
     mktemp() { printf '%s\n' "$HOSTILE_GATE_DIR"; }
-    export -f false cat mktemp
+    export -f false cat exec mktemp
     HOSTILE_GATE_DIR="$shellfunc_hostile_dir" TMPDIR="$gate_tmp" \
       bash "$gate_script" >"$shellfunc_stdout" 2>"$shellfunc_stderr"
   ); shellfunc_rc=$?
