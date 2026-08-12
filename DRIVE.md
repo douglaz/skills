@@ -8,7 +8,7 @@ take.
 · **Branch:** `plan/backlog-execution`
 **Pending:** —
 **Gate:** `./check.sh`
-· last green 2026-08-12 at `16e1775` (exit 0).
+· last green 2026-08-12 on the `10c0288` tree (exit 0).
 
 ## Done
 
@@ -35,7 +35,7 @@ take.
   encoding implementation guesses downstream.
 - Repeated pinned Codex xhigh reviews drove the canonical gate wrapper to
   fail-closed process-group, output, cleanup, and inherited-signal behavior.
-  `./check.sh` exited 0 at `16e1775` (26 installer, 124 bot-gate, and 70
+  `./check.sh` exited 0 on the `10c0288` tree (26 installer, 124 bot-gate, and 70
   drive-status fixtures passed).
 - Called Fable at high effort to review the complete `docs/specs` inventory. It
   read all 33 rows and found two blocking plan gaps: B2d lacked its B2c

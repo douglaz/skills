@@ -259,6 +259,17 @@ field is absent, mistyped, or ambiguous.
    `testing-with-rb-lite` when the deliverable itself is a test or live gate.
 6. A reviewer finding is a hypothesis. Reproduce it before accepting it.
 7. Do not run two implementers against the same worktree or file ownership lane.
+8. Bootstrap the P0 Beads safety owners before normal scheduling. GRAPH may perform
+   its reviewed in-place update as one coordinator-owned, serialized transaction:
+   save the exact clean JSONL, require the pinned `sync --status --json` fields and
+   SHA-256 to agree, use only `br --no-auto-flush --no-auto-import` mutations,
+   explicitly flush once, and field-diff every ID against the saved bytes allowing
+   only the reviewed graph changes. After that update, dispatch E1 first. Once E1
+   merges, close E1 through that same saved-bytes/status/explicit-flush procedure,
+   then dispatch E3; make no other scoped Beads query or mutation until E3 lands.
+   Close E3 with its newly landed helper. Thereafter every scheduler query and
+   mutation uses E3. Any unexpected ID/field/body difference restores the saved
+   bytes, rebuilds the DB from them, and blocks scheduling for recovery.
 
 ## Workstream A — merge and admission integrity
 
@@ -335,13 +346,16 @@ follow a pre-created symlink, or continue after capture/read/cleanup failure.
 Fixtures cover hostile TMPDIR entries, create/write/read failure, and two
 concurrent captures. Run them and `./check.sh`. Do not absorb A3a or A3c.
 
-**A3c, P1 — exclude closure PRs from work-PR resume.** Own both matching query
-copies in `skills/rb-lite-backlog-drain/SKILL.md` and add executable
+**A3c, P1 — exclude closure PRs from work-PR resume.** Own the duplicated matching
+query consumers in `skills/rb-lite-backlog-drain/SKILL.md` and
+`skills/drive/references/phases.md` § LAND, or extract one tested fact owner both
+reference. Add executable
 `skills/rb-lite-backlog-drain/scripts/resume-query.test`. Before applying
 OPEN/MERGED work-PR state rules, reject a body carrying the exact
 `bead-closure: <id>` marker; retain the boundary-safe ordinary bead-ID match and
-fork/parent URL identity. The fixture uses one work PR and one closure PR with
-the same ID in OPEN and MERGED permutations and proves only work PRs reach the
+fork/parent URL identity. The fixture extracts and exercises the query from each
+consumer (or the one shared owner) with one work PR and one closure PR carrying
+the same ID in OPEN and MERGED permutations, and proves only work PRs reach the
 resume state. Run it and `./check.sh`. Do not absorb A3a or A3b.
 
 ### A4. Bounded plan-format follow-ups — issue #65
@@ -352,16 +366,21 @@ resume state. Run it and `./check.sh`. Do not absorb A3a or A3b.
 `skills/drive/SKILL.md` and the existing
 `skills/drive/evals/trigger-evals.json`. Replace the broad question exclusion
 with `general informational question`, explicitly retaining project-status and
-resume as Drive triggers. Run the existing trigger evaluation command documented
-by that skill before and after and require identical outcomes; this is not a
-red/green production behavior change. Then run `./check.sh`.
+resume as Drive triggers. Run the documented manual live-model measurement three
+times each for the affected project-status/resume positives and the informational
+negative, and record the before/after routing rates plus raw stream artifacts.
+Because the skill's invocation contract explicitly treats auto-triggering as
+stochastic bonus behavior, do not require byte-identical runs or turn a single
+miss into a red gate; the deterministic acceptance check is the exact folded
+description and unchanged `should_trigger` routing assertions in the eval file.
+This is not a red/green production behavior change. Then run `./check.sh`.
 
 **A4b, P3 — adjudicate moved examples.** Re-open the linked #65 review thread and
 inspect every merge/reset example in `skills/rb-lite-backlog-drain/SKILL.md`.
 The current file already places its shell examples in fenced blocks, so do not
 churn those blocks merely to satisfy stale wording. If the linked finding
 identifies a remaining indented example, own only that block plus its exact
-extraction check in `install.test`; convert only block style and require
+new extraction check added to `install.test`; convert only block style and require
 byte-identical command text before/after. Otherwise close this bead with the
 thread URL, inspected ranges, and no-change evidence. Do not execute the examples
 or add the G2 harness here. If any file changes, run `./install.test` and
@@ -952,6 +971,25 @@ Create:
   parallel round and assert the bounded diagnosis text/outcome. Run it and
   `./check.sh`.
 
+The E2b noninteractive interface is pinned to installed `br 0.2.19` by this
+disposable-repository measurement:
+
+```text
+$ br agents --help | grep -E -- '--add|--update|--dry-run|--force'
+      --add                          Add beads workflow instructions to AGENTS.md
+      --update                       Update beads workflow instructions to latest version
+      --dry-run                      Preview changes without modifying files
+  -f, --force                        Skip confirmation prompts
+$ br agents --add --force --dry-run
+Would add beads workflow instructions to: /tmp/<fixture>/AGENTS.md
+$ add_rc=$?
+$ br agents --update --force --dry-run
+Beads workflow instructions are already up to date (v1).
+$ update_rc=$?
+$ printf 'add=%s update=%s\n' "$add_rc" "$update_rc"
+add=0 update=0
+```
+
 The skeptic-convergence observation is not a fourth E2 bead; F1 owns it together
 with #47's fact-ownership policy.
 
@@ -1006,8 +1044,14 @@ transaction:
 
 ```bash
 if [ -n "${notes_file:-}" ]; then
+  _notes_payload=$(
+    command cat -- "$notes_file" || exit
+    printf '.'
+  ) ||
+    compensate_to_saved_open_state_or_retain_lock
+  _notes_payload=${_notes_payload%.}
   br --no-auto-flush --no-auto-import \
-    update "$bead_id" --notes "$(<"$notes_file")" ||
+    update "$bead_id" --notes "$_notes_payload" ||
     compensate_to_saved_open_state_or_retain_lock
 fi
 br --no-auto-flush --no-auto-import \
@@ -1019,6 +1063,11 @@ else
   compensate_to_saved_open_state_or_retain_lock
 fi
 ```
+
+Validation rejects raw NUL in a notes file before command substitution. Appending
+and then removing the sentinel preserves every trailing newline; success and
+compensation compare against that exact submitted payload, not a shell-trimmed
+variant.
 
 `bead_id` must be the exact claimed finding ID and `merge_evidence` must contain
 the reviewed work-PR URL and merge SHA. Do not use `br update ... -s closed`,
@@ -1512,14 +1561,19 @@ Constraints:
   AND semantics:
 
   ```bash
-  br ready --limit 0 -l drive-open-issues -l executor-skills
-  br ready --limit 0 -l drive-open-issues -l executor-rb-lite
-  br ready --limit 0 -l drive-open-issues -l authority-human
+  beads-close-transaction with-lock -- \
+    br ready --limit 0 -l drive-open-issues -l executor-skills
+  beads-close-transaction with-lock -- \
+    br ready --limit 0 -l drive-open-issues -l executor-rb-lite
+  beads-close-transaction with-lock -- \
+    br ready --limit 0 -l drive-open-issues -l authority-human
   ```
 
   The first lane runs in this repository, the second routes to the
   cross-repository procedure above, and the third is reported for human action
-  but never sent to an implementer.
+  but never sent to an implementer. These helper-wrapped spellings apply after
+  the E1/E3 bootstrap sequence in global rule 8; before then, normal lane
+  scheduling is forbidden.
 
 ## Beads graph to update
 
