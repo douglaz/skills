@@ -13,7 +13,8 @@ the missing B2d→B2c edge and an unattested E3 status schema. Both corrections 
 its valid lower-severity refinements are incorporated. On the final reviewed tree
 at `9965c24`, pinned `gpt-5.6-sol`/xhigh Codex reported no P0/P1 and Fable/high
 reported `NO BLOCKING FINDINGS`; `./check.sh` exited 0 with 26 installer, 124
-bot-gate, and 70 drive-status fixtures. GRAPH then updated the 33 rows and 24
+bot-gate, and 70 drive-status fixtures under GNU Bash 5.3.3, non-POSIX mode.
+GRAPH then updated the 33 rows and 24
 edges exactly, but five fresh polish passes found that the P0 E1→E3 bootstrap was
 only prose, E1/E3 closure metadata was not fully landed between stages, and a few
 shared owners/acceptance commands remained implicit. The plan now encodes the
@@ -22,7 +23,8 @@ the accepted sizing, ownership, and command findings. On `ec076e9`, Fable/high
 reported `NO BLOCKING FINDINGS`, pinned `gpt-5.6-sol`/xhigh Codex reported no
 P0/P1 (one non-blocking P2 about orphan cleanup in a startup-timeout test path),
 and `./check.sh` exited 0 with 26 installer, 124 bot-gate, and 70 drive-status
-fixtures. GRAPH may update the existing store to the 37-edge target. This plan covers the 29 GitHub
+fixtures under GNU Bash 5.3.3, non-POSIX mode. GRAPH may update the existing
+store to the 37-edge target. This plan covers the 29 GitHub
 issues that were open in `douglaz/skills` on 2026-08-11. GitHub remains the
 external source of issue identity; Beads holds the executable dependency graph.
 
@@ -240,11 +242,19 @@ $ jq -c '{dirty_count,jsonl_newer,db_newer,workspace_health,
           worktree_clean:.git_export.worktree_clean,
           index_clean:.git_export.index_clean}' /tmp/br-sync-status.json
 {"dirty_count":0,"jsonl_newer":false,"db_newer":false,"workspace_health":"healthy","reliability_health":"healthy","anomaly_count":0,"jsonl_content_hash":"3e0b401a0a7093b57d41a5f86ec9200cd1f721cc9a2caa06291edcda435fe4ad","git_available":true,"git_tracked":true,"worktree_clean":true,"index_clean":true}
-$ BEADS_JSONL=$(br --no-auto-flush --no-auto-import where --json | jq -er .jsonl_path)
+$ br --no-auto-flush --no-auto-import where --json \
+    >/tmp/br-where.json 2>/tmp/br-where.err
+$ br_where_rc=$?
+$ BEADS_JSONL=$(jq -er .jsonl_path </tmp/br-where.json)
+$ br_where_jq_rc=$?
+$ printf 'WHERE_EXIT=%s JQ_EXIT=%s\n' "$br_where_rc" "$br_where_jq_rc"
+WHERE_EXIT=0 JQ_EXIT=0
 $ sha256sum "$BEADS_JSONL"
 3e0b401a0a7093b57d41a5f86ec9200cd1f721cc9a2caa06291edcda435fe4ad  /home/master/p/skills/.beads/issues.jsonl
-$ wc -c /tmp/br-sync-status.err
+$ wc -c /tmp/br-sync-status.err /tmp/br-where.err
 0 /tmp/br-sync-status.err
+0 /tmp/br-where.err
+0 total
 $ printf 'EXIT=%s\n' "$br_sync_status_rc"
 EXIT=0
 ```
@@ -1181,20 +1191,21 @@ runs E1 before its first mutation, saves a private pre-transaction JSONL plus
 material `br show` state, opens each reason/optional-notes input once with
 `O_NOFOLLOW`, requires a regular file owned by the effective UID, copies its exact
 bytes into a mode-0600 helper-private snapshot while holding the lock, closes the
-caller-provided descriptor, and never rereads the caller path. It validates and
+caller-provided descriptor, and never rereads the caller path. The helper-private
+paths are named `_reason_snapshot` and `_notes_snapshot` below. It validates and
 submits only those immutable snapshot bytes, then updates notes (when supplied),
 closes, and explicitly flushes as one helper-owned transaction:
 
 ```bash
 _reason_payload=$(
-  command cat -- "$reason_file" || exit
+  command cat -- "$_reason_snapshot" || exit
   printf '.'
 ) ||
   compensate_to_saved_open_state_or_retain_lock
 _reason_payload=${_reason_payload%.}
 if [ -n "${notes_file:-}" ]; then
   _notes_payload=$(
-    command cat -- "$notes_file" || exit
+    command cat -- "$_notes_snapshot" || exit
     printf '.'
   ) ||
     compensate_to_saved_open_state_or_retain_lock

@@ -586,15 +586,22 @@ aggregate_release="$WORK/discipline-aggregate-release"
 aggregate_rc_file="$WORK/discipline-aggregate.rc"
 aggregate_early_file="$WORK/discipline-aggregate.early"
 bashenv_file="$WORK/hostile-bash-env"
+bashenv_python_dir="$WORK/hostile-bash-env-python"
+bashenv_real_python=$(command -v python3)
 shellfunc_hostile_dir="$WORK/hostile-mktemp-target"
 shellfunc_hostile_sentinel="$shellfunc_hostile_dir/sentinel"
 mkdir -p "$gate_tmp" "$cleanup_tmp" "$trusted_cleanup_tmp" "$cleanup_bin" \
-  "$shellfunc_hostile_dir"
+  "$bashenv_python_dir" "$shellfunc_hostile_dir"
 printf '%s\n' preserve >"$shellfunc_hostile_sentinel"
 printf '%s\n' '#!/bin/sh' 'exit 0' >"$cleanup_bin/unlink"
 printf '%s\n' '#!/bin/sh' 'exit 0' >"$cleanup_bin/rmdir"
 chmod +x "$cleanup_bin/unlink" "$cleanup_bin/rmdir"
 printf '%s\n' 'exit 0' >"$bashenv_file"
+cat >"$bashenv_python_dir/python3" <<'EOF'
+#!/usr/bin/env bash
+command exec "$BASHENV_REAL_PYTHON" "$@"
+EOF
+chmod +x "$bashenv_python_dir/python3"
 capture_gate=false
 found_gate_start=false
 found_gate_command=false
@@ -737,7 +744,8 @@ else
     sleep 0.01
   done
   execfail_leak=$(find "$gate_tmp" -mindepth 1 -print -quit)
-  TMPDIR="$gate_tmp" \
+  PATH="$bashenv_python_dir:$PATH" BASHENV_REAL_PYTHON="$bashenv_real_python" \
+    TMPDIR="$gate_tmp" \
     HOSTILE_BASH_ENV="$bashenv_file" PYTHONINSPECT=1 PYTHONPATH=/definitely/hostile \
     bash "$gate_script" >"$bashenv_stdout" 2>"$bashenv_stderr"; bashenv_rc=$?
   (

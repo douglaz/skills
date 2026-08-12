@@ -411,6 +411,8 @@ __AGENT_SUPERVISOR__
 : >"$_gate_pending" || { echo "cannot create exec marker"; exit 1; }
 _gate_python=$(command type -P python3) ||
   { echo "cannot locate python3"; exit 1; }
+command unset BASH_ENV ENV ||
+  { echo "cannot clear shell startup environment"; exit 1; }
 "$_gate_python" -I -c '
 import os
 import sys
@@ -443,8 +445,10 @@ standalone final command, not as sourced setup for later commands:
 `exec` makes the Python supervisor the caller-visible wrapper process, while a
 failed `exec` leaves the shell cleanup trap armed. Put self-contained gate
 commands between the delimiter lines. The supervisor runs them in a fresh Bash
-from a private script with closed stdin, cleared `BASH_ENV`, disabled startup
-files, and `pipefail`.
+from a private script with closed stdin, cleared shell-startup environment,
+disabled startup files, and `pipefail`. The wrapper clears `BASH_ENV` and `ENV`
+before either Python launch as well, so a Python path implemented by a shell shim
+cannot bypass the supervisor before its own environment sanitization runs.
 It creates a dedicated process group, handles HUP, INT, QUIT, and TERM even when
 the invoking shell inherited an ignored signal, resumes stopped work, waits with
 a deadline, and escalates boundedly when the leader or another process in that

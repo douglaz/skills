@@ -9,7 +9,8 @@ take.
 **Pending:** —
 **Gate:** `./check.sh`
 · last green 2026-08-12 on the `7d88c46` tree (exit 0; 26 installer,
-124 bot-gate, and 70 drive-status fixtures passed).
+124 bot-gate, and 70 drive-status fixtures passed under GNU Bash 5.3.3,
+non-POSIX mode).
 
 ## Done
 
@@ -26,7 +27,8 @@ take.
   fixture orphan cleanup) remain non-blocking follow-up evidence for the
   admission-integrity stream.
 - Ran the repository gate at `bceb919`: `./check.sh` exited 0 (26 installer,
-  124 bot-gate, and 66 drive-status fixtures passed).
+  124 bot-gate, and 66 drive-status fixtures passed under GNU Bash 5.3.3,
+  non-POSIX mode).
 - Initialized Beads and transferred all 33 reviewed rows with 22 dependency
   edges; the first transfer audit found the exact expected labels, priorities,
   URLs, bodies, and ready A1 (`skills-ro5`).
@@ -37,7 +39,7 @@ take.
 - Repeated pinned Codex xhigh reviews drove the canonical gate wrapper to
   fail-closed process-group, output, cleanup, and inherited-signal behavior.
   `./check.sh` exited 0 on the `10c0288` tree (26 installer, 124 bot-gate, and 70
-  drive-status fixtures passed).
+  drive-status fixtures passed under GNU Bash 5.3.3, non-POSIX mode).
 - Called Fable at high effort to review the complete `docs/specs` inventory. It
   read all 33 rows and found two blocking plan gaps: B2d lacked its B2c
   serialization/artifact edge, and E3 relied on an unattested `br sync --status
@@ -47,7 +49,7 @@ take.
   `gpt-5.6-sol`/xhigh Codex reported no P0/P1 findings (one non-blocking P2 about
   the pre-supervisor ignored-signal startup window), Fable/high reported
   `NO BLOCKING FINDINGS`, and `./check.sh` exited 0 (26 installer, 124 bot-gate,
-  and 70 drive-status fixtures).
+  and 70 drive-status fixtures under GNU Bash 5.3.3, non-POSIX mode).
 - Updated all 33 existing beads in place at `c921749`, preserving IDs and
   producing the reviewed 24-edge graph; exact field/body, label, cycle, and ready
   audits passed.
@@ -60,7 +62,7 @@ take.
   `NO BLOCKING FINDINGS`; pinned `gpt-5.6-sol`/xhigh Codex reported no P0/P1
   findings (one non-blocking P2 on fixture-only startup-timeout orphan cleanup);
   and `./check.sh` exited 0 with 26 installer, 124 bot-gate, and 70 drive-status
-  fixtures.
+  fixtures under GNU Bash 5.3.3, non-POSIX mode.
 - Updated all 33 beads in place to the final reviewed 37-edge graph at
   `7d88c46`, preserving every generated ID. Exact field/body, lint, cycle,
   sync-health, and frontier audits passed: E1 (`skills-iog`) is the sole ready
@@ -73,7 +75,8 @@ take.
   not change the graph: exact tests already exist in the five cited bodies,
   and keyword-driven `bv` executor-label suggestions conflict with the
   authoritative one-lane contract.
-- Reran `./check.sh` on `7d88c46`; all 220 fixtures passed.
+- Reran `./check.sh` on `7d88c46` under GNU Bash 5.3.3, non-POSIX mode; all
+  220 fixtures passed.
 
 ## Now
 
