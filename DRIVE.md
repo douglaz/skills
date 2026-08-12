@@ -8,8 +8,8 @@ take.
 · **Branch:** `plan/backlog-execution`
 **Pending:** —
 **Gate:** `./check.sh`
-· last green 2026-08-12 on the `873cb2b` tree (exit 0; 26 installer,
-124 bot-gate, and 70 drive-status fixtures passed under GNU Bash 5.3.3,
+· last green 2026-08-12 on the `4317460` tree (exit 0; 26 installer,
+124 bot-gate, and 70 drive-status fixtures passed under GNU Bash 5.3.15,
 non-POSIX mode).
 
 ## Done
@@ -75,8 +75,8 @@ non-POSIX mode).
   not change the graph: exact tests already exist in the five cited bodies,
   and keyword-driven `bv` executor-label suggestions conflict with the
   authoritative one-lane contract.
-- Reran `./check.sh` on `7d88c46` under GNU Bash 5.3.3, non-POSIX mode; all
-  220 fixtures passed.
+- Reran `./check.sh` on `7d88c46` under GNU Bash 5.3.3, non-POSIX mode; it
+  exited 0 and all 220 fixtures passed.
 - PR #68 review found and fixed two additional fail-open shell-shim paths plus
   two specification/body defects: the gate wrapper now clears startup variables
   and exported functions before either Python launch; E3 reads only immutable
@@ -89,8 +89,15 @@ non-POSIX mode).
 - The PR's final startup-timeout finding reproduced: killing only the fixture's
   Python supervisor orphaned its independently grouped gate. The bounded fixture
   cleanup now reaps both without re-signalling an observed-dead/reused PID, all
-  analogous timeout paths use it, a fresh read-only reviewer voted PASS, and
-  three consecutive `./check.sh` runs passed with no surviving gate process.
+  analogous timeout paths use it, and a fresh read-only reviewer voted PASS.
+- A subsequent current-tip review reproduced scheduler-latency failure in the
+  fixture readiness polls. All analogous setup handshakes now allow a bounded
+  ten seconds while the behavior deadlines remain two seconds; the aggregate
+  fixture's missing-marker branch is also bounded and fail-closed. A final
+  diff-based reviewer voted PASS.
+- On the resulting `4317460` tree, `./check.sh` under GNU Bash 5.3.15,
+  non-POSIX mode, exited 0 with 26 installer, 124 bot-gate, and 70 drive-status
+  fixtures; stderr was empty and no fixture gate process survived.
 - Called Fable/high again after all specification/body corrections. It reread
   the full 1,871-line spec, all 33 bodies, `AGENTS.md`, `DRIVE.md`, and linked
   owners and reported `NO BLOCKING FINDINGS`.
