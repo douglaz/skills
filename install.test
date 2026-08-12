@@ -524,6 +524,8 @@ execfail_stdout="$WORK/discipline-execfail.stdout"
 execfail_stderr="$WORK/discipline-execfail.stderr"
 bashenv_stdout="$WORK/discipline-bashenv.stdout"
 bashenv_stderr="$WORK/discipline-bashenv.stderr"
+delayedexec_stdout="$WORK/discipline-delayed-exec.stdout"
+delayedexec_stderr="$WORK/discipline-delayed-exec.stderr"
 shellfunc_stdout="$WORK/discipline-shellfunc.stdout"
 shellfunc_stderr="$WORK/discipline-shellfunc.stderr"
 localcommand_stdout="$WORK/discipline-local-command.stdout"
@@ -625,6 +627,10 @@ chmod +x "$cleanup_bin/unlink" "$cleanup_bin/rmdir"
 printf '%s\n' ': >"$BASHENV_MARKER"' 'exit 0' >"$bashenv_file"
 cat >"$bashenv_python_dir/python3" <<'EOF'
 #!/usr/bin/env bash
+if [[ -n ${BASHENV_SUPERVISOR_DELAY:-} &&
+    ${2:-} == */supervisor.py ]]; then
+  sleep "$BASHENV_SUPERVISOR_DELAY"
+fi
 exec "$BASHENV_REAL_PYTHON" "$@"
 EOF
 chmod +x "$bashenv_python_dir/python3"
@@ -997,6 +1003,10 @@ PY
     BASHENV_MARKER="$bashenv_marker" TMPDIR="$gate_tmp" \
     HOSTILE_BASH_ENV="$bashenv_file" PYTHONINSPECT=1 PYTHONPATH=/definitely/hostile \
     bash "$gate_script" >"$bashenv_stdout" 2>"$bashenv_stderr"; bashenv_rc=$?
+  PATH="$bashenv_python_dir:$PATH" BASHENV_REAL_PYTHON="$bashenv_real_python" \
+    BASHENV_SUPERVISOR_DELAY=3 TMPDIR="$gate_tmp" GATE_MODE=success \
+    bash "$gate_script" >"$delayedexec_stdout" 2>"$delayedexec_stderr"
+  delayedexec_rc=$?
   (
     builtin() { return 0; }
     declare() { return 0; }
@@ -1500,6 +1510,8 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
   execfail_error=$(< "$execfail_stderr")
   bashenv_output=$(< "$bashenv_stdout")
   bashenv_error=$(< "$bashenv_stderr")
+  delayedexec_output=$(< "$delayedexec_stdout")
+  delayedexec_error=$(< "$delayedexec_stderr")
   shellfunc_output=$(< "$shellfunc_stdout")
   shellfunc_error=$(< "$shellfunc_stderr")
   localcommand_output=$(< "$localcommand_stdout")
@@ -1563,6 +1575,11 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
     fail "$t" "hostile-BASH_ENV run wrote stderr: $bashenv_error"
   elif [[ -e "$bashenv_marker" ]]; then
     fail "$t" "hostile BASH_ENV reached a Python-launch shim"
+  elif [[ $delayedexec_rc -ne 0 ||
+      $delayedexec_output != $'paste-success\nEXIT=0' ]]; then
+    fail "$t" "delayed supervisor handoff became rc=$delayedexec_rc stdout=$delayedexec_output"
+  elif [[ -n "$delayedexec_error" ]]; then
+    fail "$t" "delayed supervisor handoff wrote stderr: $delayedexec_error"
   elif [[ $localcommand_rc -ne 1 ||
       $localcommand_output != $'first\nEXIT=1' ]]; then
     fail "$t" "local command function bypassed the gate: rc=$localcommand_rc stdout=$localcommand_output"

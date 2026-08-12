@@ -467,13 +467,24 @@ while command builtin read -r _ _ _gate_function; do
   command builtin export -n -f -- "$_gate_function" ||
     { echo "cannot clear exported shell function"; exit 1; }
 done < <(command builtin declare -F)
+_gate_owner_pid=$BASHPID
 "$_gate_python" -I -c '
 import os
 import sys
 import time
 
-root, pending, *paths = sys.argv[1:]
-time.sleep(2)
+root, pending, owner_pid, *paths = sys.argv[1:]
+owner_pid = int(owner_pid)
+while os.path.lexists(pending):
+    if os.getppid() != owner_pid:
+        break
+    try:
+        os.kill(owner_pid, 0)
+    except ProcessLookupError:
+        break
+    except PermissionError:
+        pass
+    time.sleep(0.05)
 if os.path.lexists(pending):
     for path in paths:
         try:
@@ -487,7 +498,8 @@ if os.path.lexists(pending):
     except OSError:
         pass
 ' "$_gate_dir" "$_gate_pending" \
-  "$_gate_log" "$_gate_error" "$_gate_script" "$_gate_runner" "$_gate_pending" &
+  "$_gate_owner_pid" "$_gate_log" "$_gate_error" "$_gate_script" "$_gate_runner" \
+  "$_gate_pending" &
 _gate_exec_watchdog=$!
 command exec "$_gate_python" -I "$_gate_runner" "$_gate_dir" "${BASH:-bash}" \
   "$_gate_exec_watchdog" "$_gate_pending"

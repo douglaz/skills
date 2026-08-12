@@ -654,8 +654,11 @@ forced-kill or child-reaping failure, 2 for invocation/dependency/capability
 failure, and 1 for malformed/error reviewer output or result-file
 create/write/finalize/cleanup failure. Write results to a mode-0600 sibling
 temporary file, wait for the complete child process group, validate, atomically
-rename to `--result-file`, and never modify that path after returning; no failure
-may leave a valid-looking final result. Timeout/signal handling performs bounded
+publish without replacement by hard-linking that same-directory temporary file
+to `--result-file` and then unlinking the temporary name; if the destination
+appears after the initial check, the exclusive link must fail rather than
+replace it. Never modify the final path after returning; no failure may leave a
+valid-looking final result. Timeout/signal handling performs bounded
 TERM/CONT/KILL and does not return until descendants are reaped.
 
 `probe` writes the selected model plus one trailing newline to stdout and no
