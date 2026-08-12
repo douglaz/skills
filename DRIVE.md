@@ -8,7 +8,7 @@ take.
 · **Branch:** `plan/backlog-execution`
 **Pending:** —
 **Gate:** `./check.sh`
-· last green 2026-08-12 on the `2c74bb0` tree (exit 0; 26 installer,
+· last green 2026-08-12 on the `3df315b` tree (exit 0; 26 installer,
 124 bot-gate, and 70 drive-status fixtures passed under GNU Bash 5.3.15,
 non-POSIX mode).
 
@@ -127,6 +127,12 @@ non-POSIX mode).
   and that shell rejects remaining raw exported-function entries. Disabling
   POSIX precedence makes the combined fixture fail 25/1; the corrected full
   gate passed 26/124/70 with empty stderr.
+- Independent review then found alias expansion and a caller-controlled `BASH`
+  path on the outer trust path. Commit `3df315b` backslash-suppresses the
+  special-builtin words, resolves Bash through `command -p`, and narrows the
+  inherited-ignored-signal claim to the post-supervisor boundary. The combined
+  alias plus hostile-`BASH` regression fails 25/1; the full gate passed
+  26/124/70 with empty stderr.
 
 ## Now
 
