@@ -433,10 +433,10 @@ _gate_python=$(command type -P python3) ||
   { echo "cannot locate python3"; exit 1; }
 command unset BASH_ENV ENV ||
   { echo "cannot clear shell startup environment"; exit 1; }
-while read -r _ _ _gate_function; do
-  export -n -f -- "$_gate_function" ||
+while command builtin read -r _ _ _gate_function; do
+  command builtin export -n -f -- "$_gate_function" ||
     { echo "cannot clear exported shell function"; exit 1; }
-done < <(declare -F)
+done < <(command builtin declare -F)
 "$_gate_python" -I -c '
 import os
 import sys

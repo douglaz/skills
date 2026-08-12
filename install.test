@@ -861,11 +861,15 @@ else
     HOSTILE_BASH_ENV="$bashenv_file" PYTHONINSPECT=1 PYTHONPATH=/definitely/hostile \
     bash "$gate_script" >"$bashenv_stdout" 2>"$bashenv_stderr"; bashenv_rc=$?
   (
+    builtin() { return 0; }
+    declare() { return 0; }
+    read() { return 1; }
+    export() { return 0; }
     false() { return 0; }
     cat() { return 0; }
     exec() { return 0; }
     mktemp() { printf '%s\n' "$HOSTILE_GATE_DIR"; }
-    export -f false cat exec mktemp
+    command builtin export -f builtin declare read export false cat exec mktemp
     PATH="$bashenv_python_dir:$PATH" BASHENV_REAL_PYTHON="$bashenv_real_python" \
       HOSTILE_GATE_DIR="$shellfunc_hostile_dir" TMPDIR="$gate_tmp" \
       bash "$gate_script" >"$shellfunc_stdout" 2>"$shellfunc_stderr"
