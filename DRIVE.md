@@ -82,8 +82,10 @@ non-POSIX mode).
   and exported functions before either Python launch; E3 reads only immutable
   helper-private evidence snapshots; E2b permits only the measured initial
   `br agents --add --force` path and verifies the installed block bytes instead
-  of trusting `--update`'s false zero-status no-op. Focused mutations made each
-  new gate fixture fail for its intended assertion before the production fix.
+  of trusting `--update`'s false zero-status no-op. Fable's convergence pass
+  caught the two sibling beads that also embed the E2 section; the corrected
+  contract is now present in E2a, E2b, and E2c. Focused mutations made each new
+  gate fixture fail for its intended assertion before the production fix.
 
 ## Now
 
