@@ -410,26 +410,41 @@ try:
         stderr_was_blocking = os.get_blocking(stderr_fd)
         os.set_blocking(stdout_fd, False)
         os.set_blocking(stderr_fd, False)
-        for path, target_fd in ((log_path, stdout_fd), (error_path, stderr_fd)):
-            with open(path, "rb") as output:
-                while True:
-                    chunk = output.read(65536)
-                    if not chunk:
-                        break
-                    pending = memoryview(chunk)
-                    while pending:
-                        try:
-                            written = os.write(target_fd, pending)
-                            pending = pending[written:]
-                        except BlockingIOError:
-                            select.select([], [target_fd], [], 0.1)
+        streams = [
+            [open(log_path, "rb"), stdout_fd, memoryview(b"")],
+            [open(error_path, "rb"), stderr_fd, memoryview(b"")],
+        ]
+        try:
+            while streams:
+                active = []
+                for stream in streams:
+                    if not stream[2]:
+                        chunk = stream[0].read(65536)
+                        if not chunk:
+                            stream[0].close()
+                            continue
+                        stream[2] = memoryview(chunk)
+                    active.append(stream)
+                streams = active
+                if not streams:
+                    break
+                _, writable, _ = select.select(
+                    [], [stream[1] for stream in streams], [], 0.1
+                )
+                for stream in streams:
+                    if stream[1] in writable:
+                        written = os.write(stream[1], stream[2])
+                        stream[2] = stream[2][written:]
+        finally:
+            for stream in streams:
+                stream[0].close()
+        os.set_blocking(stderr_fd, stderr_was_blocking)
     if not remove_private_dir():
         print("cannot remove gate directory", file=sys.stderr)
         rc = rc if rc != 0 else 1
     if cancelled is None:
         write_terminal_status(stdout_fd, rc)
         os.set_blocking(stdout_fd, stdout_was_blocking)
-        os.set_blocking(stderr_fd, stderr_was_blocking)
 except GateCancelled as cancellation:
     if "stdout_fd" in locals() and "stdout_was_blocking" in locals():
         os.set_blocking(stdout_fd, stdout_was_blocking)

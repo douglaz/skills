@@ -801,8 +801,12 @@ build-review-bundle --base REV --bundle-dir PATH --result-file PATH \
 `--bundle-dir` and `--result-file` must not exist; their parents must be
 caller-owned mode-0700 directories. The helper creates the bundle directory at
 0700, accepts the optional allowlist as raw NUL-delimited paths (absence is valid
-only when the repository has no untracked paths), writes no stdout, and atomically
-writes exactly one compact UTF-8 JSON object plus newline to a mode-0600 result:
+only when the repository has no untracked paths), and writes no stdout. It first
+writes and validates exactly one compact UTF-8 JSON object plus newline in a
+mode-0600 same-directory temporary, then publishes without replacement by
+hard-linking it to `--result-file` and unlinking the temporary name. If the
+destination appears after the initial check, the exclusive link fails rather
+than replacing caller-owned evidence. The result schema is:
 
 ```json
 {"bundle_root":"<absolute>","working_directory":"<absolute snapshot>","diff":"<absolute native diff>","manifest":"<absolute untracked manifest>"}
@@ -911,7 +915,9 @@ file must be absent from the snapshot, and no refusal case may launch the
 reviewer. Concurrent-swap fixtures replace a tracked path and an allowlisted
 untracked path—with both regular-file and symlink variants—between enumeration,
 open, copy, and final token validation; every variant must refuse without
-bundling replacement/target bytes or publishing a result.
+bundling replacement/target bytes or publishing a result. A separate finalization
+race creates `--result-file` after the initial nonexistence check and proves the
+helper returns status 1 without replacing or modifying that path.
 
 Wire `skills/reviewer-isolation/scripts/reviewer-isolation.test` into
 `check.sh`; acceptance runs that test directly, `./install.test`, and

@@ -543,6 +543,11 @@ pipeline_stdout="$WORK/discipline-pipeline.stdout"
 pipeline_stderr="$WORK/discipline-pipeline.stderr"
 streams_stdout="$WORK/discipline-streams.stdout"
 streams_stderr="$WORK/discipline-streams.stderr"
+pressure_fifo="$WORK/discipline-pressure.fifo"
+pressure_stdout="$WORK/discipline-pressure.stdout"
+pressure_stderr="$WORK/discipline-pressure.stderr"
+pressure_reader_ready="$WORK/discipline-pressure-reader.ready"
+pressure_reader_release="$WORK/discipline-pressure-reader.release"
 ignored_sigchld_stdout="$WORK/discipline-ignored-sigchld.stdout"
 ignored_sigchld_stderr="$WORK/discipline-ignored-sigchld.stderr"
 normal_orphan_stdout="$WORK/discipline-normal-orphan.stdout"
@@ -564,6 +569,12 @@ aggregate_stdout="$WORK/discipline-aggregate.stdout"
 aggregate_stderr="$WORK/discipline-aggregate.stderr"
 cleanup_stdout="$WORK/discipline-cleanup.stdout"
 cleanup_stderr="$WORK/discipline-cleanup.stderr"
+cleanup_pressure_fifo="$WORK/discipline-cleanup-pressure.fifo"
+cleanup_pressure_stdout="$WORK/discipline-cleanup-pressure.stdout"
+cleanup_pressure_stderr="$WORK/discipline-cleanup-pressure.stderr"
+cleanup_pressure_reader_ready="$WORK/discipline-cleanup-pressure-reader.ready"
+cleanup_pressure_release="$WORK/discipline-cleanup-pressure.release"
+cleanup_pressure_filled="$WORK/discipline-cleanup-pressure.filled"
 trusted_cleanup_stdout="$WORK/discipline-trusted-cleanup.stdout"
 trusted_cleanup_stderr="$WORK/discipline-trusted-cleanup.stderr"
 gate_tmp="$WORK/discipline-gate-tmp"
@@ -830,6 +841,9 @@ possible_gate_start=false
         printf '%s\n' '  printf "pipeline-first\n"; false | true; printf "pipeline-last\n"'
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == streams ]]; then'
         printf '%s\n' '  printf "stream-out\n"; printf "stream-error\n" >&2'
+        printf '%s\n' 'elif [[ ${GATE_MODE:-function} == stream-pressure ]]; then'
+        printf '%s\n' '  python3 -c '\''import sys; sys.stdout.write("x" * 262144)'\'''
+        printf '%s\n' '  printf "pressure-error\n" >&2'
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == normal-orphan ]]; then'
         printf '%s\n' '  python3 -c '\''import os, sys, time; (sys.exit(0) if not sys.platform.startswith("linux") else None); pid = os.fork(); (os._exit(0) if pid == 0 else None); deadline = time.monotonic() + 2; info = None; exec("while time.monotonic() < deadline:\n info = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)\n if info is not None and info.si_pid == pid: break\n time.sleep(0.005)"); (None if info is not None and info.si_pid == pid else (_ for _ in ()).throw(RuntimeError("child did not become a zombie")))'\'''
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == replay ]]; then'
@@ -940,6 +954,7 @@ else
     pidfd_signal_fixtures=false
   fi
   deadline_group_leak=false
+  deadline_group_setup_error=
   deadline_watchdog_rc=0
   if $pidfd_signal_fixtures; then
     python3 - "$deadline_group_ready" "$deadline_group_pid_file" <<'PY' &
@@ -963,29 +978,34 @@ PY
       [[ -e "$deadline_group_ready" ]] && break
       sleep 0.01
     done
-    read -r deadline_group_pid deadline_descendant_pid \
-      <"$deadline_group_pid_file"
-    sleep 30 &
-    deadline_wrapper_pid=$!
-    gate_fixture_watchdog \
-      "$deadline_group_marker" "$deadline_wrapper_pid" "$deadline_group_pid" &
-    deadline_watchdog_pid=$!
-    gate_fixture_watchdog_ready "$deadline_group_marker"
-    gate_fixture_wait_with_watchdog \
-      "$deadline_wrapper_pid" "$deadline_group_marker" "$deadline_watchdog_pid" \
-      2>/dev/null
-    deadline_watchdog_rc=$gate_fixture_wait_rc
-    wait "$deadline_group_pid" 2>/dev/null || true
-    for ((_n=1; _n<=200; _n++)); do
-      deadline_group_leak=false
-      for _deadline_pid in "$deadline_group_pid" "$deadline_descendant_pid"; do
-        _deadline_state=$(LC_ALL=C ps -o stat= -p "$_deadline_pid" 2>/dev/null) ||
-          continue
-        [[ $_deadline_state == *Z* ]] || deadline_group_leak=true
+    if [[ ! -e "$deadline_group_ready" ]] ||
+        ! read -r deadline_group_pid deadline_descendant_pid \
+          <"$deadline_group_pid_file"; then
+      deadline_group_setup_error="deadline group fixture did not start"
+      gate_fixture_abort_before_signal "$deadline_group_pid" "$deadline_group_pid"
+    else
+      sleep 30 &
+      deadline_wrapper_pid=$!
+      gate_fixture_watchdog \
+        "$deadline_group_marker" "$deadline_wrapper_pid" "$deadline_group_pid" &
+      deadline_watchdog_pid=$!
+      gate_fixture_watchdog_ready "$deadline_group_marker"
+      gate_fixture_wait_with_watchdog \
+        "$deadline_wrapper_pid" "$deadline_group_marker" "$deadline_watchdog_pid" \
+        2>/dev/null
+      deadline_watchdog_rc=$gate_fixture_wait_rc
+      wait "$deadline_group_pid" 2>/dev/null || true
+      for ((_n=1; _n<=200; _n++)); do
+        deadline_group_leak=false
+        for _deadline_pid in "$deadline_group_pid" "$deadline_descendant_pid"; do
+          _deadline_state=$(LC_ALL=C ps -o stat= -p "$_deadline_pid" 2>/dev/null) ||
+            continue
+          [[ $_deadline_state == *Z* ]] || deadline_group_leak=true
+        done
+        $deadline_group_leak || break
+        sleep 0.01
       done
-      $deadline_group_leak || break
-      sleep 0.01
-    done
+    fi
   fi
   TMPDIR="$gate_tmp" \
     bash "$gate_script" >"$gate_stdout" 2>"$gate_stderr"; rc=$?
@@ -1061,6 +1081,46 @@ PY
     bash "$gate_script" >"$pipeline_stdout" 2>"$pipeline_stderr"; pipeline_rc=$?
   TMPDIR="$gate_tmp" GATE_MODE=streams \
     bash "$gate_script" >"$streams_stdout" 2>"$streams_stderr"; streams_rc=$?
+  mkfifo "$pressure_fifo"
+  python3 - "$pressure_fifo" "$pressure_reader_ready" \
+      "$pressure_reader_release" "$pressure_stdout" <<'PY' &
+import os
+import sys
+import time
+
+fifo, ready, release, output = sys.argv[1:]
+with open(fifo, "rb", buffering=0) as source:
+    open(ready, "xb").close()
+    while not os.path.exists(release):
+        time.sleep(0.01)
+    with open(output, "wb") as destination:
+        while True:
+            chunk = source.read(65536)
+            if not chunk:
+                break
+            destination.write(chunk)
+PY
+  pressure_reader_pid=$!
+  TMPDIR="$gate_tmp" GATE_MODE=stream-pressure \
+    bash "$gate_script" >"$pressure_fifo" 2>"$pressure_stderr" &
+  pressure_pid=$!
+  for ((_n=1; _n<=1000; _n++)); do
+    [[ -e "$pressure_reader_ready" ]] && break
+    sleep 0.01
+  done
+  pressure_error_early=false
+  for ((_n=1; _n<=1000; _n++)); do
+    if grep -Fq pressure-error "$pressure_stderr"; then
+      pressure_error_early=true
+      break
+    fi
+    sleep 0.01
+  done
+  : >"$pressure_reader_release"
+  wait "$pressure_pid"
+  pressure_rc=$?
+  wait "$pressure_reader_pid"
+  pressure_reader_rc=$?
   TMPDIR="$gate_tmp" GATE_MODE=status \
     python3 -c '
 import os
@@ -1498,6 +1558,63 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
   aggregate_rc=$(< "$aggregate_rc_file")
   TMPDIR="$cleanup_tmp" GATE_MODE=cleanup \
     bash "$cleanupfail_gate_script" >"$cleanup_stdout" 2>"$cleanup_stderr"; cleanup_rc=$?
+  mkfifo "$cleanup_pressure_fifo"
+  python3 - "$cleanup_pressure_fifo" "$cleanup_pressure_reader_ready" \
+      "$cleanup_pressure_release" "$cleanup_pressure_stderr" <<'PY' &
+import os
+import sys
+import time
+
+fifo, ready, release, output = sys.argv[1:]
+with open(fifo, "rb", buffering=0) as source:
+    open(ready, "xb").close()
+    while not os.path.exists(release):
+        time.sleep(0.01)
+    with open(output, "wb") as destination:
+        while True:
+            chunk = source.read(65536)
+            if not chunk:
+                break
+            destination.write(chunk)
+PY
+  cleanup_pressure_reader_pid=$!
+  python3 - "$cleanup_pressure_fifo" "$cleanup_pressure_filled" \
+      "$cleanup_pressure_release" <<'PY' &
+import os
+import sys
+import time
+
+fifo, filled, release = sys.argv[1:]
+fd = os.open(fifo, os.O_WRONLY)
+os.set_blocking(fd, False)
+try:
+    while True:
+        try:
+            os.write(fd, b"x" * 65536)
+        except BlockingIOError:
+            break
+    open(filled, "xb").close()
+    while not os.path.exists(release):
+        time.sleep(0.01)
+finally:
+    os.close(fd)
+PY
+  cleanup_pressure_filler_pid=$!
+  for ((_n=1; _n<=1000; _n++)); do
+    [[ -e "$cleanup_pressure_reader_ready" &&
+       -e "$cleanup_pressure_filled" ]] && break
+    sleep 0.01
+  done
+  TMPDIR="$cleanup_tmp" GATE_MODE=cleanup \
+    bash "$cleanupfail_gate_script" >"$cleanup_pressure_stdout" \
+      2>"$cleanup_pressure_fifo" &
+  cleanup_pressure_pid=$!
+  sleep 0.1
+  : >"$cleanup_pressure_release"
+  wait "$cleanup_pressure_pid"
+  cleanup_pressure_rc=$?
+  wait "$cleanup_pressure_filler_pid"
+  wait "$cleanup_pressure_reader_pid"
   TMPDIR="$trusted_cleanup_tmp" GATE_MODE=trusted-cleanup \
     PATH="$cleanup_bin:$PATH" \
     bash "$gate_script" >"$trusted_cleanup_stdout" 2>"$trusted_cleanup_stderr"
@@ -1528,6 +1645,8 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
   pipeline_error=$(< "$pipeline_stderr")
   streams_output=$(< "$streams_stdout")
   streams_error=$(< "$streams_stderr")
+  pressure_stdout_bytes=$(wc -c <"$pressure_stdout")
+  pressure_error=$(< "$pressure_stderr")
   ignored_sigchld_output=$(< "$ignored_sigchld_stdout")
   ignored_sigchld_error=$(< "$ignored_sigchld_stderr")
   normal_orphan_output=$(< "$normal_orphan_stdout")
@@ -1549,6 +1668,7 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
   aggregate_early=$(< "$aggregate_early_file")
   cleanup_output=$(< "$cleanup_stdout")
   cleanup_error=$(< "$cleanup_stderr")
+  cleanup_pressure_output=$(< "$cleanup_pressure_stdout")
   trusted_cleanup_output=$(< "$trusted_cleanup_stdout")
   trusted_cleanup_error=$(< "$trusted_cleanup_stderr")
   if [[ $rc -ne 1 ]]; then
@@ -1620,6 +1740,11 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
   elif [[ $streams_rc -ne 0 || $streams_output != $'stream-out\nEXIT=0' ||
       $streams_error != stream-error ]]; then
     fail "$t" "gate streams were not preserved: rc=$streams_rc stdout=$streams_output stderr=$streams_error"
+  elif ! $pressure_error_early; then
+    fail "$t" "stderr replay waited behind blocked stdout"
+  elif [[ $pressure_rc -ne 0 || $pressure_reader_rc -ne 0 ||
+      $pressure_stdout_bytes -ne 262151 || $pressure_error != pressure-error ]]; then
+    fail "$t" "backpressured stream replay was incomplete: wrapper=$pressure_rc reader=$pressure_reader_rc stdout-bytes=$pressure_stdout_bytes stderr=$pressure_error"
   elif [[ $ignored_sigchld_rc -ne 124 ||
       $ignored_sigchld_output != 'EXIT=124' ]]; then
     fail "$t" "ignored parent SIGCHLD corrupted status: rc=$ignored_sigchld_rc stdout=$ignored_sigchld_output"
@@ -1691,6 +1816,8 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
     fail "$t" "QUIT gate exposed output: stdout=$quit_output stderr=$quit_error"
   elif $pidfd_signal_fixtures && [[ $stop_rc -ne 143 ]]; then
     fail "$t" "stopped gate escaped before termination: rc=$stop_rc"
+  elif $pidfd_signal_fixtures && [[ ! -s "$stop_child_pid_file" ]]; then
+    fail "$t" "stopped gate fixture did not record the gate process"
   elif $pidfd_signal_fixtures &&
       read -r stop_child_pid _ <"$stop_child_pid_file" &&
       kill -0 "$stop_child_pid" 2>/dev/null; then
@@ -1711,11 +1838,17 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
     fail "$t" "cleanup failure was not reported: $cleanup_error"
   elif ! find "$cleanup_tmp" -mindepth 1 -type f -print -quit | grep -q .; then
     fail "$t" "cleanup-failure fixture left no log to substantiate the failure"
+  elif [[ $cleanup_pressure_rc -ne 1 ||
+      $cleanup_pressure_output != $'cleanup-output\nEXIT=1' ]] ||
+      ! grep -Fq "cannot remove gate directory" "$cleanup_pressure_stderr"; then
+    fail "$t" "full-stderr cleanup failure omitted its diagnostic or terminal status"
   elif [[ $trusted_cleanup_rc -ne 0 ||
       $trusted_cleanup_output != $'trusted-cleanup-output\nEXIT=0' ]]; then
     fail "$t" "trusted cleanup became rc=$trusted_cleanup_rc stdout=$trusted_cleanup_output"
   elif [[ -n "$trusted_cleanup_error" ]]; then
     fail "$t" "trusted cleanup wrote stderr: $trusted_cleanup_error"
+  elif [[ -n "$deadline_group_setup_error" ]]; then
+    fail "$t" "$deadline_group_setup_error"
   elif $pidfd_signal_fixtures && [[ $deadline_watchdog_rc -ne 124 ]]; then
     fail "$t" "fixture watchdog deadline became rc=$deadline_watchdog_rc"
   elif $deadline_group_leak; then
