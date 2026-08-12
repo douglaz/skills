@@ -391,6 +391,10 @@ _gate_python=$(command type -P python3) ||
   { echo "cannot locate python3"; exit 1; }
 command unset BASH_ENV ENV ||
   { echo "cannot clear shell startup environment"; exit 1; }
+while read -r _ _ _gate_function; do
+  export -n -f -- "$_gate_function" ||
+    { echo "cannot clear exported shell function"; exit 1; }
+done < <(declare -F)
 "$_gate_python" -I -c '
 import os
 import sys
@@ -425,8 +429,9 @@ failed `exec` leaves the shell cleanup trap armed. Put self-contained gate
 commands between the delimiter lines. The supervisor runs them in a fresh Bash
 from a private script with closed stdin, cleared shell-startup environment,
 disabled startup files, and `pipefail`. The wrapper clears `BASH_ENV` and `ENV`
-before either Python launch as well, so a Python path implemented by a shell shim
-cannot bypass the supervisor before its own environment sanitization runs.
+and removes the export attribute from every inherited shell function before
+either Python launch as well, so a Python path implemented by a shell shim cannot
+bypass the supervisor before its own environment sanitization runs.
 It creates a dedicated process group, handles HUP, INT, QUIT, and TERM even when
 the invoking shell inherited an ignored signal, resumes stopped work, waits with
 a deadline, and escalates boundedly when the leader or another process in that
