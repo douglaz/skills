@@ -8,7 +8,7 @@ take.
 · **Branch:** `plan/backlog-execution`
 **Pending:** —
 **Gate:** `./check.sh`
-· last green 2026-08-12 on the `eab5c53` tree (exit 0; 26 installer,
+· last green 2026-08-12 on the `2c74bb0` tree (exit 0; 26 installer,
 124 bot-gate, and 70 drive-status fixtures passed under GNU Bash 5.3.15,
 non-POSIX mode).
 
@@ -120,6 +120,13 @@ non-POSIX mode).
   removes that function before the first normal-shell `command`; the new
   source-in-current-shell fixture fails against the isolated regression, and
   the full gate again passed 26/124/70 with empty stderr.
+- A subsequent Codex pass combined hostile local `builtin` and `command`
+  functions. Commit `2c74bb0` closes the class rather than adding another
+  trust anchor: POSIX special-builtin precedence removes the local
+  `unset`/`exec` path, `exec` replaces the caller with a privileged clean Bash,
+  and that shell rejects remaining raw exported-function entries. Disabling
+  POSIX precedence makes the combined fixture fail 25/1; the corrected full
+  gate passed 26/124/70 with empty stderr.
 
 ## Now
 
