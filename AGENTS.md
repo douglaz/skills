@@ -66,7 +66,7 @@ exit 0. Group the entire gate, use a fresh log, save the real status, and return
 that status after reading the log:
 
 ```bash
-_gate_dir=$(mktemp -d) || { echo "cannot create gate directory"; exit 1; }
+_gate_dir=$(command mktemp -d) || { echo "cannot create gate directory"; exit 1; }
 _gate_log="$_gate_dir/output.log"
 _gate_script="$_gate_dir/gate.bash"
 _gate_runner="$_gate_dir/supervisor.py"
@@ -147,30 +147,28 @@ def write_terminal_status(stdout_fd, status):
     global signal_ready
     data = f"EXIT={status}\n".encode("ascii")
     while True:
+        signal_ready = True
+        _, writable, _ = select.select([], [stdout_fd], [], 0.1)
+        if not writable:
+            continue
         previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, managed_signals)
         signal_ready = False
-        if pending_signal is not None:
-            raise GateCancelled(pending_signal)
+        kernel_pending = signal.sigpending().intersection(managed_signals)
+        if pending_signal is not None or kernel_pending:
+            signum = pending_signal
+            if signum is None:
+                signum = min(kernel_pending)
+            raise GateCancelled(signum)
+        ignore_managed_signals()
         try:
             written = os.write(stdout_fd, data)
-        except BlockingIOError:
-            signal_ready = True
-            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
-            select.select([], [stdout_fd], [], 0.1)
-            continue
         except BaseException:
             signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
             raise
         if written != len(data):
             signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
             raise RuntimeError("partial terminal status write")
-        signal_ready = True
         signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
-        if pending_signal is not None:
-            signal_ready = False
-            signal.pthread_sigmask(signal.SIG_BLOCK, managed_signals)
-            raise GateCancelled(pending_signal)
-        signal_ready = False
         return
 
 
@@ -387,17 +385,31 @@ __AGENT_SUPERVISOR__
     exit 1
   fi
 : >"$_gate_pending" || { echo "cannot create exec marker"; exit 1; }
-(
-  sleep 2
-  if [ -e "$_gate_pending" ]; then
-    for _gate_file in "$_gate_log" "$_gate_script" "$_gate_runner" "$_gate_pending"; do
-      [ ! -e "$_gate_file" ] || command unlink "$_gate_file" 2>/dev/null || :
-    done
-    command rmdir "$_gate_dir" 2>/dev/null || :
-  fi
-) &
+_gate_python=$(command type -P python3) ||
+  { echo "cannot locate python3"; exit 1; }
+"$_gate_python" -I -c '
+import os
+import sys
+import time
+
+root, pending, *paths = sys.argv[1:]
+time.sleep(2)
+if os.path.lexists(pending):
+    for path in paths:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+    try:
+        os.rmdir(root)
+    except OSError:
+        pass
+' "$_gate_dir" "$_gate_pending" \
+  "$_gate_log" "$_gate_script" "$_gate_runner" "$_gate_pending" &
 _gate_exec_watchdog=$!
-exec python3 -I "$_gate_runner" "$_gate_dir" "${BASH:-bash}" \
+exec "$_gate_python" -I "$_gate_runner" "$_gate_dir" "${BASH:-bash}" \
   "$_gate_exec_watchdog" "$_gate_pending"
 ```
 

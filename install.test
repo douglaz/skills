@@ -586,7 +586,11 @@ aggregate_release="$WORK/discipline-aggregate-release"
 aggregate_rc_file="$WORK/discipline-aggregate.rc"
 aggregate_early_file="$WORK/discipline-aggregate.early"
 bashenv_file="$WORK/hostile-bash-env"
-mkdir -p "$gate_tmp" "$cleanup_tmp" "$trusted_cleanup_tmp" "$cleanup_bin"
+shellfunc_hostile_dir="$WORK/hostile-mktemp-target"
+shellfunc_hostile_sentinel="$shellfunc_hostile_dir/sentinel"
+mkdir -p "$gate_tmp" "$cleanup_tmp" "$trusted_cleanup_tmp" "$cleanup_bin" \
+  "$shellfunc_hostile_dir"
+printf '%s\n' preserve >"$shellfunc_hostile_sentinel"
 printf '%s\n' '#!/bin/sh' 'exit 0' >"$cleanup_bin/unlink"
 printf '%s\n' '#!/bin/sh' 'exit 0' >"$cleanup_bin/rmdir"
 chmod +x "$cleanup_bin/unlink" "$cleanup_bin/rmdir"
@@ -602,7 +606,7 @@ possible_gate_start=false
   printf '%s\n' 'if [[ -n ${HOSTILE_BASH_ENV:-} ]]; then export BASH_ENV=$HOSTILE_BASH_ENV; fi'
   while IFS= read -r line; do
     if ! $capture_gate; then
-      if [[ $line == *'_gate_dir=$(mktemp -d)'* ]] ||
+      if [[ $line == *'_gate_dir=$(command mktemp -d)'* ]] ||
           { $possible_gate_start && [[ $line == *'_gate_log=$(mktemp)'* ]]; }; then
         capture_gate=true
         found_gate_start=true
@@ -615,7 +619,7 @@ possible_gate_start=false
       break
     fi
     if $capture_gate; then
-      [[ $line == *'exec python3 '* && $line == *'"$_gate_runner"'* ]] &&
+      [[ $line == *'exec "$_gate_python" '* && $line == *'"$_gate_runner"'* ]] &&
         found_supervisor=true
       if [[ ${line#"${line%%[![:space:]]*}"} == '<gate>' ]]; then
         printf '%s\n' 'gate() { printf "first\n"; false; printf "should-not-run\n"; }'
@@ -655,8 +659,8 @@ possible_gate_start=false
   done < "$discipline_block"
 } > "$gate_script"
 awk '
-  /exec python3 -I "\$_gate_runner"/ {
-    sub(/exec python3 -I/, "exec /definitely/missing/python3")
+  /^exec "\$_gate_python" -I "\$_gate_runner"/ {
+    sub(/^exec "\$_gate_python"/, "exec /definitely/missing/python3")
   }
   { print }
 ' "$gate_script" >"$execfail_gate_script"
@@ -738,8 +742,9 @@ else
   (
     false() { return 0; }
     cat() { return 0; }
-    export -f false cat
-    TMPDIR="$gate_tmp" \
+    mktemp() { printf '%s\n' "$HOSTILE_GATE_DIR"; }
+    export -f false cat mktemp
+    HOSTILE_GATE_DIR="$shellfunc_hostile_dir" TMPDIR="$gate_tmp" \
       bash "$gate_script" >"$shellfunc_stdout" 2>"$shellfunc_stderr"
   ); shellfunc_rc=$?
   TMPDIR="$gate_tmp" GATE_MODE=stdin \
@@ -1115,6 +1120,9 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
     fail "$t" "exported Bash function bypassed the gate: rc=$shellfunc_rc stdout=$shellfunc_output"
   elif [[ -n "$shellfunc_error" || $shellfunc_output == *should-not-run* ]]; then
     fail "$t" "exported-function run leaked or continued: stderr=$shellfunc_error"
+  elif [[ ! -f "$shellfunc_hostile_sentinel" ||
+      $(<"$shellfunc_hostile_sentinel") != preserve ]]; then
+    fail "$t" "exported mktemp function selected or deleted an existing directory"
   elif [[ $stdin_rc -ne 1 || $stdin_output != 'EXIT=1' ]]; then
     fail "$t" "stdin-consuming gate became rc=$stdin_rc stdout=$stdin_output"
   elif [[ -n "$stdin_error" || $stdin_output == *stdin-gate-continued* ]]; then
