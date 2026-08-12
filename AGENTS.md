@@ -184,6 +184,45 @@ def group_alive(pgid):
         return True
 
 
+subreaper_enabled = False
+
+
+def enable_child_subreaper():
+    global subreaper_enabled
+    if not sys.platform.startswith("linux"):
+        return
+    import ctypes
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    prctl = getattr(libc, "prctl", None)
+    if prctl is None:
+        raise OSError("Linux libc has no prctl")
+    prctl.argtypes = (
+        ctypes.c_int,
+        ctypes.c_ulong,
+        ctypes.c_ulong,
+        ctypes.c_ulong,
+        ctypes.c_ulong,
+    )
+    prctl.restype = ctypes.c_int
+    if prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+    subreaper_enabled = True
+
+
+def reap_adopted_children():
+    if not subreaper_enabled:
+        return
+    while True:
+        try:
+            pid, _ = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            return
+        if pid == 0:
+            return
+
+
 def stop_group(signum):
     global gate_pgid
     if child is None or gate_pgid is None:
@@ -218,7 +257,9 @@ def stop_group(signum):
             return False
     deadline = time.monotonic() + 1.0
     while group_alive(pgid) and time.monotonic() < deadline:
+        reap_adopted_children()
         time.sleep(0.01)
+    reap_adopted_children()
     stopped = not group_alive(pgid)
     if stopped:
         gate_pgid = None
@@ -268,6 +309,7 @@ try:
         signal_ready = False
         signal.pthread_sigmask(signal.SIG_BLOCK, managed_signals)
         raise GateCancelled(pending_signal)
+    enable_child_subreaper()
     environment = os.environ.copy()
     shell_control = {
         "BASHOPTS",
@@ -435,10 +477,14 @@ bypass the supervisor before its own environment sanitization runs.
 It creates a dedicated process group, handles HUP, INT, QUIT, and TERM even when
 the invoking shell inherited an ignored signal, resumes stopped work, waits with
 a deadline, and escalates boundedly when the leader or another process in that
-group ignores the signal. Gate commands must use their foreground mode and must
-not daemonize into a different session/process group; that is outside this
-portable wrapper's containment contract. Cleanup happens before the reported
-final status: supervisor, read,
+group ignores the signal. On Linux it also becomes a child subreaper before
+launch, so orphaned descendants are reparented to and reaped by the supervisor
+rather than leaving a zombie-only group that POSIX `kill(0)` cannot distinguish
+from live work; failure to establish that Linux contract is fail-closed. Other
+platforms keep the portable process-group contract. Gate commands must use their
+foreground mode and must not daemonize into a different session/process group;
+that is outside this portable wrapper's containment contract. Cleanup happens
+before the reported final status: supervisor, read,
 lingering-process, or cleanup failure turns success into failure but preserves
 an existing nonzero/signal status. The wrapper returns that final status,
 including categorized statuses such as 2 or 124.

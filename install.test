@@ -593,6 +593,9 @@ aggregate_release="$WORK/discipline-aggregate-release"
 aggregate_rc_file="$WORK/discipline-aggregate.rc"
 aggregate_early_file="$WORK/discipline-aggregate.early"
 aggregate_child_pid_file="$WORK/discipline-aggregate-child.pid"
+subreaper_rc_file="$WORK/discipline-subreaper.rc"
+subreaper_stderr="$WORK/discipline-subreaper.stderr"
+subreaper_supervisor="$WORK/discipline-subreaper-supervisor.py"
 bashenv_file="$WORK/hostile-bash-env"
 bashenv_marker="$WORK/hostile-bash-env.sourced"
 bashenv_python_dir="$WORK/hostile-bash-env-python"
@@ -611,6 +614,21 @@ cat >"$bashenv_python_dir/python3" <<'EOF'
 exec "$BASHENV_REAL_PYTHON" "$@"
 EOF
 chmod +x "$bashenv_python_dir/python3"
+
+gate_fixture_group_alive() {
+  python3 - "$1" <<'PY'
+import os
+import sys
+
+try:
+    os.killpg(int(sys.argv[1]), 0)
+except ProcessLookupError:
+    sys.exit(1)
+except PermissionError:
+    pass
+sys.exit(0)
+PY
+}
 
 # A fixture timeout must stop the caller-visible supervisor and any gate process
 # group it may have created concurrently. Killing only the supervisor can orphan
@@ -632,7 +650,7 @@ stop_timed_out_gate_fixture() {
       fi
     fi
     if [[ -n "$child_pid" ]] && ! $group_gone; then
-      if kill -0 -- "-$child_pid" 2>/dev/null; then
+      if gate_fixture_group_alive "$child_pid"; then
         kill -TERM -- "-$child_pid" 2>/dev/null || true
         kill -CONT -- "-$child_pid" 2>/dev/null || true
       else
@@ -660,11 +678,11 @@ stop_timed_out_gate_fixture() {
     child_pid=$candidate
   fi
   if [[ -n "$child_pid" ]] && ! $group_gone; then
-    if kill -0 -- "-$child_pid" 2>/dev/null; then
+    if gate_fixture_group_alive "$child_pid"; then
       kill -TERM -- "-$child_pid" 2>/dev/null || true
       kill -CONT -- "-$child_pid" 2>/dev/null || true
       for ((_n=1; _n<=100; _n++)); do
-        if ! kill -0 -- "-$child_pid" 2>/dev/null; then
+        if ! gate_fixture_group_alive "$child_pid"; then
           group_gone=true
           break
         fi
@@ -673,7 +691,7 @@ stop_timed_out_gate_fixture() {
       if ! $group_gone; then
         kill -KILL -- "-$child_pid" 2>/dev/null || true
         for ((_n=1; _n<=100; _n++)); do
-          if ! kill -0 -- "-$child_pid" 2>/dev/null; then
+          if ! gate_fixture_group_alive "$child_pid"; then
             group_gone=true
             break
           fi
@@ -755,6 +773,11 @@ possible_gate_start=false
     fi
   done < "$discipline_block"
 } > "$gate_script"
+awk '
+  /^import os$/ { supervisor=1 }
+  /^__AGENT_SUPERVISOR__$/ { exit }
+  supervisor { print }
+' "$gate_script" >"$subreaper_supervisor"
 awk '
   /^command exec "\$_gate_python" -I "\$_gate_runner"/ {
     sub(/^command exec "\$_gate_python"/, "command exec /definitely/missing/python3")
@@ -864,6 +887,113 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
 ' "$(command -v bash)" "$gate_script" \
       >"$ignored_sigchld_stdout" 2>"$ignored_sigchld_stderr"
   ignored_sigchld_rc=$?
+  python3 - "$subreaper_supervisor" <<'PY' 2>"$subreaper_stderr"
+import ast
+import os
+import signal
+import sys
+import time
+
+source = open(sys.argv[1], encoding="utf-8").read()
+tree = ast.parse(source)
+selected = [
+    node
+    for node in tree.body
+    if isinstance(node, (ast.Import, ast.ImportFrom))
+    or isinstance(node, ast.FunctionDef)
+    and node.name in {"enable_child_subreaper", "reap_adopted_children"}
+]
+namespace = {}
+exec(compile(ast.Module(body=selected, type_ignores=[]), sys.argv[1], "exec"), namespace)
+namespace["enable_child_subreaper"]()
+if not sys.platform.startswith("linux"):
+    # The production function is a portable no-op here; do not create an orphan
+    # in a fixture that has no subreaper contract to test.
+    sys.exit(0)
+if not namespace.get("subreaper_enabled", False):
+    raise RuntimeError("Linux supervisor did not enable child subreaper")
+
+pid_read, pid_write = os.pipe()
+control_read, control_write = os.pipe()
+intermediate = os.fork()
+if intermediate == 0:
+    os.close(pid_read)
+    os.close(control_write)
+    os.setsid()
+    orphan = os.fork()
+    if orphan == 0:
+        os.close(pid_write)
+        os.read(control_read, 1)
+        os.close(control_read)
+        os._exit(0)
+    os.close(control_read)
+    os.write(pid_write, f"{orphan}\n".encode("ascii"))
+    os.close(pid_write)
+    os._exit(0)
+os.close(pid_write)
+os.close(control_read)
+adopted = None
+reaped = False
+try:
+    pid_bytes = b""
+    while not pid_bytes.endswith(b"\n"):
+        chunk = os.read(pid_read, 64)
+        if not chunk:
+            break
+        pid_bytes += chunk
+    os.close(pid_read)
+    pid_read = -1
+    if not pid_bytes.endswith(b"\n"):
+        raise RuntimeError("intermediate did not report the orphan PID")
+    adopted = int(pid_bytes)
+    os.waitpid(intermediate, 0)
+    intermediate = None
+    os.close(control_write)
+    control_write = -1
+    deadline = time.monotonic() + 2.0
+    zombie = None
+    while time.monotonic() < deadline:
+        try:
+            zombie = os.waitid(
+                os.P_PID,
+                adopted,
+                os.WEXITED | os.WNOHANG | os.WNOWAIT,
+            )
+        except ChildProcessError:
+            zombie = None
+        if zombie is not None and zombie.si_pid == adopted:
+            break
+        time.sleep(0.01)
+    else:
+        raise RuntimeError("adopted child did not become a zombie")
+    namespace["reap_adopted_children"]()
+    try:
+        os.waitid(os.P_PID, adopted, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+    except ChildProcessError:
+        reaped = True
+        adopted = None
+    if not reaped:
+        raise RuntimeError("subreaper did not reap adopted zombie")
+finally:
+    for fd in (control_write, pid_read):
+        try:
+            if fd >= 0:
+                os.close(fd)
+        except OSError:
+            pass
+    if intermediate is not None:
+        try:
+            os.waitpid(intermediate, 0)
+        except ChildProcessError:
+            pass
+    if adopted is not None:
+        try:
+            os.waitpid(adopted, 0)
+        except ChildProcessError:
+            pass
+    namespace["reap_adopted_children"]()
+PY
+  printf '%s' "$?" >"$subreaper_rc_file"
   # These are startup handshakes, not behavior deadlines. Allow ten bounded
   # seconds so ordinary scheduler latency cannot turn a correct wrapper into a
   # fixture failure; the timeout cleanup below owns every failure path.
@@ -1222,6 +1352,8 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
   pipeline_error=$(< "$pipeline_stderr")
   ignored_sigchld_output=$(< "$ignored_sigchld_stdout")
   ignored_sigchld_error=$(< "$ignored_sigchld_stderr")
+  subreaper_rc=$(< "$subreaper_rc_file")
+  subreaper_error=$(< "$subreaper_stderr")
   cooperative_output=$(< "$cooperative_stdout")
   cooperative_error=$(< "$cooperative_stderr")
   blocked_term_output=$(< "$blocked_term_stdout")
@@ -1287,6 +1419,8 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
     fail "$t" "ignored parent SIGCHLD corrupted status: rc=$ignored_sigchld_rc stdout=$ignored_sigchld_output"
   elif [[ -n "$ignored_sigchld_error" ]]; then
     fail "$t" "ignored parent SIGCHLD wrote stderr: $ignored_sigchld_error"
+  elif [[ $subreaper_rc -ne 0 ]]; then
+    fail "$t" "supervisor did not reap an adopted child: $subreaper_error"
   elif [[ $replay_rc -ne 143 ]]; then
     fail "$t" "blocked replay ignored TERM: rc=$replay_rc"
   elif [[ -n "$replay_error" ]]; then
