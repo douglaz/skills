@@ -53,9 +53,9 @@ both reviewers have no blocking findings.
 ## Next
 
 Return to GRAPH → update/polish/audit the 33 beads → land the planning/bootstrap
-branch → start A1, GitHub issue #42, through rb-lite → continue the
-highest-priority unblocked lane while respecting the two human-authority
-checkpoints.
+branch → bootstrap E1 and then E3 exactly as plan global rule 8 requires → only
+then start A1, GitHub issue #42, through rb-lite → continue the highest-priority
+unblocked lane while respecting the two human-authority checkpoints.
 
 ## Open questions for the human
 

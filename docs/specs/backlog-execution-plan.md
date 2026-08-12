@@ -602,7 +602,9 @@ may leave a valid-looking final result. Timeout/signal handling performs bounded
 TERM/CONT/KILL and does not return until descendants are reaped.
 
 `probe` writes the selected model plus one trailing newline to stdout and no
-stdout on failure. `run` writes no stdout. Its final file is exactly one compact
+stdout on failure; invocation, dependency, or malformed-output failures use
+status 2, while exhausted supported candidates remain status 3. `run` writes no
+stdout. Its final file is exactly one compact
 UTF-8 JSON object plus a trailing newline:
 
 ```json
@@ -691,8 +693,8 @@ it through rb-lite's existing `--reviewers-file` interface. Do not choose the
 upstream implementation option in #51. Remove stale local hardcoded-model
 guidance without waiting for the larger controller.
 
-Ownership is `skills/orchestrating-with-rb-lite/SKILL.md`, its exact reviewer
-configuration reference, and new executable fixture
+Ownership is `skills/orchestrating-with-rb-lite/SKILL.md`, specifically its
+inline reviewers-file configuration section, and new executable fixture
 `skills/orchestrating-with-rb-lite/scripts/reviewer-model.test`.
 
 Use C1's categorized probe contract. Probe exit 3, malformed/empty output,
@@ -788,7 +790,7 @@ reviewer.
 
 ## Workstream D — installer and upgrade correctness
 
-### D1. Old-Bash and empty discovery — issues #61 and #38
+### D1. Old-Bash and empty discovery — issues #61, #38, and #65
 
 **Priority:** P2. **Effort:** medium.
 
@@ -946,8 +948,11 @@ owns the exact close-plus-flush transaction after resolution succeeds.
 
 Create:
 
-- **E2a, P0:** replace unconditional delegation with a fail-closed semantic
-  preview. Read the complete `br agents --add --dry-run` output against the
+- **E2a, P0:** own `skills/agents-md/SKILL.md` § br-agent-instructions guidance
+  plus its managed-block assertions in `install.test`; the guidance and test,
+  not `install.sh`, host this decision mechanism. Replace unconditional
+  delegation with a fail-closed semantic preview. Read the complete
+  `br agents --add --dry-run` output against the
   existing AGENTS branch, review, gate, and closure contract. If its session
   commit/push protocol conflicts, omit the entire generated Beads block and
   report the exact conflicting clauses; do not reconcile, partially copy, or
@@ -997,8 +1002,13 @@ with #47's fact-ownership policy.
 
 **Priority:** P0. **Effort:** extra small.
 
-Align harden-until-clean with the canonical fail-closed closure command and
-explicit flush behavior. Create exact companion owner:
+Align every live scoped closure consumer with the canonical fail-closed closure
+command and explicit flush behavior. Ownership includes
+`skills/orchestrating-with-rb-lite/references/harden-until-clean.md`,
+`skills/drive/references/phases.md` § LAND, and
+`skills/rb-lite-backlog-drain/SKILL.md` step 11; migrate all three away from raw
+`br close`/`br update -s closed` plus separate flushes. Create exact companion
+owner:
 
 - `skills/beads-close-transaction/SKILL.md`;
 - `skills/beads-close-transaction/scripts/beads-close-transaction`; and
@@ -1043,6 +1053,12 @@ notes (when supplied), closes, and explicitly flushes as one helper-owned
 transaction:
 
 ```bash
+_reason_payload=$(
+  command cat -- "$reason_file" || exit
+  printf '.'
+) ||
+  compensate_to_saved_open_state_or_retain_lock
+_reason_payload=${_reason_payload%.}
 if [ -n "${notes_file:-}" ]; then
   _notes_payload=$(
     command cat -- "$notes_file" || exit
@@ -1055,7 +1071,7 @@ if [ -n "${notes_file:-}" ]; then
     compensate_to_saved_open_state_or_retain_lock
 fi
 br --no-auto-flush --no-auto-import \
-  close "$bead_id" --reason "$merge_evidence" ||
+  close "$bead_id" --reason "$_reason_payload" ||
   compensate_to_saved_open_state_or_retain_lock
 if br --no-auto-flush --no-auto-import sync --flush-only; then
   verify_db_and_jsonl_closed_or_retain_lock
@@ -1064,10 +1080,10 @@ else
 fi
 ```
 
-Validation rejects raw NUL in a notes file before command substitution. Appending
-and then removing the sentinel preserves every trailing newline; success and
-compensation compare against that exact submitted payload, not a shell-trimmed
-variant.
+Validation rejects raw NUL in both the reason and notes files before command
+substitution. Appending and then removing the sentinel preserves every trailing
+newline; success and compensation compare against those exact submitted
+payloads, not shell-trimmed variants.
 
 `bead_id` must be the exact claimed finding ID and `merge_evidence` must contain
 the reviewed work-PR URL and merge SHA. Do not use `br update ... -s closed`,
@@ -1090,7 +1106,11 @@ before removing the lock.
 Add the companion to every scheduler/closure consumer's selective dependencies
 and wire its test into `check.sh`.
 `skills/orchestrating-with-rb-lite/scripts/harden-closure.test` is the focused
-consumer extraction fixture. Direct and consumer fixtures cover a competing
+hardening consumer fixture. A companion-owned
+`skills/beads-close-transaction/scripts/closure-consumers.test` extracts the
+Drive LAND and backlog-drain step-11 procedures and proves both call only the
+helper API, so no live instruction retains a raw closure path. Direct and
+consumer fixtures cover a competing
 scheduler blocked across the entire query/mutation, notes-update failure, close
 failure, disabled auto-flush plus forced flush failure and successful
 compensation, restore/reopen/re-flush failure retaining the recovery lock,
@@ -1264,7 +1284,9 @@ Require `gh release view <tag> -R douglaz/rb-lite` to report a published,
 non-draft release, and require both the tag ref and its peeled annotated-tag ref
 (when present) from `git ls-remote` to resolve to the recorded commit. A mismatch,
 lightweight/annotated ambiguity, moving tag, or absent release blocks closure.
-Then probe the tag-qualified released artifact:
+Then probe the commit-qualified released artifact. The displayed block is the inner
+probe body passed to the required 120-second process-group supervisor described
+immediately below; it must not be invoked directly or without that supervisor:
 
 ```bash
 TAG="<immutable-tag>"
@@ -1373,7 +1395,7 @@ production/test budget breaches.
 
 ## Workstream G — executable evidence and documentation
 
-### G1. Read-only commit verifier — issue #32
+### G1. Read-only commit verifier — issues #32 and #34
 
 **Priority:** P2. **Effort:** medium/large.
 
@@ -1397,7 +1419,8 @@ verify-commit [--rev REV]
 `--expect` requires at least one byte-for-byte literal occurrence;
 `--expect-count` counts non-overlapping byte occurrences, including multiple
 occurrences on one line and zero; `--expect-absent` requires the path to be
-absent from the commit; and `--exact-paths` requires the revision diff to contain
+absent from REV's tree (not merely absent from its changed-path set); and
+`--exact-paths` requires the revision diff to contain
 exactly the repeated `--path` values, compared as raw path bytes. `--rev`
 defaults to `HEAD`; the compared path set is `REV^1..REV`, and a root commit uses
 Git's empty tree as the parent. For a merge commit, only first-parent changes are
@@ -1573,7 +1596,9 @@ Constraints:
   cross-repository procedure above, and the third is reported for human action
   but never sent to an implementer. These helper-wrapped spellings apply after
   the E1/E3 bootstrap sequence in global rule 8; before then, normal lane
-  scheduling is forbidden.
+  scheduling is forbidden. `with-lock` injects `--no-auto-flush` and
+  `--no-auto-import` into the requested `br` invocation before launch rather than
+  trusting each displayed caller to repeat those safety flags.
 
 ## Beads graph to update
 
