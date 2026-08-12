@@ -103,6 +103,7 @@ __AGENT_GATE__
   fi
   if ! cat >"$_gate_runner" <<'__AGENT_SUPERVISOR__'
 import os
+import select
 import signal
 import subprocess
 import sys
@@ -196,6 +197,8 @@ def remove_private_dir():
                 check=False,
             )
             ok = result.returncode == 0 and ok
+    if not os.path.exists(root):
+        return ok
     result = subprocess.run(
         ["rmdir", root],
         stdin=subprocess.DEVNULL,
@@ -232,8 +235,24 @@ try:
     with open(log_path, "wb") as output:
         previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, managed_signals)
         try:
+            child_bootstrap = (
+                "import os,signal,sys;"
+                "managed=tuple(map(int,sys.argv[3:]));"
+                "signal.pthread_sigmask(signal.SIG_UNBLOCK,managed);"
+                "os.execvpe(sys.argv[1],"
+                "[sys.argv[1],'--noprofile','--norc','-eo','pipefail',sys.argv[2]],"
+                "os.environ)"
+            )
             child = subprocess.Popen(
-                [bash, "--noprofile", "--norc", "-eo", "pipefail", gate_path],
+                [
+                    sys.executable,
+                    "-I",
+                    "-c",
+                    child_bootstrap,
+                    bash,
+                    gate_path,
+                    *(str(signum) for signum in managed_signals),
+                ],
                 stdin=subprocess.DEVNULL,
                 stdout=output,
                 stderr=subprocess.STDOUT,
@@ -264,31 +283,47 @@ except BaseException as error:
         stop_group(signal.SIGTERM)
     print(f"cannot run gate: {error}", file=sys.stderr)
     rc = rc if rc != 0 else 1
-else:
-    ignore_managed_signals()
-
-if cancelled is None:
-    try:
+try:
+    if cancelled is None:
+        stdout_fd = sys.stdout.fileno()
+        stdout_was_blocking = os.get_blocking(stdout_fd)
+        os.set_blocking(stdout_fd, False)
         with open(log_path, "rb") as output:
             while True:
                 chunk = output.read(65536)
                 if not chunk:
                     break
-                sys.stdout.buffer.write(chunk)
-        sys.stdout.buffer.flush()
-    except BaseException as error:
-        print(f"cannot read gate log: {error}", file=sys.stderr)
+                pending = memoryview(chunk)
+                while pending:
+                    try:
+                        written = os.write(stdout_fd, pending)
+                        pending = pending[written:]
+                    except BlockingIOError:
+                        select.select([], [stdout_fd], [], 0.1)
+        os.set_blocking(stdout_fd, stdout_was_blocking)
+    if not remove_private_dir():
+        print("cannot remove gate directory", file=sys.stderr)
         rc = rc if rc != 0 else 1
-
-if not remove_private_dir():
-    print("cannot remove gate directory", file=sys.stderr)
-    rc = rc if rc != 0 else 1
-
-if cancelled is None:
-    try:
+    if cancelled is None:
         print(f"EXIT={rc}")
-    except BaseException:
-        rc = rc if rc != 0 else 1
+except GateCancelled as cancellation:
+    if "stdout_fd" in locals() and "stdout_was_blocking" in locals():
+        os.set_blocking(stdout_fd, stdout_was_blocking)
+    cancelled = cancellation.signum
+    ignore_managed_signals()
+    if child is not None and group_alive(child.pid):
+        stop_group(cancellation.signum)
+    rc = 128 + cancellation.signum
+    if not remove_private_dir():
+        print("cannot remove gate directory", file=sys.stderr)
+except BaseException as error:
+    if "stdout_fd" in locals() and "stdout_was_blocking" in locals():
+        os.set_blocking(stdout_fd, stdout_was_blocking)
+    ignore_managed_signals()
+    print(f"cannot finalize gate: {error}", file=sys.stderr)
+    rc = rc if rc != 0 else 1
+    if not remove_private_dir():
+        print("cannot remove gate directory", file=sys.stderr)
 sys.exit(rc)
 __AGENT_SUPERVISOR__
   then

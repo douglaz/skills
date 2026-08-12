@@ -529,6 +529,9 @@ status_stdout="$WORK/discipline-status.stdout"
 status_stderr="$WORK/discipline-status.stderr"
 pipeline_stdout="$WORK/discipline-pipeline.stdout"
 pipeline_stderr="$WORK/discipline-pipeline.stderr"
+cooperative_stdout="$WORK/discipline-cooperative.stdout"
+cooperative_stderr="$WORK/discipline-cooperative.stderr"
+replay_stderr="$WORK/discipline-replay.stderr"
 term_stdout="$WORK/discipline-term.stdout"
 term_stderr="$WORK/discipline-term.stderr"
 quit_stdout="$WORK/discipline-quit.stdout"
@@ -546,6 +549,16 @@ term_started="$WORK/discipline-term-started"
 term_rc_file="$WORK/discipline-term.rc"
 term_child_pid_file="$WORK/discipline-term-child.pid"
 term_deadline_marker="$WORK/discipline-term-deadline"
+cooperative_started="$WORK/discipline-cooperative-started"
+cooperative_rc_file="$WORK/discipline-cooperative.rc"
+cooperative_child_pid_file="$WORK/discipline-cooperative-child.pid"
+cooperative_signal_marker="$WORK/discipline-cooperative-signal"
+cooperative_deadline_marker="$WORK/discipline-cooperative-deadline"
+replay_fifo="$WORK/discipline-replay.fifo"
+replay_started="$WORK/discipline-replay-started"
+replay_done="$WORK/discipline-replay-done"
+replay_rc_file="$WORK/discipline-replay.rc"
+replay_deadline_marker="$WORK/discipline-replay-deadline"
 quit_started="$WORK/discipline-quit-started"
 quit_rc_file="$WORK/discipline-quit.rc"
 quit_child_pid_file="$WORK/discipline-quit-child.pid"
@@ -595,6 +608,14 @@ possible_gate_start=false
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == success ]]; then printf "paste-success\n"'
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == pipeline ]]; then'
         printf '%s\n' '  printf "pipeline-first\n"; false | true; printf "pipeline-last\n"'
+        printf '%s\n' 'elif [[ ${GATE_MODE:-function} == replay ]]; then'
+        printf '%s\n' '  : >"$STARTED"'
+        printf '%s\n' '  python3 -c '\''import sys; sys.stdout.write("x" * 2000000)'\''; : >"$REPLAY_DONE"'
+        printf '%s\n' 'elif [[ ${GATE_MODE:-function} == cooperative ]]; then'
+        printf '%s\n' '  trap '\''printf term-cleanup >"$SIGNAL_MARKER"; exit 143'\'' TERM'
+        printf '%s\n' '  printf "%s %s\n" "$BASHPID" "$PPID" >"$CHILD_PID_FILE"'
+        printf '%s\n' '  printf "cooperative-sensitive-output\n"; : >"$STARTED"'
+        printf '%s\n' '  while :; do sleep 1; done'
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == term ]]; then'
         printf '%s\n' '  trap "" HUP INT TERM'
         printf '%s\n' '  bash -c '\''trap "" HUP INT TERM; while :; do sleep 1; done'\'' & term_descendant=$!'
@@ -689,6 +710,84 @@ else
     bash "$gate_script" >"$status_stdout" 2>"$status_stderr"; status_rc=$?
   TMPDIR="$gate_tmp" GATE_MODE=pipeline \
     bash "$gate_script" >"$pipeline_stdout" 2>"$pipeline_stderr"; pipeline_rc=$?
+  (
+    mkfifo "$replay_fifo"
+    sleep 30 <"$replay_fifo" &
+    replay_reader_pid=$!
+    TMPDIR="$gate_tmp" GATE_MODE=replay STARTED="$replay_started" \
+      REPLAY_DONE="$replay_done" \
+      bash "$gate_script" >"$replay_fifo" 2>"$replay_stderr" &
+    replay_pid=$!
+    for ((_n=1; _n<=200; _n++)); do
+      [[ -f "$replay_done" ]] && break
+      sleep 0.01
+    done
+    if [[ ! -f "$replay_done" ]]; then
+      kill -KILL "$replay_pid" 2>/dev/null || true
+      printf '%s' 125 >"$replay_rc_file"
+    else
+      sleep 0.1
+      kill -TERM "$replay_pid"
+      (
+        sleep 2
+        : >"$replay_deadline_marker"
+        kill -KILL "$replay_pid" 2>/dev/null || true
+      ) &
+      replay_watchdog_pid=$!
+      wait "$replay_pid"
+      replay_wait_rc=$?
+      if [[ -f "$replay_deadline_marker" ]]; then
+        replay_wait_rc=124
+      else
+        kill "$replay_watchdog_pid" 2>/dev/null || true
+      fi
+      wait "$replay_watchdog_pid" 2>/dev/null || true
+      printf '%s' "$replay_wait_rc" >"$replay_rc_file"
+    fi
+    kill "$replay_reader_pid" 2>/dev/null || true
+    wait "$replay_reader_pid" 2>/dev/null || true
+  )
+  replay_rc=$(< "$replay_rc_file")
+  replay_error=$(< "$replay_stderr")
+  (
+    TMPDIR="$gate_tmp" GATE_MODE=cooperative \
+      STARTED="$cooperative_started" CHILD_PID_FILE="$cooperative_child_pid_file" \
+      SIGNAL_MARKER="$cooperative_signal_marker" \
+      bash "$gate_script" >"$cooperative_stdout" 2>"$cooperative_stderr" &
+    cooperative_pid=$!
+    for _n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+      [[ -f "$cooperative_started" ]] && break
+      sleep 0.05
+    done
+    if [[ ! -f "$cooperative_started" ]]; then
+      kill -KILL "$cooperative_pid" 2>/dev/null
+      printf '%s' 125 >"$cooperative_rc_file"
+    else
+      read -r cooperative_child_pid _ <"$cooperative_child_pid_file"
+      kill -TERM "$cooperative_pid"
+      (
+        sleep 2
+        : >"$cooperative_deadline_marker"
+        kill -TERM "$cooperative_pid" 2>/dev/null || true
+        kill -TERM -- "-$cooperative_child_pid" 2>/dev/null || true
+        kill -CONT -- "-$cooperative_child_pid" 2>/dev/null || true
+        sleep 0.05
+        kill -KILL "$cooperative_pid" 2>/dev/null || true
+        kill -KILL -- "-$cooperative_child_pid" 2>/dev/null || true
+      ) &
+      cooperative_watchdog_pid=$!
+      wait "$cooperative_pid"
+      cooperative_wait_rc=$?
+      if [[ -f "$cooperative_deadline_marker" ]]; then
+        cooperative_wait_rc=124
+      else
+        kill "$cooperative_watchdog_pid" 2>/dev/null || true
+      fi
+      wait "$cooperative_watchdog_pid" 2>/dev/null || true
+      printf '%s' "$cooperative_wait_rc" >"$cooperative_rc_file"
+    fi
+  )
+  cooperative_rc=$(< "$cooperative_rc_file")
   (
     TMPDIR="$gate_tmp" GATE_MODE=term \
       STARTED="$term_started" CHILD_PID_FILE="$term_child_pid_file" \
@@ -869,6 +968,8 @@ else
   status_error=$(< "$status_stderr")
   pipeline_output=$(< "$pipeline_stdout")
   pipeline_error=$(< "$pipeline_stderr")
+  cooperative_output=$(< "$cooperative_stdout")
+  cooperative_error=$(< "$cooperative_stderr")
   term_output=$(< "$term_stdout")
   term_error=$(< "$term_stderr")
   quit_output=$(< "$quit_stdout")
@@ -914,6 +1015,22 @@ else
     fail "$t" "failed pipeline became rc=$pipeline_rc stdout=$pipeline_output"
   elif [[ -n "$pipeline_error" || $pipeline_output == *pipeline-last* ]]; then
     fail "$t" "pipeline gate leaked or continued: stderr=$pipeline_error"
+  elif [[ $replay_rc -ne 143 ]]; then
+    fail "$t" "blocked replay ignored TERM: rc=$replay_rc"
+  elif [[ -n "$replay_error" ]]; then
+    fail "$t" "blocked replay wrote stderr: $replay_error"
+  elif [[ $cooperative_rc -ne 143 ]]; then
+    fail "$t" "cooperative TERM gate wrapper exited $cooperative_rc"
+  elif [[ ! -s "$cooperative_child_pid_file" ]]; then
+    fail "$t" "cooperative TERM fixture did not record the gate process"
+  elif read -r cooperative_child_pid _ <"$cooperative_child_pid_file" &&
+      kill -0 "$cooperative_child_pid" 2>/dev/null; then
+    fail "$t" "cooperative TERM left the gate process alive"
+  elif [[ ! -f "$cooperative_signal_marker" ||
+      $(<"$cooperative_signal_marker") != term-cleanup ]]; then
+    fail "$t" "cooperative TERM trap did not run"
+  elif [[ -n "$cooperative_output" || -n "$cooperative_error" ]]; then
+    fail "$t" "cooperative TERM exposed output: stdout=$cooperative_output stderr=$cooperative_error"
   elif [[ $term_rc -ne 143 ]]; then
     fail "$t" "terminated gate wrapper exited $term_rc"
   elif [[ ! -s "$term_child_pid_file" ]]; then
