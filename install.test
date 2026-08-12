@@ -607,6 +607,9 @@ aggregate_child_pid_file="$WORK/discipline-aggregate-child.pid"
 subreaper_rc_file="$WORK/discipline-subreaper.rc"
 subreaper_stderr="$WORK/discipline-subreaper.stderr"
 subreaper_supervisor="$WORK/discipline-subreaper-supervisor.py"
+deadline_group_ready="$WORK/discipline-deadline-group.ready"
+deadline_group_pid_file="$WORK/discipline-deadline-group.pids"
+deadline_group_marker="$WORK/discipline-deadline-group.deadline"
 bashenv_file="$WORK/hostile-bash-env"
 bashenv_marker="$WORK/hostile-bash-env.sourced"
 bashenv_python_dir="$WORK/hostile-bash-env-python"
@@ -691,18 +694,22 @@ if os.path.exists(cancel):
     raise SystemExit(0)
 
 open(marker, "xb").close()
-try:
-    if group_fd is not None:
-        signal.pidfd_send_signal(group_fd, signal.SIGKILL)
-    if wrapper_fd is not None:
+if group_fd is not None:
+    try:
+        # Holding the leader's pidfd pins its numeric PID/PGID against reuse
+        # while the one group-wide escalation reaches every descendant.
+        os.killpg(group_pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+if wrapper_fd is not None:
+    try:
         signal.pidfd_send_signal(wrapper_fd, signal.SIGKILL)
-except (ProcessLookupError, PermissionError, OSError):
-    pass
-finally:
-    if group_fd is not None:
-        os.close(group_fd)
-    if wrapper_fd is not None:
-        os.close(wrapper_fd)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+if group_fd is not None:
+    os.close(group_fd)
+if wrapper_fd is not None:
+    os.close(wrapper_fd)
 PY
 }
 
@@ -742,7 +749,7 @@ PY
 # Wait for whichever owned child finishes first. The watchdog owns all timeout
 # signals through pidfds; Bash only cancels it by file and reaps both exact jobs.
 gate_fixture_wait_with_watchdog() {
-  local wrapper_pid=$1 marker=$2 watchdog_pid=$3 child_pid_file=$4
+  local wrapper_pid=$1 marker=$2 watchdog_pid=$3
   local winner= first_rc=0 watchdog_rc=0 wrapper_rc=0
   wait -n -p winner "$wrapper_pid" "$watchdog_pid" || first_rc=$?
   if [[ $winner == "$wrapper_pid" ]]; then
@@ -925,6 +932,54 @@ else
     pidfd_signal_fixtures=true
   else
     pidfd_signal_fixtures=false
+  fi
+  deadline_group_leak=false
+  deadline_watchdog_rc=0
+  if $pidfd_signal_fixtures; then
+    python3 - "$deadline_group_ready" "$deadline_group_pid_file" <<'PY' &
+import os
+import sys
+import time
+
+ready, pid_file = sys.argv[1:]
+os.setsid()
+descendant = os.fork()
+if descendant == 0:
+    time.sleep(30)
+    os._exit(0)
+with open(pid_file, "w", encoding="ascii") as output:
+    output.write(f"{os.getpid()} {descendant}\n")
+open(ready, "xb").close()
+time.sleep(30)
+PY
+    deadline_group_pid=$!
+    for ((_n=1; _n<=1000; _n++)); do
+      [[ -e "$deadline_group_ready" ]] && break
+      sleep 0.01
+    done
+    read -r deadline_group_pid deadline_descendant_pid \
+      <"$deadline_group_pid_file"
+    sleep 30 &
+    deadline_wrapper_pid=$!
+    gate_fixture_watchdog \
+      "$deadline_group_marker" "$deadline_wrapper_pid" "$deadline_group_pid" &
+    deadline_watchdog_pid=$!
+    gate_fixture_watchdog_ready "$deadline_group_marker"
+    gate_fixture_wait_with_watchdog \
+      "$deadline_wrapper_pid" "$deadline_group_marker" "$deadline_watchdog_pid" \
+      2>/dev/null
+    deadline_watchdog_rc=$gate_fixture_wait_rc
+    wait "$deadline_group_pid" 2>/dev/null || true
+    for ((_n=1; _n<=200; _n++)); do
+      deadline_group_leak=false
+      for _deadline_pid in "$deadline_group_pid" "$deadline_descendant_pid"; do
+        _deadline_state=$(LC_ALL=C ps -o stat= -p "$_deadline_pid" 2>/dev/null) ||
+          continue
+        [[ $_deadline_state == *Z* ]] || deadline_group_leak=true
+      done
+      $deadline_group_leak || break
+      sleep 0.01
+    done
   fi
   TMPDIR="$gate_tmp" \
     bash "$gate_script" >"$gate_stdout" 2>"$gate_stderr"; rc=$?
@@ -1157,7 +1212,7 @@ PY
       fi
       gate_fixture_wait_with_watchdog \
         "$replay_pid" "$replay_deadline_marker" \
-        "$replay_watchdog_pid" "$replay_child_pid_file"
+        "$replay_watchdog_pid"
       replay_wait_rc=$gate_fixture_wait_rc
       printf '%s' "$replay_wait_rc" >"$replay_rc_file"
     fi
@@ -1199,7 +1254,7 @@ PY
       fi
       gate_fixture_wait_with_watchdog \
         "$cooperative_pid" "$cooperative_deadline_marker" \
-        "$cooperative_watchdog_pid" "$cooperative_child_pid_file"
+        "$cooperative_watchdog_pid"
       cooperative_wait_rc=$gate_fixture_wait_rc
       printf '%s' "$cooperative_wait_rc" >"$cooperative_rc_file"
     fi
@@ -1272,7 +1327,7 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
     fi
     gate_fixture_wait_with_watchdog \
       "$blocked_term_pid" "$blocked_term_deadline_marker" \
-      "$blocked_term_watchdog_pid" "$blocked_term_child_pid_file"
+      "$blocked_term_watchdog_pid"
     blocked_term_wait_rc=$gate_fixture_wait_rc
     printf '%s' "$blocked_term_wait_rc" >"$blocked_term_rc_file"
   fi
@@ -1306,7 +1361,7 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
       fi
       gate_fixture_wait_with_watchdog \
         "$term_pid" "$term_deadline_marker" \
-        "$term_watchdog_pid" "$term_child_pid_file"
+        "$term_watchdog_pid"
       term_wait_rc=$gate_fixture_wait_rc
       printf '%s' "$term_wait_rc" > "$term_rc_file"
     fi
@@ -1341,7 +1396,7 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
       fi
       gate_fixture_wait_with_watchdog \
         "$quit_pid" "$quit_deadline_marker" \
-        "$quit_watchdog_pid" "$quit_child_pid_file"
+        "$quit_watchdog_pid"
       quit_wait_rc=$gate_fixture_wait_rc
       printf '%s' "$quit_wait_rc" >"$quit_rc_file"
     fi
@@ -1390,7 +1445,7 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
         fi
         gate_fixture_wait_with_watchdog \
           "$stop_script_pid" "$stop_deadline_marker" \
-          "$stop_watchdog_pid" "$stop_child_pid_file"
+          "$stop_watchdog_pid"
         stop_wait_rc=$gate_fixture_wait_rc
         printf '%s' "$stop_wait_rc" >"$stop_rc_file"
       fi
@@ -1644,6 +1699,10 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
     fail "$t" "trusted cleanup became rc=$trusted_cleanup_rc stdout=$trusted_cleanup_output"
   elif [[ -n "$trusted_cleanup_error" ]]; then
     fail "$t" "trusted cleanup wrote stderr: $trusted_cleanup_error"
+  elif $pidfd_signal_fixtures && [[ $deadline_watchdog_rc -ne 124 ]]; then
+    fail "$t" "fixture watchdog deadline became rc=$deadline_watchdog_rc"
+  elif $deadline_group_leak; then
+    fail "$t" "fixture watchdog deadline left its process group alive"
   elif find "$trusted_cleanup_tmp" -mindepth 1 -print -quit | grep -q .; then
     fail "$t" "PATH cleanup wrappers bypassed trusted artifact removal"
   elif find "$gate_tmp" -mindepth 1 -print -quit | grep -q .; then
