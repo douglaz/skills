@@ -251,6 +251,8 @@ def remove_private_dir():
 
 for managed_signal in managed_signals:
     signal.signal(managed_signal, receive_signal)
+signal.signal(signal.SIGCHLD, signal.SIG_DFL)
+signal.pthread_sigmask(signal.SIG_UNBLOCK, managed_signals)
 
 try:
     os.unlink(pending_path)

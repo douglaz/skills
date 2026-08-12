@@ -532,8 +532,12 @@ status_stdout="$WORK/discipline-status.stdout"
 status_stderr="$WORK/discipline-status.stderr"
 pipeline_stdout="$WORK/discipline-pipeline.stdout"
 pipeline_stderr="$WORK/discipline-pipeline.stderr"
+ignored_sigchld_stdout="$WORK/discipline-ignored-sigchld.stdout"
+ignored_sigchld_stderr="$WORK/discipline-ignored-sigchld.stderr"
 cooperative_stdout="$WORK/discipline-cooperative.stdout"
 cooperative_stderr="$WORK/discipline-cooperative.stderr"
+blocked_term_stdout="$WORK/discipline-blocked-term.stdout"
+blocked_term_stderr="$WORK/discipline-blocked-term.stderr"
 replay_stderr="$WORK/discipline-replay.stderr"
 term_stdout="$WORK/discipline-term.stdout"
 term_stderr="$WORK/discipline-term.stderr"
@@ -560,6 +564,10 @@ cooperative_rc_file="$WORK/discipline-cooperative.rc"
 cooperative_child_pid_file="$WORK/discipline-cooperative-child.pid"
 cooperative_signal_marker="$WORK/discipline-cooperative-signal"
 cooperative_deadline_marker="$WORK/discipline-cooperative-deadline"
+blocked_term_started="$WORK/discipline-blocked-term-started"
+blocked_term_rc_file="$WORK/discipline-blocked-term.rc"
+blocked_term_child_pid_file="$WORK/discipline-blocked-term-child.pid"
+blocked_term_deadline_marker="$WORK/discipline-blocked-term-deadline"
 replay_fifo="$WORK/discipline-replay.fifo"
 replay_started="$WORK/discipline-replay-started"
 replay_done="$WORK/discipline-replay-done"
@@ -735,6 +743,17 @@ else
     bash "$gate_script" >"$status_stdout" 2>"$status_stderr"; status_rc=$?
   TMPDIR="$gate_tmp" GATE_MODE=pipeline \
     bash "$gate_script" >"$pipeline_stdout" 2>"$pipeline_stderr"; pipeline_rc=$?
+  TMPDIR="$gate_tmp" GATE_MODE=status \
+    python3 -c '
+import os
+import signal
+import sys
+
+signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
+' "$(command -v bash)" "$gate_script" \
+      >"$ignored_sigchld_stdout" 2>"$ignored_sigchld_stderr"
+  ignored_sigchld_rc=$?
   (
     mkfifo "$replay_fifo"
     sleep 30 <"$replay_fifo" &
@@ -814,6 +833,53 @@ else
     fi
   )
   cooperative_rc=$(< "$cooperative_rc_file")
+  (
+    TMPDIR="$gate_tmp" GATE_MODE=term \
+      STARTED="$blocked_term_started" CHILD_PID_FILE="$blocked_term_child_pid_file" \
+      exec python3 -c '
+import os
+import signal
+import sys
+
+signal.pthread_sigmask(signal.SIG_BLOCK, (signal.SIGTERM,))
+os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
+' "$(command -v bash)" "$gate_script" \
+        >"$blocked_term_stdout" 2>"$blocked_term_stderr"
+  ) &
+  blocked_term_pid=$!
+  for ((_n=1; _n<=100; _n++)); do
+    [[ -f "$blocked_term_started" ]] && break
+    sleep 0.05
+  done
+  if [[ ! -f "$blocked_term_started" ]]; then
+    kill -KILL "$blocked_term_pid" 2>/dev/null || true
+    wait "$blocked_term_pid" 2>/dev/null || true
+    printf '%s' 125 >"$blocked_term_rc_file"
+  else
+    read -r blocked_term_child_pid _ _ <"$blocked_term_child_pid_file"
+    kill -TERM "$blocked_term_pid"
+    (
+      sleep 2
+      : >"$blocked_term_deadline_marker"
+      kill -TERM "$blocked_term_pid" 2>/dev/null || true
+      kill -TERM -- "-$blocked_term_child_pid" 2>/dev/null || true
+      kill -CONT -- "-$blocked_term_child_pid" 2>/dev/null || true
+      sleep 0.05
+      kill -KILL "$blocked_term_pid" 2>/dev/null || true
+      kill -KILL -- "-$blocked_term_child_pid" 2>/dev/null || true
+    ) &
+    blocked_term_watchdog_pid=$!
+    wait "$blocked_term_pid"
+    blocked_term_wait_rc=$?
+    if [[ -f "$blocked_term_deadline_marker" ]]; then
+      blocked_term_wait_rc=124
+    else
+      kill "$blocked_term_watchdog_pid" 2>/dev/null || true
+    fi
+    wait "$blocked_term_watchdog_pid" 2>/dev/null || true
+    printf '%s' "$blocked_term_wait_rc" >"$blocked_term_rc_file"
+  fi
+  blocked_term_rc=$(< "$blocked_term_rc_file")
   (
     TMPDIR="$gate_tmp" GATE_MODE=term \
       STARTED="$term_started" CHILD_PID_FILE="$term_child_pid_file" \
@@ -999,8 +1065,12 @@ else
   status_error=$(< "$status_stderr")
   pipeline_output=$(< "$pipeline_stdout")
   pipeline_error=$(< "$pipeline_stderr")
+  ignored_sigchld_output=$(< "$ignored_sigchld_stdout")
+  ignored_sigchld_error=$(< "$ignored_sigchld_stderr")
   cooperative_output=$(< "$cooperative_stdout")
   cooperative_error=$(< "$cooperative_stderr")
+  blocked_term_output=$(< "$blocked_term_stdout")
+  blocked_term_error=$(< "$blocked_term_stderr")
   term_output=$(< "$term_stdout")
   term_error=$(< "$term_stderr")
   quit_output=$(< "$quit_stdout")
@@ -1052,6 +1122,11 @@ else
     fail "$t" "failed pipeline became rc=$pipeline_rc stdout=$pipeline_output"
   elif [[ -n "$pipeline_error" || $pipeline_output == *pipeline-last* ]]; then
     fail "$t" "pipeline gate leaked or continued: stderr=$pipeline_error"
+  elif [[ $ignored_sigchld_rc -ne 124 ||
+      $ignored_sigchld_output != 'EXIT=124' ]]; then
+    fail "$t" "ignored parent SIGCHLD corrupted status: rc=$ignored_sigchld_rc stdout=$ignored_sigchld_output"
+  elif [[ -n "$ignored_sigchld_error" ]]; then
+    fail "$t" "ignored parent SIGCHLD wrote stderr: $ignored_sigchld_error"
   elif [[ $replay_rc -ne 143 ]]; then
     fail "$t" "blocked replay ignored TERM: rc=$replay_rc"
   elif [[ -n "$replay_error" ]]; then
@@ -1068,6 +1143,17 @@ else
     fail "$t" "cooperative TERM trap did not run"
   elif [[ -n "$cooperative_output" || -n "$cooperative_error" ]]; then
     fail "$t" "cooperative TERM exposed output: stdout=$cooperative_output stderr=$cooperative_error"
+  elif [[ $blocked_term_rc -ne 143 ]]; then
+    fail "$t" "blocked parent TERM escaped cancellation: rc=$blocked_term_rc"
+  elif [[ ! -s "$blocked_term_child_pid_file" ]]; then
+    fail "$t" "blocked parent TERM fixture did not record the gate process"
+  elif read -r blocked_term_child_pid _ blocked_term_descendant_pid \
+      <"$blocked_term_child_pid_file" &&
+      { kill -0 "$blocked_term_child_pid" 2>/dev/null ||
+        kill -0 "$blocked_term_descendant_pid" 2>/dev/null; }; then
+    fail "$t" "blocked parent TERM left the gate process group alive"
+  elif [[ -n "$blocked_term_output" || -n "$blocked_term_error" ]]; then
+    fail "$t" "blocked parent TERM exposed output: stdout=$blocked_term_output stderr=$blocked_term_error"
   elif [[ $term_rc -ne 143 ]]; then
     fail "$t" "terminated gate wrapper exited $term_rc"
   elif [[ ! -s "$term_child_pid_file" ]]; then
