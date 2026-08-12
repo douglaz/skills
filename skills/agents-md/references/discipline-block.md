@@ -180,8 +180,19 @@ def write_terminal_status(stdout_fd, status):
             signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
             select.select([], [stdout_fd], [], 0.1)
             continue
+        except BaseException:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+            raise
         if written != len(data):
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
             raise RuntimeError("partial terminal status write")
+        signal_ready = True
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+        if pending_signal is not None:
+            signal_ready = False
+            signal.pthread_sigmask(signal.SIG_BLOCK, managed_signals)
+            raise GateCancelled(pending_signal)
+        signal_ready = False
         return
 
 
