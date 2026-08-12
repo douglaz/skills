@@ -8,7 +8,7 @@ take.
 · **Branch:** `plan/backlog-execution`
 **Pending:** —
 **Gate:** `./check.sh`
-· last green 2026-08-12 on the `4317460` tree (exit 0; 26 installer,
+· last green 2026-08-12 on the `ad5fe0b` tree (exit 0; 26 installer,
 124 bot-gate, and 70 drive-status fixtures passed under GNU Bash 5.3.15,
 non-POSIX mode).
 
@@ -101,6 +101,15 @@ non-POSIX mode).
 - Called Fable/high again after all specification/body corrections. It reread
   the full 1,871-line spec, all 33 bodies, `AGENTS.md`, `DRIVE.md`, and linked
   owners and reported `NO BLOCKING FINDINGS`.
+- Closed the final current-tip gate supervision findings at `ad5fe0b`: a
+  privileged-Bash preflight now rejects an exported `command` trust-anchor
+  function before any artifact is created; the Linux supervisor reaps adopted
+  children on normal completion; and the behavior fixtures use one childless
+  watchdog with pidfd-pinned deadline targets rather than orphanable Bash
+  `sleep` timers. Full-wrapper normal-orphan coverage and hostile-command
+  coverage both fail against their isolated regressions. `./check.sh` then
+  exited 0 with 26 installer, 124 bot-gate, and 70 drive-status fixtures;
+  stderr was empty.
 
 ## Now
 
