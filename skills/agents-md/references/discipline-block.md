@@ -99,6 +99,8 @@ while IFS="=" read -r _gate_env_name _; do
   esac
 done <<<"$_gate_environment"
 '; then
+builtin unset -f command ||
+  { echo "cannot clear local command function"; exit 1; }
 command type -P python3 >/dev/null 2>&1 ||
   { echo "python3 is required for gate supervision"; exit 1; }
 _gate_dir=$(command mktemp -d) || { echo "cannot create gate directory"; exit 1; }
@@ -513,7 +515,8 @@ either Python launch as well, so a Python path implemented by a shell shim canno
 bypass the supervisor before its own environment sanitization runs. The outer
 privileged-Bash preflight cannot import exported functions and refuses an
 exported `command` trust-anchor function before the wrapper creates artifacts;
-the normal sanitizer then removes every other inherited exported function.
+the parent then removes any non-exported local `command` function before the
+normal sanitizer removes every other inherited exported function.
 It creates a dedicated process group, handles HUP, INT, QUIT, and TERM even when
 the invoking shell inherited an ignored signal, resumes stopped work, waits with
 a deadline, and escalates boundedly when the leader or another process in that
