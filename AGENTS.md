@@ -88,12 +88,13 @@ command type -P python3 >/dev/null 2>&1 ||
   { echo "python3 is required for gate supervision"; exit 1; }
 _gate_dir=$(command mktemp -d) || { echo "cannot create gate directory"; exit 1; }
 _gate_log="$_gate_dir/output.log"
+_gate_error="$_gate_dir/error.log"
 _gate_script="$_gate_dir/gate.bash"
 _gate_runner="$_gate_dir/supervisor.py"
 _gate_pending="$_gate_dir/exec.pending"
   _gate_remove_dir() {
     _gate_remove_rc=0
-    for _gate_file in "$_gate_log" "$_gate_script" "$_gate_runner" "$_gate_pending"; do
+    for _gate_file in "$_gate_log" "$_gate_error" "$_gate_script" "$_gate_runner" "$_gate_pending"; do
       if [ -e "$_gate_file" ] && ! command unlink "$_gate_file"; then
         _gate_remove_rc=1
       fi
@@ -132,6 +133,7 @@ import time
 root, bash, watchdog_pid, pending_path = sys.argv[1:5]
 watchdog_pid = int(watchdog_pid)
 log_path = os.path.join(root, "output.log")
+error_path = os.path.join(root, "error.log")
 gate_path = os.path.join(root, "gate.bash")
 runner_path = os.path.join(root, "supervisor.py")
 managed_signals = (signal.SIGHUP, signal.SIGINT, signal.SIGQUIT, signal.SIGTERM)
@@ -286,7 +288,7 @@ def stop_group(signum):
 
 def remove_private_dir():
     ok = True
-    for path in (log_path, gate_path, runner_path, pending_path):
+    for path in (log_path, error_path, gate_path, runner_path, pending_path):
         try:
             os.unlink(path)
         except FileNotFoundError:
@@ -345,7 +347,7 @@ try:
         if name in shell_control or name.startswith("BASH_FUNC_"):
             environment.pop(name, None)
     environment["BASH_ENV"] = "/dev/null"
-    with open(log_path, "wb") as output:
+    with open(log_path, "wb") as output, open(error_path, "wb") as errors:
         previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, managed_signals)
         try:
             child_bootstrap = (
@@ -368,7 +370,7 @@ try:
                 ],
                 stdin=subprocess.DEVNULL,
                 stdout=output,
-                stderr=subprocess.STDOUT,
+                stderr=errors,
                 env=environment,
                 start_new_session=True,
             )
@@ -403,29 +405,36 @@ except BaseException as error:
 try:
     if cancelled is None:
         stdout_fd = sys.stdout.fileno()
+        stderr_fd = sys.stderr.fileno()
         stdout_was_blocking = os.get_blocking(stdout_fd)
+        stderr_was_blocking = os.get_blocking(stderr_fd)
         os.set_blocking(stdout_fd, False)
-        with open(log_path, "rb") as output:
-            while True:
-                chunk = output.read(65536)
-                if not chunk:
-                    break
-                pending = memoryview(chunk)
-                while pending:
-                    try:
-                        written = os.write(stdout_fd, pending)
-                        pending = pending[written:]
-                    except BlockingIOError:
-                        select.select([], [stdout_fd], [], 0.1)
+        os.set_blocking(stderr_fd, False)
+        for path, target_fd in ((log_path, stdout_fd), (error_path, stderr_fd)):
+            with open(path, "rb") as output:
+                while True:
+                    chunk = output.read(65536)
+                    if not chunk:
+                        break
+                    pending = memoryview(chunk)
+                    while pending:
+                        try:
+                            written = os.write(target_fd, pending)
+                            pending = pending[written:]
+                        except BlockingIOError:
+                            select.select([], [target_fd], [], 0.1)
     if not remove_private_dir():
         print("cannot remove gate directory", file=sys.stderr)
         rc = rc if rc != 0 else 1
     if cancelled is None:
         write_terminal_status(stdout_fd, rc)
         os.set_blocking(stdout_fd, stdout_was_blocking)
+        os.set_blocking(stderr_fd, stderr_was_blocking)
 except GateCancelled as cancellation:
     if "stdout_fd" in locals() and "stdout_was_blocking" in locals():
         os.set_blocking(stdout_fd, stdout_was_blocking)
+    if "stderr_fd" in locals() and "stderr_was_blocking" in locals():
+        os.set_blocking(stderr_fd, stderr_was_blocking)
     cancelled = cancellation.signum
     ignore_managed_signals()
     if gate_pgid is not None and group_alive(gate_pgid):
@@ -436,6 +445,8 @@ except GateCancelled as cancellation:
 except BaseException as error:
     if "stdout_fd" in locals() and "stdout_was_blocking" in locals():
         os.set_blocking(stdout_fd, stdout_was_blocking)
+    if "stderr_fd" in locals() and "stderr_was_blocking" in locals():
+        os.set_blocking(stderr_fd, stderr_was_blocking)
     ignore_managed_signals()
     print(f"cannot finalize gate: {error}", file=sys.stderr)
     rc = rc if rc != 0 else 1
@@ -476,7 +487,7 @@ if os.path.lexists(pending):
     except OSError:
         pass
 ' "$_gate_dir" "$_gate_pending" \
-  "$_gate_log" "$_gate_script" "$_gate_runner" "$_gate_pending" &
+  "$_gate_log" "$_gate_error" "$_gate_script" "$_gate_runner" "$_gate_pending" &
 _gate_exec_watchdog=$!
 command exec "$_gate_python" -I "$_gate_runner" "$_gate_dir" "${BASH:-bash}" \
   "$_gate_exec_watchdog" "$_gate_pending"

@@ -539,6 +539,8 @@ status_stdout="$WORK/discipline-status.stdout"
 status_stderr="$WORK/discipline-status.stderr"
 pipeline_stdout="$WORK/discipline-pipeline.stdout"
 pipeline_stderr="$WORK/discipline-pipeline.stderr"
+streams_stdout="$WORK/discipline-streams.stdout"
+streams_stderr="$WORK/discipline-streams.stderr"
 ignored_sigchld_stdout="$WORK/discipline-ignored-sigchld.stdout"
 ignored_sigchld_stderr="$WORK/discipline-ignored-sigchld.stderr"
 normal_orphan_stdout="$WORK/discipline-normal-orphan.stdout"
@@ -813,6 +815,8 @@ possible_gate_start=false
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == success ]]; then printf "paste-success\n"'
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == pipeline ]]; then'
         printf '%s\n' '  printf "pipeline-first\n"; false | true; printf "pipeline-last\n"'
+        printf '%s\n' 'elif [[ ${GATE_MODE:-function} == streams ]]; then'
+        printf '%s\n' '  printf "stream-out\n"; printf "stream-error\n" >&2'
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == normal-orphan ]]; then'
         printf '%s\n' '  python3 -c '\''import os, sys, time; (sys.exit(0) if not sys.platform.startswith("linux") else None); pid = os.fork(); (os._exit(0) if pid == 0 else None); deadline = time.monotonic() + 2; info = None; exec("while time.monotonic() < deadline:\n info = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)\n if info is not None and info.si_pid == pid: break\n time.sleep(0.005)"); (None if info is not None and info.si_pid == pid else (_ for _ in ()).throw(RuntimeError("child did not become a zombie")))'\'''
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == replay ]]; then'
@@ -989,6 +993,8 @@ else
     bash "$gate_script" >"$status_stdout" 2>"$status_stderr"; status_rc=$?
   TMPDIR="$gate_tmp" GATE_MODE=pipeline \
     bash "$gate_script" >"$pipeline_stdout" 2>"$pipeline_stderr"; pipeline_rc=$?
+  TMPDIR="$gate_tmp" GATE_MODE=streams \
+    bash "$gate_script" >"$streams_stdout" 2>"$streams_stderr"; streams_rc=$?
   TMPDIR="$gate_tmp" GATE_MODE=status \
     python3 -c '
 import os
@@ -1452,6 +1458,8 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
   status_error=$(< "$status_stderr")
   pipeline_output=$(< "$pipeline_stdout")
   pipeline_error=$(< "$pipeline_stderr")
+  streams_output=$(< "$streams_stdout")
+  streams_error=$(< "$streams_stderr")
   ignored_sigchld_output=$(< "$ignored_sigchld_stdout")
   ignored_sigchld_error=$(< "$ignored_sigchld_stderr")
   normal_orphan_output=$(< "$normal_orphan_stdout")
@@ -1536,6 +1544,9 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
     fail "$t" "failed pipeline became rc=$pipeline_rc stdout=$pipeline_output"
   elif [[ -n "$pipeline_error" || $pipeline_output == *pipeline-last* ]]; then
     fail "$t" "pipeline gate leaked or continued: stderr=$pipeline_error"
+  elif [[ $streams_rc -ne 0 || $streams_output != $'stream-out\nEXIT=0' ||
+      $streams_error != stream-error ]]; then
+    fail "$t" "gate streams were not preserved: rc=$streams_rc stdout=$streams_output stderr=$streams_error"
   elif [[ $ignored_sigchld_rc -ne 124 ||
       $ignored_sigchld_output != 'EXIT=124' ]]; then
     fail "$t" "ignored parent SIGCHLD corrupted status: rc=$ignored_sigchld_rc stdout=$ignored_sigchld_output"
