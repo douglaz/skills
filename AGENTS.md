@@ -142,6 +142,26 @@ def ignore_managed_signals():
         signal.signal(signum, signal.SIG_IGN)
 
 
+def write_terminal_status(stdout_fd, status):
+    global signal_ready
+    data = f"EXIT={status}\n".encode("ascii")
+    while True:
+        previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, managed_signals)
+        signal_ready = False
+        if pending_signal is not None:
+            raise GateCancelled(pending_signal)
+        try:
+            written = os.write(stdout_fd, data)
+        except BlockingIOError:
+            signal_ready = True
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+            select.select([], [stdout_fd], [], 0.1)
+            continue
+        if written != len(data):
+            raise RuntimeError("partial terminal status write")
+        return
+
+
 def group_alive(pgid):
     try:
         os.killpg(pgid, 0)
@@ -315,16 +335,12 @@ try:
                         pending = pending[written:]
                     except BlockingIOError:
                         select.select([], [stdout_fd], [], 0.1)
-        os.set_blocking(stdout_fd, stdout_was_blocking)
     if not remove_private_dir():
         print("cannot remove gate directory", file=sys.stderr)
         rc = rc if rc != 0 else 1
     if cancelled is None:
-        signal.pthread_sigmask(signal.SIG_BLOCK, managed_signals)
-        signal_ready = False
-        if pending_signal is not None:
-            raise GateCancelled(pending_signal)
-        print(f"EXIT={rc}")
+        write_terminal_status(stdout_fd, rc)
+        os.set_blocking(stdout_fd, stdout_was_blocking)
 except GateCancelled as cancellation:
     if "stdout_fd" in locals() and "stdout_was_blocking" in locals():
         os.set_blocking(stdout_fd, stdout_was_blocking)

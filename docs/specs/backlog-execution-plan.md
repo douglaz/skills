@@ -787,12 +787,22 @@ resolves the Beads JSONL to use the exact installed companion path, falling back
 to the checkout owner only when no installed target resolves. Require:
 
 ```bash
-_bw=$(br where --json) ||
-  { echo "cannot resolve the beads workspace" >&2; exit 1; }
+_bw_file=$(mktemp) ||
+  { echo "cannot create beads resolver input" >&2; exit 1; }
+_bw_cleanup() { command unlink "$_bw_file" 2>/dev/null || :; }
+trap _bw_cleanup EXIT
+if ! br where --json >"$_bw_file"; then
+  echo "cannot resolve the beads workspace" >&2
+  exit 1
+fi
+if LC_ALL=C command od -An -v -t x1 "$_bw_file" |
+    command grep -Eq '(^|[[:space:]])00([[:space:]]|$)'; then
+  echo "beads workspace JSON contains a raw NUL byte" >&2
+  exit 1
+fi
 BEADS_JSONL=$(
-  printf '%s' "$_bw" |
-    jq -ers '
-      if length == 1 and
+  jq -ers '
+       if length == 1 and
          ((.[0] | type) == "object") and
          ((.[0].jsonl_path | type) == "string") and
          ((.[0].jsonl_path | length) > 0) and
@@ -801,14 +811,19 @@ BEADS_JSONL=$(
        then .[0].jsonl_path
        else error("expected exactly one non-empty string jsonl_path")
        end
-     '
+     ' <"$_bw_file"
 ) || { echo "cannot resolve exactly one beads JSONL" >&2; exit 1; }
+command unlink "$_bw_file" ||
+  { echo "cannot remove beads resolver input" >&2; exit 1; }
+trap - EXIT
 ```
 
 or one tested fact owner with equivalent fail-closed behavior.
 
-The displayed shell pins the JSON cardinality and rejects NUL/CR/LF before
-command substitution can strip or misrepresent path bytes; the companion owns
+The displayed shell captures raw stdout to a private file and rejects a NUL at
+the byte level before JSON parsing or command substitution; only validated jq
+output enters a shell variable. It also pins JSON cardinality and rejects
+NUL/CR/LF in the decoded path before jq emits it. The companion owns
 the remaining byte-safe inspection. It canonicalizes the current worktree root
 and resolved parent without following the final path, requires the path to be
 inside that root, and reads raw NUL-delimited `git ls-files --stage -z`,
