@@ -96,11 +96,11 @@ _gate_pending="$_gate_dir/exec.pending"
   _gate_remove_dir() {
     _gate_remove_rc=0
     for _gate_file in "$_gate_log" "$_gate_script" "$_gate_runner" "$_gate_pending"; do
-      if [ -e "$_gate_file" ] && ! unlink "$_gate_file"; then
+      if [ -e "$_gate_file" ] && ! command unlink "$_gate_file"; then
         _gate_remove_rc=1
       fi
     done
-    if ! rmdir "$_gate_dir"; then
+    if ! command rmdir "$_gate_dir"; then
       _gate_remove_rc=1
     fi
     return "$_gate_remove_rc"
@@ -413,9 +413,9 @@ __AGENT_SUPERVISOR__
   sleep 2
   if [ -e "$_gate_pending" ]; then
     for _gate_file in "$_gate_log" "$_gate_script" "$_gate_runner" "$_gate_pending"; do
-      [ ! -e "$_gate_file" ] || unlink "$_gate_file" 2>/dev/null || :
+      [ ! -e "$_gate_file" ] || command unlink "$_gate_file" 2>/dev/null || :
     done
-    rmdir "$_gate_dir" 2>/dev/null || :
+    command rmdir "$_gate_dir" 2>/dev/null || :
   fi
 ) &
 _gate_exec_watchdog=$!

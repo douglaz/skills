@@ -720,8 +720,13 @@ else
     bash "$gate_script" >"$gate_stdout" 2>"$gate_stderr"; rc=$?
   TMPDIR="$gate_tmp" GATE_MODE=success \
     bash -c "$(<"$gate_script")" >"$paste_stdout" 2>"$paste_stderr"; paste_rc=$?
-  TMPDIR="$gate_tmp" \
-    bash "$execfail_gate_script" >"$execfail_stdout" 2>"$execfail_stderr"; execfail_rc=$?
+  (
+    unlink() { return 0; }
+    rmdir() { return 0; }
+    export -f unlink rmdir
+    TMPDIR="$gate_tmp" \
+      bash "$execfail_gate_script" >"$execfail_stdout" 2>"$execfail_stderr"
+  ); execfail_rc=$?
   for ((_n=1; _n<=300; _n++)); do
     ! find "$gate_tmp" -mindepth 1 -print -quit | grep -q . && break
     sleep 0.01

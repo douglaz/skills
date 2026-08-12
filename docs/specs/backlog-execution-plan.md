@@ -585,6 +585,8 @@ claude-reviewer-runner run --model <name> --prompt-file <path> \
   --timeout-seconds <n> --result-file <private-path> \
   --tool-policy <auditor-readonly|panel-legacy-shell|panel-no-shell> \
   [--working-directory <path>] [--add-dir <private-bundle-path>]
+claude-reviewer-runner command-no-output --timeout-seconds <n> -- \
+  <executable> [arg...]
 ```
 
 `probe` prints exactly one selected model and exits 0, exits 3 when no candidate
@@ -634,6 +636,16 @@ that `--add-dir` names that root, then passes exactly that one `--add-dir`.
 Other policies reject those options so no caller can accidentally broaden its
 current view. C3 owns creating and validating the bundle bytes; C1 owns only the
 fixed launch/lifecycle boundary.
+
+`command-no-output` is the non-reviewer reuse of that lifecycle boundary. It
+executes the fixed argv directly—never through a shell—with stdin closed; rejects
+an empty command or nonpositive deadline as status 2; requires both stdout and
+stderr to be empty; and otherwise returns the child's exit status subject to the
+same latched 124 timeout, 128+signal caller cancellation, and 125 reaping-failure
+rules. It accepts no model, prompt, result-file, policy, working-directory, or
+add-dir options. Direct fixtures cover argv metacharacters remaining literal,
+nonempty-stream refusal, timeout with a stopped/resistant descendant, caller
+signals, and complete reaping. F2r is its first non-reviewer consumer.
 
 For `panel-no-shell`, canonicalize through already-open directory descriptors,
 not a string-prefix check. The bundle root and every existing ancestor below its
@@ -951,9 +963,12 @@ Create:
 - **E2a, P0:** own `skills/agents-md/SKILL.md` § br-agent-instructions guidance
   plus its managed-block assertions in `install.test`; the guidance and test,
   not `install.sh`, host this decision mechanism. Replace unconditional
-  delegation with a fail-closed semantic preview. Read the complete
-  `br agents --add --dry-run` output against the
-  existing AGENTS branch, review, gate, and closure contract. If its session
+  delegation with a fail-closed semantic preview. Force plain non-TTY output with
+  `NO_COLOR=1`, capture the complete
+  `br agents --add --force --dry-run` output against the existing AGENTS branch,
+  and fail unless it contains exactly one complete delimited generated block
+  rather than only a rich summary. Review that full block against the branch,
+  review, gate, and closure contract. If its session
   commit/push protocol conflicts, omit the entire generated Beads block and
   report the exact conflicting clauses; do not reconcile, partially copy, or
   claim that separate markers imply semantic compatibility. Install the block
@@ -985,8 +1000,13 @@ $ br agents --help | grep -E -- '--add|--update|--dry-run|--force'
       --update                       Update beads workflow instructions to latest version
       --dry-run                      Preview changes without modifying files
   -f, --force                        Skip confirmation prompts
-$ br agents --add --force --dry-run
+$ NO_COLOR=1 br agents --add --force --dry-run
 Would add beads workflow instructions to: /tmp/<fixture>/AGENTS.md
+
+--- Preview ---
+<!-- br-agent-instructions-v1 -->
+...
+<!-- end-br-agent-instructions -->
 $ add_rc=$?
 $ br agents --update --force --dry-run
 Beads workflow instructions are already up to date (v1).
@@ -1284,9 +1304,15 @@ Require `gh release view <tag> -R douglaz/rb-lite` to report a published,
 non-draft release, and require both the tag ref and its peeled annotated-tag ref
 (when present) from `git ls-remote` to resolve to the recorded commit. A mismatch,
 lightweight/annotated ambiguity, moving tag, or absent release blocks closure.
-Then probe the commit-qualified released artifact. The displayed block is the inner
-probe body passed to the required 120-second process-group supervisor described
-immediately below; it must not be invoked directly or without that supervisor:
+Then probe the commit-qualified released artifact. The coordinating agent invokes
+C1's already-landed `claude-reviewer-runner command-no-output
+--timeout-seconds 120 -- <executable> [arg...]` lifecycle boundary. It runs one
+fixed argv vector with stdin closed, no shell, model, prompt, or result, and
+succeeds only when the child exits 0 with empty stdout/stderr. Its bounded
+TERM/CONT/KILL, timeout status 124, caller-signal status, and reaping contract
+are exactly C1's. The displayed block is written to a private mode-0700
+directory as an executable wrapper and passed as the single executable argv to
+that supervisor; it must not be invoked directly:
 
 ```bash
 TAG="<immutable-tag>"
@@ -1334,9 +1360,25 @@ F3 separately pins the verified commit as its immutable fallback rather than a
 path-only, moving-tag, or version-text guess.
 The release/tag checks establish published identity; probe the already verified
 commit-qualified artifact so a transient tag rewrite cannot change executed
-bytes. Run that capability command through the same 120-second
-process-group deadline and bounded TERM/CONT/KILL cleanup required by F3; a
-hanging release artifact is not consumable and cannot close F2r.
+bytes. A timeout, signal, descendant leak, or nonempty unexpected stream from the
+landed supervisor blocks closure.
+
+After publication and the supervised probe succeed, record F2r through a dedicated
+reviewed skills metadata transaction. Create `metadata/close-f2r-release` from
+current `master`; use E1 to prove the JSONL clean; make only the F2r
+authorization/release evidence and closure JSONL change plus the `DRIVE.md`
+Done/Now/Next update; and invoke exactly:
+
+```text
+beads-close-transaction close --id <F2r-bead-id> \
+  --reason-file <publication-evidence-file> --notes-file <release-evidence-file>
+```
+
+Push and open a PR whose body contains `bead-closure: <F2r-bead-id>`; once GitHub
+assigns `N`, amend `DRIVE.md` to `Pending: metadata PR douglaz/skills#N`; rerun
+`./check.sh` and the independent panel on the amended tree; force-push with lease;
+then merge. Do not mutate directly on `master`, combine this metadata with F3, or
+make F3 ready before this reviewed closure lands.
 
 ### F3. Foreground Drive controller — issues #48, #30, #31, #35
 
