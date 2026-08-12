@@ -838,7 +838,9 @@ _bw_hex=$(mktemp) ||
     exit 1
   }
 _bw_cleanup() {
-  command unlink "$_bw_file" "$_bw_hex" 2>/dev/null || :
+  for _bw_path in "$_bw_file" "$_bw_hex"; do
+    command unlink "$_bw_path" 2>/dev/null || :
+  done
 }
 trap _bw_cleanup EXIT
 if ! br --no-auto-flush --no-auto-import where --json >"$_bw_file"; then
@@ -872,7 +874,8 @@ BEADS_JSONL=$(
        end
      ' <"$_bw_file"
 ) || { echo "cannot resolve exactly one beads JSONL" >&2; exit 1; }
-command unlink "$_bw_file" "$_bw_hex" ||
+command unlink "$_bw_file" &&
+  command unlink "$_bw_hex" ||
   { echo "cannot remove beads resolver input" >&2; exit 1; }
 trap - EXIT
 ```

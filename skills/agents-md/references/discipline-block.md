@@ -138,6 +138,7 @@ gate_path = os.path.join(root, "gate.bash")
 runner_path = os.path.join(root, "supervisor.py")
 managed_signals = (signal.SIGHUP, signal.SIGINT, signal.SIGQUIT, signal.SIGTERM)
 child = None
+gate_pgid = None
 cancelled = None
 signal_ready = False
 pending_signal = None
@@ -195,9 +196,10 @@ def group_alive(pgid):
 
 
 def stop_group(signum):
-    if child is None:
+    global gate_pgid
+    if child is None or gate_pgid is None:
         return True
-    pgid = child.pid
+    pgid = gate_pgid
     try:
         os.killpg(pgid, signum)
     except ProcessLookupError:
@@ -228,7 +230,10 @@ def stop_group(signum):
     deadline = time.monotonic() + 1.0
     while group_alive(pgid) and time.monotonic() < deadline:
         time.sleep(0.01)
-    return not group_alive(pgid)
+    stopped = not group_alive(pgid)
+    if stopped:
+        gate_pgid = None
+    return stopped
 
 
 def remove_private_dir():
@@ -318,18 +323,21 @@ try:
                 env=environment,
                 start_new_session=True,
             )
+            gate_pgid = child.pid
         finally:
             signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
         rc = child.wait()
         if rc < 0:
             rc = 128 - rc
-        if group_alive(child.pid):
+        if group_alive(gate_pgid):
             if not stop_group(signal.SIGTERM):
                 print("cannot terminate gate process group", file=sys.stderr)
                 rc = rc if rc != 0 else 1
             elif rc == 0:
                 print("gate left background processes running", file=sys.stderr)
                 rc = 1
+        else:
+            gate_pgid = None
 except GateCancelled as cancellation:
     cancelled = cancellation.signum
     ignore_managed_signals()
@@ -338,7 +346,7 @@ except GateCancelled as cancellation:
     rc = 128 + cancellation.signum
 except BaseException as error:
     ignore_managed_signals()
-    if child is not None and group_alive(child.pid):
+    if gate_pgid is not None and group_alive(gate_pgid):
         stop_group(signal.SIGTERM)
     print(f"cannot run gate: {error}", file=sys.stderr)
     rc = rc if rc != 0 else 1
@@ -370,7 +378,7 @@ except GateCancelled as cancellation:
         os.set_blocking(stdout_fd, stdout_was_blocking)
     cancelled = cancellation.signum
     ignore_managed_signals()
-    if child is not None and group_alive(child.pid):
+    if gate_pgid is not None and group_alive(gate_pgid):
         stop_group(cancellation.signum)
     rc = 128 + cancellation.signum
     if not remove_private_dir():
