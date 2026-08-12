@@ -528,6 +528,8 @@ shellfunc_stdout="$WORK/discipline-shellfunc.stdout"
 shellfunc_stderr="$WORK/discipline-shellfunc.stderr"
 localcommand_stdout="$WORK/discipline-local-command.stdout"
 localcommand_stderr="$WORK/discipline-local-command.stderr"
+localalias_stdout="$WORK/discipline-local-alias.stdout"
+localalias_stderr="$WORK/discipline-local-alias.stderr"
 commandfunc_stdout="$WORK/discipline-commandfunc.stdout"
 commandfunc_stderr="$WORK/discipline-commandfunc.stderr"
 commandfunc_env=$(command -p -v env)
@@ -940,6 +942,14 @@ else
     TMPDIR="$gate_tmp" source "$gate_script"
   ) >"$localcommand_stdout" 2>"$localcommand_stderr"
   localcommand_rc=$?
+  (
+    shopt -s expand_aliases
+    alias unset=:
+    alias exec=:
+    BASH=/definitely/missing/caller-controlled-bash
+    TMPDIR="$gate_tmp" source "$gate_script"
+  ) >"$localalias_stdout" 2>"$localalias_stderr"
+  localalias_rc=$?
   (
   mkdir -p "$WORK/hostile-command-bin"
   printf '%s\n' '#!/bin/sh' 'exit 0' >"$WORK/hostile-command-bin/env"
@@ -1398,6 +1408,8 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
   shellfunc_error=$(< "$shellfunc_stderr")
   localcommand_output=$(< "$localcommand_stdout")
   localcommand_error=$(< "$localcommand_stderr")
+  localalias_output=$(< "$localalias_stdout")
+  localalias_error=$(< "$localalias_stderr")
   commandfunc_output=$(< "$commandfunc_stdout")
   commandfunc_error=$(< "$commandfunc_stderr")
   stdin_output=$(< "$stdin_stdout")
@@ -1459,6 +1471,12 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
   elif [[ -n "$localcommand_error" ||
       $localcommand_output == *should-not-run* ]]; then
     fail "$t" "local-command run leaked or continued: stderr=$localcommand_error"
+  elif [[ $localalias_rc -ne 1 ||
+      $localalias_output != $'first\nEXIT=1' ]]; then
+    fail "$t" "local alias or caller BASH bypassed the gate: rc=$localalias_rc stdout=$localalias_output"
+  elif [[ -n "$localalias_error" ||
+      $localalias_output == *should-not-run* ]]; then
+    fail "$t" "local-alias run leaked or continued: stderr=$localalias_error"
   elif [[ $shellfunc_rc -eq 0 || -n "$shellfunc_output" ]]; then
     fail "$t" "exported Bash function bypassed the refusal: rc=$shellfunc_rc stdout=$shellfunc_output"
   elif [[ $shellfunc_error != *"refusing exported shell function"* ]]; then

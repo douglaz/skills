@@ -67,8 +67,10 @@ that status after reading the log:
 
 ```bash
 POSIXLY_CORRECT=y
-unset -f command builtin exec unset
-exec "${BASH:?Bash path is required}" --noprofile --norc -p -s <<'__AGENT_GATE_WRAPPER__'
+\unset -f command builtin exec unset
+_gate_outer_bash=$(command -p -v bash) ||
+  { echo "cannot locate trusted Bash"; exit 1; }
+\exec "$_gate_outer_bash" --noprofile --norc -p -s <<'__AGENT_GATE_WRAPPER__'
 _gate_environment=$(command -p env) || exit 1
 while IFS="=" read -r _gate_env_name _; do
   case $_gate_env_name in
@@ -494,14 +496,17 @@ either Python launch as well, so a Python path implemented by a shell shim canno
 bypass the supervisor before its own environment sanitization runs. The entire
 wrapper runs from a quoted here-document inside privileged Bash, so it cannot
 import exported or non-exported caller functions. The caller first enables
-POSIX special-builtin precedence, removes local functions named for the
-`unset`/`exec` trust path, and replaces itself with that clean Bash. Its
+POSIX special-builtin precedence, uses backslash-suppressed special builtins to
+remove local functions named for the trust path, resolves Bash through
+`command -p`, and replaces itself with that clean interpreter. Its
 preflight refuses every raw exported-function environment entry before creating
 artifacts, and the normal sanitizer is a second defense before either Python
 launch.
-It creates a dedicated process group, handles HUP, INT, QUIT, and TERM even when
-the invoking shell inherited an ignored signal, resumes stopped work, waits with
-a deadline, and escalates boundedly when the leader or another process in that
+It creates a dedicated process group and, after the supervisor has launched,
+handles HUP, INT, QUIT, and TERM even when the invoking shell inherited an
+ignored signal. Signals delivered earlier in the bootstrap can still retain
+their inherited disposition. The supervisor resumes stopped work, waits with a
+deadline, and escalates boundedly when the leader or another process in that
 group ignores the signal. On Linux it also becomes a child subreaper before
 launch, so orphaned descendants are reparented to and reaped by the supervisor
 rather than leaving a zombie-only group that POSIX `kill(0)` cannot distinguish
