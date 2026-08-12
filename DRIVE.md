@@ -4,7 +4,7 @@
 `docs/specs/backlog-execution-plan.md` (#30–#66, exact set in that plan); the
 Beads graph created from the reviewed plan will be the ONLY work this drive may
 take.
-**Phase:** GRAPH · **Bead:** n/a (update/polish the reviewed 33-row graph)
+**Phase:** SHAPE · **Bead:** n/a (polish exposed a bootstrap graph contract gap)
 · **Branch:** `plan/backlog-execution`
 **Pending:** —
 **Gate:** `./check.sh`
@@ -47,12 +47,21 @@ take.
   the pre-supervisor ignored-signal startup window), Fable/high reported
   `NO BLOCKING FINDINGS`, and `./check.sh` exited 0 (26 installer, 124 bot-gate,
   and 70 drive-status fixtures).
+- Updated all 33 existing beads in place at `c921749`, preserving IDs and
+  producing the reviewed 24-edge graph; exact field/body, label, cycle, and ready
+  audits passed.
+- Ran five fresh read-only polish passes. Coverage mapping passed, while the
+  critical-path passes found that E1/E3 bootstrap ordering was not encoded in the
+  graph, closure metadata needed an explicit merge between bootstrap stages, E3
+  was materially undersized, and several shared owners/acceptance commands were
+  implicit. Returned to SHAPE and accepted those corrections.
 
 ## Now
 
-Update the existing 33 flat beads in place from the reviewed plan, preserving all
-generated IDs, and change the intentional dependency set from 22 to 24 edges.
-Then run the required polish passes and the independent second-model graph audit.
+Re-run pinned Codex xhigh and Fable/high blocking reviews on the polish-amended
+plan. Once both pass, update the existing 33 flat beads in place from 24 to 37
+edges while preserving every generated ID, then rerun focused polish and the
+independent second-model graph audit.
 
 ## Next
 

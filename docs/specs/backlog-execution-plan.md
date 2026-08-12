@@ -2,7 +2,8 @@
 
 ## Status
 
-SHAPE cleared on 2026-08-12 after returning from GRAPH polish. The first pinned Codex xhigh
+Returned to SHAPE again on 2026-08-12 after the first post-amendment GRAPH
+polish. The first pinned Codex xhigh
 review at `bceb919` reported no P0/P1 findings, but translation exposed missing
 API, failure, recovery, and fixture detail in later rows. After those amendments,
 a fresh pinned Codex review found two inherited-signal defects in the canonical
@@ -12,8 +13,13 @@ the missing B2d→B2c edge and an unattested E3 status schema. Both corrections 
 its valid lower-severity refinements are incorporated. On the final reviewed tree
 at `9965c24`, pinned `gpt-5.6-sol`/xhigh Codex reported no P0/P1 and Fable/high
 reported `NO BLOCKING FINDINGS`; `./check.sh` exited 0 with 26 installer, 124
-bot-gate, and 70 drive-status fixtures. GRAPH may now update the existing store in
-place. This plan covers the 29 GitHub
+bot-gate, and 70 drive-status fixtures. GRAPH then updated the 33 rows and 24
+edges exactly, but five fresh polish passes found that the P0 E1→E3 bootstrap was
+only prose, E1/E3 closure metadata was not fully landed between stages, and a few
+shared owners/acceptance commands remained implicit. The plan now encodes the
+bootstrap barrier as edges, serializes skills/metadata lanes, and incorporates
+the accepted sizing, ownership, and command findings. It requires fresh blocking
+Codex and Fable review before the graph is updated again. This plan covers the 29 GitHub
 issues that were open in `douglaz/skills` on 2026-08-11. GitHub remains the
 external source of issue identity; Beads holds the executable dependency graph.
 
@@ -112,8 +118,10 @@ Turn the current flat issue list into a sequenced, testable delivery program tha
   the 33 table rows, and flushed 22 edges before polish returned this drive to
   SHAPE. After this amended plan passes review, update that existing graph in
   place with `br`; do not rerun `br init`, delete the database, recreate IDs, or
-  hand-edit the JSONL. The amended table deliberately adds F2→E3 and B2d→B2c,
-  bringing the reviewed target to 24 edges.
+  hand-edit the JSONL. The first amendment added F2→E3 and B2d→B2c, reaching 24
+  edges at `c921749`. This polish amendment adds the executable E1→E3 bootstrap
+  barrier and A3a→A3b content ordering, removes the unsupported E2c→E2a and
+  G2→G1 constraints, and targets 37 edges.
 - The previous `DRIVE.md` described PR #64 after it had already merged. This plan
   replaces that stale record rather than continuing its HARDEN phase.
 - Exact issue scope:
@@ -261,18 +269,41 @@ field is absent, mistyped, or ambiguous.
 5. Run Codex-heavy work through `orchestrating-with-rb-lite`; use
    `testing-with-rb-lite` when the deliverable itself is a test or live gate.
 6. A reviewer finding is a hypothesis. Reproduce it before accepting it.
-7. Do not run two implementers against the same worktree or file ownership lane.
+7. Run at most one `executor-skills` bead at a time, regardless of how many the
+   ready query returns. Before selecting it, atomically create a lane reservation
+   directory under the Git common directory containing the exact bead ID, branch,
+   coordinator identity, and start time; an existing live or unknown reservation
+   blocks dispatch, and stale recovery requires explicit evidence rather than PID
+   age. Hold that reservation through work-PR merge or explicit abandonment and
+   verified cleanup, including the corresponding closure metadata PR merge. The
+   external `executor-rb-lite` lane may run concurrently
+   once ready because it owns another repository; authority beads are reported,
+   never implemented speculatively. This serialization is intentional: current
+   ready rows share installer, reviewer-panel, and skill files in ways that are not
+   faithfully representable as semantic dependency edges.
 8. Bootstrap the P0 Beads safety owners before normal scheduling. GRAPH may perform
    its reviewed in-place update as one coordinator-owned, serialized transaction:
    save the exact clean JSONL, require the pinned `sync --status --json` fields and
    SHA-256 to agree, use only `br --no-auto-flush --no-auto-import` mutations,
    explicitly flush once, and field-diff every ID against the saved bytes allowing
-   only the reviewed graph changes. After that update, dispatch E1 first. Once E1
-   merges, close E1 through that same saved-bytes/status/explicit-flush procedure,
-   then dispatch E3; make no other scoped Beads query or mutation until E3 lands.
-   Close E3 with its newly landed helper. Thereafter every scheduler query and
+   only the reviewed graph changes. The graph encodes this barrier: E1 is the sole
+   initial root, E3 depends on E1, and every otherwise dependency-free row depends
+   on E3. After that update, dispatch E1 first. Once its work PR merges, close E1
+   through the saved-bytes/status/explicit-flush procedure on a dedicated metadata
+   branch, commit only that JSONL closure plus `DRIVE.md`, run the repository gate
+   and independent review, and merge the metadata PR before refreshing/importing
+   clean `master` and dispatching E3. Make no other scoped Beads query or mutation
+   before that merge. After E3's work PR merges, repeat the dedicated metadata
+   transaction using E3's newly landed helper; merge E3's closure PR and refresh
+   clean `master` before normal scheduling. Thereafter every scheduler query and
    mutation uses E3. Any unexpected ID/field/body difference restores the saved
    bytes, rebuilds the DB from them, and blocks scheduling for recovery.
+9. Permit at most one outstanding Beads closure metadata branch/PR. It starts from
+   latest clean `master`, owns exactly one bead's evidence/status plus the matching
+   `DRIVE.md` transition, and remains exclusive through merge, abandonment, or
+   explicit recovery. The E3 operation lock protects DB/JSONL mutation; this
+   longer-lived coordinator rule protects the tracked JSONL while a closure PR is
+   under review and across worktrees.
 
 ## Workstream A — merge and admission integrity
 
@@ -348,6 +379,8 @@ into the report. Never use a predictable `${TMPDIR}/merge-evidence-N.json`,
 follow a pre-created symlink, or continue after capture/read/cleanup failure.
 Fixtures cover hostile TMPDIR entries, create/write/read failure, and two
 concurrent captures. Run them and `./check.sh`. Do not absorb A3a or A3c.
+**Depends on:** A1 and A3a; A3a creates the shared fixture this child extends,
+so these two rows must not be dispatched together.
 
 **A3c, P1 — exclude closure PRs from work-PR resume.** Own the duplicated matching
 query consumers in `skills/rb-lite-backlog-drain/SKILL.md` and
@@ -448,8 +481,9 @@ the caller notices.
 
 - `skills/multi-reviewer-loop-delegating-edits/SKILL.md`
 - `skills/multi-reviewer-loop/references/reviewer-panel.md`
-- a new tested helper under `skills/multi-reviewer-loop/scripts/`, if review
-  confirms that a shell helper is the smallest fact owner
+- exact helper `skills/multi-reviewer-loop/scripts/delegated-edit-isolation`
+- exact direct test
+  `skills/multi-reviewer-loop/scripts/delegated-edit-isolation.test`
 
 **Required behavior**
 
@@ -504,6 +538,10 @@ and must not be inferred from this plan.
 - source HEAD/index/allowed-path drift while the implementer runs; and
 - a second cooperating writer attempting to edit while the transaction lock is
   held.
+
+Run `skills/multi-reviewer-loop/scripts/delegated-edit-isolation.test` and then
+`./check.sh`, recording both real statuses and requiring zero; wire the direct
+test into the aggregate gate.
 
 ### B2. Remaining #34 safety children
 
@@ -730,6 +768,19 @@ cleanup failure cannot be reported as success. Run that fixture and
 
 Use a portable no-shell reviewer boundary through the single runner from C1:
 
+Create exact companion owner:
+
+- `skills/reviewer-isolation/SKILL.md`;
+- `skills/reviewer-isolation/scripts/build-review-bundle`; and
+- `skills/reviewer-isolation/scripts/reviewer-isolation.test`.
+
+Migrate the bundle/isolation call sites in
+`skills/multi-reviewer-loop/references/reviewer-panel.md`,
+`skills/second-model-bead-audit/references/reviewer-panel.md`,
+`skills/orchestrating-with-rb-lite/references/harden-until-clean.md`, and
+`skills/pr-with-codex-bot-review/SKILL.md`; callers resolve the exact installed
+companion and do not duplicate bundle construction.
+
 1. remove `Bash` from `--allowedTools` and include it in
    `--disallowedTools`; require `--no-session-persistence`, `--safe-mode`,
    `--strict-mcp-config`, `--mcp-config '{"mcpServers":{}}'`, and an exact
@@ -803,6 +854,10 @@ and proves neither helper executes and the native diff is bundled. The ignored
 file must be absent from the snapshot, and no refusal case may launch the
 reviewer.
 
+Wire `skills/reviewer-isolation/scripts/reviewer-isolation.test` into
+`check.sh`; acceptance runs that test directly, `./install.test`, and
+`./check.sh`, recording every real status and requiring all three to be zero.
+
 ## Workstream D — installer and upgrade correctness
 
 ### D1. Old-Bash and empty discovery — issues #61, #38, and #65
@@ -817,6 +872,8 @@ reviewer.
 Establish a Bash 4.0–4.3 execution strategy, guard empty argv, and make empty
 skill discovery emit no phantom skill. The matching #65 empty-array checkbox is
 the same implementation, not a second patch.
+Run the focused old-Bash argv and empty-discovery cases in `./install.test`, then
+run `./check.sh`; record both real statuses and require zero.
 
 ### D2. Re-exec provenance — issue #62 and #65 marker diagnostic
 
@@ -845,6 +902,9 @@ Parse the minimal YAML scalar spellings Tau accepts: plain, single-quoted,
 double-quoted, and valid trailing comments. Continue rejecting malformed
 frontmatter, duplicate keys, and real mismatches without adding a heavyweight
 dependency.
+Run the plain/single-quoted/double-quoted/trailing-comment and
+malformed/duplicate/mismatch cases in `./install.test`, then run `./check.sh`;
+record both real statuses and require zero.
 
 ## Workstream E — Beads and generated workflow safety
 
@@ -992,7 +1052,9 @@ Create:
   panel is not evidence that parallel review is broken and must not recommend
   serialization. Fixtures feed an API abort, an actual signal, and one failed
   parallel round and assert the bounded diagnosis text/outcome. Run it and
-  `./check.sh`.
+  `./check.sh`. This row has no semantic dependency on E2a; both merely originate
+  in issue #33 and the serialized `executor-skills` lane prevents concurrent file
+  ownership.
 
 The E2b noninteractive interface is pinned to installed `br 0.2.19` by this
 disposable-repository measurement:
@@ -1023,7 +1085,7 @@ with #47's fact-ownership policy.
 
 ### E3. Exact closure command — issue #65
 
-**Priority:** P0. **Effort:** extra small.
+**Priority:** P0. **Effort:** extra large.
 
 Align every live scoped closure consumer with the canonical fail-closed closure
 command and explicit flush behavior. Ownership includes
@@ -1144,8 +1206,17 @@ failure, disabled auto-flush plus forced flush failure and successful
 compensation, restore/reopen/re-flush failure retaining the recovery lock,
 exact-ID selection, dependents never escaping during compensation, successful
 notes-plus-close, a clean newer JSONL explicitly imported before `br ready`, and
-dirty/DB-newer/hash-mismatch status refusing without export. Run both tests,
+dirty/DB-newer/hash-mismatch status refusing without export. Run all three direct
+and consumer tests,
 `./install.test`, and `./check.sh`.
+
+Implement E3 in three reviewed internal stages without closing the bead between
+them: (1) lock plus read-only resolver/status reconciliation, (2) immutable
+evidence plus close/flush/compensation/recovery, and (3) migrate all three
+consumers and wire aggregate/selective-install tests. Use hard stops of 1,600
+production lines and 3,000 fixture lines across the new owner and migrations.
+Crossing either budget, adding another lifecycle owner, or needing a fourth stage
+returns to SHAPE for an explicit split that preserves E3 as the bootstrap barrier.
 
 ## Workstream F — Drive/rb-lite controller and convergence
 
@@ -1512,7 +1583,7 @@ This is post-commit evidence and is not B1's delegated-edit isolation mechanism.
 
 ### G2. Executable-document harness — issue #49
 
-**Priority:** P2. **Effort:** large. **Depends on:** G1.
+**Priority:** P2. **Effort:** large. **Depends on:** E3 bootstrap only.
 
 Create exact companion owner:
 
@@ -1558,6 +1629,7 @@ mutation fixture first updates the copied manifest's source digest so it reaches
 execution rather than failing the generic drift guard, then must make the named
 property assertion fail; assert the failure diagnostic names that property.
 Then run `./check.sh`.
+G2 does not consume G1; G3 independently consumes both owners.
 
 ### G3. Managed-block length decision — issue #50
 
@@ -1572,8 +1644,14 @@ managed paragraph with the repository's existing folded-description/word-count
 conventions. Shrink only if every sub-rule remains actionable and the G2
 registered examples still carry the removed operational detail; otherwise
 retain it and record why. There is no required pre-fix red run for a legitimate
-retain decision. Run G1/G2 evidence and `./check.sh` after any tracked edit; a
-notes-only retain decision records the exact measurement commands and statuses
+retain decision. After any tracked edit run
+`skills/verify-commit/scripts/verify-commit.test`,
+`skills/executable-docs/scripts/executable-docs.test`,
+`skills/executable-docs/scripts/executable-docs --document
+skills/agents-md/references/behavioural-claims.md --manifest
+skills/executable-docs/manifests/behavioural-claims.json`, and `./check.sh`,
+recording all real statuses and requiring zero. A notes-only retain decision
+records the exact inventory and word-count commands plus their real statuses
 instead.
 
 ## Complete execution-bead table
@@ -1586,43 +1664,47 @@ the body. Every row gets label `drive-open-issues`; B0 and F2r get
 
 | Bead | Priority | GitHub | Depends on | Deliverable |
 |---|---:|---|---|---|
-| A1 | P0 | #42 | — | Tip-scope bot review objects |
+| A1 | P0 | #42 | E3 | Tip-scope bot review objects |
 | A2 | P1 | #66 | A1 | Traceable per-thread disposition |
 | A3a | P1 | #65 | A1 | Preserve first degraded exit-4 evidence |
-| A3b | P1 | #65 | A1 | Private unique post-merge evidence |
+| A3b | P1 | #65 | A1, A3a | Private unique post-merge evidence |
 | A3c | P1 | #65 | A1 | Exclude closure PRs from work-PR resume |
-| A4a | P3 | #65 | — | Drive routing wording and trigger fixture |
-| A4b | P3 | #65 | — | Adjudicate moved backlog examples |
-| B0 | P0 | #41, #43, #34, #65 | — | Record the human dirty-state decision |
+| A4a | P3 | #65 | E3 | Drive routing wording and trigger fixture |
+| A4b | P3 | #65 | E3 | Adjudicate moved backlog examples |
+| B0 | P0 | #41, #43, #34, #65 | E3 | Record the human dirty-state decision |
 | B1d | P0 | #41, #43, #34, #65 | B0 | Delegated-edit design and fixture contract |
 | B1 | P0 | #41, #43, #34, #65 | B1d | Delegated-edit isolation implementation |
-| B2a | P1 | #34 | — | Unsafe red evidence blocks completion |
-| B2b | P0 | #34 | — | Preserve colocated tests during inversion |
+| B2a | P1 | #34 | E3 | Unsafe red evidence blocks completion |
+| B2b | P0 | #34 | E3 | Preserve colocated tests during inversion |
 | B2c | P2 | #34 | C1 | Tested panel shutdown/escape |
 | B2d | P2 | #34 | G1, B2c | Do not mask verification execution errors |
-| B2e | P0 | #34 | — | Compare flush against saved bytes |
-| C1 | P1 | #53–#58, #60 | — | Shared bounded Claude reviewer runner |
+| B2e | P0 | #34 | E3 | Compare flush against saved bytes |
+| C1 | P1 | #53–#58, #60 | E3 | Shared bounded Claude reviewer runner |
 | C2 | P1 | #51 | C1 | Bound rb-lite reviewer model |
 | C3 | P0 | #59 | C1 | Enforced reviewer isolation |
-| D1 | P2 | #61, #38, #65 | — | Old-Bash argv and empty discovery |
+| D1 | P2 | #61, #38, #65 | E3 | Old-Bash argv and empty discovery |
 | D2 | P0 | #62, #65 | D1 | Re-exec provenance and marker diagnostic |
 | D3 | P2 | #63 | D1 | YAML-equivalent companion names |
 | E1 | P0 | #44, #65 | — | Fail-closed JSONL path ownership |
-| E2a | P0 | #33 | — | Resolve generated protocol conflict |
+| E2a | P0 | #33 | E3 | Resolve generated protocol conflict |
 | E2b | P2 | #33 | E2a | Noninteractive generated behavior |
-| E2c | P2 | #33 | E2a | Correct panel diagnostics |
+| E2c | P2 | #33 | E3 | Correct panel diagnostics |
 | E3 | P0 | #65 | E1 | Exact fail-closed closure command |
-| F1 | P2 | #47, #33 | — | Deduplication and fact ownership |
+| F1 | P2 | #47, #33 | E3 | Deduplication and fact ownership |
 | F2 | P1 | #48 | C2, E3 | Upstream synchronous checkpoint seam |
 | F2r | P1 | #48 | F2 | Human-authorized release publication |
 | F3 | P1 | #48, #30, #31, #35 | C1, F2r | Foreground Drive controller |
-| G1 | P2 | #32, #34 | — | Read-only commit verifier |
-| G2 | P2 | #49 | G1 | Executable-document harness |
+| G1 | P2 | #32, #34 | E3 | Read-only commit verifier |
+| G2 | P2 | #49 | E3 | Executable-document harness |
 | G3 | P3 | #50 | G1, G2 | Managed-block length decision |
 
 Constraints:
 
 - Only one owner edits the delegated-edit or panel-runner file set at a time.
+- The direct E3 edges on otherwise-root rows are deliberate bootstrap barriers,
+  not semantic implementation prerequisites. Retain them until E3 is closed; they
+  make the tracked scheduler agree with global rule 8 instead of relying on a
+  prose exception to `br ready`/`bv` recommendations.
 - B2c remains a consumer-level #34 integration regression after C1 owns the
   lifecycle; E3 remains the exact harden-until-clean close/flush transaction
   after E1 owns resolution. Neither is a duplicate of its prerequisite.
@@ -1666,12 +1748,14 @@ After review, update the existing graph in place into:
   implementation gate; and
 - the exact priority and executor labels in the table.
 
-Before any execution state changes, the exact dependency-free
-`executor-skills` ready set is A1, A4a, A4b, B2a, B2b, B2e, C1, D1, E1, E2a,
-F1, and G1; the `executor-rb-lite` set is empty; and the `authority-human` set
-contains B0. Every later dependency-free table row must likewise appear in its
-lane's uncapped ready set. B1d must close before B1 can enter BUILD. F2 must
-record its upstream issue/PR URL before it can become in progress.
+Before any execution state changes, the exact scoped ready set is only E1 in the
+`executor-skills` lane; both other lanes are empty. After E1's work and closure
+metadata PRs merge, only E3 is ready. After E3's work and closure metadata PRs
+merge, the normal frontier opens to A1, A4a, A4b, B0, B2a, B2b, B2e, C1, D1,
+E2a, E2c, F1, G1, and G2 in their table lanes; rule 7 still permits only one
+active `executor-skills` bead. Every later table row must appear when all its
+prerequisites close. B1d must close before B1 can enter BUILD. F2 must record
+its upstream issue/PR URL before it can become in progress.
 
 ## Completion
 
