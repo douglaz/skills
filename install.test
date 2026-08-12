@@ -719,6 +719,24 @@ gate_fixture_watchdog_ready() {
   return 1
 }
 
+gate_fixture_pidfd_supported() {
+  [[ ${FORCE_NO_PIDFD_FIXTURES:-false} != true ]] || return 1
+  python3 - <<'PY'
+import os
+import signal
+import sys
+
+if not (
+    sys.platform.startswith("linux")
+    and hasattr(os, "pidfd_open")
+    and hasattr(signal, "pidfd_send_signal")
+):
+    raise SystemExit(1)
+fd = os.pidfd_open(os.getpid())
+os.close(fd)
+PY
+}
+
 # Wait for whichever owned child finishes first. The watchdog owns all timeout
 # signals through pidfds; Bash only cancels it by file and reaps both exact jobs.
 gate_fixture_wait_with_watchdog() {
@@ -899,6 +917,11 @@ if [[ -n "$gate_copy_failure" ]]; then
 elif ! $found_gate_start || ! $found_gate_command || ! $found_supervisor; then
   fail "$t" "could not extract the canonical gate wrapper"
 else
+  if gate_fixture_pidfd_supported; then
+    pidfd_signal_fixtures=true
+  else
+    pidfd_signal_fixtures=false
+  fi
   TMPDIR="$gate_tmp" \
     bash "$gate_script" >"$gate_stdout" 2>"$gate_stderr"; rc=$?
   TMPDIR="$gate_tmp" GATE_MODE=success \
@@ -1090,6 +1113,7 @@ PY
   # These are startup handshakes, not behavior deadlines. Allow ten bounded
   # seconds so ordinary scheduler latency cannot turn a correct wrapper into a
   # fixture failure; the timeout cleanup below owns every failure path.
+  if $pidfd_signal_fixtures; then
   (
     mkfifo "$replay_fifo"
     sleep 30 <"$replay_fifo" &
@@ -1366,6 +1390,16 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
     fi
   )
   stop_rc=$(< "$stop_rc_file")
+  else
+    for _signal_output in \
+        "$cooperative_stdout" "$cooperative_stderr" \
+        "$blocked_term_stdout" "$blocked_term_stderr" \
+        "$term_stdout" "$term_stderr" \
+        "$quit_stdout" "$quit_stderr" \
+        "$stop_stdout" "$stop_stderr"; do
+      : >"$_signal_output"
+    done
+  fi
   (
     TMPDIR="$gate_tmp" \
       GATE_MODE=aggregate AGG_STARTED="$aggregate_started" AGG_RELEASE="$aggregate_release" \
@@ -1512,65 +1546,72 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
     fail "$t" "normal-completion orphan reap failed: rc=$normal_orphan_rc stdout=$normal_orphan_output stderr=$normal_orphan_error"
   elif [[ $subreaper_rc -ne 0 ]]; then
     fail "$t" "supervisor did not reap an adopted child: $subreaper_error"
-  elif [[ $replay_rc -ne 143 ]]; then
+  elif $pidfd_signal_fixtures && [[ $replay_rc -ne 143 ]]; then
     fail "$t" "blocked replay ignored TERM: rc=$replay_rc"
-  elif [[ -n "$replay_error" ]]; then
+  elif $pidfd_signal_fixtures && [[ -n "$replay_error" ]]; then
     fail "$t" "blocked replay wrote stderr: $replay_error"
-  elif [[ $cooperative_rc -ne 143 ]]; then
+  elif $pidfd_signal_fixtures && [[ $cooperative_rc -ne 143 ]]; then
     fail "$t" "cooperative TERM gate wrapper exited $cooperative_rc"
-  elif [[ ! -s "$cooperative_child_pid_file" ]]; then
+  elif $pidfd_signal_fixtures && [[ ! -s "$cooperative_child_pid_file" ]]; then
     fail "$t" "cooperative TERM fixture did not record the gate process"
-  elif read -r cooperative_child_pid _ <"$cooperative_child_pid_file" &&
+  elif $pidfd_signal_fixtures &&
+      read -r cooperative_child_pid _ <"$cooperative_child_pid_file" &&
       kill -0 "$cooperative_child_pid" 2>/dev/null; then
     fail "$t" "cooperative TERM left the gate process alive"
-  elif [[ ! -f "$cooperative_signal_marker" ||
+  elif $pidfd_signal_fixtures && [[ ! -f "$cooperative_signal_marker" ||
       $(<"$cooperative_signal_marker") != term-cleanup ]]; then
     fail "$t" "cooperative TERM trap did not run"
-  elif [[ -n "$cooperative_output" || -n "$cooperative_error" ]]; then
+  elif $pidfd_signal_fixtures &&
+      [[ -n "$cooperative_output" || -n "$cooperative_error" ]]; then
     fail "$t" "cooperative TERM exposed output: stdout=$cooperative_output stderr=$cooperative_error"
-  elif [[ $startup_timeout_rc -ne 125 ]]; then
+  elif $pidfd_signal_fixtures && [[ $startup_timeout_rc -ne 125 ]]; then
     fail "$t" "startup-timeout fixture could not start the gate: rc=$startup_timeout_rc"
-  elif [[ $startup_timeout_leaked -ne 0 ]]; then
+  elif $pidfd_signal_fixtures && [[ $startup_timeout_leaked -ne 0 ]]; then
     fail "$t" "startup timeout orphaned the gate process group"
-  elif [[ -n "$startup_timeout_error" ]]; then
+  elif $pidfd_signal_fixtures && [[ -n "$startup_timeout_error" ]]; then
     fail "$t" "startup-timeout fixture wrote stderr: $startup_timeout_error"
-  elif [[ $blocked_term_rc -ne 143 ]]; then
+  elif $pidfd_signal_fixtures && [[ $blocked_term_rc -ne 143 ]]; then
     fail "$t" "blocked parent TERM escaped cancellation: rc=$blocked_term_rc"
-  elif [[ ! -s "$blocked_term_child_pid_file" ]]; then
+  elif $pidfd_signal_fixtures && [[ ! -s "$blocked_term_child_pid_file" ]]; then
     fail "$t" "blocked parent TERM fixture did not record the gate process"
-  elif read -r blocked_term_child_pid _ blocked_term_descendant_pid \
+  elif $pidfd_signal_fixtures &&
+      read -r blocked_term_child_pid _ blocked_term_descendant_pid \
       <"$blocked_term_child_pid_file" &&
       { kill -0 "$blocked_term_child_pid" 2>/dev/null ||
         kill -0 "$blocked_term_descendant_pid" 2>/dev/null; }; then
     fail "$t" "blocked parent TERM left the gate process group alive"
-  elif [[ -n "$blocked_term_output" || -n "$blocked_term_error" ]]; then
+  elif $pidfd_signal_fixtures &&
+      [[ -n "$blocked_term_output" || -n "$blocked_term_error" ]]; then
     fail "$t" "blocked parent TERM exposed output: stdout=$blocked_term_output stderr=$blocked_term_error"
-  elif [[ $term_rc -ne 143 ]]; then
+  elif $pidfd_signal_fixtures && [[ $term_rc -ne 143 ]]; then
     fail "$t" "terminated gate wrapper exited $term_rc"
-  elif [[ ! -s "$term_child_pid_file" ]]; then
+  elif $pidfd_signal_fixtures && [[ ! -s "$term_child_pid_file" ]]; then
     fail "$t" "PID-only TERM fixture did not record the gate process"
-  elif read -r term_child_pid _ term_descendant_pid <"$term_child_pid_file" &&
+  elif $pidfd_signal_fixtures &&
+      read -r term_child_pid _ term_descendant_pid <"$term_child_pid_file" &&
       { kill -0 "$term_child_pid" 2>/dev/null ||
         kill -0 "$term_descendant_pid" 2>/dev/null; }; then
     fail "$t" "PID-only TERM left the gate process group alive"
-  elif [[ -n "$term_output" || -n "$term_error" ]]; then
+  elif $pidfd_signal_fixtures && [[ -n "$term_output" || -n "$term_error" ]]; then
     fail "$t" "terminated gate exposed output: stdout=$term_output stderr=$term_error"
-  elif [[ $quit_rc -ne 131 ]]; then
+  elif $pidfd_signal_fixtures && [[ $quit_rc -ne 131 ]]; then
     fail "$t" "QUIT gate wrapper exited $quit_rc"
-  elif [[ ! -s "$quit_child_pid_file" ]]; then
+  elif $pidfd_signal_fixtures && [[ ! -s "$quit_child_pid_file" ]]; then
     fail "$t" "PID-only QUIT fixture did not record the gate process"
-  elif read -r quit_child_pid _ quit_descendant_pid <"$quit_child_pid_file" &&
+  elif $pidfd_signal_fixtures &&
+      read -r quit_child_pid _ quit_descendant_pid <"$quit_child_pid_file" &&
       { kill -0 "$quit_child_pid" 2>/dev/null ||
         kill -0 "$quit_descendant_pid" 2>/dev/null; }; then
     fail "$t" "PID-only QUIT left the gate process group alive"
-  elif [[ -n "$quit_output" || -n "$quit_error" ]]; then
+  elif $pidfd_signal_fixtures && [[ -n "$quit_output" || -n "$quit_error" ]]; then
     fail "$t" "QUIT gate exposed output: stdout=$quit_output stderr=$quit_error"
-  elif [[ $stop_rc -ne 143 ]]; then
+  elif $pidfd_signal_fixtures && [[ $stop_rc -ne 143 ]]; then
     fail "$t" "stopped gate escaped before termination: rc=$stop_rc"
-  elif read -r stop_child_pid _ <"$stop_child_pid_file" &&
+  elif $pidfd_signal_fixtures &&
+      read -r stop_child_pid _ <"$stop_child_pid_file" &&
       kill -0 "$stop_child_pid" 2>/dev/null; then
     fail "$t" "stopped gate remained alive after PID-only TERM"
-  elif [[ -n "$stop_output" || -n "$stop_error" ]]; then
+  elif $pidfd_signal_fixtures && [[ -n "$stop_output" || -n "$stop_error" ]]; then
     fail "$t" "stopped gate exposed output: stdout=$stop_output stderr=$stop_error"
   elif [[ $aggregate_rc -ne 1 || $aggregate_output != $'aggregate-first\nEXIT=1' ]]; then
     fail "$t" "aggregate gate became rc=$aggregate_rc stdout=$aggregate_output"
