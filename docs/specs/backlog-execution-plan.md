@@ -1094,10 +1094,15 @@ Create:
   covers a branch-and-PR agreement and proves no generic session block is
   installed or human-owned Beads text changed; a compatible minimal repository
   fixture proves the full generated block may be installed unchanged.
-- **E2b, P2:** use `br agents --add --force` (or `--update --force`) only after
-  E2a accepts the preview, so compatible generation is bounded without a TTY.
-  Fixtures cover EOF/noninteractive success after acceptance, noninteractive
-  omission after conflict, and no prompt hang.
+- **E2b, P2:** use exactly `br agents --add --force` only after E2a accepts the
+  preview, so compatible generation is bounded without a TTY. Do not substitute
+  `--update --force` for this initial install: pinned `br 0.2.19` can report
+  “already up to date” with status zero while the managed block is absent. After
+  `--add --force` returns zero, reread `AGENTS.md` and require exactly one complete
+  delimited block whose bytes equal the accepted preview before reporting success.
+  Fixtures cover EOF/noninteractive success after acceptance with that exact
+  byte/delimiter assertion, the zero-status `--update --force` no-op on a
+  block-absent file, noninteractive omission after conflict, and no prompt hang.
 - **E2c, P2:** own the “When the loop misbehaves” guidance in
   `skills/orchestrating-with-rb-lite/SKILL.md` plus executable prose extraction
   fixture `skills/orchestrating-with-rb-lite/scripts/diagnostic-guidance.test`.
@@ -1134,6 +1139,11 @@ $ update_rc=$?
 $ printf 'add=%s update=%s\n' "$add_rc" "$update_rc"
 add=0 update=0
 ```
+
+The `update=0` result is negative compatibility evidence, not an installation
+alternative: in this block-absent fixture it changed no bytes. E2b therefore pins
+the initial write to `--add --force` and verifies the installed block itself
+rather than treating either command's zero status as sufficient.
 
 The skeptic-convergence observation is not a fourth E2 bead; F1 owns it together
 with #47's fact-ownership policy.
