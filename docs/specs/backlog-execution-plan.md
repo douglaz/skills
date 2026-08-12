@@ -822,9 +822,16 @@ installation, missing companion, and wrong declared companion name.
    `git ls-files --others --exclude-standard -z`, compare byte-for-byte, and
    refuse the panel before any external launch if an untracked path is outside
    the allowlist or the allowlist names a path that is no longer untracked;
-4. materialize a sanitized snapshot under that directory from the NUL-safe raw
-   index path/mode set (`git ls-files --stage -z`) plus the current worktree
-   bytes; first inspect `git ls-files -v -z` and refuse every
+4. capture a source token containing `HEAD`, the raw index entries/tree,
+   tracked/untracked/deleted path sets, Git-relevant modes, and content digests;
+   then materialize a sanitized snapshot under that directory from the NUL-safe
+   raw index path/mode set (`git ls-files --stage -z`) plus the current worktree
+   bytes. Open the worktree root and descend each path descriptor-relatively;
+   open every copied tracked and untracked source with `O_NOFOLLOW`, require the
+   `fstat` result to be a regular file owned by the effective UID, and stream
+   copy/hash from that same descriptor. Never copy or hash by reopening the
+   pathname: `git hash-object` on a path follows symlinks. First inspect
+   `git ls-files -v -z` and refuse every
    assume-unchanged or skip-worktree entry; copy regular files byte-for-byte,
    preserve Git-relevant executable mode, and omit only paths proven to be
    tracked deletions; refuse all tracked symlinks and gitlinks rather than risk a
@@ -832,14 +839,18 @@ installation, missing companion, and wrong declared companion name.
    are not deletions, unmerged index stages, or any path/mode/digest mismatch;
    do not use `git archive` or a checkout operation that honors `export-ignore`,
    `export-subst`, or smudge filters;
-5. copy only the allowlisted untracked regular files into both their snapshot
-   paths and numbered bundle paths; do not copy `.git`, ignored files, or any
-   unrelated untracked path;
+5. copy only the allowlisted untracked regular-file descriptors into both their
+   snapshot paths and numbered bundle paths; after every copy, recapture the
+   complete source token and require byte-for-byte equality before publishing
+   the result. Drift removes the incomplete bundle/result and refuses before any
+   reviewer launch. Do not copy `.git`, ignored files, or any unrelated untracked
+   path;
 6. generate a
    tested JSON manifest containing its JSON-escaped original path, numbered copy,
    type, Git-relevant mode (`100755` when executable, otherwise `100644`), and
-   content digest; use `git hash-object --no-filters` on both the original and
-   copy and require equality; fail closed on a non-regular type or any
+   content digest; feed the already-open source descriptor bytes and copied file
+   bytes to `git hash-object --stdin --no-filters` and require equality; fail
+   closed on a non-regular type or any
    enumerate/copy/digest/manifest error;
 7. before copying, refuse any tracked file larger than 16 MiB or a tracked
    snapshot larger than 256 MiB, and refuse any untracked file larger than
@@ -880,7 +891,10 @@ fixture covers the 64 MiB generated-diff boundary. A hostile Git configuration
 fixture installs both `diff.external` and an attribute-backed textconv driver
 and proves neither helper executes and the native diff is bundled. The ignored
 file must be absent from the snapshot, and no refusal case may launch the
-reviewer.
+reviewer. Concurrent-swap fixtures replace a tracked path and an allowlisted
+untracked path—with both regular-file and symlink variants—between enumeration,
+open, copy, and final token validation; every variant must refuse without
+bundling replacement/target bytes or publishing a result.
 
 Wire `skills/reviewer-isolation/scripts/reviewer-isolation.test` into
 `check.sh`; acceptance runs that test directly, `./install.test`, and
