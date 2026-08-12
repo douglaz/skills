@@ -536,6 +536,8 @@ ignored_sigchld_stdout="$WORK/discipline-ignored-sigchld.stdout"
 ignored_sigchld_stderr="$WORK/discipline-ignored-sigchld.stderr"
 cooperative_stdout="$WORK/discipline-cooperative.stdout"
 cooperative_stderr="$WORK/discipline-cooperative.stderr"
+startup_timeout_stdout="$WORK/discipline-startup-timeout.stdout"
+startup_timeout_stderr="$WORK/discipline-startup-timeout.stderr"
 blocked_term_stdout="$WORK/discipline-blocked-term.stdout"
 blocked_term_stderr="$WORK/discipline-blocked-term.stderr"
 replay_stderr="$WORK/discipline-replay.stderr"
@@ -564,6 +566,10 @@ cooperative_rc_file="$WORK/discipline-cooperative.rc"
 cooperative_child_pid_file="$WORK/discipline-cooperative-child.pid"
 cooperative_signal_marker="$WORK/discipline-cooperative-signal"
 cooperative_deadline_marker="$WORK/discipline-cooperative-deadline"
+startup_timeout_started="$WORK/discipline-startup-timeout-started"
+startup_timeout_rc_file="$WORK/discipline-startup-timeout.rc"
+startup_timeout_child_pid_file="$WORK/discipline-startup-timeout-child.pid"
+startup_timeout_leak_file="$WORK/discipline-startup-timeout.leak"
 blocked_term_started="$WORK/discipline-blocked-term-started"
 blocked_term_rc_file="$WORK/discipline-blocked-term.rc"
 blocked_term_child_pid_file="$WORK/discipline-blocked-term-child.pid"
@@ -572,6 +578,7 @@ replay_fifo="$WORK/discipline-replay.fifo"
 replay_started="$WORK/discipline-replay-started"
 replay_done="$WORK/discipline-replay-done"
 replay_rc_file="$WORK/discipline-replay.rc"
+replay_child_pid_file="$WORK/discipline-replay-child.pid"
 replay_deadline_marker="$WORK/discipline-replay-deadline"
 quit_started="$WORK/discipline-quit-started"
 quit_rc_file="$WORK/discipline-quit.rc"
@@ -603,6 +610,82 @@ cat >"$bashenv_python_dir/python3" <<'EOF'
 exec "$BASHENV_REAL_PYTHON" "$@"
 EOF
 chmod +x "$bashenv_python_dir/python3"
+
+# A fixture timeout must stop the caller-visible supervisor and any gate process
+# group it may have created concurrently. Killing only the supervisor can orphan
+# the private gate under PID 1 and poison every signal fixture that follows.
+stop_timed_out_gate_fixture() {
+  local wrapper_pid=$1 child_pid_file=$2
+  local child_pid= candidate=
+  local wrapper_gone=false group_gone=false
+  local _n
+
+  kill -TERM "$wrapper_pid" 2>/dev/null || true
+  for ((_n=1; _n<=200; _n++)); do
+    if [[ -z "$child_pid" && -s "$child_pid_file" ]]; then
+      read -r candidate _ <"$child_pid_file" || candidate=
+      if [[ $candidate != *[!0-9]* && ${candidate:-0} -gt 1 ]]; then
+        child_pid=$candidate
+      else
+        return 1
+      fi
+    fi
+    if [[ -n "$child_pid" ]] && ! $group_gone; then
+      if kill -0 -- "-$child_pid" 2>/dev/null; then
+        kill -TERM -- "-$child_pid" 2>/dev/null || true
+        kill -CONT -- "-$child_pid" 2>/dev/null || true
+      else
+        # Once the original group is absent, never signal this numeric PGID
+        # again: it may be reused by an unrelated process group.
+        group_gone=true
+      fi
+    fi
+    if ! $wrapper_gone && ! kill -0 "$wrapper_pid" 2>/dev/null; then
+      # The same no-reuse rule applies to the caller-visible wrapper PID.
+      wrapper_gone=true
+    fi
+    $wrapper_gone && { [[ -z "$child_pid" ]] || $group_gone; } && break
+    sleep 0.01
+  done
+
+  $wrapper_gone || kill -KILL "$wrapper_pid" 2>/dev/null || true
+  wait "$wrapper_pid" 2>/dev/null || true
+  wrapper_gone=true
+  if [[ -z "$child_pid" && -s "$child_pid_file" ]]; then
+    read -r candidate _ <"$child_pid_file" || candidate=
+    if [[ $candidate == *[!0-9]* || ${candidate:-0} -le 1 ]]; then
+      return 1
+    fi
+    child_pid=$candidate
+  fi
+  if [[ -n "$child_pid" ]] && ! $group_gone; then
+    if kill -0 -- "-$child_pid" 2>/dev/null; then
+      kill -TERM -- "-$child_pid" 2>/dev/null || true
+      kill -CONT -- "-$child_pid" 2>/dev/null || true
+      for ((_n=1; _n<=100; _n++)); do
+        if ! kill -0 -- "-$child_pid" 2>/dev/null; then
+          group_gone=true
+          break
+        fi
+        sleep 0.01
+      done
+      if ! $group_gone; then
+        kill -KILL -- "-$child_pid" 2>/dev/null || true
+        for ((_n=1; _n<=100; _n++)); do
+          if ! kill -0 -- "-$child_pid" 2>/dev/null; then
+            group_gone=true
+            break
+          fi
+          sleep 0.01
+        done
+      fi
+    else
+      group_gone=true
+    fi
+  fi
+  $wrapper_gone && { [[ -z "$child_pid" ]] || $group_gone; }
+}
+
 capture_gate=false
 found_gate_start=false
 found_gate_command=false
@@ -637,13 +720,16 @@ possible_gate_start=false
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == pipeline ]]; then'
         printf '%s\n' '  printf "pipeline-first\n"; false | true; printf "pipeline-last\n"'
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == replay ]]; then'
-        printf '%s\n' '  : >"$STARTED"'
+        printf '%s\n' '  printf "%s %s\n" "$BASHPID" "$PPID" >"$CHILD_PID_FILE"; : >"$STARTED"'
         printf '%s\n' '  python3 -c '\''import sys; sys.stdout.write("x" * 2000000)'\''; : >"$REPLAY_DONE"'
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == cooperative ]]; then'
         printf '%s\n' '  trap '\''printf term-cleanup >"$SIGNAL_MARKER"; exit 143'\'' TERM'
         printf '%s\n' '  printf "%s %s\n" "$BASHPID" "$PPID" >"$CHILD_PID_FILE"'
         printf '%s\n' '  printf "cooperative-sensitive-output\n"; : >"$STARTED"'
         printf '%s\n' '  while :; do sleep 1; done'
+        printf '%s\n' 'elif [[ ${GATE_MODE:-function} == startup-timeout ]]; then'
+        printf '%s\n' '  printf "%s %s\n" "$BASHPID" "$PPID" >"$CHILD_PID_FILE"'
+        printf '%s\n' '  sleep 30; : >"$STARTED"'
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == term ]]; then'
         printf '%s\n' '  trap "" HUP INT TERM'
         printf '%s\n' '  bash -c '\''trap "" HUP INT TERM; while :; do sleep 1; done'\'' & term_descendant=$!'
@@ -781,6 +867,7 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
     sleep 30 <"$replay_fifo" &
     replay_reader_pid=$!
     TMPDIR="$gate_tmp" GATE_MODE=replay STARTED="$replay_started" \
+      CHILD_PID_FILE="$replay_child_pid_file" \
       REPLAY_DONE="$replay_done" \
       bash "$gate_script" >"$replay_fifo" 2>"$replay_stderr" &
     replay_pid=$!
@@ -789,8 +876,11 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
       sleep 0.01
     done
     if [[ ! -f "$replay_done" ]]; then
-      kill -KILL "$replay_pid" 2>/dev/null || true
-      printf '%s' 125 >"$replay_rc_file"
+      if stop_timed_out_gate_fixture "$replay_pid" "$replay_child_pid_file"; then
+        printf '%s' 125 >"$replay_rc_file"
+      else
+        printf '%s' 126 >"$replay_rc_file"
+      fi
     else
       sleep 0.1
       kill -TERM "$replay_pid"
@@ -826,8 +916,11 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
       sleep 0.05
     done
     if [[ ! -f "$cooperative_started" ]]; then
-      kill -KILL "$cooperative_pid" 2>/dev/null
-      printf '%s' 125 >"$cooperative_rc_file"
+      if stop_timed_out_gate_fixture "$cooperative_pid" "$cooperative_child_pid_file"; then
+        printf '%s' 125 >"$cooperative_rc_file"
+      else
+        printf '%s' 126 >"$cooperative_rc_file"
+      fi
     else
       read -r cooperative_child_pid _ <"$cooperative_child_pid_file"
       kill -TERM "$cooperative_pid"
@@ -856,6 +949,38 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
   )
   cooperative_rc=$(< "$cooperative_rc_file")
   (
+    TMPDIR="$gate_tmp" GATE_MODE=startup-timeout \
+      STARTED="$startup_timeout_started" CHILD_PID_FILE="$startup_timeout_child_pid_file" \
+      bash "$gate_script" >"$startup_timeout_stdout" 2>"$startup_timeout_stderr" &
+    startup_timeout_pid=$!
+    for ((_n=1; _n<=200; _n++)); do
+      [[ -s "$startup_timeout_child_pid_file" ]] && break
+      sleep 0.01
+    done
+    if [[ ! -s "$startup_timeout_child_pid_file" ]]; then
+      stop_timed_out_gate_fixture \
+        "$startup_timeout_pid" "$startup_timeout_child_pid_file" || true
+      printf '%s' 126 >"$startup_timeout_rc_file"
+      printf '%s' 0 >"$startup_timeout_leak_file"
+    else
+      read -r startup_timeout_child_pid _ <"$startup_timeout_child_pid_file"
+      if stop_timed_out_gate_fixture \
+          "$startup_timeout_pid" "$startup_timeout_child_pid_file"; then
+        printf '%s' 0 >"$startup_timeout_leak_file"
+      else
+        printf '%s' 1 >"$startup_timeout_leak_file"
+        kill -TERM -- "-$startup_timeout_child_pid" 2>/dev/null || true
+        kill -CONT -- "-$startup_timeout_child_pid" 2>/dev/null || true
+        sleep 0.05
+        kill -KILL -- "-$startup_timeout_child_pid" 2>/dev/null || true
+      fi
+      printf '%s' 125 >"$startup_timeout_rc_file"
+    fi
+  )
+  startup_timeout_rc=$(< "$startup_timeout_rc_file")
+  startup_timeout_leaked=$(< "$startup_timeout_leak_file")
+  startup_timeout_error=$(< "$startup_timeout_stderr")
+  (
     TMPDIR="$gate_tmp" GATE_MODE=term \
       STARTED="$blocked_term_started" CHILD_PID_FILE="$blocked_term_child_pid_file" \
       exec python3 -c '
@@ -874,9 +999,11 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
     sleep 0.05
   done
   if [[ ! -f "$blocked_term_started" ]]; then
-    kill -KILL "$blocked_term_pid" 2>/dev/null || true
-    wait "$blocked_term_pid" 2>/dev/null || true
-    printf '%s' 125 >"$blocked_term_rc_file"
+    if stop_timed_out_gate_fixture "$blocked_term_pid" "$blocked_term_child_pid_file"; then
+      printf '%s' 125 >"$blocked_term_rc_file"
+    else
+      printf '%s' 126 >"$blocked_term_rc_file"
+    fi
   else
     read -r blocked_term_child_pid _ _ <"$blocked_term_child_pid_file"
     kill -TERM "$blocked_term_pid"
@@ -912,8 +1039,11 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
       sleep 0.05
     done
     if [[ ! -f "$term_started" ]]; then
-      kill -KILL "$term_pid" 2>/dev/null
-      printf '%s' 125 > "$term_rc_file"
+      if stop_timed_out_gate_fixture "$term_pid" "$term_child_pid_file"; then
+        printf '%s' 125 > "$term_rc_file"
+      else
+        printf '%s' 126 > "$term_rc_file"
+      fi
     else
       read -r term_child_pid _ _ <"$term_child_pid_file"
       kill -TERM "$term_pid"
@@ -950,8 +1080,11 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
       sleep 0.05
     done
     if [[ ! -f "$quit_started" ]]; then
-      kill -KILL "$quit_pid" 2>/dev/null
-      printf '%s' 125 >"$quit_rc_file"
+      if stop_timed_out_gate_fixture "$quit_pid" "$quit_child_pid_file"; then
+        printf '%s' 125 >"$quit_rc_file"
+      else
+        printf '%s' 126 >"$quit_rc_file"
+      fi
     else
       read -r quit_child_pid _ _ <"$quit_child_pid_file"
       kill -QUIT "$quit_pid"
@@ -988,22 +1121,11 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
       sleep 0.05
     done
     if [[ ! -f "$stop_started" || ! -s "$stop_child_pid_file" ]]; then
-      kill -STOP "$stop_script_pid" 2>/dev/null || true
-      for ((_n=1; _n<=100; _n++)); do
-        [[ -s "$stop_child_pid_file" ]] && break
-        sleep 0.01
-      done
-      if [[ -s "$stop_child_pid_file" ]]; then
-        read -r stop_child_pid _ <"$stop_child_pid_file"
-        kill -TERM "$stop_script_pid" 2>/dev/null || true
-        kill -TERM -- "-$stop_child_pid" 2>/dev/null || true
-        kill -CONT -- "-$stop_child_pid" 2>/dev/null || true
+      if stop_timed_out_gate_fixture "$stop_script_pid" "$stop_child_pid_file"; then
+        printf '%s' 125 >"$stop_rc_file"
       else
-        kill -KILL "$stop_script_pid" 2>/dev/null || true
+        printf '%s' 126 >"$stop_rc_file"
       fi
-      kill -CONT "$stop_script_pid" 2>/dev/null || true
-      wait "$stop_script_pid" 2>/dev/null || true
-      printf '%s' 125 >"$stop_rc_file"
     else
       read -r stop_child_pid _ <"$stop_child_pid_file"
       stop_observed=false
@@ -1013,12 +1135,14 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
         sleep 0.05
       done
       if ! $stop_observed; then
-        kill -TERM "$stop_script_pid" 2>/dev/null || true
-        printf '%s' 125 >"$stop_rc_file"
+        if stop_timed_out_gate_fixture "$stop_script_pid" "$stop_child_pid_file"; then
+          printf '%s' 125 >"$stop_rc_file"
+        else
+          printf '%s' 126 >"$stop_rc_file"
+        fi
       elif ! kill -0 "$stop_script_pid" 2>/dev/null; then
-        kill -TERM "$stop_child_pid" 2>/dev/null || true
-        kill -CONT "$stop_child_pid" 2>/dev/null || true
-        wait "$stop_script_pid" 2>/dev/null || true
+        stop_timed_out_gate_fixture \
+          "$stop_script_pid" "$stop_child_pid_file" || true
         printf '%s' 126 >"$stop_rc_file"
       else
         kill -TERM "$stop_script_pid"
@@ -1170,6 +1294,12 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
     fail "$t" "cooperative TERM trap did not run"
   elif [[ -n "$cooperative_output" || -n "$cooperative_error" ]]; then
     fail "$t" "cooperative TERM exposed output: stdout=$cooperative_output stderr=$cooperative_error"
+  elif [[ $startup_timeout_rc -ne 125 ]]; then
+    fail "$t" "startup-timeout fixture could not start the gate: rc=$startup_timeout_rc"
+  elif [[ $startup_timeout_leaked -ne 0 ]]; then
+    fail "$t" "startup timeout orphaned the gate process group"
+  elif [[ -n "$startup_timeout_error" ]]; then
+    fail "$t" "startup-timeout fixture wrote stderr: $startup_timeout_error"
   elif [[ $blocked_term_rc -ne 143 ]]; then
     fail "$t" "blocked parent TERM escaped cancellation: rc=$blocked_term_rc"
   elif [[ ! -s "$blocked_term_child_pid_file" ]]; then
