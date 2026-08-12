@@ -46,7 +46,7 @@ than occurrences, and demanding *zero* occurrences rejects a correct partial rem
 ```bash
 (
   _chk=$(mktemp) || { echo "cannot create the scratch file — do NOT report the commit verified"; exit 1; }
-  trap 'rm -f "$_chk"' EXIT
+  trap 'unlink "$_chk"' EXIT
   # ...the three loops, using `grep -Fq --` / `grep -Fo | wc -l || true` on a captured file.
 )
 ```
@@ -66,14 +66,14 @@ exit 0. Group the entire gate, use a fresh log, save the real status, and return
 that status after reading the log:
 
 ```bash
-(
-  _gate_dir=$(mktemp -d) || { echo "cannot create gate directory"; exit 1; }
-  _gate_log="$_gate_dir/output.log"
-  _gate_script="$_gate_dir/gate.bash"
-  _gate_runner="$_gate_dir/supervisor.py"
+_gate_dir=$(mktemp -d) || { echo "cannot create gate directory"; exit 1; }
+_gate_log="$_gate_dir/output.log"
+_gate_script="$_gate_dir/gate.bash"
+_gate_runner="$_gate_dir/supervisor.py"
+_gate_pending="$_gate_dir/exec.pending"
   _gate_remove_dir() {
     _gate_remove_rc=0
-    for _gate_file in "$_gate_log" "$_gate_script" "$_gate_runner"; do
+    for _gate_file in "$_gate_log" "$_gate_script" "$_gate_runner" "$_gate_pending"; do
       if [ -e "$_gate_file" ] && ! unlink "$_gate_file"; then
         _gate_remove_rc=1
       fi
@@ -108,13 +108,16 @@ import subprocess
 import sys
 import time
 
-root, bash = sys.argv[1:3]
+root, bash, watchdog_pid, pending_path = sys.argv[1:5]
+watchdog_pid = int(watchdog_pid)
 log_path = os.path.join(root, "output.log")
 gate_path = os.path.join(root, "gate.bash")
 runner_path = os.path.join(root, "supervisor.py")
 managed_signals = (signal.SIGHUP, signal.SIGINT, signal.SIGQUIT, signal.SIGTERM)
 child = None
 cancelled = None
+signal_ready = False
+pending_signal = None
 
 class GateCancelled(BaseException):
     def __init__(self, signum):
@@ -122,6 +125,10 @@ class GateCancelled(BaseException):
 
 
 def receive_signal(signum, _frame):
+    global pending_signal
+    if not signal_ready:
+        pending_signal = signum
+        return
     raise GateCancelled(signum)
 
 
@@ -179,7 +186,7 @@ def stop_group(signum):
 
 def remove_private_dir():
     ok = True
-    for path in (log_path, gate_path, runner_path):
+    for path in (log_path, gate_path, runner_path, pending_path):
         if os.path.lexists(path):
             result = subprocess.run(
                 ["unlink", path],
@@ -202,19 +209,39 @@ def remove_private_dir():
 for managed_signal in managed_signals:
     signal.signal(managed_signal, receive_signal)
 
+try:
+    os.unlink(pending_path)
+except FileNotFoundError:
+    pass
+try:
+    os.kill(watchdog_pid, signal.SIGTERM)
+except ProcessLookupError:
+    pass
+try:
+    os.waitpid(watchdog_pid, 0)
+except ChildProcessError:
+    pass
+
 rc = 1
 try:
+    signal_ready = True
+    if pending_signal is not None:
+        raise GateCancelled(pending_signal)
     environment = os.environ.copy()
     environment["BASH_ENV"] = ""
     with open(log_path, "wb") as output:
-        child = subprocess.Popen(
-            [bash, "--noprofile", "--norc", "-eo", "pipefail", gate_path],
-            stdin=subprocess.DEVNULL,
-            stdout=output,
-            stderr=subprocess.STDOUT,
-            env=environment,
-            start_new_session=True,
-        )
+        previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, managed_signals)
+        try:
+            child = subprocess.Popen(
+                [bash, "--noprofile", "--norc", "-eo", "pipefail", gate_path],
+                stdin=subprocess.DEVNULL,
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                env=environment,
+                start_new_session=True,
+            )
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
         rc = child.wait()
         if rc < 0:
             rc = 128 - rc
@@ -268,15 +295,27 @@ __AGENT_SUPERVISOR__
     echo "cannot write gate supervisor"
     exit 1
   fi
-  trap - EXIT
-  exec python3 "$_gate_runner" "$_gate_dir" "${BASH:-bash}"
-)
+: >"$_gate_pending" || { echo "cannot create exec marker"; exit 1; }
+(
+  sleep 2
+  if [ -e "$_gate_pending" ]; then
+    for _gate_file in "$_gate_log" "$_gate_script" "$_gate_runner" "$_gate_pending"; do
+      [ ! -e "$_gate_file" ] || unlink "$_gate_file" 2>/dev/null || :
+    done
+    rmdir "$_gate_dir" 2>/dev/null || :
+  fi
+) &
+_gate_exec_watchdog=$!
+exec python3 "$_gate_runner" "$_gate_dir" "${BASH:-bash}" \
+  "$_gate_exec_watchdog" "$_gate_pending"
 ```
 
-The subshell isolates setup cleanup from the caller, then `exec` makes the Python
-supervisor the wrapper process. Put self-contained gate commands between the
-delimiter lines. The supervisor runs them in a fresh Bash from a private script
-with closed stdin, cleared `BASH_ENV`, disabled startup files, and `pipefail`.
+Run this as a standalone final command, not as sourced setup for later commands:
+`exec` makes the Python supervisor the caller-visible wrapper process, while a
+failed `exec` leaves the shell cleanup trap armed. Put self-contained gate
+commands between the delimiter lines. The supervisor runs them in a fresh Bash
+from a private script with closed stdin, cleared `BASH_ENV`, disabled startup
+files, and `pipefail`.
 It creates a dedicated process group, handles HUP, INT, QUIT, and TERM even when
 the invoking shell inherited an ignored signal, resumes stopped work, waits with
 a deadline, and escalates boundedly when the leader or a descendant ignores the
