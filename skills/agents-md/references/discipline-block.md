@@ -342,9 +342,10 @@ try:
         print("cannot remove gate directory", file=sys.stderr)
         rc = rc if rc != 0 else 1
     if cancelled is None:
-        signal_ready = False
         signal.pthread_sigmask(signal.SIG_BLOCK, managed_signals)
-        ignore_managed_signals()
+        signal_ready = False
+        if pending_signal is not None:
+            raise GateCancelled(pending_signal)
         print(f"EXIT={rc}")
 except GateCancelled as cancellation:
     if "stdout_fd" in locals() and "stdout_was_blocking" in locals():

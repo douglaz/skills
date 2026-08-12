@@ -898,10 +898,24 @@ Every scoped scheduler invokes each `br ready`, `br list`, and mutation through
 `with-lock`; a separate check followed by an unlocked command is forbidden.
 `with-lock` atomically acquires one exclusive recovery/transaction lock under
 the resolved Beads directory, checks for retained recovery state while holding
-it, runs the one command without auto-import/auto-flush, performs any required
-explicit flush and verification, and releases only after that operation is
-quiescent. Thus no scheduler can pass a check and then observe or mutate the DB
-while close compensation is in flight.
+it, and runs E1 against the clean tracked JSONL. Before any query or mutation it
+runs `br sync --status --json` and requires healthy audit output, zero dirty
+issues, and no DB-newer state. If the JSONL is newer, it performs an explicit
+`br sync --import-only`, then re-runs status and requires DB/JSONL freshness
+to agree; specifically, `dirty_count` is zero, both `jsonl_newer`
+and `db_newer` are false, health/audit is healthy, and the reported JSONL hash
+equals E1's still-current saved bytes. Import/status failure retains the lock
+and changes nothing further. An equal status proceeds. Any DB-newer, dirty, ambiguous,
+external-JSONL, hash-mismatch, or unhealthy state is
+`BEADS_RECOVERY_REQUIRED`, never permission to flush the cache over the tracked
+graph.
+
+Only after that reconciliation does `with-lock` run the one requested command
+with auto-import/auto-flush disabled, perform any required explicit flush and
+verification, and release after the operation is quiescent. Thus no scheduler
+can pass a check and then observe or mutate the DB while close compensation is
+in flight, and no old ignored SQLite cache can schedule or overwrite work newly
+merged into the tracked JSONL.
 
 `close` acquires that same lock directly and is not nested under `with-lock`. It
 runs E1 before its first mutation, saves a private pre-transaction JSONL plus
@@ -948,8 +962,10 @@ consumer extraction fixture. Direct and consumer fixtures cover a competing
 scheduler blocked across the entire query/mutation, notes-update failure, close
 failure, disabled auto-flush plus forced flush failure and successful
 compensation, restore/reopen/re-flush failure retaining the recovery lock,
-exact-ID selection, dependents never escaping during compensation, and
-successful notes-plus-close. Run both tests, `./install.test`, and `./check.sh`.
+exact-ID selection, dependents never escaping during compensation, successful
+notes-plus-close, a clean newer JSONL explicitly imported before `br ready`, and
+dirty/DB-newer/hash-mismatch status refusing without export. Run both tests,
+`./install.test`, and `./check.sh`.
 
 ## Workstream F — Drive/rb-lite controller and convergence
 
