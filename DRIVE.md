@@ -4,11 +4,11 @@
 `docs/specs/backlog-execution-plan.md` (#30–#66, exact set in that plan); the
 Beads graph created from the reviewed plan will be the ONLY work this drive may
 take.
-**Phase:** SHAPE · **Bead:** n/a (polish returned gaps to plan space)
+**Phase:** GRAPH · **Bead:** n/a (update/polish the reviewed 33-row graph)
 · **Branch:** `plan/backlog-execution`
 **Pending:** —
 **Gate:** `./check.sh`
-· last green 2026-08-12 on the `10c0288` tree (exit 0).
+· last green 2026-08-12 on the `9965c24` tree (exit 0).
 
 ## Done
 
@@ -42,13 +42,17 @@ take.
   serialization/artifact edge, and E3 relied on an unattested `br sync --status
   --json` schema. The plan now adds that edge, pins the measured `br 0.2.19`
   schema/hash, and incorporates the valid lower-severity corrections.
+- Cleared the repeated SHAPE hard stop on `9965c24`: pinned
+  `gpt-5.6-sol`/xhigh Codex reported no P0/P1 findings (one non-blocking P2 about
+  the pre-supervisor ignored-signal startup window), Fable/high reported
+  `NO BLOCKING FINDINGS`, and `./check.sh` exited 0 (26 installer, 124 bot-gate,
+  and 70 drive-status fixtures).
 
 ## Now
 
-Re-run both the pinned Codex xhigh SHAPE review and the user-requested Fable
-all-specs review against the corrected plan. Preserve the reviewed 33-row flat
-graph and update its intentional dependency set from 22 to 24 edges only after
-both reviewers have no blocking findings.
+Update the existing 33 flat beads in place from the reviewed plan, preserving all
+generated IDs, and change the intentional dependency set from 22 to 24 edges.
+Then run the required polish passes and the independent second-model graph audit.
 
 ## Next
 

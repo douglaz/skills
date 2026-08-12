@@ -2,15 +2,18 @@
 
 ## Status
 
-Returned to SHAPE after GRAPH polish on 2026-08-12. The first pinned Codex xhigh
+SHAPE cleared on 2026-08-12 after returning from GRAPH polish. The first pinned Codex xhigh
 review at `bceb919` reported no P0/P1 findings, but translation exposed missing
 API, failure, recovery, and fixture detail in later rows. After those amendments,
 a fresh pinned Codex review found two inherited-signal defects in the canonical
 gate wrapper; both are fixed and covered at `16e1775`. A user-requested Fable
 review then read the complete specification inventory and reported two plan P1s:
 the missing B2d→B2c edge and an unattested E3 status schema. Both corrections and
-its valid lower-severity refinements are now incorporated and await fresh Codex
-and Fable passes before the graph is updated. This plan covers the 29 GitHub
+its valid lower-severity refinements are incorporated. On the final reviewed tree
+at `9965c24`, pinned `gpt-5.6-sol`/xhigh Codex reported no P0/P1 and Fable/high
+reported `NO BLOCKING FINDINGS`; `./check.sh` exited 0 with 26 installer, 124
+bot-gate, and 70 drive-status fixtures. GRAPH may now update the existing store in
+place. This plan covers the 29 GitHub
 issues that were open in `douglaz/skills` on 2026-08-11. GitHub remains the
 external source of issue identity; Beads holds the executable dependency graph.
 
