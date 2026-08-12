@@ -769,7 +769,8 @@ possible_gate_start=false
   printf '%s\n' 'if [[ -n ${HOSTILE_BASH_ENV:-} ]]; then export BASH_ENV=$HOSTILE_BASH_ENV; fi'
   while IFS= read -r line; do
     if ! $capture_gate; then
-      if [[ $line == *'--noprofile --norc -p -c'* ]] ||
+      if [[ $line == 'POSIXLY_CORRECT=y' ]] ||
+          [[ $line == *'--noprofile --norc -p -s'* ]] ||
           [[ $line == *'_gate_dir=$(command mktemp -d)'* ]] ||
           { $possible_gate_start && [[ $line == *'_gate_log=$(mktemp)'* ]]; }; then
         capture_gate=true
@@ -900,13 +901,9 @@ else
     bash "$gate_script" >"$gate_stdout" 2>"$gate_stderr"; rc=$?
   TMPDIR="$gate_tmp" GATE_MODE=success \
     bash -c "$(<"$gate_script")" >"$paste_stdout" 2>"$paste_stderr"; paste_rc=$?
-  (
-    unlink() { return 0; }
-    rmdir() { return 0; }
-    export -f unlink rmdir
-    TMPDIR="$gate_tmp" \
-      bash "$execfail_gate_script" >"$execfail_stdout" 2>"$execfail_stderr"
-  ); execfail_rc=$?
+  TMPDIR="$gate_tmp" \
+    bash "$execfail_gate_script" >"$execfail_stdout" 2>"$execfail_stderr"
+  execfail_rc=$?
   for ((_n=1; _n<=300; _n++)); do
     ! find "$gate_tmp" -mindepth 1 -print -quit | grep -q . && break
     sleep 0.01
@@ -931,6 +928,9 @@ else
       bash "$gate_script" >"$shellfunc_stdout" 2>"$shellfunc_stderr"
   ); shellfunc_rc=$?
   (
+    builtin() { return 0; }
+    exec() { return 0; }
+    unset() { return 0; }
     command() {
       if [[ $1 == exec ]]; then
         return 0
@@ -1453,23 +1453,25 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
     fail "$t" "hostile-BASH_ENV run wrote stderr: $bashenv_error"
   elif [[ -e "$bashenv_marker" ]]; then
     fail "$t" "hostile BASH_ENV reached a Python-launch shim"
-  elif [[ $shellfunc_rc -ne 1 || $shellfunc_output != $'first\nEXIT=1' ]]; then
-    fail "$t" "exported Bash function bypassed the gate: rc=$shellfunc_rc stdout=$shellfunc_output"
-  elif [[ -n "$shellfunc_error" || $shellfunc_output == *should-not-run* ]]; then
-    fail "$t" "exported-function run leaked or continued: stderr=$shellfunc_error"
-  elif [[ ! -f "$shellfunc_hostile_sentinel" ||
-      $(<"$shellfunc_hostile_sentinel") != preserve ]]; then
-    fail "$t" "exported mktemp function selected or deleted an existing directory"
   elif [[ $localcommand_rc -ne 1 ||
       $localcommand_output != $'first\nEXIT=1' ]]; then
     fail "$t" "local command function bypassed the gate: rc=$localcommand_rc stdout=$localcommand_output"
   elif [[ -n "$localcommand_error" ||
       $localcommand_output == *should-not-run* ]]; then
     fail "$t" "local-command run leaked or continued: stderr=$localcommand_error"
-  elif [[ $commandfunc_rc -eq 0 || -n "$commandfunc_output" ]]; then
-    fail "$t" "exported command function bypassed the refusal: rc=$commandfunc_rc stdout=$commandfunc_output"
-  elif [[ $commandfunc_error != *"refusing exported command function"* ]]; then
-    fail "$t" "exported-command refusal had unexpected stderr: $commandfunc_error"
+  elif [[ $shellfunc_rc -eq 0 || -n "$shellfunc_output" ]]; then
+    fail "$t" "exported Bash function bypassed the refusal: rc=$shellfunc_rc stdout=$shellfunc_output"
+  elif [[ $shellfunc_error != *"refusing exported shell function"* ]]; then
+    fail "$t" "exported-function refusal had unexpected stderr: $shellfunc_error"
+  elif [[ ! -f "$shellfunc_hostile_sentinel" ||
+      $(<"$shellfunc_hostile_sentinel") != preserve ]]; then
+    fail "$t" "exported mktemp function selected or deleted an existing directory"
+  elif [[ $commandfunc_rc -ne 1 ||
+      $commandfunc_output != $'first\nEXIT=1' ]]; then
+    fail "$t" "exported command function bypassed the gate: rc=$commandfunc_rc stdout=$commandfunc_output"
+  elif [[ -n "$commandfunc_error" ||
+      $commandfunc_output == *should-not-run* ]]; then
+    fail "$t" "exported-command run leaked or continued: stderr=$commandfunc_error"
   elif [[ $stdin_rc -ne 1 || $stdin_output != 'EXIT=1' ]]; then
     fail "$t" "stdin-consuming gate became rc=$stdin_rc stdout=$stdin_output"
   elif [[ -n "$stdin_error" || $stdin_output == *stdin-gate-continued* ]]; then

@@ -66,7 +66,9 @@ exit 0. Group the entire gate, use a fresh log, save the real status, and return
 that status after reading the log:
 
 ```bash
-if "${BASH:?Bash path is required}" --noprofile --norc -p -c '
+POSIXLY_CORRECT=y
+unset -f command builtin exec unset
+exec "${BASH:?Bash path is required}" --noprofile --norc -p -s <<'__AGENT_GATE_WRAPPER__'
 _gate_environment=$(command -p env) || exit 1
 while IFS="=" read -r _gate_env_name _; do
   case $_gate_env_name in
@@ -74,11 +76,12 @@ while IFS="=" read -r _gate_env_name _; do
       printf "%s\n" "refusing exported command function" >&2
       exit 97
       ;;
+    BASH_FUNC_*%%)
+      printf "%s\n" "refusing exported shell function" >&2
+      exit 97
+      ;;
   esac
 done <<<"$_gate_environment"
-'; then
-builtin unset -f command ||
-  { echo "cannot clear local command function"; exit 1; }
 command type -P python3 >/dev/null 2>&1 ||
   { echo "python3 is required for gate supervision"; exit 1; }
 _gate_dir=$(command mktemp -d) || { echo "cannot create gate directory"; exit 1; }
@@ -475,9 +478,7 @@ if os.path.lexists(pending):
 _gate_exec_watchdog=$!
 command exec "$_gate_python" -I "$_gate_runner" "$_gate_dir" "${BASH:-bash}" \
   "$_gate_exec_watchdog" "$_gate_pending"
-else
-  "${BASH:?Bash path is required}" --noprofile --norc -p -c 'exit 1'
-fi
+__AGENT_GATE_WRAPPER__
 ```
 
 This portable supervisor requires Python 3 in addition to Bash; preflight it
@@ -490,11 +491,14 @@ from a private script with closed stdin, cleared shell-startup environment,
 disabled startup files, and `pipefail`. The wrapper clears `BASH_ENV` and `ENV`
 and removes the export attribute from every inherited shell function before
 either Python launch as well, so a Python path implemented by a shell shim cannot
-bypass the supervisor before its own environment sanitization runs. The outer
-privileged-Bash preflight cannot import exported functions and refuses an
-exported `command` trust-anchor function before the wrapper creates artifacts;
-the parent then removes any non-exported local `command` function before the
-normal sanitizer removes every other inherited exported function.
+bypass the supervisor before its own environment sanitization runs. The entire
+wrapper runs from a quoted here-document inside privileged Bash, so it cannot
+import exported or non-exported caller functions. The caller first enables
+POSIX special-builtin precedence, removes local functions named for the
+`unset`/`exec` trust path, and replaces itself with that clean Bash. Its
+preflight refuses every raw exported-function environment entry before creating
+artifacts, and the normal sanitizer is a second defense before either Python
+launch.
 It creates a dedicated process group, handles HUP, INT, QUIT, and TERM even when
 the invoking shell inherited an ignored signal, resumes stopped work, waits with
 a deadline, and escalates boundedly when the leader or another process in that
