@@ -8,7 +8,7 @@ take.
 · **Branch:** `plan/backlog-execution`
 **Pending:** —
 **Gate:** `./check.sh`
-· last green 2026-08-12 on the `37f0e8e` tree (exit 0; 26 installer,
+· last green 2026-08-12 on the `4f26161` tree (exit 0; 26 installer,
 124 bot-gate, and 70 drive-status fixtures passed under GNU Bash 5.3.15,
 non-POSIX mode).
 
@@ -145,6 +145,10 @@ non-POSIX mode).
   corresponding descriptor only after completion. Re-merging them makes the
   new streams fixture fail 25/1; normal and forced-no-pidfd installer runs pass
   26/0, and the full gate passes 26/124/70 with empty stderr.
+- Codex then found alias expansion on the trusted `command -p` Bash lookup.
+  Commit `4f26161` backslash-suppresses that command word and extends the
+  combined alias fixture; removing the suppression fails 25/1, while the full
+  gate passes 26/124/70 with empty stderr.
 
 ## Now
 
