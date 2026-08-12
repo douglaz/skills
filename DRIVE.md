@@ -8,7 +8,7 @@ take.
 · **Branch:** `plan/backlog-execution`
 **Pending:** —
 **Gate:** `./check.sh`
-· last green 2026-08-12 on the `4e9db0d` tree (exit 0; 26 installer,
+· last green 2026-08-12 on the `803ec9d` tree (exit 0; 26 installer,
 124 bot-gate, and 70 drive-status fixtures passed under GNU Bash 5.3.15,
 non-POSIX mode).
 
@@ -155,6 +155,13 @@ non-POSIX mode).
   A dedicated leader-plus-descendant deadline fixture fails 25/1 against the
   leader-only regression. Normal and forced-no-pidfd installer runs pass 26/0;
   the full gate passes 26/124/70 with empty stderr.
+- Codex's next pass found the exec-failure watchdog could delete a slowly
+  launching supervisor, and found C1's atomic rename could overwrite a result
+  path created during review. Commit `803ec9d` ties cleanup to the owner-process
+  handoff instead of a fixed timer and specifies same-directory exclusive-link
+  publication for C1 in both plan and bead. A three-second launch passes; the
+  old two-second timer fails 25/1. Normal and forced-no-pidfd installers pass
+  26/0, and the full gate passes 26/124/70 with empty stderr.
 
 ## Now
 
