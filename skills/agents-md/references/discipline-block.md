@@ -125,7 +125,6 @@ __AGENT_GATE__
   fi
   if ! command cat >"$_gate_runner" <<'__AGENT_SUPERVISOR__'
 import os
-import ctypes
 import select
 import signal
 import subprocess
@@ -142,7 +141,6 @@ child = None
 cancelled = None
 signal_ready = False
 pending_signal = None
-PR_SET_CHILD_SUBREAPER = 36
 
 class GateCancelled(BaseException):
     def __init__(self, signum):
@@ -176,91 +174,6 @@ def group_alive(pgid):
         return True
 
 
-def enable_subreaper():
-    if sys.platform != "linux":
-        raise RuntimeError("escaped-descendant supervision requires Linux")
-    libc = ctypes.CDLL(None, use_errno=True)
-    if libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
-        error = ctypes.get_errno()
-        raise OSError(error, os.strerror(error))
-
-
-def descendant_pids():
-    parents = {}
-    try:
-        entries = os.scandir("/proc")
-    except OSError:
-        raise RuntimeError("cannot inspect gate descendants")
-    with entries:
-        for entry in entries:
-            if not entry.name.isdigit():
-                continue
-            try:
-                with open(
-                    os.path.join(entry.path, "status"),
-                    "r",
-                    encoding="ascii",
-                    errors="strict",
-                ) as status:
-                    for line in status:
-                        if line.startswith("PPid:"):
-                            parents[int(entry.name)] = int(line.split()[1])
-                            break
-            except (FileNotFoundError, ProcessLookupError):
-                pass
-    descendants = set()
-    frontier = {os.getpid()}
-    while frontier:
-        found = {
-            pid for pid, parent in parents.items()
-            if parent in frontier and pid not in descendants
-        }
-        descendants.update(found)
-        frontier = found
-    return descendants
-
-
-def reap_adopted():
-    found = False
-    while True:
-        try:
-            pid, _status = os.waitpid(-1, os.WNOHANG)
-        except ChildProcessError:
-            break
-        if pid == 0:
-            break
-        found = True
-    return found
-
-
-def stop_descendants(signum):
-    ok = True
-    for phase_signal, duration in ((signum, 0.2), (signal.SIGKILL, 1.0)):
-        deadline = time.monotonic() + duration
-        while True:
-            pids = descendant_pids()
-            if not pids:
-                reap_adopted()
-                if not descendant_pids():
-                    return ok
-                pids = descendant_pids()
-            for pid in pids:
-                try:
-                    os.kill(pid, phase_signal)
-                    if phase_signal != signal.SIGKILL:
-                        os.kill(pid, signal.SIGCONT)
-                except ProcessLookupError:
-                    pass
-                except OSError:
-                    ok = False
-            reap_adopted()
-            if time.monotonic() >= deadline:
-                break
-            time.sleep(0.01)
-    reap_adopted()
-    return ok and not descendant_pids()
-
-
 def stop_group(signum):
     if child is None:
         return True
@@ -275,7 +188,6 @@ def stop_group(signum):
         pass
     deadline = time.monotonic() + 0.2
     while group_alive(pgid) and time.monotonic() < deadline:
-        reap_adopted()
         time.sleep(0.01)
     if group_alive(pgid):
         try:
@@ -295,7 +207,6 @@ def stop_group(signum):
             return False
     deadline = time.monotonic() + 1.0
     while group_alive(pgid) and time.monotonic() < deadline:
-        reap_adopted()
         time.sleep(0.01)
     return not group_alive(pgid)
 
@@ -320,14 +231,6 @@ def remove_private_dir():
 
 for managed_signal in managed_signals:
     signal.signal(managed_signal, receive_signal)
-
-try:
-    enable_subreaper()
-except BaseException as error:
-    print(f"cannot supervise gate descendants: {error}", file=sys.stderr)
-    if not remove_private_dir():
-        print("cannot remove gate directory", file=sys.stderr)
-    sys.exit(1)
 
 try:
     os.unlink(pending_path)
@@ -398,7 +301,6 @@ try:
         rc = child.wait()
         if rc < 0:
             rc = 128 - rc
-        adopted_exit = reap_adopted()
         if group_alive(child.pid):
             if not stop_group(signal.SIGTERM):
                 print("cannot terminate gate process group", file=sys.stderr)
@@ -406,26 +308,16 @@ try:
             elif rc == 0:
                 print("gate left background processes running", file=sys.stderr)
                 rc = 1
-        escaped = descendant_pids()
-        if escaped or adopted_exit:
-            if not stop_descendants(signal.SIGTERM):
-                print("cannot terminate detached gate descendants", file=sys.stderr)
-            if rc == 0:
-                print("gate left detached descendants running", file=sys.stderr)
-                rc = 1
 except GateCancelled as cancellation:
     cancelled = cancellation.signum
     ignore_managed_signals()
     if not stop_group(cancellation.signum):
         print("cannot terminate gate process group", file=sys.stderr)
-    if not stop_descendants(cancellation.signum):
-        print("cannot terminate detached gate descendants", file=sys.stderr)
     rc = 128 + cancellation.signum
 except BaseException as error:
     ignore_managed_signals()
     if child is not None and group_alive(child.pid):
         stop_group(signal.SIGTERM)
-    stop_descendants(signal.SIGTERM)
     print(f"cannot run gate: {error}", file=sys.stderr)
     rc = rc if rc != 0 else 1
 try:
@@ -450,6 +342,9 @@ try:
         print("cannot remove gate directory", file=sys.stderr)
         rc = rc if rc != 0 else 1
     if cancelled is None:
+        signal_ready = False
+        signal.pthread_sigmask(signal.SIG_BLOCK, managed_signals)
+        ignore_managed_signals()
         print(f"EXIT={rc}")
 except GateCancelled as cancellation:
     if "stdout_fd" in locals() and "stdout_was_blocking" in locals():
@@ -458,7 +353,6 @@ except GateCancelled as cancellation:
     ignore_managed_signals()
     if child is not None and group_alive(child.pid):
         stop_group(cancellation.signum)
-    stop_descendants(cancellation.signum)
     rc = 128 + cancellation.signum
     if not remove_private_dir():
         print("cannot remove gate directory", file=sys.stderr)
@@ -478,19 +372,7 @@ __AGENT_SUPERVISOR__
   fi
 : >"$_gate_pending" || { echo "cannot create exec marker"; exit 1; }
 (
-  _gate_watchdog_sleep=
-  _gate_watchdog_wake() {
-    trap - HUP INT QUIT TERM
-    [ -z "$_gate_watchdog_sleep" ] ||
-      command kill "$_gate_watchdog_sleep" 2>/dev/null || :
-    [ -z "$_gate_watchdog_sleep" ] ||
-      command wait "$_gate_watchdog_sleep" 2>/dev/null || :
-  }
-  trap _gate_watchdog_wake HUP INT QUIT TERM
-  sleep 2 &
-  _gate_watchdog_sleep=$!
-  command wait "$_gate_watchdog_sleep" 2>/dev/null || :
-  trap - HUP INT QUIT TERM
+  sleep 2
   if [ -e "$_gate_pending" ]; then
     for _gate_file in "$_gate_log" "$_gate_script" "$_gate_runner" "$_gate_pending"; do
       [ ! -e "$_gate_file" ] || unlink "$_gate_file" 2>/dev/null || :
@@ -507,16 +389,15 @@ Run this as a standalone final command, not as sourced setup for later commands:
 `exec` makes the Python supervisor the caller-visible wrapper process, while a
 failed `exec` leaves the shell cleanup trap armed. Put self-contained gate
 commands between the delimiter lines. The supervisor runs them in a fresh Bash
-from a private script with closed stdin, shell-control variables and exported
-functions removed, disabled startup files, and `pipefail`.
-On Linux it becomes a child subreaper and inspects `/proc`, so a descendant that
-escapes the dedicated process group is still detected, terminated, and turns
-success into failure; on a host without that kernel containment it refuses
-before launching the gate rather than claiming a weaker guarantee. It handles
-HUP, INT, QUIT, and TERM even when the invoking shell inherited an ignored
-signal, resumes stopped work, waits with a deadline, and escalates boundedly
-when the leader or a descendant ignores the signal. Cleanup happens before the
-reported final status: supervisor, read,
+from a private script with closed stdin, cleared `BASH_ENV`, disabled startup
+files, and `pipefail`.
+It creates a dedicated process group, handles HUP, INT, QUIT, and TERM even when
+the invoking shell inherited an ignored signal, resumes stopped work, waits with
+a deadline, and escalates boundedly when the leader or another process in that
+group ignores the signal. Gate commands must use their foreground mode and must
+not daemonize into a different session/process group; that is outside this
+portable wrapper's containment contract. Cleanup happens before the reported
+final status: supervisor, read,
 lingering-process, or cleanup failure turns success into failure but preserves
 an existing nonzero/signal status. The wrapper returns that final status,
 including categorized statuses such as 2 or 124.

@@ -988,7 +988,8 @@ rationale, and split panel advice. Run it and `./check.sh`.
 
 ### F2. Synchronous checkpoint seam — issue #48 upstream portion
 
-**Priority:** P1. **Effort:** large/external dependency. **Depends on:** C2.
+**Priority:** P1. **Effort:** large/external dependency. **Depends on:** C2 and
+E3.
 
 **Executor:** `executor-rb-lite`.
 
@@ -1385,7 +1386,7 @@ the body. Every row gets label `drive-open-issues`; B0 and F2r get
 | E2c | P2 | #33 | E2a | Correct panel diagnostics |
 | E3 | P0 | #65 | E1 | Exact fail-closed closure command |
 | F1 | P2 | #47, #33 | — | Deduplication and fact ownership |
-| F2 | P1 | #48 | C2 | Upstream synchronous checkpoint seam |
+| F2 | P1 | #48 | C2, E3 | Upstream synchronous checkpoint seam |
 | F2r | P1 | #48 | F2 | Human-authorized release publication |
 | F3 | P1 | #48, #30, #31, #35 | C1, F2r | Foreground Drive controller |
 | G1 | P2 | #32, #34 | — | Read-only commit verifier |
