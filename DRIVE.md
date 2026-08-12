@@ -8,7 +8,7 @@ take.
 · **Branch:** `plan/backlog-execution`
 **Pending:** —
 **Gate:** `./check.sh`
-· last green 2026-08-12 on the `ad5fe0b` tree (exit 0; 26 installer,
+· last green 2026-08-12 on the `8844eaa` tree (exit 0; 26 installer,
 124 bot-gate, and 70 drive-status fixtures passed under GNU Bash 5.3.15,
 non-POSIX mode).
 
@@ -110,6 +110,11 @@ non-POSIX mode).
   coverage both fail against their isolated regressions. `./check.sh` then
   exited 0 with 26 installer, 124 bot-gate, and 70 drive-status fixtures;
   stderr was empty.
+- CodeRabbit's current-tip pass found that the new Python-watchdog readiness
+  poll still used a two-second setup budget. Commit `8844eaa` aligns it with
+  the other ten-second startup handshakes without changing the watchdog's
+  two-second behavior deadline; the full gate passed with the same 26/124/70
+  counts and empty stderr.
 
 ## Now
 
