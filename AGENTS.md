@@ -68,7 +68,7 @@ that status after reading the log:
 ```bash
 POSIXLY_CORRECT=y
 \unset -f command builtin exec unset
-_gate_outer_bash=$(command -p -v bash) ||
+_gate_outer_bash=$(\command -p -v bash) ||
   { echo "cannot locate trusted Bash"; exit 1; }
 \exec "$_gate_outer_bash" --noprofile --norc -p -s <<'__AGENT_GATE_WRAPPER__'
 _gate_environment=$(command -p env) || exit 1

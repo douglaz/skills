@@ -973,6 +973,7 @@ else
     shopt -s expand_aliases
     alias unset=:
     alias exec=:
+    alias command='printf /bin/true'
     BASH=/definitely/missing/caller-controlled-bash
     TMPDIR="$gate_tmp" source "$gate_script"
   ) >"$localalias_stdout" 2>"$localalias_stderr"
