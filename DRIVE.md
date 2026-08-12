@@ -4,7 +4,7 @@
 `docs/specs/backlog-execution-plan.md` (#30–#66, exact set in that plan); the
 Beads graph created from the reviewed plan will be the ONLY work this drive may
 take.
-**Phase:** GRAPH · **Bead:** n/a (graph transfer in progress)
+**Phase:** SHAPE · **Bead:** n/a (polish returned gaps to plan space)
 · **Branch:** `plan/backlog-execution`
 **Pending:** —
 **Gate:** `./check.sh`
@@ -26,19 +26,29 @@ take.
   admission-integrity stream.
 - Ran the repository gate at `bceb919`: `./check.sh` exited 0 (26 installer,
   124 bot-gate, and 66 drive-status fixtures passed).
+- Initialized Beads and transferred all 33 reviewed rows with 22 dependency
+  edges; the first transfer audit found the exact expected labels, priorities,
+  URLs, bodies, and ready A1 (`skills-ro5`).
+- GRAPH polish then found that several lower workstream rows copied real intent
+  but not enough API, failure, recovery, or fixture detail to be executable by a
+  fresh agent. Per the GRAPH escalation rule, returned to SHAPE rather than
+  encoding implementation guesses downstream.
 
 ## Now
 
-Initialize Beads, transfer the 33 flat execution/decision records exactly from
-the reviewed plan, and verify labels, priorities, external references, and
-dependency direction. Then run the polish loop and an independent second-model
-graph audit. Do NOT start implementation until the graph passes both checks.
+Amend the plan with the accepted polish findings: complete the delegated-edit
+fixture matrix; settle the generated-protocol and verifier owners; make C1/C2,
+D2, E1/E3, F1/F2r/F3, and G1–G3 executable memory; correct priorities that meet
+the plan's own P0 definition; and make design/format/decision acceptance paths
+honest. Preserve the reviewed 33-row flat graph and its intentional direct
+dependency edges. Re-run the pinned SHAPE review before updating Beads.
 
 ## Next
 
-Land the planning/bootstrap branch → start A1, GitHub issue #42, through rb-lite
-→ continue the highest-priority unblocked lane while respecting the two human
-authority checkpoints.
+Return to GRAPH → update/polish/audit the 33 beads → land the planning/bootstrap
+branch → start A1, GitHub issue #42, through rb-lite → continue the
+highest-priority unblocked lane while respecting the two human-authority
+checkpoints.
 
 ## Open questions for the human
 
@@ -48,3 +58,6 @@ authority checkpoints.
   user-state/data-loss design checkpoint.
 - Before F2 release: authorize publishing the required upstream rb-lite release.
   Opening and reviewing its branch/PR may proceed; publishing the release may not.
+  Once authorized, the coordinating skills agent performs and verifies the
+  mechanical publication—human authority does not require the human to run the
+  release commands.

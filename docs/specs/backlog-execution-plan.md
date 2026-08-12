@@ -2,10 +2,13 @@
 
 ## Status
 
-Reviewed and accepted for GRAPH transfer on 2026-08-12. The pinned Codex xhigh
-review at `bceb919` reported no P0/P1 findings. This plan covers the 29 GitHub
-issues that were open in `douglaz/skills` on 2026-08-11. GitHub remains the
-external source of issue identity; Beads holds the executable dependency graph.
+Returned to SHAPE after GRAPH polish on 2026-08-12. The first pinned Codex xhigh
+review at `bceb919` reported no P0/P1 findings, but translation exposed missing
+API, failure, recovery, and fixture detail in later rows. Those gaps are amended
+below and await a new pinned review before the graph is updated. This plan covers
+the 29 GitHub issues that were open in `douglaz/skills` on 2026-08-11. GitHub
+remains the external source of issue identity; Beads holds the executable
+dependency graph.
 
 ## Goal
 
@@ -53,8 +56,8 @@ Turn the current flat issue list into a sequenced, testable delivery program tha
   $ cat /tmp/gh-prs.stderr; printf 'EXIT=%s\n' "$gh_prs_rc"
   EXIT=0
   ```
-- Beads is not initialized: there is no `.beads` directory, database, or JSONL.
-  This was measured on 2026-08-11 with stdout and stderr captured separately:
+- Beads was not initialized when SHAPE began. The following 2026-08-11
+  transcript is the historical baseline:
 
   ```text
   $ br --version >/tmp/br-version.stdout 2>/tmp/br-version.stderr
@@ -98,6 +101,11 @@ Turn the current flat issue list into a sequenced, testable delivery program tha
         or set BEADS_DIR to point to your .beads directory
   EXIT=1
   ```
+- GRAPH initialized the current `.beads` store with prefix `skills`, transferred
+  the 33 table rows, and flushed 22 edges before polish returned this drive to
+  SHAPE. After this amended plan passes review, update that existing graph in
+  place with `br`; do not rerun `br init`, delete the database, recreate IDs, or
+  hand-edit the JSONL.
 - The previous `DRIVE.md` described PR #64 after it had already merged. This plan
   replaces that stale record rather than continuing its HARDEN phase.
 - Exact issue scope:
@@ -120,7 +128,9 @@ Turn the current flat issue list into a sequenced, testable delivery program tha
 GitHub owns external issue identity, discussion, and closure. Beads owns local
 execution state and dependencies.
 
-- Initialize Beads only after this plan passes its SHAPE review.
+- The initial transfer initialized Beads only after the first SHAPE review.
+  Subsequent reviewed amendments update the existing store in place and preserve
+  all generated IDs.
 - Create only the bounded execution and decision beads in the complete table.
   Do not create root/workstream epics or parent beads: normal `br` parent
   semantics make a completed umbrella ready, and the branch drain would mistake
@@ -270,20 +280,52 @@ insufficient.
 
 **Effort:** three small beads, not one PR. **Depends on:** A1.
 
-Create:
+**A3a, P1 — preserve first degraded exit-4 evidence.** Own
+`skills/pr-with-codex-bot-review-merge/SKILL.md` plus new extracted-snippet
+fixture
+`skills/pr-with-codex-bot-review-merge/scripts/merge-evidence.test`. On first
+exit 4, create the incident file exclusively under the Git directory and retain
+its exact path. Re-entry must not truncate, replace, or recertify that file; a
+different body at the same logical incident is a nonzero conflict. The fixture
+runs degraded re-entry twice, changes the second JSON, proves the original bytes
+and mode remain unchanged, and covers create/read/write failure. Run it and
+`./check.sh`. Do not absorb A3b or A3c.
 
-- **A3a, P1:** preserve the first degraded exit-4 response across re-entry;
-- **A3b, P1:** create post-merge evidence through a unique private file with
-  checked writes; and
-- **A3c, P1:** exclude closure PRs from the work-PR resume query.
+**A3b, P1 — private post-merge evidence.** Own the post-merge capture in
+`skills/pr-with-codex-bot-review-merge/SKILL.md` and the separate post-merge cases
+in `merge-evidence.test`. Create a unique mode-0600 file inside a mode-0700
+directory with checked `mktemp`, checked write, and an explicit path carried
+into the report. Never use a predictable `${TMPDIR}/merge-evidence-N.json`,
+follow a pre-created symlink, or continue after capture/read/cleanup failure.
+Fixtures cover hostile TMPDIR entries, create/write/read failure, and two
+concurrent captures. Run them and `./check.sh`. Do not absorb A3a or A3c.
+
+**A3c, P1 — exclude closure PRs from work-PR resume.** Own both matching query
+copies in `skills/rb-lite-backlog-drain/SKILL.md` and add executable
+`skills/rb-lite-backlog-drain/scripts/resume-query.test`. Before applying
+OPEN/MERGED work-PR state rules, reject a body carrying the exact
+`bead-closure: <id>` marker; retain the boundary-safe ordinary bead-ID match and
+fork/parent URL identity. The fixture uses one work PR and one closure PR with
+the same ID in OPEN and MERGED permutations and proves only work PRs reach the
+resume state. Run it and `./check.sh`. Do not absorb A3a or A3b.
 
 ### A4. Bounded plan-format follow-ups — issue #65
 
 **Effort:** two extra-small beads, separate from admission logic.
 
-- **A4a, P3:** clarify Drive's project-status/resume routing exception without
-  changing its trigger-evaluation outcomes.
-- **A4b, P3:** convert the moved backlog examples to fenced Markdown.
+**A4a, P3 — routing wording.** Own only the folded description in
+`skills/drive/SKILL.md` and the existing
+`skills/drive/evals/trigger-evals.json`. Replace the broad question exclusion
+with `general informational question`, explicitly retaining project-status and
+resume as Drive triggers. Run the existing trigger evaluation command documented
+by that skill before and after and require identical outcomes; this is not a
+red/green production behavior change. Then run `./check.sh`.
+
+**A4b, P3 — fenced moved examples.** Own the two indented merge/reset examples
+in `skills/rb-lite-backlog-drain/SKILL.md` and add their exact extraction check
+to `install.test`. Convert only block style, asserting fenced structure and
+byte-identical command text before/after. Do not execute the examples or add the
+G2 harness here. Run `./install.test` and `./check.sh`.
 
 ## Workstream B — delegated-edit state integrity
 
@@ -308,9 +350,30 @@ against the current plan.
 
 Write `docs/specs/delegated-edit-isolation.md` with the exact helper API, path
 state matrix, refusal contract, patch/apply transaction, file/LOC budget, and one
-named red fixture per state class below. Review that design with pinned Codex
-xhigh until it has no P0/P1. Do not edit production skill prose or implement the
-helper in B1d.
+named future red fixture for each of these classes:
+
+- non-ASCII and newline-containing pathnames;
+- rename plus intent-to-add;
+- skip-worktree and assume-unchanged;
+- ambient Git configuration;
+- gitlinks/submodules;
+- out-of-allowlist writes;
+- untracked and deleted descendants; and
+- restore/apply failure.
+
+The design must state each fixture's setup, pre-fix failure assertion, preserved
+user bytes/state, and post-fix acceptance assertion. Review the design with:
+
+```bash
+codex review --base master -c 'model="gpt-5.6-sol"' \
+  -c 'model_reasoning_effort="xhigh"'
+```
+
+until it has no P0/P1, then run `./check.sh`. B1d authors the reviewed spec and
+fixture contract, not the fixtures or helper: do not edit production skill prose
+or implement the helper in B1d. The separation matters because delegated edits
+against unsupported dirty/index states can corrupt or misapply user work before
+the caller notices.
 
 ### B1. Delegated-edit isolation mechanism — issues #41, #43, #34, #65
 
@@ -361,20 +424,59 @@ and must not be inferred from this plan.
 
 Split from B1 with one priority per child:
 
-- **B2a, P1:** unsafe red evidence must report INCOMPLETE/BLOCKED rather
-  than land.
-- **B2b, P1:** file-level inversion must not destroy colocated tests.
-- **B2c, P2:** panel shutdown/escape behavior must use C1's tested owner.
-- **B2d, P2:** `grep ... || true` must not convert execution errors to
-  success; use G1's verification owner.
-- **B2e, P1:** post-flush comparison must use saved pre-flush bytes, not
-  `HEAD`.
+**B2a, P1 — unsafe red evidence.** Own
+`skills/testing-with-rb-lite/SKILL.md` and new executable
+`skills/testing-with-rb-lite/scripts/unsafe-red.test`. When neither a disposable
+environment nor a non-destructive mutation exists, return
+INCOMPLETE/BLOCKED, preserve the reason, and make the land/clear path
+unreachable. The fixture reaches the unsafe branch and asserts no commit, push,
+merge, or success report. Run it and `./check.sh`.
+
+**B2b, P0 — preserve colocated tests.** Own the testing-with-rb-lite task
+template/inversion instructions and add
+`skills/testing-with-rb-lite/scripts/inversion-restore.test`. Save a private
+mode-0600 patch or full-file recovery copy before a file-level mutation, restore
+production bytes without removing the newly authored colocated test, and retain
+the recovery copy until exact verification succeeds. On restore failure, report
+BLOCKED with the recovery path and do not land. A fixture uses a Rust-like
+colocated test module and proves the pre-fix file restore deletes it, then proves
+the accepted transaction preserves both test and original production bytes.
+Run it and `./check.sh`.
+
+- **B2c, P2:** after C1 lands, add the #34 consumer-integration regression in
+  `skills/multi-reviewer-loop/references/reviewer-panel.md`: timeout, signal, and
+  escape must be reachable from the running invocation without a second shell,
+  use C1 for bounded shutdown/reaping/status, and prevent a late result write.
+  Add executable
+  `skills/multi-reviewer-loop/scripts/reviewer-shutdown-integration.test`, wire
+  it into `check.sh`, and do not duplicate C1 lifecycle code or re-test its
+  internal unit surface.
+
+**B2d, P2 — preserve verification execution errors.** After G1 lands, replace
+the occurrence-count `grep ... || true` consumer in
+`skills/multi-reviewer-loop/references/reviewer-panel.md` with G1's exact
+literal/count API. Add the missing/unreadable verifier-input cases to G1's test
+and a consumer extraction assertion to the B2c integration test. Exit 1 means a
+checked mismatch; exit 2+ remains an execution failure and may not become count
+zero or success. Run both tests and `./check.sh`.
+
+**B2e, P0 — compare flush against saved bytes.** Own
+`skills/second-model-bead-audit/SKILL.md` and
+`skills/second-model-bead-audit/references/reviewer-panel.md`; add executable
+`skills/second-model-bead-audit/scripts/postflush-preservation.test`. Before a
+flush, save the exact JSONL to a mode-0600 file in a mode-0700 directory and
+compare every post-flush ID/field/body against that file, not `HEAD`. Retain
+recoverable bytes and fail with reverted IDs/fields on read/comparison/cleanup
+failure; never continue to staging or audit. The fixture makes HEAD older, the
+index damaged, and the worktree good, then proves the pre-fix comparison passes
+incorrectly and the accepted comparison blocks with recovery bytes intact. Run
+it and `./check.sh`.
 
 ## Workstream C — reviewer runner reliability and isolation
 
 ### C1. Bounded panel correctness — issues #53–#58 and #60
 
-**Priority:** P1. **Effort:** medium as one shared mechanism.
+**Priority:** P1. **Effort:** large as one shared mechanism.
 
 **Likely files**
 
@@ -388,6 +490,7 @@ Split from B1 with one priority per child:
   `skills/claude-reviewer-runner/scripts/claude-reviewer-runner`
   and
   `skills/claude-reviewer-runner/scripts/claude-reviewer-runner.test`
+- aggregate gate owner: `check.sh`
 - `install.sh` and `install.test`
 
 **Required owner/API**
@@ -398,13 +501,62 @@ The runner is a mandatory deliverable, not an optional refactor. It provides:
 claude-reviewer-runner probe --models <comma-list>
 claude-reviewer-runner run --model <name> --prompt-file <path> \
   --timeout-seconds <n> --result-file <private-path> \
-  --tool-policy <auditor-readonly|panel-legacy-shell|panel-no-shell>
+  --tool-policy <auditor-readonly|panel-legacy-shell|panel-no-shell> \
+  [--working-directory <path>] [--add-dir <private-bundle-path>]
 ```
 
 `probe` prints exactly one selected model and exits 0, exits 3 when no candidate
 answers, and uses a distinct non-3 failure for missing dependencies or malformed
 probe output. `run` requires a non-empty model, bounds the child, writes only the
 caller-provided private result path, and propagates a categorized status.
+The fixed process statuses are 0 for a complete valid result, 3 for reviewer
+unavailable/exhausted, 124 for timeout, 128+signal for HUP/INT/QUIT/TERM, 125 for
+forced-kill or child-reaping failure, 2 for invocation/dependency/capability
+failure, and 1 for malformed/error reviewer output or result-file
+create/write/finalize/cleanup failure. Write results to a mode-0600 sibling
+temporary file, wait for the complete child process group, validate, atomically
+rename to `--result-file`, and never modify that path after returning; no failure
+may leave a valid-looking final result. Timeout/signal handling performs bounded
+TERM/CONT/KILL and does not return until descendants are reaped.
+
+`probe` writes the selected model plus one trailing newline to stdout and no
+stdout on failure. `run` writes no stdout. Its final file is exactly one compact
+UTF-8 JSON object plus a trailing newline:
+
+```json
+{"model":"<effective>","is_error":false,"result":"<non-empty reviewer text>"}
+```
+
+Reject a pre-existing result path, invalid UTF-8, extra JSON values, any
+`.is_error` other than `false`, an empty/non-string result, or a model that does
+not equal the requested effective model. Diagnostics and categorized child
+stderr go to stderr without emitting prompt/result content; raw child stdout and
+stderr remain in caller-private sibling artifacts until validated cleanup.
+Callers consume only this normalized schema and never unwrap raw Claude output.
+
+Latch the first terminal cause. Invocation/capability failure before launch is
+2; once launched, a received caller signal yields 128+that signal and a timeout
+yields 124 even if bounded cleanup escalates to KILL. Status 125 is reserved for
+an otherwise unclassified supervisor/reaping failure with no latched
+signal/timeout. Only after lifecycle success may malformed/error output yield 1
+or a valid result yield 0. Direct fixtures pin that precedence, the exact file
+bytes, empty stdout, redacted stderr, target-exists refusal, and no late write.
+
+By default `run` inherits the caller's working directory and passes no
+`--add-dir`. `panel-no-shell` requires both explicit path options, verifies that
+the working directory is inside the same caller-owned private bundle root and
+that `--add-dir` names that root, then passes exactly that one `--add-dir`.
+Other policies reject those options so no caller can accidentally broaden its
+current view. C3 owns creating and validating the bundle bytes; C1 owns only the
+fixed launch/lifecycle boundary.
+
+For `panel-no-shell`, canonicalize through already-open directory descriptors,
+not a string-prefix check. The bundle root and every existing ancestor below its
+private parent must be non-symlink directories owned by the current effective
+UID; the root must be mode 0700. `--add-dir` must be exactly that canonical root,
+and the working directory must be that root or a descendant reached without a
+symlink. Ownership, mode, containment, swapped-symlink, and non-directory
+fixtures all fail before Claude launches.
 Callers retain both requested and effective panel state and use the runner for
 launch, wait, and unwrap. Policies are fixed enums rather than caller-provided
 tool strings:
@@ -416,6 +568,12 @@ tool strings:
 - `panel-no-shell` is C3's enforced `Read,Glob,Grep` policy with Bash denied.
 
 The runner must not broaden a caller's policy or edit the reviewed worktree.
+Its direct test must be executable and wired into `check.sh`; acceptance runs
+the runner test directly, `./install.test`, then `./check.sh`. Treat this as one
+large shared-mechanism branch, not the earlier medium estimate: set a reviewed
+hard stop of 1,200 production lines and 1,800 fixture lines. Stop and return to
+SHAPE rather than silently exceeding either budget or splitting lifecycle
+ownership between half-migrated callers.
 
 Every caller resolves the executable from the exact installed
 `claude-reviewer-runner` companion path across Claude, Codex, and Agents targets,
@@ -450,9 +608,25 @@ it through rb-lite's existing `--reviewers-file` interface. Do not choose the
 upstream implementation option in #51. Remove stale local hardcoded-model
 guidance without waiting for the larger controller.
 
+Ownership is `skills/orchestrating-with-rb-lite/SKILL.md`, its exact reviewer
+configuration reference, and new executable fixture
+`skills/orchestrating-with-rb-lite/scripts/reviewer-model.test`.
+
+Use C1's categorized probe contract. Probe exit 3, malformed/empty output,
+missing dependencies, reviewers-file create/write/chmod failure, and cleanup
+failure all stop before rb-lite launches with a categorized stderr diagnostic.
+Create the reviewers file in a caller-owned mode-0700 directory, require the
+file to be mode 0600, never print its contents, and remove it after the bounded
+run. Diagnostics name the requested candidates and effective model, not prompt
+or credential content. A focused fixture must use a fake C1 runner and fake
+rb-lite to prove the exact resolved model plus finite timeout arrive through
+`--reviewers-file`, every preflight failure launches zero rb-lite children, and
+cleanup failure cannot be reported as success. Run that fixture and
+`./check.sh`.
+
 ### C3. Enforced reviewer isolation — issue #59
 
-**Priority:** P1. **Effort:** large design. **Depends on:** C1.
+**Priority:** P0. **Effort:** large design. **Depends on:** C1.
 
 Use a portable no-shell reviewer boundary through the single runner from C1:
 
@@ -507,6 +681,12 @@ Use a portable no-shell reviewer boundary through the single runner from C1:
 
 This is the Linux/macOS boundary; do not add `bwrap` or `sandbox-exec`.
 Prompt text while granting Bash does not satisfy this issue.
+Keep the boundary in one bead despite its size: first implement and test the
+bundle builder without treating it as enforcement, then integrate the fixed
+no-shell runner policy and callers, and only then call the boundary enforced.
+No intermediate helper-only commit may close the bead. Use a reviewed hard stop
+of 1,500 production lines and 2,500 fixture lines; crossing it returns to SHAPE
+for an explicit split rather than improvising extra graph rows.
 Required bundle fixtures include an untracked executable whose content is
 identical at modes 100644 and 100755; the manifest and reviewer input must
 distinguish them. Additional fixtures cover an unrelated untracked credential,
@@ -540,11 +720,21 @@ the same implementation, not a second patch.
 
 ### D2. Re-exec provenance — issue #62 and #65 marker diagnostic
 
-**Priority:** P1. **Effort:** medium. **Depends on:** D1 test harness.
+**Priority:** P0. **Effort:** medium. **Depends on:** D1 test harness.
 
 Continue re-exec for piped installs and a pulled installer at the same canonical
 install path. A readable installer from another checkout must continue executing
-its own bytes. Check a re-exec marker exists before reading it.
+its own bytes. An absent, non-regular, or unreadable re-exec marker is a
+categorized nonzero failure on stderr; do not fall back to another checkout or
+execute bytes whose provenance was not established.
+
+Ownership is `install.sh` and `install.test`. Focused fixtures cover a piped
+install, a pulled installer re-executing the same canonical path, empty argv,
+another readable checkout retaining its own bytes, and every marker failure.
+Each fixture records which sentinel bytes executed and proves no fallback bytes
+ran. Run `./install.test` and `./check.sh`. This protects the user's requested
+installer provenance: running bytes from another checkout can install a tree the
+user did not invoke.
 
 ### D3. YAML-equivalent companion names — issue #63
 
@@ -559,31 +749,75 @@ dependency.
 
 ### E1. Fail-closed JSONL path ownership — issue #44 and issue #65
 
-**Priority:** P1. **Effort:** medium.
+**Priority:** P0. **Effort:** medium.
 
-Sweep every executable block, prose instruction, and comment that resolves the
-Beads JSONL. Require:
+Create exact companion owner:
+
+- `skills/beads-jsonl-path/SKILL.md`;
+- `skills/beads-jsonl-path/scripts/resolve-beads-jsonl`; and
+- `skills/beads-jsonl-path/scripts/resolve-beads-jsonl.test`.
+
+`resolve-beads-jsonl` runs the following resolution, additionally verifies that
+the result is inside the current Git worktree, and prints only that absolute path
+on success. Sweep every executable block, prose instruction, and comment that
+resolves the Beads JSONL to use the exact installed companion path, falling back
+to the checkout owner only when no installed target resolves. Require:
 
 ```bash
-_bw=$(br where --json) || exit
+_bw=$(br where --json) ||
+  { echo "cannot resolve the beads workspace" >&2; exit 1; }
 BEADS_JSONL=$(
   printf '%s' "$_bw" |
     jq -ers '
       if length == 1 and
          ((.[0] | type) == "object") and
          ((.[0].jsonl_path | type) == "string") and
-         ((.[0].jsonl_path | length) > 0)
-      then .[0].jsonl_path
-      else error("expected exactly one non-empty string jsonl_path")
-      end
-    '
-) || exit
+         ((.[0].jsonl_path | length) > 0) and
+         ((.[0].jsonl_path | contains("\u0000")) | not) and
+         ((.[0].jsonl_path | test("[\r\n]")) | not)
+       then .[0].jsonl_path
+       else error("expected exactly one non-empty string jsonl_path")
+       end
+     '
+) || { echo "cannot resolve exactly one beads JSONL" >&2; exit 1; }
 ```
 
 or one tested fact owner with equivalent fail-closed behavior.
 
+The displayed shell pins the JSON cardinality and rejects NUL/CR/LF before
+command substitution can strip or misrepresent path bytes; the companion owns
+the remaining byte-safe inspection. It canonicalizes the current worktree root
+and resolved parent without following the final path, requires the path to be
+inside that root, and reads raw NUL-delimited `git ls-files --stage -z`,
+`git ls-files -v -z`, and `git ls-tree -z HEAD` records. Success requires exactly
+one stage-0 tracked regular-file entry, mode `100644`, tag `H` (not lowercase
+assume-unchanged or `S` skip-worktree), the same regular mode in HEAD, and a
+non-symlink regular worktree file. It reads the HEAD blob, index blob, and
+worktree bytes without filters and requires all three byte strings to be
+identical before printing the path. It therefore refuses staged, unstaged,
+mode-only, hidden-index-flag, unmerged, missing, ignored/untracked, symlink,
+gitlink, and wrong-worktree states rather than trusting porcelain visibility.
+
 Likely consumers include Drive, plan transfer, bead polish, rb-lite backlog
-drain, and orchestration guidance.
+drain, and orchestration guidance. Add this companion to their selective-install
+dependencies and wire its direct test into `check.sh`.
+
+The owner must print a useful stderr diagnostic and exit nonzero for: `br where`
+returning nonzero after emitting valid JSON; missing, null, empty, or non-string
+`jsonl_path`; zero or multiple JSON documents; malformed JSON; missing/failing
+`jq`; NUL/CR/LF path values; and a resolved path outside the current worktree.
+Focused fixtures prove that each failure performs no Beads mutation or flush.
+Further fixtures cover staged-only, unstaged-only, staged-plus-unstaged,
+mode-only, assume-unchanged, skip-worktree, unmerged, symlink, gitlink,
+ignored/untracked, missing, and nonregular JSONL state, plus a path inside a
+different worktree; each is refused before any mutation or flush. This is P0
+because the
+first `br` write after an ambiguous resolution can export a stale cache over the
+tracked JSONL and silently destroy unstaged bead bodies.
+
+E1 owns resolution and clean-worktree inspection only. It updates every
+consumer, including harden-until-clean, to use that fact owner; E3 separately
+owns the exact close-plus-flush transaction after resolution succeeds.
 
 ### E2. Generated agent protocol conflict — issue #33
 
@@ -591,20 +825,56 @@ drain, and orchestration guidance.
 
 Create:
 
-- **E2a, P1:** semantic review or omission of a generated `br agents` session
-  protocol that contradicts branch/review gates.
-- **E2b, P2:** noninteractive prompt behavior.
-- **E2c, P2:** exit-143 and parallel-panel diagnostic corrections.
+- **E2a, P0:** replace unconditional delegation with a fail-closed semantic
+  preview. Read the complete `br agents --add --dry-run` output against the
+  existing AGENTS branch, review, gate, and closure contract. If its session
+  commit/push protocol conflicts, omit the entire generated Beads block and
+  report the exact conflicting clauses; do not reconcile, partially copy, or
+  claim that separate markers imply semantic compatibility. Install the block
+  only when the preview is semantically compatible. An `install.test` fixture
+  covers a branch-and-PR agreement and proves no generic session block is
+  installed or human-owned Beads text changed; a compatible minimal repository
+  fixture proves the full generated block may be installed unchanged.
+- **E2b, P2:** use `br agents --add --force` (or `--update --force`) only after
+  E2a accepts the preview, so compatible generation is bounded without a TTY.
+  Fixtures cover EOF/noninteractive success after acceptance, noninteractive
+  omission after conflict, and no prompt hang.
+- **E2c, P2:** own the “When the loop misbehaves” guidance in
+  `skills/orchestrating-with-rb-lite/SKILL.md` plus executable prose extraction
+  fixture `skills/orchestrating-with-rb-lite/scripts/diagnostic-guidance.test`.
+  Before attributing exit 143/137 to collateral `pkill`, require reading reviewer
+  JSON `terminal_reason`, `subtype`, and errors plus the disconfirming check for
+  non-rb-lite process deaths. Remove “almost always.” A single failed concurrent
+  panel is not evidence that parallel review is broken and must not recommend
+  serialization. Fixtures feed an API abort, an actual signal, and one failed
+  parallel round and assert the bounded diagnosis text/outcome. Run it and
+  `./check.sh`.
 
 The skeptic-convergence observation is not a fourth E2 bead; F1 owns it together
 with #47's fact-ownership policy.
 
 ### E3. Exact closure command — issue #65
 
-**Priority:** P2. **Effort:** extra small.
+**Priority:** P0. **Effort:** extra small.
 
 Align harden-until-clean with the canonical fail-closed closure command and
-explicit flush behavior.
+explicit flush behavior. After E1 resolves and inspects the exact JSONL, the
+literal terminal transaction is:
+
+```bash
+br close "$bead_id" --reason "$merge_evidence" ||
+  { echo "cannot close $bead_id" >&2; exit 1; }
+br sync --flush-only ||
+  { echo "closure not persisted for $bead_id" >&2; exit 1; }
+```
+
+`bead_id` must be the exact claimed finding ID and `merge_evidence` must contain
+the reviewed work-PR URL and merge SHA. Do not use `br update ... -s closed`,
+continue after either failure, or report closure before the explicit flush.
+Add
+`skills/orchestrating-with-rb-lite/scripts/harden-closure.test` as the focused
+extracted-snippet fixture. It covers close failure, flush failure, exact-ID
+selection, and success, then runs `./check.sh`.
 
 ## Workstream F — Drive/rb-lite controller and convergence
 
@@ -612,8 +882,34 @@ explicit flush behavior.
 
 **Priority:** P2. **Effort:** medium. Can land before F2.
 
-Add DEDUPE/fact-owner disposition and panel self-diagnosis. Do not use
-delta-only review or defer all P3 findings as the remedy for duplicated facts.
+Own `skills/multi-reviewer-loop/references/disposition-rules.md` and the
+fractal-tail/convergence sections in `skills/multi-reviewer-loop/SKILL.md`.
+Add executable
+`skills/multi-reviewer-loop/scripts/disposition-convergence.test`, wired into
+`check.sh`. The disposition record gains:
+
+```text
+DEDUPE owner=<path-or-generated-command> copies=<NUL-safe path set>
+       action=<delete copies|replace with references|derive mechanically>
+```
+
+When a finding concerns a checkable fact stated in multiple places, require one
+owner and delete/reference/derive every other copy in the same round. A
+wording-only tail remains a normal disposition; checkable numbers, statuses, or
+commands are never waived merely for arriving late. Do not use delta-only review
+or defer all P3 findings as the remedy.
+
+Also own #33's skeptic-convergence observation: when the coordinator cannot
+distinguish substantive convergence from review tail, give the same panel the
+round-by-round finding/disposition history and ask independently for
+LAND/CONTINUE plus the class the loop is systematically missing. Record both
+answers and disagreement; panel advice is diagnostic evidence, never authority
+to bypass the gate or unresolved findings. Fixtures cover a finding about a
+newly duplicated fact becoming DEDUPE with one named owner, a wording-only tail
+that does not hide a checkable false fact, and split panel advice that remains
+visible. The fixture exercises DEDUPE with one owner and multiple copies,
+wording tail versus a checkable false fact, skeptic withdrawal under recorded
+rationale, and split panel advice. Run it and `./check.sh`.
 
 ### F2. Synchronous checkpoint seam — issue #48 upstream portion
 
@@ -679,20 +975,15 @@ and TERM/INT child reaping. The hook does not parse a Drive contract, persist a
 state database, poll logs, reset/cut the diff, or learn BUILD/HARDEN/LAND.
 
 The coordinating skills agent verifies the upstream PR URL, merge SHA, and all
-three gate exit codes. It then records and closes F2 only through a reviewed
-skills-repository path:
-
-- carry the evidence update, `br close <F2-bead-id>`, and the explicit
-  `br sync --flush-only` into the next `executor-skills` branch after first
-  confirming the JSONL is clean against `HEAD`; or
-- if no next skills branch is immediately available, run the canonical metadata
-  closure transaction: create `metadata/close-f2-checkpoint` from current
-  `master`; make the evidence/closure JSONL change plus the `DRIVE.md`
-  Done/Now/Next update; push and open a PR whose body contains
-  `bead-closure: <F2-bead-id>`; once GitHub assigns `N`, amend `DRIVE.md` to
-  `Pending: metadata PR douglaz/skills#N`; rerun the skills gate and panel on the
-  amended tree; force-push with lease; and merge that PR. Do not record DONE
-  while other scoped rows remain.
+three gate exit codes. It then records and closes F2 only through the dedicated
+reviewed metadata transaction: create `metadata/close-f2-checkpoint` from current
+`master`; use E1 to prove the JSONL clean; make only the F2 evidence/closure JSONL
+change plus the `DRIVE.md` Done/Now/Next update; push and open a PR whose body
+contains `bead-closure: <F2-bead-id>`; once GitHub assigns `N`, amend `DRIVE.md`
+to `Pending: metadata PR douglaz/skills#N`; rerun the skills gate and panel on
+the amended tree; force-push with lease; and merge that PR. Do not combine this
+metadata with another execution row or record DONE while other scoped rows
+remain.
 
 Do not mutate the skills Beads store from the rb-lite checkout, on an active
 unrelated skills branch, or directly on skills `master`.
@@ -713,6 +1004,70 @@ that release exists.
 Record explicit human authorization, publish the release, and record its
 immutable version/reference. This bead must not start or close merely because F2
 merged.
+
+F2r is a two-stage authority transaction within one bead. While awaiting
+authorization it stays open, unclaimed, and is reported only through the
+`authority-human` lane. Once the human records affirmative authorization, the
+coordinating skills agent—not a generic implementation drain—claims F2r and
+performs the mechanical release publication, probe, and reviewed metadata
+record. The authority label remains because the prohibited action is still
+governed by that record; it does not mean the human must execute release tooling.
+Publication follows the rb-lite repository's release instructions and is the
+only external side effect authorized by this bead.
+
+The authorization record and immutable version/commit go in both the bead notes
+and `DRIVE.md`. Publication is not complete until the released artifact itself
+exists and passes. Record the GitHub release URL, immutable tag, and full commit.
+Require `gh release view <tag> -R douglaz/rb-lite` to report a published,
+non-draft release, and require both the tag ref and its peeled annotated-tag ref
+(when present) from `git ls-remote` to resolve to the recorded commit. A mismatch,
+lightweight/annotated ambiguity, moving tag, or absent release blocks closure.
+Then probe the tag-qualified released artifact:
+
+```bash
+TAG="<immutable-tag>"
+COMMIT="<immutable-commit>"
+_release=$(
+  gh release view "$TAG" -R douglaz/rb-lite \
+    --json url,tagName,isDraft,isPrerelease
+) || { echo "published rb-lite release is absent" >&2; exit 1; }
+printf '%s' "$_release" |
+  jq -e --arg tag "$TAG" \
+    '.tagName == $tag and .isDraft == false' >/dev/null ||
+  { echo "rb-lite release metadata does not match authorization" >&2; exit 1; }
+_refs=$(git ls-remote --tags https://github.com/douglaz/rb-lite.git \
+  "refs/tags/$TAG" "refs/tags/$TAG^{}") ||
+  { echo "cannot resolve published rb-lite tag" >&2; exit 1; }
+_tag_commit=$(printf '%s\n' "$_refs" |
+  awk -v tag="refs/tags/$TAG" '
+    $2 == tag { direct=$1; direct_n++ }
+    $2 == tag "^{}" { peeled=$1; peeled_n++ }
+    END {
+      if (direct_n != 1 || peeled_n > 1) exit 1
+      print (peeled_n == 1 ? peeled : direct)
+    }
+  ') || { echo "rb-lite tag resolution is ambiguous" >&2; exit 1; }
+[ "$_tag_commit" = "$COMMIT" ] ||
+  { echo "rb-lite release tag does not resolve to the authorized commit" >&2; exit 1; }
+_caps=$(
+  nix run "github:douglaz/rb-lite/$TAG" -- capabilities --json
+) || { echo "published rb-lite is not runnable" >&2; exit 1; }
+printf '%s' "$_caps" |
+  jq -e '.synchronous_checkpoint == 1' >/dev/null ||
+  { echo "published rb-lite lacks synchronous checkpoint capability" >&2; exit 1; }
+_refs_after=$(git ls-remote --tags https://github.com/douglaz/rb-lite.git \
+  "refs/tags/$TAG" "refs/tags/$TAG^{}") ||
+  { echo "cannot recheck published rb-lite tag" >&2; exit 1; }
+[ "$_refs_after" = "$_refs" ] ||
+  { echo "rb-lite release tag moved during verification" >&2; exit 1; }
+```
+
+Replace every placeholder with the recorded values. Fixtures or a checked
+release transcript cover lightweight and annotated tags, absent/draft releases,
+tag/commit mismatch, and successful capability probing. Authorization without
+a published, consumable, tag-and-commit-verified artifact does not close F2r;
+F3 separately pins the verified commit as its immutable fallback rather than a
+path-only, moving-tag, or version-text guess.
 
 ### F3. Foreground Drive controller — issues #48, #30, #31, #35
 
@@ -740,6 +1095,17 @@ Implement:
 - atomic BUILD-to-HARDEN continuation; and
 - durable pass count and resume behavior.
 
+Keep F3 as one controller bead because the resolver, checkpoint policy, and
+resume state form one foreground transaction, but implement and review it in
+three explicit internal stages: (1) immutable capability resolver/preflight;
+(2) checkpoint allowlist, class budgets, brakes, cutback, and post-cutback gate;
+and (3) structured terminal result, atomic phase continuation, pass count, and
+resume. The owner is `skills/drive/scripts/drive-run` with a deterministic
+`skills/drive/scripts/drive-run.test`, wired into `check.sh`. No stage is a
+closable partial deliverable, and no test may launch a real model. Use a reviewed
+hard stop of 1,500 production lines and 2,500 fixture lines; crossing it returns
+to SHAPE for a graph split.
+
 Close #30, #31, and #35 only after their observed failures are deterministic
 fixtures. #47 remains an independent policy deliverable even if #48 tracks the
 controller umbrella.
@@ -757,11 +1123,55 @@ production/test budget breaches.
 
 **Priority:** P2. **Effort:** medium/large.
 
-Create a tested `verify-commit` owner for literal expectations, occurrence
-counts, absent paths, and optional exact path sets. Cover the regression cases
-listed in #32, including metacharacters, leading dashes, multiple occurrences on
-one line, count zero under `pipefail`, SIGPIPE, file deletion, and unexpected
-paths.
+Create exact companion owner `skills/verify-commit/` with:
+
+- `skills/verify-commit/scripts/verify-commit`;
+- `skills/verify-commit/scripts/verify-commit.test`; and
+- selective-install companion wiring for Drive, multi-reviewer-loop,
+  second-model-bead-audit, and agents-md consumers.
+
+The fixed argv API is:
+
+```text
+verify-commit [--rev REV]
+  [--expect PATH LITERAL]...
+  [--expect-count PATH LITERAL COUNT]...
+  [--expect-absent PATH]...
+  [--path PATH]... [--exact-paths]
+```
+
+`--expect` requires at least one byte-for-byte literal occurrence;
+`--expect-count` counts non-overlapping byte occurrences, including multiple
+occurrences on one line and zero; `--expect-absent` requires the path to be
+absent from the commit; and `--exact-paths` requires the revision diff to contain
+exactly the repeated `--path` values, compared as raw path bytes. `--rev`
+defaults to `HEAD`; the compared path set is `REV^1..REV`, and a root commit uses
+Git's empty tree as the parent. For a merge commit, only first-parent changes are
+in scope and the diagnostic states that fact. Enumerate the path set with rename
+detection disabled, so a rename is one deleted old path plus one added new path;
+both endpoints are required. Use raw NUL-delimited Git output and explicitly
+disable external diff, textconv, rename config, and pager behavior. A hostile
+repository/global configuration must not change the set or execute a helper.
+
+Reject empty literals, negative/non-decimal counts, binary blobs for literal
+operations, an unborn/unreadable revision, ambiguous options, conflicting
+expectations, or `--path` without `--exact-paths`. At least one repeated `--path`
+is required with `--exact-paths`. Unix argv cannot represent NUL, so NUL-path
+support is neither claimed nor tested. Fixtures pin adds/deletes/renames, root
+and merge commits, hostile diff/textconv/rename configuration, empty literals,
+and both invalid `--path` combinations.
+Exit 0 means every expectation matched, 1 means a checked mismatch, and 2 means
+invocation/dependency/repository/read failure; diagnostics on stderr name the
+revision, path encoded unambiguously, and failed expectation without dumping
+blob content.
+
+The checker reads Git objects and diffs only: it never writes the worktree,
+index, refs, config, or object database. Tests hash the index/worktree/ref state
+before and after every success and failure. Cover the regression cases listed in
+#32: metacharacters, leading dashes, multiple occurrences on one line, count
+zero under `pipefail`, SIGPIPE/large-file early match, whole-file deletion,
+accidental retained-file deletion, and unexpected paths. Run the direct test,
+selective-install fixtures, and `./check.sh`.
 
 This is post-commit evidence and is not B1's delegated-edit isolation mechanism.
 
@@ -769,8 +1179,50 @@ This is post-commit evidence and is not B1's delegated-edit isolation mechanism.
 
 **Priority:** P2. **Effort:** large. **Depends on:** G1.
 
-Extract and run executable examples in a disposable environment, and
-experimentally validate the harness's own claims.
+Create exact companion owner:
+
+- `skills/executable-docs/SKILL.md`;
+- `skills/executable-docs/scripts/executable-docs`;
+- `skills/executable-docs/manifests/behavioural-claims.json`; and
+- `skills/executable-docs/scripts/executable-docs.test`.
+
+Its fixed API is:
+
+```text
+executable-docs --document PATH --manifest PATH
+```
+
+The first and only registered document is
+`skills/agents-md/references/behavioural-claims.md`. Give each of its five
+`console` fences a stable adjacent HTML ID. The manifest pins the exact ordered
+ID set, source digest, shell/version prerequisites, per-example timeout,
+normalizers for random temporary paths and host binary/version prefixes, and
+expected stdout, stderr, and status. The parser accepts only `$ ` command starts
+and `> ` continuations, rejects duplicate/missing/unregistered IDs, malformed
+prompt structure, unexpected fence drift, unsupported normalizers, and any
+registered block whose transcript cannot be separated unambiguously.
+
+Run each example in its own mode-0700 temporary directory and initialized
+disposable Git repository, with private HOME/XDG/TMPDIR, stdin closed, credential
+and agent environment removed, a fixed minimal PATH resolved before launch,
+bounded process-group cleanup, and separated stdout/stderr/status artifacts.
+The registered source digest and executable allowlist make this a harness for
+reviewed examples, not an evaluator for arbitrary Markdown or untrusted shell.
+Portable network sandboxing is a non-goal; no registered block may use a network
+client, and the test rejects a manifest/source mutation that introduces one.
+Cleanup or transcript-normalization failure is nonzero and preserves private
+artifacts only when a diagnostic explicitly names their path.
+
+Wire the harness test and the registered behavioural-claims run into
+`check.sh`. Experimentally validate the apparatus with one mutation per defect:
+late trap-variable expansion, unchecked `mktemp`, predictable temp output,
+redirection bound to the wrong command, execution outside Git, `$?` captured
+after substitution, unexported TMPDIR, inherited SHELLOPTS/BASH_ENV/function,
+wrong expected stream, wrong status, and timeout with a descendant. Each
+mutation fixture first updates the copied manifest's source digest so it reaches
+execution rather than failing the generic drift guard, then must make the named
+property assertion fail; assert the failure diagnostic names that property.
+Then run `./check.sh`.
 
 ### G3. Managed-block length decision — issue #50
 
@@ -778,6 +1230,16 @@ experimentally validate the harness's own claims.
 
 Reassess whether the 183-word behavioral-claims rule can shrink once mechanisms
 own its detail. Leaving it intact is an acceptable evidence-based disposition.
+
+Record the decision in the bead notes and, if content changes, in the owning
+document/commit. Inventory all four load-bearing sub-rules and measure the
+managed paragraph with the repository's existing folded-description/word-count
+conventions. Shrink only if every sub-rule remains actionable and the G2
+registered examples still carry the removed operational detail; otherwise
+retain it and record why. There is no required pre-fix red run for a legitimate
+retain decision. Run G1/G2 evidence and `./check.sh` after any tracked edit; a
+notes-only retain decision records the exact measurement commands and statuses
+instead.
 
 ## Complete execution-bead table
 
@@ -800,21 +1262,21 @@ the body. Every row gets label `drive-open-issues`; B0 and F2r get
 | B1d | P0 | #41, #43, #34, #65 | B0 | Delegated-edit design and fixture contract |
 | B1 | P0 | #41, #43, #34, #65 | B1d | Delegated-edit isolation implementation |
 | B2a | P1 | #34 | — | Unsafe red evidence blocks completion |
-| B2b | P1 | #34 | — | Preserve colocated tests during inversion |
+| B2b | P0 | #34 | — | Preserve colocated tests during inversion |
 | B2c | P2 | #34 | C1 | Tested panel shutdown/escape |
 | B2d | P2 | #34 | G1 | Do not mask verification execution errors |
-| B2e | P1 | #34 | — | Compare flush against saved bytes |
+| B2e | P0 | #34 | — | Compare flush against saved bytes |
 | C1 | P1 | #53–#58, #60 | — | Shared bounded Claude reviewer runner |
 | C2 | P1 | #51 | C1 | Bound rb-lite reviewer model |
-| C3 | P1 | #59 | C1 | Enforced reviewer isolation |
+| C3 | P0 | #59 | C1 | Enforced reviewer isolation |
 | D1 | P2 | #61, #38, #65 | — | Old-Bash argv and empty discovery |
-| D2 | P1 | #62, #65 | D1 | Re-exec provenance and marker diagnostic |
+| D2 | P0 | #62, #65 | D1 | Re-exec provenance and marker diagnostic |
 | D3 | P2 | #63 | D1 | YAML-equivalent companion names |
-| E1 | P1 | #44, #65 | — | Fail-closed JSONL path ownership |
-| E2a | P1 | #33 | — | Resolve generated protocol conflict |
+| E1 | P0 | #44, #65 | — | Fail-closed JSONL path ownership |
+| E2a | P0 | #33 | — | Resolve generated protocol conflict |
 | E2b | P2 | #33 | E2a | Noninteractive generated behavior |
 | E2c | P2 | #33 | E2a | Correct panel diagnostics |
-| E3 | P2 | #65 | E1 | Exact fail-closed closure command |
+| E3 | P0 | #65 | E1 | Exact fail-closed closure command |
 | F1 | P2 | #47, #33 | — | Deduplication and fact ownership |
 | F2 | P1 | #48 | C2 | Upstream synchronous checkpoint seam |
 | F2r | P1 | #48 | F2 | Human-authorized release publication |
@@ -826,6 +1288,14 @@ the body. Every row gets label `drive-open-issues`; B0 and F2r get
 Constraints:
 
 - Only one owner edits the delegated-edit or panel-runner file set at a time.
+- B2c remains a consumer-level #34 integration regression after C1 owns the
+  lifecycle; E3 remains the exact harden-until-clean close/flush transaction
+  after E1 owns resolution. Neither is a duplicate of its prerequisite.
+- Retain the direct F3→C1 and G3→G1 edges even though each is also reachable
+  transitively. F3 directly consumes C1's runner independently of the upstream
+  release chain, and G3 directly uses G1 evidence independently of G2. The
+  intermediate bead being rejected or re-scoped must not erase either direct
+  prerequisite.
 - B0 and F2r are explicit decision/authority beads. They remain blocked for
   human input even when their graph prerequisites are satisfied.
 - The upstream F2 implementation/PR may proceed before F2r authorization.
@@ -842,9 +1312,9 @@ Constraints:
   cross-repository procedure above, and the third is reported for human action
   but never sent to an implementer.
 
-## Beads graph to create
+## Beads graph to update
 
-After review, transfer this plan into:
+After review, update the existing graph in place into:
 
 - exactly one flat execution/decision bead per row in the complete
   execution-bead table, with no tracking parent or epic;
