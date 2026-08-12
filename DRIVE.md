@@ -8,7 +8,7 @@ take.
 · **Branch:** `plan/backlog-execution`
 **Pending:** —
 **Gate:** `./check.sh`
-· last green 2026-08-12 on the `8844eaa` tree (exit 0; 26 installer,
+· last green 2026-08-12 on the `eab5c53` tree (exit 0; 26 installer,
 124 bot-gate, and 70 drive-status fixtures passed under GNU Bash 5.3.15,
 non-POSIX mode).
 
@@ -115,6 +115,11 @@ non-POSIX mode).
   the other ten-second startup handshakes without changing the watchdog's
   two-second behavior deadline; the full gate passed with the same 26/124/70
   counts and empty stderr.
+- Codex's next current-tip pass found that a non-exported local `command`
+  function could still swallow the final supervisor `exec`. Commit `eab5c53`
+  removes that function before the first normal-shell `command`; the new
+  source-in-current-shell fixture fails against the isolated regression, and
+  the full gate again passed 26/124/70 with empty stderr.
 
 ## Now
 
