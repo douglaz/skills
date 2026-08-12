@@ -2,8 +2,8 @@
 
 ## Status
 
-Returned to SHAPE again on 2026-08-12 after the first post-amendment GRAPH
-polish. The first pinned Codex xhigh
+SHAPE cleared again on 2026-08-12 after the first post-amendment GRAPH polish.
+The first pinned Codex xhigh
 review at `bceb919` reported no P0/P1 findings, but translation exposed missing
 API, failure, recovery, and fixture detail in later rows. After those amendments,
 a fresh pinned Codex review found two inherited-signal defects in the canonical
@@ -18,8 +18,11 @@ edges exactly, but five fresh polish passes found that the P0 E1→E3 bootstrap 
 only prose, E1/E3 closure metadata was not fully landed between stages, and a few
 shared owners/acceptance commands remained implicit. The plan now encodes the
 bootstrap barrier as edges, serializes skills/metadata lanes, and incorporates
-the accepted sizing, ownership, and command findings. It requires fresh blocking
-Codex and Fable review before the graph is updated again. This plan covers the 29 GitHub
+the accepted sizing, ownership, and command findings. On `ec076e9`, Fable/high
+reported `NO BLOCKING FINDINGS`, pinned `gpt-5.6-sol`/xhigh Codex reported no
+P0/P1 (one non-blocking P2 about orphan cleanup in a startup-timeout test path),
+and `./check.sh` exited 0 with 26 installer, 124 bot-gate, and 70 drive-status
+fixtures. GRAPH may update the existing store to the 37-edge target. This plan covers the 29 GitHub
 issues that were open in `douglaz/skills` on 2026-08-11. GitHub remains the
 external source of issue identity; Beads holds the executable dependency graph.
 
