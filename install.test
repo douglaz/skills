@@ -523,6 +523,8 @@ execfail_stdout="$WORK/discipline-execfail.stdout"
 execfail_stderr="$WORK/discipline-execfail.stderr"
 bashenv_stdout="$WORK/discipline-bashenv.stdout"
 bashenv_stderr="$WORK/discipline-bashenv.stderr"
+shellfunc_stdout="$WORK/discipline-shellfunc.stdout"
+shellfunc_stderr="$WORK/discipline-shellfunc.stderr"
 stdin_stdout="$WORK/discipline-stdin.stdout"
 stdin_stderr="$WORK/discipline-stdin.stderr"
 status_stdout="$WORK/discipline-status.stdout"
@@ -542,8 +544,11 @@ aggregate_stdout="$WORK/discipline-aggregate.stdout"
 aggregate_stderr="$WORK/discipline-aggregate.stderr"
 cleanup_stdout="$WORK/discipline-cleanup.stdout"
 cleanup_stderr="$WORK/discipline-cleanup.stderr"
+trusted_cleanup_stdout="$WORK/discipline-trusted-cleanup.stdout"
+trusted_cleanup_stderr="$WORK/discipline-trusted-cleanup.stderr"
 gate_tmp="$WORK/discipline-gate-tmp"
 cleanup_tmp="$WORK/discipline-cleanup-tmp"
+trusted_cleanup_tmp="$WORK/discipline-trusted-cleanup-tmp"
 cleanup_bin="$WORK/discipline-cleanup-bin"
 term_started="$WORK/discipline-term-started"
 term_rc_file="$WORK/discipline-term.rc"
@@ -572,10 +577,10 @@ aggregate_release="$WORK/discipline-aggregate-release"
 aggregate_rc_file="$WORK/discipline-aggregate.rc"
 aggregate_early_file="$WORK/discipline-aggregate.early"
 bashenv_file="$WORK/hostile-bash-env"
-mkdir -p "$gate_tmp" "$cleanup_tmp" "$cleanup_bin"
-printf '%s\n' '#!/bin/sh' 'exit 1' >"$cleanup_bin/rm"
-mv "$cleanup_bin/rm" "$cleanup_bin/unlink"
-chmod +x "$cleanup_bin/unlink"
+mkdir -p "$gate_tmp" "$cleanup_tmp" "$trusted_cleanup_tmp" "$cleanup_bin"
+printf '%s\n' '#!/bin/sh' 'exit 0' >"$cleanup_bin/unlink"
+printf '%s\n' '#!/bin/sh' 'exit 0' >"$cleanup_bin/rmdir"
+chmod +x "$cleanup_bin/unlink" "$cleanup_bin/rmdir"
 printf '%s\n' 'exit 0' >"$bashenv_file"
 capture_gate=false
 found_gate_start=false
@@ -629,7 +634,10 @@ possible_gate_start=false
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == aggregate ]]; then'
         printf '%s\n' '  printf "aggregate-first\n" && { : >"$AGG_STARTED"; while [[ ! -f "$AGG_RELEASE" ]]; do sleep 0.01; done; false; } && printf "aggregate-last\n"'
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == cleanup ]]; then'
+        printf '%s\n' '  for cleanup_root in "$TMPDIR"/*; do [[ ! -d "$cleanup_root" ]] || chmod 500 "$cleanup_root"; done'
         printf '%s\n' '  printf "cleanup-output\n"'
+        printf '%s\n' 'elif [[ ${GATE_MODE:-function} == trusted-cleanup ]]; then'
+        printf '%s\n' '  printf "trusted-cleanup-output\n"'
         printf '%s\n' 'else gate; fi'
         found_gate_command=true
       else
@@ -705,6 +713,12 @@ else
   TMPDIR="$gate_tmp" \
     HOSTILE_BASH_ENV="$bashenv_file" PYTHONINSPECT=1 PYTHONPATH=/definitely/hostile \
     bash "$gate_script" >"$bashenv_stdout" 2>"$bashenv_stderr"; bashenv_rc=$?
+  (
+    false() { return 0; }
+    export -f false
+    TMPDIR="$gate_tmp" \
+      bash "$gate_script" >"$shellfunc_stdout" 2>"$shellfunc_stderr"
+  ); shellfunc_rc=$?
   TMPDIR="$gate_tmp" GATE_MODE=stdin \
     bash "$stdin_gate_script" >"$stdin_stdout" 2>"$stdin_stderr"; stdin_rc=$?
   TMPDIR="$gate_tmp" GATE_MODE=status \
@@ -954,8 +968,12 @@ else
   )
   aggregate_rc=$(< "$aggregate_rc_file")
   TMPDIR="$cleanup_tmp" GATE_MODE=cleanup \
-    PATH="$cleanup_bin:$PATH" \
     bash "$gate_script" >"$cleanup_stdout" 2>"$cleanup_stderr"; cleanup_rc=$?
+  find "$cleanup_tmp" -mindepth 1 -maxdepth 1 -type d -exec chmod 700 {} \;
+  TMPDIR="$trusted_cleanup_tmp" GATE_MODE=trusted-cleanup \
+    PATH="$cleanup_bin:$PATH" \
+    bash "$gate_script" >"$trusted_cleanup_stdout" 2>"$trusted_cleanup_stderr"
+  trusted_cleanup_rc=$?
   gate_output=$(< "$gate_stdout")
   gate_error=$(< "$gate_stderr")
   paste_output=$(< "$paste_stdout")
@@ -964,6 +982,8 @@ else
   execfail_error=$(< "$execfail_stderr")
   bashenv_output=$(< "$bashenv_stdout")
   bashenv_error=$(< "$bashenv_stderr")
+  shellfunc_output=$(< "$shellfunc_stdout")
+  shellfunc_error=$(< "$shellfunc_stderr")
   stdin_output=$(< "$stdin_stdout")
   stdin_error=$(< "$stdin_stderr")
   status_output=$(< "$status_stdout")
@@ -983,6 +1003,8 @@ else
   aggregate_early=$(< "$aggregate_early_file")
   cleanup_output=$(< "$cleanup_stdout")
   cleanup_error=$(< "$cleanup_stderr")
+  trusted_cleanup_output=$(< "$trusted_cleanup_stdout")
+  trusted_cleanup_error=$(< "$trusted_cleanup_stderr")
   if [[ $rc -ne 1 ]]; then
     fail "$t" "failed gate wrapper exited $rc"
   elif [[ $gate_output != $'first\nEXIT=1' ]]; then
@@ -1005,6 +1027,10 @@ else
     fail "$t" "hostile BASH_ENV bypassed the gate: rc=$bashenv_rc stdout=$bashenv_output"
   elif [[ -n "$bashenv_error" ]]; then
     fail "$t" "hostile-BASH_ENV run wrote stderr: $bashenv_error"
+  elif [[ $shellfunc_rc -ne 1 || $shellfunc_output != $'first\nEXIT=1' ]]; then
+    fail "$t" "exported Bash function bypassed the gate: rc=$shellfunc_rc stdout=$shellfunc_output"
+  elif [[ -n "$shellfunc_error" || $shellfunc_output == *should-not-run* ]]; then
+    fail "$t" "exported-function run leaked or continued: stderr=$shellfunc_error"
   elif [[ $stdin_rc -ne 1 || $stdin_output != 'EXIT=1' ]]; then
     fail "$t" "stdin-consuming gate became rc=$stdin_rc stdout=$stdin_output"
   elif [[ -n "$stdin_error" || $stdin_output == *stdin-gate-continued* ]]; then
@@ -1074,6 +1100,13 @@ else
     fail "$t" "cleanup failure was not reported: $cleanup_error"
   elif ! find "$cleanup_tmp" -mindepth 1 -type f -print -quit | grep -q .; then
     fail "$t" "cleanup-failure fixture left no log to substantiate the failure"
+  elif [[ $trusted_cleanup_rc -ne 0 ||
+      $trusted_cleanup_output != $'trusted-cleanup-output\nEXIT=0' ]]; then
+    fail "$t" "trusted cleanup became rc=$trusted_cleanup_rc stdout=$trusted_cleanup_output"
+  elif [[ -n "$trusted_cleanup_error" ]]; then
+    fail "$t" "trusted cleanup wrote stderr: $trusted_cleanup_error"
+  elif find "$trusted_cleanup_tmp" -mindepth 1 -print -quit | grep -q .; then
+    fail "$t" "PATH cleanup wrappers bypassed trusted artifact removal"
   elif find "$gate_tmp" -mindepth 1 -print -quit | grep -q .; then
     fail "$t" "gate wrapper leaked its temporary log"
   else

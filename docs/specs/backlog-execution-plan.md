@@ -358,8 +358,11 @@ named future red fixture for each of these classes:
 - ambient Git configuration;
 - gitlinks/submodules;
 - out-of-allowlist writes;
-- untracked and deleted descendants; and
-- restore/apply failure.
+- untracked and deleted descendants;
+- restore/apply failure;
+- source HEAD/index/allowed-path drift while the implementer runs; and
+- a second cooperating writer attempting to edit while the transaction lock is
+  held.
 
 The design must state each fixture's setup, pre-fix failure assertion, preserved
 user bytes/state, and post-fix acceptance assertion. Review the design with:
@@ -399,7 +402,24 @@ Prefer a disposable clean worktree or copy:
 5. compare every staged, unstaged, and untracked path to the exact allowlist;
 6. generate a binary-safe patch;
 7. run `git apply --check`; and
-8. apply only after every guard succeeds.
+8. acquire the repository's delegated-edit transaction lock, re-read and require
+   exact equality with the original source token (HEAD, raw index entries and
+   index tree, staged/unstaged/untracked path sets, modes, and content digests),
+   rerun `git apply --check`, and apply while holding that lock; and
+9. before releasing the lock, prove the index and every pre-existing
+   out-of-allowlist path remain byte-for-byte unchanged and every allowed result
+   equals the reviewed isolated result.
+
+The transaction lock is an atomically created directory under the Git common
+directory, owned by the tested helper and used by every cooperating delegated
+editor in this repository. An existing live/unknown lock is a refusal; stale-lock
+recovery is explicit and never PID-age guessing. Capture the source token before
+launch and revalidate it only after acquiring the lock, immediately before
+application. Drift before lock acquisition applies nothing. A process that
+honors the same lock must block/refuse until application finishes. If
+uncoordinated drift is detected during the post-apply proof, report BLOCKED,
+retain the original/result/patch recovery bundle, and do not blindly restore
+over bytes that may belong to that writer.
 
 Use separate reads for the no-renames restore list and the rename-aware refusal
 decision. Do not revive #34's retracted PGID-reuse sentinel.
@@ -417,8 +437,11 @@ and must not be inferred from this plan.
 - ambient Git configuration;
 - gitlinks/submodules;
 - out-of-allowlist writes;
-- untracked and deleted descendants; and
-- restore/apply failure.
+- untracked and deleted descendants;
+- restore/apply failure;
+- source HEAD/index/allowed-path drift while the implementer runs; and
+- a second cooperating writer attempting to edit while the transaction lock is
+  held.
 
 ### B2. Remaining #34 safety children
 
@@ -858,23 +881,63 @@ with #47's fact-ownership policy.
 **Priority:** P0. **Effort:** extra small.
 
 Align harden-until-clean with the canonical fail-closed closure command and
-explicit flush behavior. After E1 resolves and inspects the exact JSONL, the
-literal terminal transaction is:
+explicit flush behavior. Create exact companion owner:
+
+- `skills/beads-close-transaction/SKILL.md`;
+- `skills/beads-close-transaction/scripts/beads-close-transaction`; and
+- `skills/beads-close-transaction/scripts/beads-close-transaction.test`.
+
+Its API is:
+
+```text
+beads-close-transaction --check-recovery
+beads-close-transaction close --id ID --reason-file PATH
+```
+
+Every scoped scheduler calls `--check-recovery` before `br ready`, `br list`, or
+any mutation. The owner atomically acquires one recovery/transaction lock under
+the resolved Beads directory, runs E1, saves a private pre-close JSONL and
+material `br show` state, then performs the exact close and explicit flush:
 
 ```bash
-br close "$bead_id" --reason "$merge_evidence" ||
-  { echo "cannot close $bead_id" >&2; exit 1; }
-br sync --flush-only ||
-  { echo "closure not persisted for $bead_id" >&2; exit 1; }
+br close "$bead_id" --reason "$merge_evidence" --no-auto-flush ||
+  { verify_still_open_or_retain_lock; echo "cannot close $bead_id" >&2; exit 1; }
+if br sync --flush-only; then
+  verify_db_and_jsonl_closed_or_retain_lock
+else
+  echo "closure not persisted for $bead_id; compensating" >&2
+  br reopen "$bead_id" --reason "rollback: closure export failed" \
+    --no-auto-flush || retain_lock_and_require_recovery
+  br sync --flush-only || retain_lock_and_require_recovery
+  verify_reopened_or_retain_lock
+  exit 1
+fi
 ```
 
 `bead_id` must be the exact claimed finding ID and `merge_evidence` must contain
 the reviewed work-PR URL and merge SHA. Do not use `br update ... -s closed`,
 continue after either failure, or report closure before the explicit flush.
-Add
-`skills/orchestrating-with-rb-lite/scripts/harden-closure.test` as the focused
-extracted-snippet fixture. It covers close failure, flush failure, exact-ID
-selection, and success, then runs `./check.sh`.
+
+The helper cannot make SQLite plus JSONL one filesystem transaction, so it owns
+verified compensation. If close fails, prove the bead remains open. If flush
+fails after SQLite closes, immediately run `br reopen "$bead_id"
+--reason "rollback: closure export failed" --no-auto-flush`, retry the explicit
+flush, and verify the bead is open, its material fields/dependencies match the
+saved state, and no dependent remains newly ready. A successful compensation
+returns nonzero but removes the scheduler lock only after that proof. If reopen,
+re-flush, or verification fails, retain the lock and private recovery bundle,
+emit `BEADS_RECOVERY_REQUIRED` plus its path, and make all compliant scheduler
+queries refuse until explicit recovery. On success, verify both DB and JSONL say
+closed before removing the lock.
+
+Add the companion to every scheduler/closure consumer's selective dependencies
+and wire its test into `check.sh`.
+`skills/orchestrating-with-rb-lite/scripts/harden-closure.test` is the focused
+consumer extraction fixture. Direct and consumer fixtures cover close failure;
+disabled auto-flush plus forced flush failure and successful compensation;
+reopen/re-flush failure retaining the recovery lock; exact-ID selection;
+dependents never escaping during compensation; and successful close. Run both
+tests, `./install.test`, and `./check.sh`.
 
 ## Workstream F — Drive/rb-lite controller and convergence
 
@@ -952,7 +1015,7 @@ capability cases in upstream tests. Do not implement #30's log-tail sidecar.
 The upstream interface is fixed for F2:
 
 ```text
-rb-lite run ... --checkpoint-cmd CMD
+rb-lite run ... --checkpoint-cmd CMD --checkpoint-timeout-seconds N
 ```
 
 - invoke `CMD` synchronously with stdin closed and no implementer/reviewer child
@@ -962,16 +1025,21 @@ rb-lite run ... --checkpoint-cmd CMD
 - provide `RB_LITE_CHECKPOINT`, `BASE`, `RUN_DIR`, `ROUND`, and `ITERATION`, plus
   `REVIEW_PANEL_RESULT=clean|findings|failed` at `post_review`;
 - save checkpoint stdout, stderr, and status in `RUN_DIR`;
+- require a positive finite timeout, run the hook in its own process group, and
+  on expiry perform bounded TERM/CONT/KILL cleanup before returning;
 - status 0 continues, status 20 preserves the diff/artifacts and returns a
   distinct `checkpoint_stopped` terminal status, and every other nonzero returns
-  `checkpoint_failed`;
+  `checkpoint_failed`; timeout returns a third distinct
+  `checkpoint_timed_out` status and fixed process exit code;
 - include checkpoint name, round, iteration, and hook status in the single
   terminal JSON object, with fixed distinct rb-lite process exit codes for both
   terminal statuses.
 
 Deterministic upstream tests must cover both boundaries, the stabilizing
 iteration, actual joined-panel result, 0/20/other statuses, preserved artifacts,
-and TERM/INT child reaping. The hook does not parse a Drive contract, persist a
+timeout with a stopped/resistant descendant, and TERM/INT child reaping. The
+terminal JSON records the configured deadline and whether cleanup escalated.
+The hook does not parse a Drive contract, persist a
 state database, poll logs, reset/cut the diff, or learn BUILD/HARDEN/LAND.
 
 The coordinating skills agent verifies the upstream PR URL, merge SHA, and all
@@ -1068,6 +1136,9 @@ tag/commit mismatch, and successful capability probing. Authorization without
 a published, consumable, tag-and-commit-verified artifact does not close F2r;
 F3 separately pins the verified commit as its immutable fallback rather than a
 path-only, moving-tag, or version-text guess.
+Run the tag-qualified capability command through the same 120-second
+process-group deadline and bounded TERM/CONT/KILL cleanup required by F3; a
+hanging release artifact is not consumable and cannot close F2r.
 
 ### F3. Foreground Drive controller — issues #48, #30, #31, #35
 
@@ -1079,7 +1150,11 @@ Implement:
   reject a PATH candidate unless `rb-lite capabilities --json` exits 0 and
   reports `"synchronous_checkpoint":1`; otherwise fall back to
   `nix run github:douglaz/rb-lite/<F2r-immutable-commit> --`, probe that exact
-  command too, and fail preflight if neither qualifies;
+  command too, and fail preflight if neither qualifies. Bound each probe to a
+  declared positive timeout (default 120 seconds), stdin closed and a private
+  process group; timeout performs bounded TERM/CONT/KILL cleanup. A timed-out
+  PATH candidate falls through to the immutable probe, while a timed-out
+  immutable probe is a categorized preflight failure;
 - declared round limits passed to rb-lite;
 - separate production and test LOC budgets;
 - validate the contract before launch so every allowed path belongs to exactly
@@ -1112,7 +1187,10 @@ controller umbrella.
 
 F3 fixtures must put a stale pre-checkpoint `rb-lite` first on PATH and prove
 the resolver selects the immutable F2r fallback; a missing or malformed
-capability response must fail closed rather than run the stale binary. Separate
+capability response must fail closed rather than run the stale binary. A hanging
+PATH probe with a resistant/stopped descendant must be reaped before the
+fallback starts, and a hanging fallback must fail within its bound with no
+descendant or model launch. Separate
 fixtures must cover an outside-lock path, an allowed-but-unclassified path,
 overlapping classes, an explicit unbudgeted exemption, and independent
 production/test budget breaches.
@@ -1167,7 +1245,11 @@ blob content.
 
 The checker reads Git objects and diffs only: it never writes the worktree,
 index, refs, config, or object database. Tests hash the index/worktree/ref state
-before and after every success and failure. Cover the regression cases listed in
+before and after every success and failure. Set `GIT_NO_LAZY_FETCH=1` for every
+Git object read; a missing promisor object is status 2 and may not contact a
+remote or populate the object database. A partial-clone fixture installs a fake
+promisor remote, leaves the required blob absent, and proves no remote marker or
+new object appears. Cover the regression cases listed in
 #32: metacharacters, leading dashes, multiple occurrences on one line, count
 zero under `pipefail`, SIGPIPE/large-file early match, whole-file deletion,
 accidental retained-file deletion, and unexpected paths. Run the direct test,

@@ -214,25 +214,19 @@ def stop_group(signum):
 def remove_private_dir():
     ok = True
     for path in (log_path, gate_path, runner_path, pending_path):
-        if os.path.lexists(path):
-            result = subprocess.run(
-                ["unlink", path],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-            )
-            ok = result.returncode == 0 and ok
-    if not os.path.exists(root):
-        return ok
-    result = subprocess.run(
-        ["rmdir", root],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
-    return result.returncode == 0 and ok
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            ok = False
+    try:
+        os.rmdir(root)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        ok = False
+    return ok and not os.path.lexists(root)
 
 
 for managed_signal in managed_signals:
@@ -259,7 +253,22 @@ try:
         signal.pthread_sigmask(signal.SIG_BLOCK, managed_signals)
         raise GateCancelled(pending_signal)
     environment = os.environ.copy()
-    environment["BASH_ENV"] = ""
+    shell_control = {
+        "BASHOPTS",
+        "BASH_COMPAT",
+        "BASH_ENV",
+        "BASH_LOADABLES_PATH",
+        "BASH_XTRACEFD",
+        "CDPATH",
+        "ENV",
+        "GLOBIGNORE",
+        "POSIXLY_CORRECT",
+        "SHELLOPTS",
+    }
+    for name in tuple(environment):
+        if name in shell_control or name.startswith("BASH_FUNC_"):
+            environment.pop(name, None)
+    environment["BASH_ENV"] = "/dev/null"
     with open(log_path, "wb") as output:
         previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, managed_signals)
         try:
