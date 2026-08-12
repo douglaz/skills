@@ -8,7 +8,7 @@ take.
 · **Branch:** `plan/backlog-execution`
 **Pending:** —
 **Gate:** `./check.sh`
-· last green 2026-08-12 at `bceb919` (exit 0).
+· last green 2026-08-12 at `16e1775` (exit 0).
 
 ## Done
 
@@ -33,15 +33,22 @@ take.
   but not enough API, failure, recovery, or fixture detail to be executable by a
   fresh agent. Per the GRAPH escalation rule, returned to SHAPE rather than
   encoding implementation guesses downstream.
+- Repeated pinned Codex xhigh reviews drove the canonical gate wrapper to
+  fail-closed process-group, output, cleanup, and inherited-signal behavior.
+  `./check.sh` exited 0 at `16e1775` (26 installer, 124 bot-gate, and 70
+  drive-status fixtures passed).
+- Called Fable at high effort to review the complete `docs/specs` inventory. It
+  read all 33 rows and found two blocking plan gaps: B2d lacked its B2c
+  serialization/artifact edge, and E3 relied on an unattested `br sync --status
+  --json` schema. The plan now adds that edge, pins the measured `br 0.2.19`
+  schema/hash, and incorporates the valid lower-severity corrections.
 
 ## Now
 
-Amend the plan with the accepted polish findings: complete the delegated-edit
-fixture matrix; settle the generated-protocol and verifier owners; make C1/C2,
-D2, E1/E3, F1/F2r/F3, and G1–G3 executable memory; correct priorities that meet
-the plan's own P0 definition; and make design/format/decision acceptance paths
-honest. Preserve the reviewed 33-row flat graph and its intentional direct
-dependency edges. Re-run the pinned SHAPE review before updating Beads.
+Re-run both the pinned Codex xhigh SHAPE review and the user-requested Fable
+all-specs review against the corrected plan. Preserve the reviewed 33-row flat
+graph and update its intentional dependency set from 22 to 24 edges only after
+both reviewers have no blocking findings.
 
 ## Next
 

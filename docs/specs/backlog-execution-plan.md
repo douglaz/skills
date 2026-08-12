@@ -4,11 +4,15 @@
 
 Returned to SHAPE after GRAPH polish on 2026-08-12. The first pinned Codex xhigh
 review at `bceb919` reported no P0/P1 findings, but translation exposed missing
-API, failure, recovery, and fixture detail in later rows. Those gaps are amended
-below and await a new pinned review before the graph is updated. This plan covers
-the 29 GitHub issues that were open in `douglaz/skills` on 2026-08-11. GitHub
-remains the external source of issue identity; Beads holds the executable
-dependency graph.
+API, failure, recovery, and fixture detail in later rows. After those amendments,
+a fresh pinned Codex review found two inherited-signal defects in the canonical
+gate wrapper; both are fixed and covered at `16e1775`. A user-requested Fable
+review then read the complete specification inventory and reported two plan P1s:
+the missing B2d→B2c edge and an unattested E3 status schema. Both corrections and
+its valid lower-severity refinements are now incorporated and await fresh Codex
+and Fable passes before the graph is updated. This plan covers the 29 GitHub
+issues that were open in `douglaz/skills` on 2026-08-11. GitHub remains the
+external source of issue identity; Beads holds the executable dependency graph.
 
 ## Goal
 
@@ -105,7 +109,8 @@ Turn the current flat issue list into a sequenced, testable delivery program tha
   the 33 table rows, and flushed 22 edges before polish returned this drive to
   SHAPE. After this amended plan passes review, update that existing graph in
   place with `br`; do not rerun `br init`, delete the database, recreate IDs, or
-  hand-edit the JSONL.
+  hand-edit the JSONL. The amended table deliberately adds F2→E3 and B2d→B2c,
+  bringing the reviewed target to 24 edges.
 - The previous `DRIVE.md` described PR #64 after it had already merged. This plan
   replaces that stale record rather than continuing its HARDEN phase.
 - Exact issue scope:
@@ -203,6 +208,36 @@ The second query shows repeated label filters are ANDed. The final query shows
 that a tracking parent becomes ready after its last child closes. Both behaviors
 are load-bearing: the scheduler must query executor lanes separately, and the
 graph must not contain non-executable parents.
+
+The E3 reconciliation fields and hash algorithm are also pinned to the installed
+`br 0.2.19`. This 2026-08-12 transcript ran against the initialized, clean
+skills graph before the two amended edges were applied:
+
+```text
+$ br --no-auto-flush --no-auto-import sync --status --json \
+    >/tmp/br-sync-status.json 2>/tmp/br-sync-status.err
+$ br_sync_status_rc=$?
+$ jq -c '{dirty_count,jsonl_newer,db_newer,workspace_health,
+          reliability_health:.reliability_audit.health,
+          anomaly_count:.reliability_audit.anomaly_count,
+          jsonl_content_hash,
+          git_available:.git_export.available,
+          git_tracked:.git_export.tracked,
+          worktree_clean:.git_export.worktree_clean,
+          index_clean:.git_export.index_clean}' /tmp/br-sync-status.json
+{"dirty_count":0,"jsonl_newer":false,"db_newer":false,"workspace_health":"healthy","reliability_health":"healthy","anomaly_count":0,"jsonl_content_hash":"3e0b401a0a7093b57d41a5f86ec9200cd1f721cc9a2caa06291edcda435fe4ad","git_available":true,"git_tracked":true,"worktree_clean":true,"index_clean":true}
+$ BEADS_JSONL=$(br --no-auto-flush --no-auto-import where --json | jq -er .jsonl_path)
+$ sha256sum "$BEADS_JSONL"
+3e0b401a0a7093b57d41a5f86ec9200cd1f721cc9a2caa06291edcda435fe4ad  /home/master/p/skills/.beads/issues.jsonl
+$ wc -c /tmp/br-sync-status.err
+0 /tmp/br-sync-status.err
+$ printf 'EXIT=%s\n' "$br_sync_status_rc"
+EXIT=0
+```
+
+E3 therefore consumes those exact fields, compares `jsonl_content_hash` to the
+SHA-256 of the E1-validated bytes, and fails closed if the command or any required
+field is absent, mistyped, or ambiguous.
 
 ## Priority definitions
 
@@ -321,11 +356,16 @@ resume as Drive triggers. Run the existing trigger evaluation command documented
 by that skill before and after and require identical outcomes; this is not a
 red/green production behavior change. Then run `./check.sh`.
 
-**A4b, P3 — fenced moved examples.** Own the two indented merge/reset examples
-in `skills/rb-lite-backlog-drain/SKILL.md` and add their exact extraction check
-to `install.test`. Convert only block style, asserting fenced structure and
-byte-identical command text before/after. Do not execute the examples or add the
-G2 harness here. Run `./install.test` and `./check.sh`.
+**A4b, P3 — adjudicate moved examples.** Re-open the linked #65 review thread and
+inspect every merge/reset example in `skills/rb-lite-backlog-drain/SKILL.md`.
+The current file already places its shell examples in fenced blocks, so do not
+churn those blocks merely to satisfy stale wording. If the linked finding
+identifies a remaining indented example, own only that block plus its exact
+extraction check in `install.test`; convert only block style and require
+byte-identical command text before/after. Otherwise close this bead with the
+thread URL, inspected ranges, and no-change evidence. Do not execute the examples
+or add the G2 harness here. If any file changes, run `./install.test` and
+`./check.sh`.
 
 ## Workstream B — delegated-edit state integrity
 
@@ -475,8 +515,8 @@ Run it and `./check.sh`.
   it into `check.sh`, and do not duplicate C1 lifecycle code or re-test its
   internal unit surface.
 
-**B2d, P2 — preserve verification execution errors.** After G1 lands, replace
-the occurrence-count `grep ... || true` consumer in
+**B2d, P2 — preserve verification execution errors.** After G1 and B2c land,
+replace the occurrence-count `grep ... || true` consumer in
 `skills/multi-reviewer-loop/references/reviewer-panel.md` with G1's exact
 literal/count API. Add the missing/unreadable verifier-input cases to G1's test
 and a consumer extraction assertion to the B2c integration test. Exit 1 means a
@@ -556,6 +596,7 @@ not equal the requested effective model. Diagnostics and categorized child
 stderr go to stderr without emitting prompt/result content; raw child stdout and
 stderr remain in caller-private sibling artifacts until validated cleanup.
 Callers consume only this normalized schema and never unwrap raw Claude output.
+A pre-existing `--result-file` is an invocation refusal with status 2.
 
 Latch the first terminal cause. Invocation/capability failure before launch is
 2; once launched, a received caller signal yields 128+that signal and a timeout
@@ -762,6 +803,7 @@ user did not invoke.
 ### D3. YAML-equivalent companion names — issue #63
 
 **Priority:** P2. **Effort:** small/medium.
+**Depends on:** D1 installer test harness.
 
 Parse the minimal YAML scalar spellings Tau accepts: plain, single-quoted,
 double-quoted, and valid trailing comments. Continue rejecting malformed
@@ -789,16 +831,33 @@ to the checkout owner only when no installed target resolves. Require:
 ```bash
 _bw_file=$(mktemp) ||
   { echo "cannot create beads resolver input" >&2; exit 1; }
-_bw_cleanup() { command unlink "$_bw_file" 2>/dev/null || :; }
+_bw_hex=$(mktemp) ||
+  {
+    command unlink "$_bw_file" 2>/dev/null || :
+    echo "cannot create beads resolver scan" >&2
+    exit 1
+  }
+_bw_cleanup() {
+  command unlink "$_bw_file" "$_bw_hex" 2>/dev/null || :
+}
 trap _bw_cleanup EXIT
-if ! br where --json >"$_bw_file"; then
+if ! br --no-auto-flush --no-auto-import where --json >"$_bw_file"; then
   echo "cannot resolve the beads workspace" >&2
   exit 1
 fi
-if LC_ALL=C command od -An -v -t x1 "$_bw_file" |
-    command grep -Eq '(^|[[:space:]])00([[:space:]]|$)'; then
+if ! LC_ALL=C command od -An -v -t x1 "$_bw_file" >"$_bw_hex"; then
+  echo "cannot scan beads workspace JSON" >&2
+  exit 1
+fi
+if command grep -Eq '(^|[[:space:]])00([[:space:]]|$)' "$_bw_hex"; then
   echo "beads workspace JSON contains a raw NUL byte" >&2
   exit 1
+else
+  _bw_grep_rc=$?
+  if [ "$_bw_grep_rc" -ne 1 ]; then
+    echo "cannot inspect beads workspace JSON" >&2
+    exit 1
+  fi
 fi
 BEADS_JSONL=$(
   jq -ers '
@@ -813,7 +872,7 @@ BEADS_JSONL=$(
        end
      ' <"$_bw_file"
 ) || { echo "cannot resolve exactly one beads JSONL" >&2; exit 1; }
-command unlink "$_bw_file" ||
+command unlink "$_bw_file" "$_bw_hex" ||
   { echo "cannot remove beads resolver input" >&2; exit 1; }
 trap - EXIT
 ```
@@ -827,7 +886,9 @@ NUL/CR/LF in the decoded path before jq emits it. The companion owns
 the remaining byte-safe inspection. It canonicalizes the current worktree root
 and resolved parent without following the final path, requires the path to be
 inside that root, and reads raw NUL-delimited `git ls-files --stage -z`,
-`git ls-files -v -z`, and `git ls-tree -z HEAD` records. Success requires exactly
+`git ls-files -v -z`, and
+`git ls-tree -z HEAD -- "$BEADS_JSONL_REL"` records, where
+`BEADS_JSONL_REL` is the validated worktree-relative path. Success requires exactly
 one stage-0 tracked regular-file entry, mode `100644`, tag `H` (not lowercase
 assume-unchanged or `S` skip-worktree), the same regular mode in HEAD, and a
 non-symlink regular worktree file. It reads the HEAD blob, index blob, and
@@ -914,9 +975,11 @@ Every scoped scheduler invokes each `br ready`, `br list`, and mutation through
 `with-lock` atomically acquires one exclusive recovery/transaction lock under
 the resolved Beads directory, checks for retained recovery state while holding
 it, and runs E1 against the clean tracked JSONL. Before any query or mutation it
-runs `br sync --status --json` and requires healthy audit output, zero dirty
-issues, and no DB-newer state. If the JSONL is newer, it performs an explicit
-`br sync --import-only`, then re-runs status and requires DB/JSONL freshness
+runs `br --no-auto-flush --no-auto-import sync --status --json` and requires the
+pinned typed fields above, healthy audit output, zero dirty issues, and no
+DB-newer state. If the JSONL is newer, it performs an explicit
+`br --no-auto-flush --no-auto-import sync --import-only`, then re-runs status and
+requires DB/JSONL freshness
 to agree; specifically, `dirty_count` is zero, both `jsonl_newer`
 and `db_newer` are false, health/audit is healthy, and the reported JSONL hash
 equals E1's still-current saved bytes. Import/status failure retains the lock
@@ -940,12 +1003,14 @@ transaction:
 
 ```bash
 if [ -n "${notes_file:-}" ]; then
-  br update "$bead_id" --notes "$(<"$notes_file")" --no-auto-flush ||
+  br --no-auto-flush --no-auto-import \
+    update "$bead_id" --notes "$(<"$notes_file")" ||
     compensate_to_saved_open_state_or_retain_lock
 fi
-br close "$bead_id" --reason "$merge_evidence" --no-auto-flush ||
+br --no-auto-flush --no-auto-import \
+  close "$bead_id" --reason "$merge_evidence" ||
   compensate_to_saved_open_state_or_retain_lock
-if br sync --flush-only; then
+if br --no-auto-flush --no-auto-import sync --flush-only; then
   verify_db_and_jsonl_closed_or_retain_lock
 else
   compensate_to_saved_open_state_or_retain_lock
@@ -1030,10 +1095,12 @@ That agent must read `/home/master/p/rb-lite/AGENTS.md`, create
 `feat/drive-checkpoint-hook` from current `origin/main`, and use
 `orchestrating-with-rb-lite` in that checkout for the Codex-heavy implementation.
 Run all three upstream gates even when an earlier one fails, capture each real
-status separately, and require all three to be zero. Put the following
-self-contained body between the delimiter lines of the exact canonical gate
-wrapper in the skills repository's managed `AGENTS.md`; do not introduce a
-second trap, temporary-log owner, or cancellation lifecycle:
+status separately, and require all three to be zero. When running those gates in
+the rb-lite checkout, invoke the canonical wrapper defined by the skills
+repository's managed `AGENTS.md` working agreement and substitute the following
+self-contained body at its `<gate>` placeholder; do not edit either repository's
+`AGENTS.md` or introduce a second trap, temporary-log owner, or cancellation
+lifecycle:
 
 ```bash
 just_test_rc=0
@@ -1156,7 +1223,7 @@ _release=$(
 ) || { echo "published rb-lite release is absent" >&2; exit 1; }
 printf '%s' "$_release" |
   jq -e --arg tag "$TAG" \
-    '.tagName == $tag and .isDraft == false' >/dev/null ||
+    '.tagName == $tag and .isDraft == false and .isPrerelease == false' >/dev/null ||
   { echo "rb-lite release metadata does not match authorization" >&2; exit 1; }
 _refs=$(git ls-remote --tags https://github.com/douglaz/rb-lite.git \
   "refs/tags/$TAG" "refs/tags/$TAG^{}") ||
@@ -1396,14 +1463,14 @@ the body. Every row gets label `drive-open-issues`; B0 and F2r get
 | A3b | P1 | #65 | A1 | Private unique post-merge evidence |
 | A3c | P1 | #65 | A1 | Exclude closure PRs from work-PR resume |
 | A4a | P3 | #65 | — | Drive routing wording and trigger fixture |
-| A4b | P3 | #65 | — | Fence moved backlog examples |
+| A4b | P3 | #65 | — | Adjudicate moved backlog examples |
 | B0 | P0 | #41, #43, #34, #65 | — | Record the human dirty-state decision |
 | B1d | P0 | #41, #43, #34, #65 | B0 | Delegated-edit design and fixture contract |
 | B1 | P0 | #41, #43, #34, #65 | B1d | Delegated-edit isolation implementation |
 | B2a | P1 | #34 | — | Unsafe red evidence blocks completion |
 | B2b | P0 | #34 | — | Preserve colocated tests during inversion |
 | B2c | P2 | #34 | C1 | Tested panel shutdown/escape |
-| B2d | P2 | #34 | G1 | Do not mask verification execution errors |
+| B2d | P2 | #34 | G1, B2c | Do not mask verification execution errors |
 | B2e | P0 | #34 | — | Compare flush against saved bytes |
 | C1 | P1 | #53–#58, #60 | — | Shared bounded Claude reviewer runner |
 | C2 | P1 | #51 | C1 | Bound rb-lite reviewer model |
@@ -1442,9 +1509,9 @@ Constraints:
   AND semantics:
 
   ```bash
-  br ready -l drive-open-issues -l executor-skills
-  br ready -l drive-open-issues -l executor-rb-lite
-  br ready -l drive-open-issues -l authority-human
+  br ready --limit 0 -l drive-open-issues -l executor-skills
+  br ready --limit 0 -l drive-open-issues -l executor-rb-lite
+  br ready --limit 0 -l drive-open-issues -l authority-human
   ```
 
   The first lane runs in this repository, the second routes to the
@@ -1463,9 +1530,12 @@ After review, update the existing graph in place into:
   implementation gate; and
 - the exact priority and executor labels in the table.
 
-The first scoped `br ready` result must contain A1. D1 and E1 may also be ready.
-B1d must close before B1 can enter BUILD. F2 must record its upstream issue/PR
-URL before it can become in progress.
+Before any execution state changes, the exact dependency-free
+`executor-skills` ready set is A1, A4a, A4b, B2a, B2b, B2e, C1, D1, E1, E2a,
+F1, and G1; the `executor-rb-lite` set is empty; and the `authority-human` set
+contains B0. Every later dependency-free table row must likewise appear in its
+lane's uncapped ready set. B1d must close before B1 can enter BUILD. F2 must
+record its upstream issue/PR URL before it can become in progress.
 
 ## Completion
 
