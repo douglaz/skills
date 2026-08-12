@@ -1068,9 +1068,12 @@ merged into the tracked JSONL.
 
 `close` acquires that same lock directly and is not nested under `with-lock`. It
 runs E1 before its first mutation, saves a private pre-transaction JSONL plus
-material `br show` state, validates the reason/optional notes files, then updates
-notes (when supplied), closes, and explicitly flushes as one helper-owned
-transaction:
+material `br show` state, opens each reason/optional-notes input once with
+`O_NOFOLLOW`, requires a regular file owned by the effective UID, copies its exact
+bytes into a mode-0600 helper-private snapshot while holding the lock, closes the
+caller-provided descriptor, and never rereads the caller path. It validates and
+submits only those immutable snapshot bytes, then updates notes (when supplied),
+closes, and explicitly flushes as one helper-owned transaction:
 
 ```bash
 _reason_payload=$(
@@ -1100,10 +1103,12 @@ else
 fi
 ```
 
-Validation rejects raw NUL in both the reason and notes files before command
+Validation rejects raw NUL in both immutable snapshots before command
 substitution. Appending and then removing the sentinel preserves every trailing
 newline; success and compensation compare against those exact submitted
-payloads, not shell-trimmed variants.
+payloads, not shell-trimmed variants. Snapshot/read/validation failure performs
+no Beads mutation, and caller-path replacement after the snapshot cannot change
+the transaction.
 
 `bead_id` must be the exact claimed finding ID and `merge_evidence` must contain
 the reviewed work-PR URL and merge SHA. Do not use `br update ... -s closed`,
@@ -1343,7 +1348,11 @@ _caps=$(
   nix run "github:douglaz/rb-lite/$COMMIT" -- capabilities --json
 ) || { echo "published rb-lite is not runnable" >&2; exit 1; }
 printf '%s' "$_caps" |
-  jq -e '.synchronous_checkpoint == 1' >/dev/null ||
+  jq -es '
+    length == 1 and
+    ((.[0] | type) == "object") and
+    (.[0].synchronous_checkpoint == 1)
+  ' >/dev/null ||
   { echo "published rb-lite lacks synchronous checkpoint capability" >&2; exit 1; }
 _refs_after=$(git ls-remote --tags https://github.com/douglaz/rb-lite.git \
   "refs/tags/$TAG" "refs/tags/$TAG^{}") ||

@@ -66,6 +66,8 @@ exit 0. Group the entire gate, use a fresh log, save the real status, and return
 that status after reading the log:
 
 ```bash
+command type -P python3 >/dev/null 2>&1 ||
+  { echo "python3 is required for gate supervision"; exit 1; }
 _gate_dir=$(command mktemp -d) || { echo "cannot create gate directory"; exit 1; }
 _gate_log="$_gate_dir/output.log"
 _gate_script="$_gate_dir/gate.bash"
@@ -413,7 +415,9 @@ command exec "$_gate_python" -I "$_gate_runner" "$_gate_dir" "${BASH:-bash}" \
   "$_gate_exec_watchdog" "$_gate_pending"
 ```
 
-Run this as a standalone final command, not as sourced setup for later commands:
+This portable supervisor requires Python 3 in addition to Bash; preflight it
+before creating any private artifacts, as the snippet does. Run this as a
+standalone final command, not as sourced setup for later commands:
 `exec` makes the Python supervisor the caller-visible wrapper process, while a
 failed `exec` leaves the shell cleanup trap armed. Put self-contained gate
 commands between the delimiter lines. The supervisor runs them in a fresh Bash
