@@ -8,7 +8,7 @@ take.
 · **Branch:** `plan/backlog-execution`
 **Pending:** —
 **Gate:** `./check.sh`
-· last green 2026-08-12 on the `7d88c46` tree (exit 0; 26 installer,
+· last green 2026-08-12 on the `873cb2b` tree (exit 0; 26 installer,
 124 bot-gate, and 70 drive-status fixtures passed under GNU Bash 5.3.3,
 non-POSIX mode).
 
@@ -86,6 +86,14 @@ non-POSIX mode).
   caught the two sibling beads that also embed the E2 section; the corrected
   contract is now present in E2a, E2b, and E2c. Focused mutations made each new
   gate fixture fail for its intended assertion before the production fix.
+- The PR's final startup-timeout finding reproduced: killing only the fixture's
+  Python supervisor orphaned its independently grouped gate. The bounded fixture
+  cleanup now reaps both without re-signalling an observed-dead/reused PID, all
+  analogous timeout paths use it, a fresh read-only reviewer voted PASS, and
+  three consecutive `./check.sh` runs passed with no surviving gate process.
+- Called Fable/high again after all specification/body corrections. It reread
+  the full 1,871-line spec, all 33 bodies, `AGENTS.md`, `DRIVE.md`, and linked
+  owners and reported `NO BLOCKING FINDINGS`.
 
 ## Now
 
