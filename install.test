@@ -592,6 +592,7 @@ aggregate_started="$WORK/discipline-aggregate-started"
 aggregate_release="$WORK/discipline-aggregate-release"
 aggregate_rc_file="$WORK/discipline-aggregate.rc"
 aggregate_early_file="$WORK/discipline-aggregate.early"
+aggregate_child_pid_file="$WORK/discipline-aggregate-child.pid"
 bashenv_file="$WORK/hostile-bash-env"
 bashenv_marker="$WORK/hostile-bash-env.sourced"
 bashenv_python_dir="$WORK/hostile-bash-env-python"
@@ -740,6 +741,7 @@ possible_gate_start=false
         printf '%s\n' '  printf "stopped-sensitive-output\n"; : >"$STARTED"; kill -STOP "$BASHPID"'
         printf '%s\n' '  printf "stopped-gate-continued\n"'
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == aggregate ]]; then'
+        printf '%s\n' '  printf "%s %s\n" "$BASHPID" "$PPID" >"$CHILD_PID_FILE"'
         printf '%s\n' '  printf "aggregate-first\n" && { : >"$AGG_STARTED"; while [[ ! -f "$AGG_RELEASE" ]]; do sleep 0.01; done; false; } && printf "aggregate-last\n"'
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == cleanup ]]; then'
         printf '%s\n' '  printf "cleanup-output\n"'
@@ -862,6 +864,9 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
 ' "$(command -v bash)" "$gate_script" \
       >"$ignored_sigchld_stdout" 2>"$ignored_sigchld_stderr"
   ignored_sigchld_rc=$?
+  # These are startup handshakes, not behavior deadlines. Allow ten bounded
+  # seconds so ordinary scheduler latency cannot turn a correct wrapper into a
+  # fixture failure; the timeout cleanup below owns every failure path.
   (
     mkfifo "$replay_fifo"
     sleep 30 <"$replay_fifo" &
@@ -871,7 +876,7 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
       REPLAY_DONE="$replay_done" \
       bash "$gate_script" >"$replay_fifo" 2>"$replay_stderr" &
     replay_pid=$!
-    for ((_n=1; _n<=200; _n++)); do
+    for ((_n=1; _n<=1000; _n++)); do
       [[ -f "$replay_done" ]] && break
       sleep 0.01
     done
@@ -911,7 +916,7 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
       SIGNAL_MARKER="$cooperative_signal_marker" \
       bash "$gate_script" >"$cooperative_stdout" 2>"$cooperative_stderr" &
     cooperative_pid=$!
-    for _n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    for ((_n=1; _n<=200; _n++)); do
       [[ -f "$cooperative_started" ]] && break
       sleep 0.05
     done
@@ -953,7 +958,7 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
       STARTED="$startup_timeout_started" CHILD_PID_FILE="$startup_timeout_child_pid_file" \
       bash "$gate_script" >"$startup_timeout_stdout" 2>"$startup_timeout_stderr" &
     startup_timeout_pid=$!
-    for ((_n=1; _n<=200; _n++)); do
+    for ((_n=1; _n<=1000; _n++)); do
       [[ -s "$startup_timeout_child_pid_file" ]] && break
       sleep 0.01
     done
@@ -994,7 +999,7 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
         >"$blocked_term_stdout" 2>"$blocked_term_stderr"
   ) &
   blocked_term_pid=$!
-  for ((_n=1; _n<=100; _n++)); do
+  for ((_n=1; _n<=200; _n++)); do
     [[ -f "$blocked_term_started" ]] && break
     sleep 0.05
   done
@@ -1034,7 +1039,7 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
       STARTED="$term_started" CHILD_PID_FILE="$term_child_pid_file" \
       bash "$gate_script" >"$term_stdout" 2>"$term_stderr" &
     term_pid=$!
-    for _n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    for ((_n=1; _n<=200; _n++)); do
       [[ -f "$term_started" ]] && break
       sleep 0.05
     done
@@ -1075,7 +1080,7 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
       STARTED="$quit_started" CHILD_PID_FILE="$quit_child_pid_file" \
       bash "$gate_script" >"$quit_stdout" 2>"$quit_stderr" &
     quit_pid=$!
-    for _n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    for ((_n=1; _n<=200; _n++)); do
       [[ -f "$quit_started" ]] && break
       sleep 0.05
     done
@@ -1116,7 +1121,7 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
       STARTED="$stop_started" CHILD_PID_FILE="$stop_child_pid_file" \
       bash "$gate_script" >"$stop_stdout" 2>"$stop_stderr" &
     stop_script_pid=$!
-    for _n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    for ((_n=1; _n<=200; _n++)); do
       [[ -f "$stop_started" ]] && break
       sleep 0.05
     done
@@ -1129,7 +1134,7 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
     else
       read -r stop_child_pid _ <"$stop_child_pid_file"
       stop_observed=false
-      for _n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+      for ((_n=1; _n<=200; _n++)); do
         stop_state=$(ps -o stat= -p "$stop_child_pid" 2>/dev/null) || break
         [[ $stop_state == *T* ]] && { stop_observed=true; break; }
         sleep 0.05
@@ -1173,20 +1178,24 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
   (
     TMPDIR="$gate_tmp" \
       GATE_MODE=aggregate AGG_STARTED="$aggregate_started" AGG_RELEASE="$aggregate_release" \
+      CHILD_PID_FILE="$aggregate_child_pid_file" \
       bash "$gate_script" >"$aggregate_stdout" 2>"$aggregate_stderr" &
     aggregate_pid=$!
-    for _n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    for ((_n=1; _n<=500; _n++)); do
       [[ -f "$aggregate_started" ]] && break
       sleep 0.02
     done
     if [[ -f "$aggregate_started" ]]; then
       wc -c <"$aggregate_stdout" >"$aggregate_early_file"
+      : >"$aggregate_release"
+      wait "$aggregate_pid"
+      printf '%s' "$?" >"$aggregate_rc_file"
     else
       printf '%s\n' -1 >"$aggregate_early_file"
+      stop_timed_out_gate_fixture \
+        "$aggregate_pid" "$aggregate_child_pid_file" || true
+      printf '%s' 126 >"$aggregate_rc_file"
     fi
-    : >"$aggregate_release"
-    wait "$aggregate_pid"
-    printf '%s' "$?" >"$aggregate_rc_file"
   )
   aggregate_rc=$(< "$aggregate_rc_file")
   TMPDIR="$cleanup_tmp" GATE_MODE=cleanup \
