@@ -702,7 +702,10 @@ PY
 
 gate_fixture_watchdog_ready() {
   local marker=$1
-  for ((_n=1; _n<=200; _n++)); do
+  # Startup handshake, not a behavior deadline: allow the same bounded ten
+  # seconds as the other setup polls so interpreter start latency cannot fail
+  # a correct wrapper.
+  for ((_n=1; _n<=1000; _n++)); do
     if [[ -e "$marker.ready" ]]; then
       [[ ! -e "$marker.unsupported" ]]
       return
