@@ -4,11 +4,11 @@
 `docs/specs/backlog-execution-plan.md` (#30–#66, exact set in that plan); the
 Beads graph created from the reviewed plan will be the ONLY work this drive may
 take.
-**Phase:** SHAPE · **Bead:** n/a (graph pending)
+**Phase:** GRAPH · **Bead:** n/a (graph transfer in progress)
 · **Branch:** `plan/backlog-execution`
 **Pending:** —
 **Gate:** `./check.sh`
-· not yet run on this branch.
+· last green 2026-08-12 at `bceb919` (exit 0).
 
 ## Done
 
@@ -19,22 +19,26 @@ take.
 - Replaced the stale PR #64 drive record with this newly authorized goal.
 - Installed the portable working agreement for subsequent implementers and
   panels.
+- Passed the SHAPE hard stop: `codex review --base master` with
+  `gpt-5.6-sol`/`xhigh` reported no P0/P1 findings at `bceb919`. Its two P2
+  hardening observations (startup-watchdog group cancellation and defensive
+  fixture orphan cleanup) remain non-blocking follow-up evidence for the
+  admission-integrity stream.
+- Ran the repository gate at `bceb919`: `./check.sh` exited 0 (26 installer,
+  124 bot-gate, and 66 drive-status fixtures passed).
 
 ## Now
 
-Write and review the buildable execution plan. Expanded review-discovered
-bootstrap budget: `AGENTS.md`, `DRIVE.md`, one spec, the canonical gate wrapper,
-its detectable `check.sh` entry point, two Drive references to that sole owner,
-and one `install.test` regression fixture (~500 LOC; reviewed hard stop 1,000).
-This replaces the earlier ~100 LOC estimate after independent review required
-conditional-shell, pipeline, cleanup, signal, stopped-process, stdin, startup,
-and synchronization coverage. Do NOT implement any of the 29 planned GitHub
-issues in SHAPE.
+Initialize Beads, transfer the 33 flat execution/decision records exactly from
+the reviewed plan, and verify labels, priorities, external references, and
+dependency direction. Then run the polish loop and an independent second-model
+graph audit. Do NOT start implementation until the graph passes both checks.
 
 ## Next
 
-Codex xhigh spec review → initialize/transfer the scoped Beads graph → polish and
-audit → start A1, GitHub issue #42, through rb-lite.
+Land the planning/bootstrap branch → start A1, GitHub issue #42, through rb-lite
+→ continue the highest-priority unblocked lane while respecting the two human
+authority checkpoints.
 
 ## Open questions for the human
 
