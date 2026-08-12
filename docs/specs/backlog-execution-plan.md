@@ -2,10 +2,10 @@
 
 ## Status
 
-Draft for review. This plan covers the 29 GitHub issues that were open in
-`douglaz/skills` on 2026-08-11. GitHub remains the external source of issue
-identity. Beads will hold the executable dependency graph once this plan passes
-review.
+Reviewed and accepted for GRAPH transfer on 2026-08-12. The pinned Codex xhigh
+review at `bceb919` reported no P0/P1 findings. This plan covers the 29 GitHub
+issues that were open in `douglaz/skills` on 2026-08-11. GitHub remains the
+external source of issue identity; Beads holds the executable dependency graph.
 
 ## Goal
 
