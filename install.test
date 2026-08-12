@@ -513,6 +513,7 @@ discipline_block=${DISCIPLINE_BLOCK:-"$repository_discipline_block"}
 gate_script="$WORK/discipline-gate.sh"
 stdin_gate_script="$WORK/discipline-stdin-gate.sh"
 execfail_gate_script="$WORK/discipline-execfail-gate.sh"
+cleanupfail_gate_script="$WORK/discipline-cleanupfail-gate.sh"
 canonical_gate_block="$WORK/discipline-canonical-gate.block"
 managed_gate_block="$WORK/discipline-managed-gate.block"
 gate_stdout="$WORK/discipline-gate.stdout"
@@ -546,6 +547,8 @@ cleanup_stdout="$WORK/discipline-cleanup.stdout"
 cleanup_stderr="$WORK/discipline-cleanup.stderr"
 trusted_cleanup_stdout="$WORK/discipline-trusted-cleanup.stdout"
 trusted_cleanup_stderr="$WORK/discipline-trusted-cleanup.stderr"
+escape_stdout="$WORK/discipline-escape.stdout"
+escape_stderr="$WORK/discipline-escape.stderr"
 gate_tmp="$WORK/discipline-gate-tmp"
 cleanup_tmp="$WORK/discipline-cleanup-tmp"
 trusted_cleanup_tmp="$WORK/discipline-trusted-cleanup-tmp"
@@ -576,6 +579,8 @@ aggregate_started="$WORK/discipline-aggregate-started"
 aggregate_release="$WORK/discipline-aggregate-release"
 aggregate_rc_file="$WORK/discipline-aggregate.rc"
 aggregate_early_file="$WORK/discipline-aggregate.early"
+escape_pid_file="$WORK/discipline-escape.pid"
+escape_ready="$WORK/discipline-escape.ready"
 bashenv_file="$WORK/hostile-bash-env"
 mkdir -p "$gate_tmp" "$cleanup_tmp" "$trusted_cleanup_tmp" "$cleanup_bin"
 printf '%s\n' '#!/bin/sh' 'exit 0' >"$cleanup_bin/unlink"
@@ -634,10 +639,14 @@ possible_gate_start=false
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == aggregate ]]; then'
         printf '%s\n' '  printf "aggregate-first\n" && { : >"$AGG_STARTED"; while [[ ! -f "$AGG_RELEASE" ]]; do sleep 0.01; done; false; } && printf "aggregate-last\n"'
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == cleanup ]]; then'
-        printf '%s\n' '  for cleanup_root in "$TMPDIR"/*; do [[ ! -d "$cleanup_root" ]] || chmod 500 "$cleanup_root"; done'
         printf '%s\n' '  printf "cleanup-output\n"'
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == trusted-cleanup ]]; then'
         printf '%s\n' '  printf "trusted-cleanup-output\n"'
+        printf '%s\n' 'elif [[ ${GATE_MODE:-function} == escape ]]; then'
+        printf '%s\n' '  setsid bash -c '\''trap "" HUP INT TERM; : >"$ESCAPE_READY"; while :; do sleep 1; done'\'' &'
+        printf '%s\n' '  printf "%s\n" "$!" >"$ESCAPE_PID_FILE"'
+        printf '%s\n' '  while [[ ! -f "$ESCAPE_READY" ]]; do sleep 0.01; done'
+        printf '%s\n' '  printf "escape-sensitive-output\n"'
         printf '%s\n' 'else gate; fi'
         found_gate_command=true
       else
@@ -652,6 +661,15 @@ awk '
   }
   { print }
 ' "$gate_script" >"$execfail_gate_script"
+awk '
+  /^def remove_private_dir[(][)]:$/ {
+    print
+    print "    os.unlink = lambda _path: (_ for _ in ()).throw(OSError(\"fixture cleanup failure\"))"
+    print "    os.rmdir = lambda _path: (_ for _ in ()).throw(OSError(\"fixture cleanup failure\"))"
+    next
+  }
+  { print }
+' "$gate_script" >"$cleanupfail_gate_script"
 {
   printf '%s\n' '#!/usr/bin/env bash'
   printf '%s\n' 'set -e'
@@ -969,12 +987,14 @@ else
   )
   aggregate_rc=$(< "$aggregate_rc_file")
   TMPDIR="$cleanup_tmp" GATE_MODE=cleanup \
-    bash "$gate_script" >"$cleanup_stdout" 2>"$cleanup_stderr"; cleanup_rc=$?
-  find "$cleanup_tmp" -mindepth 1 -maxdepth 1 -type d -exec chmod 700 {} \;
+    bash "$cleanupfail_gate_script" >"$cleanup_stdout" 2>"$cleanup_stderr"; cleanup_rc=$?
   TMPDIR="$trusted_cleanup_tmp" GATE_MODE=trusted-cleanup \
     PATH="$cleanup_bin:$PATH" \
     bash "$gate_script" >"$trusted_cleanup_stdout" 2>"$trusted_cleanup_stderr"
   trusted_cleanup_rc=$?
+  TMPDIR="$gate_tmp" GATE_MODE=escape ESCAPE_PID_FILE="$escape_pid_file" \
+    ESCAPE_READY="$escape_ready" \
+    bash "$gate_script" >"$escape_stdout" 2>"$escape_stderr"; escape_rc=$?
   gate_output=$(< "$gate_stdout")
   gate_error=$(< "$gate_stderr")
   paste_output=$(< "$paste_stdout")
@@ -1006,6 +1026,8 @@ else
   cleanup_error=$(< "$cleanup_stderr")
   trusted_cleanup_output=$(< "$trusted_cleanup_stdout")
   trusted_cleanup_error=$(< "$trusted_cleanup_stderr")
+  escape_output=$(< "$escape_stdout")
+  escape_error=$(< "$escape_stderr")
   if [[ $rc -ne 1 ]]; then
     fail "$t" "failed gate wrapper exited $rc"
   elif [[ $gate_output != $'first\nEXIT=1' ]]; then
@@ -1108,6 +1130,16 @@ else
     fail "$t" "trusted cleanup wrote stderr: $trusted_cleanup_error"
   elif find "$trusted_cleanup_tmp" -mindepth 1 -print -quit | grep -q .; then
     fail "$t" "PATH cleanup wrappers bypassed trusted artifact removal"
+  elif [[ $escape_rc -ne 1 ||
+      $escape_output != $'escape-sensitive-output\nEXIT=1' ]]; then
+    fail "$t" "detached gate descendant became rc=$escape_rc stdout=$escape_output"
+  elif [[ $escape_error != *"gate left detached descendants running"* ]]; then
+    fail "$t" "detached gate descendant was not reported: $escape_error"
+  elif [[ ! -s "$escape_pid_file" ]]; then
+    fail "$t" "detached gate fixture did not record its PID"
+  elif escape_pid=$(<"$escape_pid_file") &&
+      kill -0 "$escape_pid" 2>/dev/null; then
+    fail "$t" "detached gate descendant remained alive"
   elif find "$gate_tmp" -mindepth 1 -print -quit | grep -q .; then
     fail "$t" "gate wrapper leaked its temporary log"
   else
