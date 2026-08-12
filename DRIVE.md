@@ -8,7 +8,7 @@ take.
 · **Branch:** `plan/backlog-execution`
 **Pending:** —
 **Gate:** `./check.sh`
-· last green 2026-08-12 on the `3df315b` tree (exit 0; 26 installer,
+· last green 2026-08-12 on the `b8e2ae7` tree (exit 0; 26 installer,
 124 bot-gate, and 70 drive-status fixtures passed under GNU Bash 5.3.15,
 non-POSIX mode).
 
@@ -133,6 +133,12 @@ non-POSIX mode).
   inherited-ignored-signal claim to the post-supervisor boundary. The combined
   alias plus hostile-`BASH` regression fails 25/1; the full gate passed
   26/124/70 with empty stderr.
+- Codex then found that pidfd-only fixture deadlines made the repository gate
+  fail on portable supervisors. Commit `b8e2ae7` detects pidfd capability,
+  keeps all portable wrapper/output/cleanup/subreaper assertions active, and
+  skips only the Linux identity-safe external signal/deadline group. Both the
+  normal full gate and forced-no-pidfd installer run pass 26/0 with empty
+  stderr; the aggregate gate remains 26/124/70.
 
 ## Now
 
