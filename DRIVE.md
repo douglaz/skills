@@ -8,7 +8,7 @@ take.
 · **Branch:** `plan/backlog-execution`
 **Pending:** —
 **Gate:** `./check.sh`
-· last green 2026-08-12 on the `b8e2ae7` tree (exit 0; 26 installer,
+· last green 2026-08-12 on the `37f0e8e` tree (exit 0; 26 installer,
 124 bot-gate, and 70 drive-status fixtures passed under GNU Bash 5.3.15,
 non-POSIX mode).
 
@@ -139,6 +139,12 @@ non-POSIX mode).
   skips only the Linux identity-safe external signal/deadline group. Both the
   normal full gate and forced-no-pidfd installer run pass 26/0 with empty
   stderr; the aggregate gate remains 26/124/70.
+- Codex's next pass found that the supervisor merged gate stderr into stdout,
+  contradicting the evidence rule that stream placement remain observable.
+  Commit `37f0e8e` buffers both streams privately and replays each to its
+  corresponding descriptor only after completion. Re-merging them makes the
+  new streams fixture fail 25/1; normal and forced-no-pidfd installer runs pass
+  26/0, and the full gate passes 26/124/70 with empty stderr.
 
 ## Now
 
