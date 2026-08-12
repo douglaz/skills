@@ -23,8 +23,9 @@ the accepted sizing, ownership, and command findings. On `ec076e9`, Fable/high
 reported `NO BLOCKING FINDINGS`, pinned `gpt-5.6-sol`/xhigh Codex reported no
 P0/P1 (one non-blocking P2 about orphan cleanup in a startup-timeout test path),
 and `./check.sh` exited 0 with 26 installer, 124 bot-gate, and 70 drive-status
-fixtures under GNU Bash 5.3.3, non-POSIX mode. GRAPH may update the existing
-store to the 37-edge target. This plan covers the 29 GitHub
+fixtures under GNU Bash 5.3.3, non-POSIX mode. GRAPH updated the existing store
+to the 37-edge target at `7d88c46`; exact field/body, lint, cycle, sync-health,
+and frontier audits passed. This plan covers the 29 GitHub
 issues that were open in `douglaz/skills` on 2026-08-11. GitHub remains the
 external source of issue identity; Beads holds the executable dependency graph.
 
@@ -121,12 +122,12 @@ Turn the current flat issue list into a sequenced, testable delivery program tha
   ```
 - GRAPH initialized the current `.beads` store with prefix `skills`, transferred
   the 33 table rows, and flushed 22 edges before polish returned this drive to
-  SHAPE. After this amended plan passes review, update that existing graph in
-  place with `br`; do not rerun `br init`, delete the database, recreate IDs, or
-  hand-edit the JSONL. The first amendment added F2→E3 and B2d→B2c, reaching 24
-  edges at `c921749`. This polish amendment adds the executable E1→E3 bootstrap
-  barrier and A3a→A3b content ordering, removes the unsupported E2c→E2a and
-  G2→G1 constraints, and targets 37 edges.
+  SHAPE. The later updates modified that existing graph in place with `br`; they
+  did not rerun `br init`, delete the database, recreate IDs, or hand-edit the
+  JSONL. The first amendment added F2→E3 and B2d→B2c, reaching 24
+  edges at `c921749`. The final polish amendment added the executable E1→E3 bootstrap
+  barrier and A3a→A3b content ordering, removed the unsupported E2c→E2a and
+  G2→G1 constraints, and the 37-edge graph was applied at `7d88c46`.
 - The previous `DRIVE.md` described PR #64 after it had already merged. This plan
   replaces that stale record rather than continuing its HARDEN phase.
 - Exact issue scope:
@@ -1241,8 +1242,9 @@ payloads, not shell-trimmed variants. Snapshot/read/validation failure performs
 no Beads mutation, and caller-path replacement after the snapshot cannot change
 the transaction.
 
-`bead_id` must be the exact claimed finding ID and `merge_evidence` must contain
-the reviewed work-PR URL and merge SHA. Do not use `br update ... -s closed`,
+`bead_id` must be the exact claimed finding ID and the `--reason-file` payload
+must contain the reviewed work-PR URL and merge SHA. Do not use
+`br update ... -s closed`,
 continue after either failure, or report closure before the explicit flush.
 
 The helper cannot make SQLite plus JSONL one filesystem transaction, so it owns

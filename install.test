@@ -526,6 +526,9 @@ bashenv_stdout="$WORK/discipline-bashenv.stdout"
 bashenv_stderr="$WORK/discipline-bashenv.stderr"
 shellfunc_stdout="$WORK/discipline-shellfunc.stdout"
 shellfunc_stderr="$WORK/discipline-shellfunc.stderr"
+commandfunc_stdout="$WORK/discipline-commandfunc.stdout"
+commandfunc_stderr="$WORK/discipline-commandfunc.stderr"
+commandfunc_env=$(command -p -v env)
 stdin_stdout="$WORK/discipline-stdin.stdout"
 stdin_stderr="$WORK/discipline-stdin.stderr"
 status_stdout="$WORK/discipline-status.stdout"
@@ -534,6 +537,8 @@ pipeline_stdout="$WORK/discipline-pipeline.stdout"
 pipeline_stderr="$WORK/discipline-pipeline.stderr"
 ignored_sigchld_stdout="$WORK/discipline-ignored-sigchld.stdout"
 ignored_sigchld_stderr="$WORK/discipline-ignored-sigchld.stderr"
+normal_orphan_stdout="$WORK/discipline-normal-orphan.stdout"
+normal_orphan_stderr="$WORK/discipline-normal-orphan.stderr"
 cooperative_stdout="$WORK/discipline-cooperative.stdout"
 cooperative_stderr="$WORK/discipline-cooperative.stderr"
 startup_timeout_stdout="$WORK/discipline-startup-timeout.stdout"
@@ -633,76 +638,119 @@ PY
 # A fixture timeout must stop the caller-visible supervisor and any gate process
 # group it may have created concurrently. Killing only the supervisor can orphan
 # the private gate under PID 1 and poison every signal fixture that follows.
-stop_timed_out_gate_fixture() {
-  local wrapper_pid=$1 child_pid_file=$2
-  local child_pid= candidate=
-  local wrapper_gone=false group_gone=false
-  local _n
+# A watchdog is one Python process with no timer child to orphan. Cancellation
+# is a private file, never a signal to a reusable watchdog PID. On Linux it pins
+# deadline targets with pidfds before publishing readiness and anchors a process
+# group through its stopped leader. If pidfds are unavailable, it publishes an
+# unsupported marker before readiness so the caller can abort before sending the
+# behavior signal; it never falls back to a reusable numeric PID.
+gate_fixture_watchdog() {
+  local marker=$1 wrapper_pid=$2 group_pid=${3:-0}
+  exec python3 - "$marker" "$wrapper_pid" "$group_pid" <<'PY'
+import os
+import signal
+import sys
+import time
 
-  kill -TERM "$wrapper_pid" 2>/dev/null || true
+marker, wrapper_raw, group_raw = sys.argv[1:]
+cancel = marker + ".cancel"
+ready = marker + ".ready"
+wrapper_pid = int(wrapper_raw)
+group_pid = int(group_raw)
+wrapper_fd = None
+group_fd = None
+
+supported = (
+    sys.platform.startswith("linux")
+    and hasattr(os, "pidfd_open")
+    and hasattr(signal, "pidfd_send_signal")
+)
+if supported:
+    try:
+        wrapper_fd = os.pidfd_open(wrapper_pid)
+        if group_pid > 1:
+            group_fd = os.pidfd_open(group_pid)
+    except (ProcessLookupError, PermissionError, OSError):
+        supported = False
+if not supported or wrapper_fd is None or (group_pid > 1 and group_fd is None):
+    open(marker + ".unsupported", "xb").close()
+
+open(ready, "xb").close()
+if not supported or wrapper_fd is None or (group_pid > 1 and group_fd is None):
+    raise SystemExit(126)
+deadline = time.monotonic() + 2.0
+while not os.path.exists(cancel) and time.monotonic() < deadline:
+    time.sleep(0.01)
+if os.path.exists(cancel):
+    raise SystemExit(0)
+
+open(marker, "xb").close()
+try:
+    if group_fd is not None:
+        signal.pidfd_send_signal(group_fd, signal.SIGKILL)
+    if wrapper_fd is not None:
+        signal.pidfd_send_signal(wrapper_fd, signal.SIGKILL)
+except (ProcessLookupError, PermissionError, OSError):
+    pass
+finally:
+    if group_fd is not None:
+        os.close(group_fd)
+    if wrapper_fd is not None:
+        os.close(wrapper_fd)
+PY
+}
+
+gate_fixture_watchdog_ready() {
+  local marker=$1
   for ((_n=1; _n<=200; _n++)); do
-    if [[ -z "$child_pid" && -s "$child_pid_file" ]]; then
-      read -r candidate _ <"$child_pid_file" || candidate=
-      if [[ $candidate != *[!0-9]* && ${candidate:-0} -gt 1 ]]; then
-        child_pid=$candidate
-      else
-        return 1
-      fi
+    if [[ -e "$marker.ready" ]]; then
+      [[ ! -e "$marker.unsupported" ]]
+      return
     fi
-    if [[ -n "$child_pid" ]] && ! $group_gone; then
-      if gate_fixture_group_alive "$child_pid"; then
-        kill -TERM -- "-$child_pid" 2>/dev/null || true
-        kill -CONT -- "-$child_pid" 2>/dev/null || true
-      else
-        # Once the original group is absent, never signal this numeric PGID
-        # again: it may be reused by an unrelated process group.
-        group_gone=true
-      fi
-    fi
-    if ! $wrapper_gone && ! kill -0 "$wrapper_pid" 2>/dev/null; then
-      # The same no-reuse rule applies to the caller-visible wrapper PID.
-      wrapper_gone=true
-    fi
-    $wrapper_gone && { [[ -z "$child_pid" ]] || $group_gone; } && break
     sleep 0.01
   done
+  return 1
+}
 
-  $wrapper_gone || kill -KILL "$wrapper_pid" 2>/dev/null || true
+# Wait for whichever owned child finishes first. The watchdog owns all timeout
+# signals through pidfds; Bash only cancels it by file and reaps both exact jobs.
+gate_fixture_wait_with_watchdog() {
+  local wrapper_pid=$1 marker=$2 watchdog_pid=$3 child_pid_file=$4
+  local winner= first_rc=0 watchdog_rc=0 wrapper_rc=0
+  wait -n -p winner "$wrapper_pid" "$watchdog_pid" || first_rc=$?
+  if [[ $winner == "$wrapper_pid" ]]; then
+    wrapper_rc=$first_rc
+    : >"$marker.cancel"
+    wait "$watchdog_pid" 2>/dev/null || watchdog_rc=$?
+  else
+    watchdog_rc=$first_rc
+    wait "$wrapper_pid" 2>/dev/null || wrapper_rc=$?
+  fi
+  if [[ -e "$marker" ]]; then
+    gate_fixture_wait_rc=124
+  elif [[ $watchdog_rc -ne 0 ]]; then
+    gate_fixture_wait_rc=126
+  else
+    gate_fixture_wait_rc=$wrapper_rc
+  fi
+}
+
+# Called only before the behavior signal, while both recorded long-running
+# targets are known alive. One hard-signal operation has no later PID use.
+gate_fixture_abort_before_signal() {
+  local wrapper_pid=$1 group_pid=$2
+  if [[ $group_pid != *[!0-9]* && $group_pid -gt 1 ]]; then
+    kill -s KILL -- "-$group_pid" "$wrapper_pid" 2>/dev/null || true
+  else
+    kill -s KILL -- "$wrapper_pid" 2>/dev/null || true
+  fi
   wait "$wrapper_pid" 2>/dev/null || true
-  wrapper_gone=true
-  if [[ -z "$child_pid" && -s "$child_pid_file" ]]; then
-    read -r candidate _ <"$child_pid_file" || candidate=
-    if [[ $candidate == *[!0-9]* || ${candidate:-0} -le 1 ]]; then
-      return 1
-    fi
-    child_pid=$candidate
-  fi
-  if [[ -n "$child_pid" ]] && ! $group_gone; then
-    if gate_fixture_group_alive "$child_pid"; then
-      kill -TERM -- "-$child_pid" 2>/dev/null || true
-      kill -CONT -- "-$child_pid" 2>/dev/null || true
-      for ((_n=1; _n<=100; _n++)); do
-        if ! gate_fixture_group_alive "$child_pid"; then
-          group_gone=true
-          break
-        fi
-        sleep 0.01
-      done
-      if ! $group_gone; then
-        kill -KILL -- "-$child_pid" 2>/dev/null || true
-        for ((_n=1; _n<=100; _n++)); do
-          if ! gate_fixture_group_alive "$child_pid"; then
-            group_gone=true
-            break
-          fi
-          sleep 0.01
-        done
-      fi
-    else
-      group_gone=true
-    fi
-  fi
-  $wrapper_gone && { [[ -z "$child_pid" ]] || $group_gone; }
+}
+
+gate_fixture_remove_aborted_artifacts() {
+  # Only setup-failure branches call this after hard containment. Normal signal
+  # fixtures still require the supervisor itself to remove every private file.
+  find "$gate_tmp" -depth -mindepth 1 -delete
 }
 
 capture_gate=false
@@ -716,7 +764,8 @@ possible_gate_start=false
   printf '%s\n' 'if [[ -n ${HOSTILE_BASH_ENV:-} ]]; then export BASH_ENV=$HOSTILE_BASH_ENV; fi'
   while IFS= read -r line; do
     if ! $capture_gate; then
-      if [[ $line == *'_gate_dir=$(command mktemp -d)'* ]] ||
+      if [[ $line == *'--noprofile --norc -p -c'* ]] ||
+          [[ $line == *'_gate_dir=$(command mktemp -d)'* ]] ||
           { $possible_gate_start && [[ $line == *'_gate_log=$(mktemp)'* ]]; }; then
         capture_gate=true
         found_gate_start=true
@@ -738,6 +787,8 @@ possible_gate_start=false
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == success ]]; then printf "paste-success\n"'
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == pipeline ]]; then'
         printf '%s\n' '  printf "pipeline-first\n"; false | true; printf "pipeline-last\n"'
+        printf '%s\n' 'elif [[ ${GATE_MODE:-function} == normal-orphan ]]; then'
+        printf '%s\n' '  python3 -c '\''import os, sys, time; (sys.exit(0) if not sys.platform.startswith("linux") else None); pid = os.fork(); (os._exit(0) if pid == 0 else None); deadline = time.monotonic() + 2; info = None; exec("while time.monotonic() < deadline:\n info = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)\n if info is not None and info.si_pid == pid: break\n time.sleep(0.005)"); (None if info is not None and info.si_pid == pid else (_ for _ in ()).throw(RuntimeError("child did not become a zombie")))'\'''
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == replay ]]; then'
         printf '%s\n' '  printf "%s %s\n" "$BASHPID" "$PPID" >"$CHILD_PID_FILE"; : >"$STARTED"'
         printf '%s\n' '  python3 -c '\''import sys; sys.stdout.write("x" * 2000000)'\''; : >"$REPLAY_DONE"'
@@ -874,6 +925,16 @@ else
       HOSTILE_GATE_DIR="$shellfunc_hostile_dir" TMPDIR="$gate_tmp" \
       bash "$gate_script" >"$shellfunc_stdout" 2>"$shellfunc_stderr"
   ); shellfunc_rc=$?
+  (
+  mkdir -p "$WORK/hostile-command-bin"
+  printf '%s\n' '#!/bin/sh' 'exit 0' >"$WORK/hostile-command-bin/env"
+  chmod +x "$WORK/hostile-command-bin/env"
+  PATH="$WORK/hostile-command-bin:$bashenv_python_dir:$PATH" \
+    BASHENV_REAL_PYTHON="$bashenv_real_python" TMPDIR="$gate_tmp" \
+    "$commandfunc_env" 'BASH_FUNC_command%%=() { if [ "$1" = -p ] && [ "$2" = env ]; then env; return; fi; case "$1" in unset | exec) return 0 ;; builtin) case "$2" in export) return 0 ;; esac ;; esac; builtin command "$@"; }' \
+    bash "$gate_script" >"$commandfunc_stdout" 2>"$commandfunc_stderr"
+  ) 2>>"$commandfunc_stderr"
+  commandfunc_rc=$?
   TMPDIR="$gate_tmp" GATE_MODE=stdin \
     bash "$stdin_gate_script" >"$stdin_stdout" 2>"$stdin_stderr"; stdin_rc=$?
   TMPDIR="$gate_tmp" GATE_MODE=status \
@@ -891,6 +952,9 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
 ' "$(command -v bash)" "$gate_script" \
       >"$ignored_sigchld_stdout" 2>"$ignored_sigchld_stderr"
   ignored_sigchld_rc=$?
+  TMPDIR="$gate_tmp" GATE_MODE=normal-orphan \
+    bash "$gate_script" >"$normal_orphan_stdout" 2>"$normal_orphan_stderr"
+  normal_orphan_rc=$?
   python3 - "$subreaper_supervisor" <<'PY' 2>"$subreaper_stderr"
 import ast
 import os
@@ -1015,28 +1079,30 @@ PY
       sleep 0.01
     done
     if [[ ! -f "$replay_done" ]]; then
-      if stop_timed_out_gate_fixture "$replay_pid" "$replay_child_pid_file"; then
-        printf '%s' 125 >"$replay_rc_file"
-      else
-        printf '%s' 126 >"$replay_rc_file"
-      fi
+      read -r replay_child_pid _ <"$replay_child_pid_file" || replay_child_pid=0
+      gate_fixture_abort_before_signal "$replay_pid" "$replay_child_pid"
+      printf '%s' 125 >"$replay_rc_file"
     else
+      read -r replay_child_pid _ <"$replay_child_pid_file"
       sleep 0.1
-      kill -TERM "$replay_pid"
-      (
-        sleep 2
-        : >"$replay_deadline_marker"
-        kill -KILL "$replay_pid" 2>/dev/null || true
-      ) &
+      gate_fixture_watchdog \
+        "$replay_deadline_marker" "$replay_pid" 0 &
       replay_watchdog_pid=$!
-      wait "$replay_pid"
-      replay_wait_rc=$?
-      if [[ -f "$replay_deadline_marker" ]]; then
-        replay_wait_rc=124
+      if gate_fixture_watchdog_ready "$replay_deadline_marker"; then
+        kill -TERM "$replay_pid"
       else
-        kill "$replay_watchdog_pid" 2>/dev/null || true
+        : >"$replay_deadline_marker.cancel"
+        gate_fixture_abort_before_signal "$replay_pid" 0
+        printf '%s' 126 >"$replay_rc_file"
+        wait "$replay_watchdog_pid" 2>/dev/null || true
+        kill "$replay_reader_pid" 2>/dev/null || true
+        wait "$replay_reader_pid" 2>/dev/null || true
+        exit
       fi
-      wait "$replay_watchdog_pid" 2>/dev/null || true
+      gate_fixture_wait_with_watchdog \
+        "$replay_pid" "$replay_deadline_marker" \
+        "$replay_watchdog_pid" "$replay_child_pid_file"
+      replay_wait_rc=$gate_fixture_wait_rc
       printf '%s' "$replay_wait_rc" >"$replay_rc_file"
     fi
     kill "$replay_reader_pid" 2>/dev/null || true
@@ -1055,34 +1121,30 @@ PY
       sleep 0.05
     done
     if [[ ! -f "$cooperative_started" ]]; then
-      if stop_timed_out_gate_fixture "$cooperative_pid" "$cooperative_child_pid_file"; then
-        printf '%s' 125 >"$cooperative_rc_file"
-      else
-        printf '%s' 126 >"$cooperative_rc_file"
-      fi
+      read -r cooperative_child_pid _ <"$cooperative_child_pid_file" ||
+        cooperative_child_pid=0
+      gate_fixture_abort_before_signal "$cooperative_pid" "$cooperative_child_pid"
+      printf '%s' 125 >"$cooperative_rc_file"
     else
       read -r cooperative_child_pid _ <"$cooperative_child_pid_file"
-      kill -TERM "$cooperative_pid"
-      kill -TERM "$cooperative_pid" 2>/dev/null || true
-      (
-        sleep 2
-        : >"$cooperative_deadline_marker"
-        kill -TERM "$cooperative_pid" 2>/dev/null || true
-        kill -TERM -- "-$cooperative_child_pid" 2>/dev/null || true
-        kill -CONT -- "-$cooperative_child_pid" 2>/dev/null || true
-        sleep 0.05
-        kill -KILL "$cooperative_pid" 2>/dev/null || true
-        kill -KILL -- "-$cooperative_child_pid" 2>/dev/null || true
-      ) &
+      gate_fixture_watchdog \
+        "$cooperative_deadline_marker" \
+        "$cooperative_pid" "$cooperative_child_pid" &
       cooperative_watchdog_pid=$!
-      wait "$cooperative_pid"
-      cooperative_wait_rc=$?
-      if [[ -f "$cooperative_deadline_marker" ]]; then
-        cooperative_wait_rc=124
+      if gate_fixture_watchdog_ready "$cooperative_deadline_marker"; then
+        kill -TERM "$cooperative_pid"
       else
-        kill "$cooperative_watchdog_pid" 2>/dev/null || true
+        : >"$cooperative_deadline_marker.cancel"
+        gate_fixture_abort_before_signal \
+          "$cooperative_pid" "$cooperative_child_pid"
+        printf '%s' 126 >"$cooperative_rc_file"
+        wait "$cooperative_watchdog_pid" 2>/dev/null || true
+        exit
       fi
-      wait "$cooperative_watchdog_pid" 2>/dev/null || true
+      gate_fixture_wait_with_watchdog \
+        "$cooperative_pid" "$cooperative_deadline_marker" \
+        "$cooperative_watchdog_pid" "$cooperative_child_pid_file"
+      cooperative_wait_rc=$gate_fixture_wait_rc
       printf '%s' "$cooperative_wait_rc" >"$cooperative_rc_file"
     fi
   )
@@ -1097,22 +1159,16 @@ PY
       sleep 0.01
     done
     if [[ ! -s "$startup_timeout_child_pid_file" ]]; then
-      stop_timed_out_gate_fixture \
-        "$startup_timeout_pid" "$startup_timeout_child_pid_file" || true
+      gate_fixture_abort_before_signal "$startup_timeout_pid" 0
+      gate_fixture_remove_aborted_artifacts
       printf '%s' 126 >"$startup_timeout_rc_file"
       printf '%s' 0 >"$startup_timeout_leak_file"
     else
       read -r startup_timeout_child_pid _ <"$startup_timeout_child_pid_file"
-      if stop_timed_out_gate_fixture \
-          "$startup_timeout_pid" "$startup_timeout_child_pid_file"; then
-        printf '%s' 0 >"$startup_timeout_leak_file"
-      else
-        printf '%s' 1 >"$startup_timeout_leak_file"
-        kill -TERM -- "-$startup_timeout_child_pid" 2>/dev/null || true
-        kill -CONT -- "-$startup_timeout_child_pid" 2>/dev/null || true
-        sleep 0.05
-        kill -KILL -- "-$startup_timeout_child_pid" 2>/dev/null || true
-      fi
+      gate_fixture_abort_before_signal \
+        "$startup_timeout_pid" "$startup_timeout_child_pid"
+      gate_fixture_remove_aborted_artifacts
+      printf '%s' 0 >"$startup_timeout_leak_file"
       printf '%s' 125 >"$startup_timeout_rc_file"
     fi
   )
@@ -1138,33 +1194,30 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
     sleep 0.05
   done
   if [[ ! -f "$blocked_term_started" ]]; then
-    if stop_timed_out_gate_fixture "$blocked_term_pid" "$blocked_term_child_pid_file"; then
-      printf '%s' 125 >"$blocked_term_rc_file"
-    else
-      printf '%s' 126 >"$blocked_term_rc_file"
-    fi
+    read -r blocked_term_child_pid _ <"$blocked_term_child_pid_file" ||
+      blocked_term_child_pid=0
+    gate_fixture_abort_before_signal "$blocked_term_pid" "$blocked_term_child_pid"
+    printf '%s' 125 >"$blocked_term_rc_file"
   else
     read -r blocked_term_child_pid _ _ <"$blocked_term_child_pid_file"
-    kill -TERM "$blocked_term_pid"
-    (
-      sleep 2
-      : >"$blocked_term_deadline_marker"
-      kill -TERM "$blocked_term_pid" 2>/dev/null || true
-      kill -TERM -- "-$blocked_term_child_pid" 2>/dev/null || true
-      kill -CONT -- "-$blocked_term_child_pid" 2>/dev/null || true
-      sleep 0.05
-      kill -KILL "$blocked_term_pid" 2>/dev/null || true
-      kill -KILL -- "-$blocked_term_child_pid" 2>/dev/null || true
-    ) &
+    gate_fixture_watchdog \
+      "$blocked_term_deadline_marker" \
+      "$blocked_term_pid" "$blocked_term_child_pid" &
     blocked_term_watchdog_pid=$!
-    wait "$blocked_term_pid"
-    blocked_term_wait_rc=$?
-    if [[ -f "$blocked_term_deadline_marker" ]]; then
-      blocked_term_wait_rc=124
+    if gate_fixture_watchdog_ready "$blocked_term_deadline_marker"; then
+      kill -TERM "$blocked_term_pid"
     else
-      kill "$blocked_term_watchdog_pid" 2>/dev/null || true
+      : >"$blocked_term_deadline_marker.cancel"
+      gate_fixture_abort_before_signal \
+        "$blocked_term_pid" "$blocked_term_child_pid"
+      printf '%s' 126 >"$blocked_term_rc_file"
+      wait "$blocked_term_watchdog_pid" 2>/dev/null || true
+      exit
     fi
-    wait "$blocked_term_watchdog_pid" 2>/dev/null || true
+    gate_fixture_wait_with_watchdog \
+      "$blocked_term_pid" "$blocked_term_deadline_marker" \
+      "$blocked_term_watchdog_pid" "$blocked_term_child_pid_file"
+    blocked_term_wait_rc=$gate_fixture_wait_rc
     printf '%s' "$blocked_term_wait_rc" >"$blocked_term_rc_file"
   fi
   blocked_term_rc=$(< "$blocked_term_rc_file")
@@ -1178,33 +1231,27 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
       sleep 0.05
     done
     if [[ ! -f "$term_started" ]]; then
-      if stop_timed_out_gate_fixture "$term_pid" "$term_child_pid_file"; then
-        printf '%s' 125 > "$term_rc_file"
-      else
-        printf '%s' 126 > "$term_rc_file"
-      fi
+      read -r term_child_pid _ <"$term_child_pid_file" || term_child_pid=0
+      gate_fixture_abort_before_signal "$term_pid" "$term_child_pid"
+      printf '%s' 125 > "$term_rc_file"
     else
       read -r term_child_pid _ _ <"$term_child_pid_file"
-      kill -TERM "$term_pid"
-      (
-        sleep 2
-        : >"$term_deadline_marker"
-        kill -TERM "$term_pid" 2>/dev/null || true
-        kill -TERM -- "-$term_child_pid" 2>/dev/null || true
-        kill -CONT -- "-$term_child_pid" 2>/dev/null || true
-        sleep 0.05
-        kill -KILL "$term_pid" 2>/dev/null || true
-        kill -KILL -- "-$term_child_pid" 2>/dev/null || true
-      ) &
+      gate_fixture_watchdog \
+        "$term_deadline_marker" "$term_pid" "$term_child_pid" &
       term_watchdog_pid=$!
-      wait "$term_pid"
-      term_wait_rc=$?
-      if [[ -f "$term_deadline_marker" ]]; then
-        term_wait_rc=124
+      if gate_fixture_watchdog_ready "$term_deadline_marker"; then
+        kill -TERM "$term_pid"
       else
-        kill "$term_watchdog_pid" 2>/dev/null || true
+        : >"$term_deadline_marker.cancel"
+        gate_fixture_abort_before_signal "$term_pid" "$term_child_pid"
+        printf '%s' 126 >"$term_rc_file"
+        wait "$term_watchdog_pid" 2>/dev/null || true
+        exit
       fi
-      wait "$term_watchdog_pid" 2>/dev/null || true
+      gate_fixture_wait_with_watchdog \
+        "$term_pid" "$term_deadline_marker" \
+        "$term_watchdog_pid" "$term_child_pid_file"
+      term_wait_rc=$gate_fixture_wait_rc
       printf '%s' "$term_wait_rc" > "$term_rc_file"
     fi
   )
@@ -1219,33 +1266,27 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
       sleep 0.05
     done
     if [[ ! -f "$quit_started" ]]; then
-      if stop_timed_out_gate_fixture "$quit_pid" "$quit_child_pid_file"; then
-        printf '%s' 125 >"$quit_rc_file"
-      else
-        printf '%s' 126 >"$quit_rc_file"
-      fi
+      read -r quit_child_pid _ <"$quit_child_pid_file" || quit_child_pid=0
+      gate_fixture_abort_before_signal "$quit_pid" "$quit_child_pid"
+      printf '%s' 125 >"$quit_rc_file"
     else
       read -r quit_child_pid _ _ <"$quit_child_pid_file"
-      kill -QUIT "$quit_pid"
-      (
-        sleep 2
-        : >"$quit_deadline_marker"
-        kill -QUIT "$quit_pid" 2>/dev/null || true
-        kill -QUIT -- "-$quit_child_pid" 2>/dev/null || true
-        kill -CONT -- "-$quit_child_pid" 2>/dev/null || true
-        sleep 0.05
-        kill -KILL "$quit_pid" 2>/dev/null || true
-        kill -KILL -- "-$quit_child_pid" 2>/dev/null || true
-      ) &
+      gate_fixture_watchdog \
+        "$quit_deadline_marker" "$quit_pid" "$quit_child_pid" &
       quit_watchdog_pid=$!
-      wait "$quit_pid"
-      quit_wait_rc=$?
-      if [[ -f "$quit_deadline_marker" ]]; then
-        quit_wait_rc=124
+      if gate_fixture_watchdog_ready "$quit_deadline_marker"; then
+        kill -QUIT "$quit_pid"
       else
-        kill "$quit_watchdog_pid" 2>/dev/null || true
+        : >"$quit_deadline_marker.cancel"
+        gate_fixture_abort_before_signal "$quit_pid" "$quit_child_pid"
+        printf '%s' 126 >"$quit_rc_file"
+        wait "$quit_watchdog_pid" 2>/dev/null || true
+        exit
       fi
-      wait "$quit_watchdog_pid" 2>/dev/null || true
+      gate_fixture_wait_with_watchdog \
+        "$quit_pid" "$quit_deadline_marker" \
+        "$quit_watchdog_pid" "$quit_child_pid_file"
+      quit_wait_rc=$gate_fixture_wait_rc
       printf '%s' "$quit_wait_rc" >"$quit_rc_file"
     fi
   )
@@ -1260,11 +1301,9 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
       sleep 0.05
     done
     if [[ ! -f "$stop_started" || ! -s "$stop_child_pid_file" ]]; then
-      if stop_timed_out_gate_fixture "$stop_script_pid" "$stop_child_pid_file"; then
-        printf '%s' 125 >"$stop_rc_file"
-      else
-        printf '%s' 126 >"$stop_rc_file"
-      fi
+      read -r stop_child_pid _ <"$stop_child_pid_file" || stop_child_pid=0
+      gate_fixture_abort_before_signal "$stop_script_pid" "$stop_child_pid"
+      printf '%s' 125 >"$stop_rc_file"
     else
       read -r stop_child_pid _ <"$stop_child_pid_file"
       stop_observed=false
@@ -1274,36 +1313,29 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
         sleep 0.05
       done
       if ! $stop_observed; then
-        if stop_timed_out_gate_fixture "$stop_script_pid" "$stop_child_pid_file"; then
-          printf '%s' 125 >"$stop_rc_file"
-        else
-          printf '%s' 126 >"$stop_rc_file"
-        fi
+        gate_fixture_abort_before_signal "$stop_script_pid" "$stop_child_pid"
+        printf '%s' 125 >"$stop_rc_file"
       elif ! kill -0 "$stop_script_pid" 2>/dev/null; then
-        stop_timed_out_gate_fixture \
-          "$stop_script_pid" "$stop_child_pid_file" || true
+        gate_fixture_abort_before_signal "$stop_script_pid" "$stop_child_pid"
         printf '%s' 126 >"$stop_rc_file"
       else
-        kill -TERM "$stop_script_pid"
-        (
-          sleep 2
-          : >"$stop_deadline_marker"
-          kill -TERM "$stop_script_pid" 2>/dev/null || true
-          kill -TERM -- "-$stop_child_pid" 2>/dev/null || true
-          kill -CONT -- "-$stop_child_pid" 2>/dev/null || true
-          sleep 0.05
-          kill -KILL "$stop_script_pid" 2>/dev/null || true
-          kill -KILL -- "-$stop_child_pid" 2>/dev/null || true
-        ) &
+        gate_fixture_watchdog \
+          "$stop_deadline_marker" \
+          "$stop_script_pid" "$stop_child_pid" &
         stop_watchdog_pid=$!
-        wait "$stop_script_pid"
-        stop_wait_rc=$?
-        if [[ -f "$stop_deadline_marker" ]]; then
-          stop_wait_rc=124
+        if gate_fixture_watchdog_ready "$stop_deadline_marker"; then
+          kill -TERM "$stop_script_pid"
         else
-          kill "$stop_watchdog_pid" 2>/dev/null || true
+          : >"$stop_deadline_marker.cancel"
+          gate_fixture_abort_before_signal "$stop_script_pid" "$stop_child_pid"
+          printf '%s' 126 >"$stop_rc_file"
+          wait "$stop_watchdog_pid" 2>/dev/null || true
+          exit
         fi
-        wait "$stop_watchdog_pid" 2>/dev/null || true
+        gate_fixture_wait_with_watchdog \
+          "$stop_script_pid" "$stop_deadline_marker" \
+          "$stop_watchdog_pid" "$stop_child_pid_file"
+        stop_wait_rc=$gate_fixture_wait_rc
         printf '%s' "$stop_wait_rc" >"$stop_rc_file"
       fi
     fi
@@ -1326,8 +1358,9 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
       printf '%s' "$?" >"$aggregate_rc_file"
     else
       printf '%s\n' -1 >"$aggregate_early_file"
-      stop_timed_out_gate_fixture \
-        "$aggregate_pid" "$aggregate_child_pid_file" || true
+      read -r aggregate_child_pid _ <"$aggregate_child_pid_file" ||
+        aggregate_child_pid=0
+      gate_fixture_abort_before_signal "$aggregate_pid" "$aggregate_child_pid"
       printf '%s' 126 >"$aggregate_rc_file"
     fi
   )
@@ -1348,6 +1381,8 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
   bashenv_error=$(< "$bashenv_stderr")
   shellfunc_output=$(< "$shellfunc_stdout")
   shellfunc_error=$(< "$shellfunc_stderr")
+  commandfunc_output=$(< "$commandfunc_stdout")
+  commandfunc_error=$(< "$commandfunc_stderr")
   stdin_output=$(< "$stdin_stdout")
   stdin_error=$(< "$stdin_stderr")
   status_output=$(< "$status_stdout")
@@ -1356,6 +1391,8 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
   pipeline_error=$(< "$pipeline_stderr")
   ignored_sigchld_output=$(< "$ignored_sigchld_stdout")
   ignored_sigchld_error=$(< "$ignored_sigchld_stderr")
+  normal_orphan_output=$(< "$normal_orphan_stdout")
+  normal_orphan_error=$(< "$normal_orphan_stderr")
   subreaper_rc=$(< "$subreaper_rc_file")
   subreaper_error=$(< "$subreaper_stderr")
   cooperative_output=$(< "$cooperative_stdout")
@@ -1406,6 +1443,10 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
   elif [[ ! -f "$shellfunc_hostile_sentinel" ||
       $(<"$shellfunc_hostile_sentinel") != preserve ]]; then
     fail "$t" "exported mktemp function selected or deleted an existing directory"
+  elif [[ $commandfunc_rc -eq 0 || -n "$commandfunc_output" ]]; then
+    fail "$t" "exported command function bypassed the refusal: rc=$commandfunc_rc stdout=$commandfunc_output"
+  elif [[ $commandfunc_error != *"refusing exported command function"* ]]; then
+    fail "$t" "exported-command refusal had unexpected stderr: $commandfunc_error"
   elif [[ $stdin_rc -ne 1 || $stdin_output != 'EXIT=1' ]]; then
     fail "$t" "stdin-consuming gate became rc=$stdin_rc stdout=$stdin_output"
   elif [[ -n "$stdin_error" || $stdin_output == *stdin-gate-continued* ]]; then
@@ -1423,6 +1464,9 @@ os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
     fail "$t" "ignored parent SIGCHLD corrupted status: rc=$ignored_sigchld_rc stdout=$ignored_sigchld_output"
   elif [[ -n "$ignored_sigchld_error" ]]; then
     fail "$t" "ignored parent SIGCHLD wrote stderr: $ignored_sigchld_error"
+  elif [[ $normal_orphan_rc -ne 0 ||
+      $normal_orphan_output != 'EXIT=0' || -n "$normal_orphan_error" ]]; then
+    fail "$t" "normal-completion orphan reap failed: rc=$normal_orphan_rc stdout=$normal_orphan_output stderr=$normal_orphan_error"
   elif [[ $subreaper_rc -ne 0 ]]; then
     fail "$t" "supervisor did not reap an adopted child: $subreaper_error"
   elif [[ $replay_rc -ne 143 ]]; then
