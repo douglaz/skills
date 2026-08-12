@@ -8,7 +8,7 @@ take.
 · **Branch:** `plan/backlog-execution`
 **Pending:** —
 **Gate:** `./check.sh`
-· last green 2026-08-12 on the `4f26161` tree (exit 0; 26 installer,
+· last green 2026-08-12 on the `4e9db0d` tree (exit 0; 26 installer,
 124 bot-gate, and 70 drive-status fixtures passed under GNU Bash 5.3.15,
 non-POSIX mode).
 
@@ -149,6 +149,12 @@ non-POSIX mode).
   Commit `4f26161` backslash-suppresses that command word and extends the
   combined alias fixture; removing the suppression fails 25/1, while the full
   gate passes 26/124/70 with empty stderr.
+- Codex's next pass found the pidfd watchdog killed only the gate-group
+  leader. Commit `4e9db0d` holds the leader pidfd to pin its numeric PGID while
+  issuing one group-wide `SIGKILL`, then kills the wrapper through its pidfd.
+  A dedicated leader-plus-descendant deadline fixture fails 25/1 against the
+  leader-only regression. Normal and forced-no-pidfd installer runs pass 26/0;
+  the full gate passes 26/124/70 with empty stderr.
 
 ## Now
 
