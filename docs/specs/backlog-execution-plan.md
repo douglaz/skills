@@ -890,27 +890,36 @@ explicit flush behavior. Create exact companion owner:
 Its API is:
 
 ```text
-beads-close-transaction --check-recovery
-beads-close-transaction close --id ID --reason-file PATH
+beads-close-transaction with-lock -- <br query-or-mutation> [args...]
+beads-close-transaction close --id ID --reason-file PATH [--notes-file PATH]
 ```
 
-Every scoped scheduler calls `--check-recovery` before `br ready`, `br list`, or
-any mutation. The owner atomically acquires one recovery/transaction lock under
-the resolved Beads directory, runs E1, saves a private pre-close JSONL and
-material `br show` state, then performs the exact close and explicit flush:
+Every scoped scheduler invokes each `br ready`, `br list`, and mutation through
+`with-lock`; a separate check followed by an unlocked command is forbidden.
+`with-lock` atomically acquires one exclusive recovery/transaction lock under
+the resolved Beads directory, checks for retained recovery state while holding
+it, runs the one command without auto-import/auto-flush, performs any required
+explicit flush and verification, and releases only after that operation is
+quiescent. Thus no scheduler can pass a check and then observe or mutate the DB
+while close compensation is in flight.
+
+`close` acquires that same lock directly and is not nested under `with-lock`. It
+runs E1 before its first mutation, saves a private pre-transaction JSONL plus
+material `br show` state, validates the reason/optional notes files, then updates
+notes (when supplied), closes, and explicitly flushes as one helper-owned
+transaction:
 
 ```bash
+if [ -n "${notes_file:-}" ]; then
+  br update "$bead_id" --notes "$(<"$notes_file")" --no-auto-flush ||
+    compensate_to_saved_open_state_or_retain_lock
+fi
 br close "$bead_id" --reason "$merge_evidence" --no-auto-flush ||
-  { verify_still_open_or_retain_lock; echo "cannot close $bead_id" >&2; exit 1; }
+  compensate_to_saved_open_state_or_retain_lock
 if br sync --flush-only; then
   verify_db_and_jsonl_closed_or_retain_lock
 else
-  echo "closure not persisted for $bead_id; compensating" >&2
-  br reopen "$bead_id" --reason "rollback: closure export failed" \
-    --no-auto-flush || retain_lock_and_require_recovery
-  br sync --flush-only || retain_lock_and_require_recovery
-  verify_reopened_or_retain_lock
-  exit 1
+  compensate_to_saved_open_state_or_retain_lock
 fi
 ```
 
@@ -919,25 +928,28 @@ the reviewed work-PR URL and merge SHA. Do not use `br update ... -s closed`,
 continue after either failure, or report closure before the explicit flush.
 
 The helper cannot make SQLite plus JSONL one filesystem transaction, so it owns
-verified compensation. If close fails, prove the bead remains open. If flush
-fails after SQLite closes, immediately run `br reopen "$bead_id"
---reason "rollback: closure export failed" --no-auto-flush`, retry the explicit
-flush, and verify the bead is open, its material fields/dependencies match the
-saved state, and no dependent remains newly ready. A successful compensation
-returns nonzero but removes the scheduler lock only after that proof. If reopen,
-re-flush, or verification fails, retain the lock and private recovery bundle,
-emit `BEADS_RECOVERY_REQUIRED` plus its path, and make all compliant scheduler
-queries refuse until explicit recovery. On success, verify both DB and JSONL say
-closed before removing the lock.
+verified compensation for every failure after the optional notes update. Restore
+the original notes and other helper-changed material fields, reopen if close
+landed, explicitly flush, and verify the bead is open, its priority, labels,
+dependencies, description, and notes match the saved state, and no dependent
+remains newly ready. Audit timestamps/comments may record the failed transaction
+and compensation, but cannot alter readiness or material executor state. A
+successful compensation returns nonzero but releases the scheduler lock only
+after that proof. If restore, reopen, re-flush, or verification fails, retain the
+lock and private recovery bundle, emit `BEADS_RECOVERY_REQUIRED` plus its path,
+and make every `with-lock`/`close` operation refuse until explicit recovery. On
+success, verify both DB and JSONL contain the requested notes and closed state
+before removing the lock.
 
 Add the companion to every scheduler/closure consumer's selective dependencies
 and wire its test into `check.sh`.
 `skills/orchestrating-with-rb-lite/scripts/harden-closure.test` is the focused
-consumer extraction fixture. Direct and consumer fixtures cover close failure;
-disabled auto-flush plus forced flush failure and successful compensation;
-reopen/re-flush failure retaining the recovery lock; exact-ID selection;
-dependents never escaping during compensation; and successful close. Run both
-tests, `./install.test`, and `./check.sh`.
+consumer extraction fixture. Direct and consumer fixtures cover a competing
+scheduler blocked across the entire query/mutation, notes-update failure, close
+failure, disabled auto-flush plus forced flush failure and successful
+compensation, restore/reopen/re-flush failure retaining the recovery lock,
+exact-ID selection, dependents never escaping during compensation, and
+successful notes-plus-close. Run both tests, `./install.test`, and `./check.sh`.
 
 ## Workstream F — Drive/rb-lite controller and convergence
 
@@ -1032,11 +1044,14 @@ rb-lite run ... --checkpoint-cmd CMD --checkpoint-timeout-seconds N
   `checkpoint_failed`; timeout returns a third distinct
   `checkpoint_timed_out` status and fixed process exit code;
 - include checkpoint name, round, iteration, and hook status in the single
-  terminal JSON object, with fixed distinct rb-lite process exit codes for both
-  terminal statuses.
+  terminal JSON object, with three fixed, mutually distinct rb-lite process exit
+  codes for `checkpoint_stopped`, `checkpoint_failed`, and
+  `checkpoint_timed_out`, none equal to the success code or a signal-derived
+  status.
 
 Deterministic upstream tests must cover both boundaries, the stabilizing
-iteration, actual joined-panel result, 0/20/other statuses, preserved artifacts,
+iteration, actual joined-panel result, 0/20/other statuses, all three exact
+terminal process codes, preserved artifacts,
 timeout with a stopped/resistant descendant, and TERM/INT child reaping. The
 terminal JSON records the configured deadline and whether cleanup escalated.
 The hook does not parse a Drive contract, persist a
@@ -1057,9 +1072,17 @@ Do not mutate the skills Beads store from the rb-lite checkout, on an active
 unrelated skills branch, or directly on skills `master`.
 
 Here `F2` means the resolved generated bead ID, not the plan alias. The terminal
-mutation is `br close <F2-bead-id>`—not `br update ... -s closed`—followed by
-the checked explicit sync. The evidence is added to the bead before that close
-with `br update <F2-bead-id> --notes ...` on the same reviewed closure branch.
+mutation is one E3 call:
+
+```text
+beads-close-transaction close --id <F2-bead-id> \
+  --reason-file <merge-evidence-file> --notes-file <upstream-evidence-file>
+```
+
+Do not run a preceding raw `br update`, raw `br close`, or separate explicit
+sync: the helper validates the initially clean JSONL, owns evidence update plus
+closure under one lock, performs the flush, and compensates both notes and status
+on failure.
 
 Publishing the required upstream release is a separate human-authority
 checkpoint recorded in `DRIVE.md`; local controller BUILD remains blocked until
@@ -1118,7 +1141,7 @@ _tag_commit=$(printf '%s\n' "$_refs" |
 [ "$_tag_commit" = "$COMMIT" ] ||
   { echo "rb-lite release tag does not resolve to the authorized commit" >&2; exit 1; }
 _caps=$(
-  nix run "github:douglaz/rb-lite/$TAG" -- capabilities --json
+  nix run "github:douglaz/rb-lite/$COMMIT" -- capabilities --json
 ) || { echo "published rb-lite is not runnable" >&2; exit 1; }
 printf '%s' "$_caps" |
   jq -e '.synchronous_checkpoint == 1' >/dev/null ||
@@ -1136,7 +1159,9 @@ tag/commit mismatch, and successful capability probing. Authorization without
 a published, consumable, tag-and-commit-verified artifact does not close F2r;
 F3 separately pins the verified commit as its immutable fallback rather than a
 path-only, moving-tag, or version-text guess.
-Run the tag-qualified capability command through the same 120-second
+The release/tag checks establish published identity; probe the already verified
+commit-qualified artifact so a transient tag rewrite cannot change executed
+bytes. Run that capability command through the same 120-second
 process-group deadline and bounded TERM/CONT/KILL cleanup required by F3; a
 hanging release artifact is not consumable and cannot close F2r.
 

@@ -116,14 +116,14 @@ _gate_pending="$_gate_dir/exec.pending"
   }
   trap _gate_cleanup EXIT
   chmod 700 "$_gate_dir" || { echo "cannot protect gate directory"; exit 1; }
-  if ! cat >"$_gate_script" <<'__AGENT_GATE__'
+  if ! command cat >"$_gate_script" <<'__AGENT_GATE__'
 <gate>
 __AGENT_GATE__
   then
     echo "cannot write gate script"
     exit 1
   fi
-  if ! cat >"$_gate_runner" <<'__AGENT_SUPERVISOR__'
+  if ! command cat >"$_gate_runner" <<'__AGENT_SUPERVISOR__'
 import os
 import select
 import signal

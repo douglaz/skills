@@ -715,7 +715,8 @@ else
     bash "$gate_script" >"$bashenv_stdout" 2>"$bashenv_stderr"; bashenv_rc=$?
   (
     false() { return 0; }
-    export -f false
+    cat() { return 0; }
+    export -f false cat
     TMPDIR="$gate_tmp" \
       bash "$gate_script" >"$shellfunc_stdout" 2>"$shellfunc_stderr"
   ); shellfunc_rc=$?
