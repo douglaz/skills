@@ -774,12 +774,40 @@ Create exact companion owner:
 - `skills/reviewer-isolation/scripts/build-review-bundle`; and
 - `skills/reviewer-isolation/scripts/reviewer-isolation.test`.
 
+The builder's fixed API is:
+
+```text
+build-review-bundle --base REV --bundle-dir PATH --result-file PATH \
+  [--untracked-allowlist0 PATH]
+```
+
+`--bundle-dir` and `--result-file` must not exist; their parents must be
+caller-owned mode-0700 directories. The helper creates the bundle directory at
+0700, accepts the optional allowlist as raw NUL-delimited paths (absence is valid
+only when the repository has no untracked paths), writes no stdout, and atomically
+writes exactly one compact UTF-8 JSON object plus newline to a mode-0600 result:
+
+```json
+{"bundle_root":"<absolute>","working_directory":"<absolute snapshot>","diff":"<absolute native diff>","manifest":"<absolute untracked manifest>"}
+```
+
+Every returned path is canonical, below `bundle_root`, and names a regular file
+or directory the helper created without symlink traversal. Status 0 means the
+entire bundle and result validated; 2 is invalid invocation/dependency/repository
+input; 1 is a checked repository-state refusal or create/read/copy/digest/write/
+finalize/cleanup failure. No failure leaves a valid-looking result, prints
+reviewed content, or launches a reviewer.
+
 Migrate the bundle/isolation call sites in
 `skills/multi-reviewer-loop/references/reviewer-panel.md`,
 `skills/second-model-bead-audit/references/reviewer-panel.md`,
 `skills/orchestrating-with-rb-lite/references/harden-until-clean.md`, and
 `skills/pr-with-codex-bot-review/SKILL.md`; callers resolve the exact installed
 companion and do not duplicate bundle construction.
+Wire `reviewer-isolation` as an exact selective-install companion of all four
+callers in `companion_dependencies()`. `install.test` covers each direct caller
+install and upgrade repair on Claude and Codex targets, legacy-only Agents
+installation, missing companion, and wrong declared companion name.
 
 1. remove `Bash` from `--allowedTools` and include it in
    `--disallowedTools`; require `--no-session-persistence`, `--safe-mode`,
@@ -1385,7 +1413,7 @@ non-draft release, and require both the tag ref and its peeled annotated-tag ref
 lightweight/annotated ambiguity, moving tag, or absent release blocks closure.
 Then probe the commit-qualified released artifact. The coordinating agent invokes
 C1's already-landed `claude-reviewer-runner command-no-output
---timeout-seconds 120 -- <executable> [arg...]` lifecycle boundary. It runs one
+--timeout-seconds 900 -- <executable> [arg...]` lifecycle boundary. It runs one
 fixed argv vector with stdin closed, no shell, model, prompt, or result, and
 succeeds only when the child exits 0 with empty stdout/stderr. Its bounded
 TERM/CONT/KILL, timeout status 124, caller-signal status, and reaping contract
@@ -1394,20 +1422,31 @@ directory as an executable wrapper and passed as the single executable argv to
 that supervisor; it must not be invoked directly:
 
 ```bash
+#!/usr/bin/env bash
 TAG="<immutable-tag>"
 COMMIT="<immutable-commit>"
+PROBE_DIR=${0%/*}
+PROBE_LOG="$PROBE_DIR/release-probe.stderr"
+umask 077
+: >"$PROBE_LOG" || exit 1
+_probe_fail() {
+  printf '%s\n' "$1" >>"$PROBE_LOG"
+  exit 1
+}
 _release=$(
   gh release view "$TAG" -R douglaz/rb-lite \
-    --json url,tagName,isDraft,isPrerelease
-) || { echo "published rb-lite release is absent" >&2; exit 1; }
+    --json url,tagName,isDraft,isPrerelease 2>>"$PROBE_LOG"
+) || _probe_fail "published rb-lite release is absent"
 printf '%s' "$_release" |
   jq -e --arg tag "$TAG" \
-    '.tagName == $tag and .isDraft == false and .isPrerelease == false' >/dev/null ||
-  { echo "rb-lite release metadata does not match authorization" >&2; exit 1; }
+    '.tagName == $tag and .isDraft == false and .isPrerelease == false' \
+    >/dev/null 2>>"$PROBE_LOG" ||
+  _probe_fail "rb-lite release metadata does not match authorization"
 _refs=$(git ls-remote --tags https://github.com/douglaz/rb-lite.git \
-  "refs/tags/$TAG" "refs/tags/$TAG^{}") ||
-  { echo "cannot resolve published rb-lite tag" >&2; exit 1; }
-_tag_commit=$(printf '%s\n' "$_refs" |
+  "refs/tags/$TAG" "refs/tags/$TAG^{}" 2>>"$PROBE_LOG") ||
+  _probe_fail "cannot resolve published rb-lite tag"
+_tag_commit=$(
+  printf '%s\n' "$_refs" |
   awk -v tag="refs/tags/$TAG" '
     $2 == tag { direct=$1; direct_n++ }
     $2 == tag "^{}" { peeled=$1; peeled_n++ }
@@ -1415,24 +1454,34 @@ _tag_commit=$(printf '%s\n' "$_refs" |
       if (direct_n != 1 || peeled_n > 1) exit 1
       print (peeled_n == 1 ? peeled : direct)
     }
-  ') || { echo "rb-lite tag resolution is ambiguous" >&2; exit 1; }
+  ' 2>>"$PROBE_LOG"
+) || _probe_fail "rb-lite tag resolution is ambiguous"
 [ "$_tag_commit" = "$COMMIT" ] ||
-  { echo "rb-lite release tag does not resolve to the authorized commit" >&2; exit 1; }
+  _probe_fail "rb-lite release tag does not resolve to the authorized commit"
+_store=$(
+  nix build --no-link --print-out-paths \
+    "github:douglaz/rb-lite/$COMMIT" 2>>"$PROBE_LOG"
+) || _probe_fail "published rb-lite cannot be realized"
+case $_store in
+  ''|*$'\n'*|*$'\r'*) _probe_fail "rb-lite realization is ambiguous" ;;
+esac
+[ -x "$_store/bin/rb-lite" ] ||
+  _probe_fail "realized rb-lite executable is absent"
 _caps=$(
-  nix run "github:douglaz/rb-lite/$COMMIT" -- capabilities --json
-) || { echo "published rb-lite is not runnable" >&2; exit 1; }
+  "$_store/bin/rb-lite" capabilities --json 2>>"$PROBE_LOG"
+) || _probe_fail "published rb-lite is not runnable"
 printf '%s' "$_caps" |
   jq -es '
     length == 1 and
     ((.[0] | type) == "object") and
     (.[0].synchronous_checkpoint == 1)
-  ' >/dev/null ||
-  { echo "published rb-lite lacks synchronous checkpoint capability" >&2; exit 1; }
+  ' >/dev/null 2>>"$PROBE_LOG" ||
+  _probe_fail "published rb-lite lacks synchronous checkpoint capability"
 _refs_after=$(git ls-remote --tags https://github.com/douglaz/rb-lite.git \
-  "refs/tags/$TAG" "refs/tags/$TAG^{}") ||
-  { echo "cannot recheck published rb-lite tag" >&2; exit 1; }
+  "refs/tags/$TAG" "refs/tags/$TAG^{}" 2>>"$PROBE_LOG") ||
+  _probe_fail "cannot recheck published rb-lite tag"
 [ "$_refs_after" = "$_refs" ] ||
-  { echo "rb-lite release tag moved during verification" >&2; exit 1; }
+  _probe_fail "rb-lite release tag moved during verification"
 ```
 
 Replace every placeholder with the recorded values. Fixtures or a checked
@@ -1444,7 +1493,11 @@ path-only, moving-tag, or version-text guess.
 The release/tag checks establish published identity; probe the already verified
 commit-qualified artifact so a transient tag rewrite cannot change executed
 bytes. A timeout, signal, descendant leak, or nonempty unexpected stream from the
-landed supervisor blocks closure.
+landed supervisor blocks closure. Nix realization progress is expected on a cold
+host, so the wrapper redirects all child stderr to its mode-0600 `PROBE_LOG`,
+captures the one output path, and probes that realized executable; it never
+requires Nix itself to be silent. Preserve and cite the private log on failure,
+and remove the private wrapper directory only after successful metadata capture.
 
 After publication and the supervised probe succeed, record F2r through a dedicated
 reviewed skills metadata transaction. Create `metadata/close-f2r-release` from
@@ -1474,7 +1527,8 @@ Implement:
   reports `"synchronous_checkpoint":1`; otherwise fall back to
   `nix run github:douglaz/rb-lite/<F2r-immutable-commit> --`, probe that exact
   command too, and fail preflight if neither qualifies. Bound each probe to a
-  declared positive timeout (default 120 seconds), stdin closed and a private
+  declared positive timeout (default 120 seconds for PATH; 900 seconds for the
+  cold immutable Nix fallback), stdin closed and a private
   process group; timeout performs bounded TERM/CONT/KILL cleanup. A timed-out
   PATH candidate falls through to the immutable probe, while a timed-out
   immutable probe is a categorized preflight failure;
