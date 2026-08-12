@@ -4,7 +4,7 @@
 `docs/specs/backlog-execution-plan.md` (#30–#66, exact set in that plan); the
 Beads graph created from the reviewed plan will be the ONLY work this drive may
 take.
-**Phase:** LAND · **Bead:** n/a (planning/bootstrap graph)
+**Phase:** HARDEN · **Bead:** n/a (planning/bootstrap graph)
 · **Branch:** `plan/backlog-execution`
 **Pending:** —
 **Gate:** `./check.sh`
@@ -99,7 +99,7 @@ non-POSIX mode).
   non-POSIX mode, exited 0 with 26 installer, 124 bot-gate, and 70 drive-status
   fixtures; stderr was empty and no fixture gate process survived.
 - Called Fable/high again after all specification/body corrections. It reread
-  the full 1,871-line spec, all 33 bodies, `AGENTS.md`, `DRIVE.md`, and linked
+  the full specification, all 33 bodies, `AGENTS.md`, `DRIVE.md`, and linked
   owners and reported `NO BLOCKING FINDINGS`.
 - Closed the final current-tip gate supervision findings at `ad5fe0b`: a
   privileged-Bash preflight now rejects an exported `command` trust-anchor
