@@ -148,11 +148,15 @@ class GateCancelled(BaseException):
 
 
 def receive_signal(signum, _frame):
-    global pending_signal
-    if not signal_ready:
+    global pending_signal, signal_ready
+    was_ready = signal_ready
+    signal_ready = False
+    if pending_signal is None:
         pending_signal = signum
+    if not was_ready:
         return
-    raise GateCancelled(signum)
+    signal.pthread_sigmask(signal.SIG_BLOCK, managed_signals)
+    raise GateCancelled(pending_signal)
 
 
 def ignore_managed_signals():
@@ -251,6 +255,8 @@ rc = 1
 try:
     signal_ready = True
     if pending_signal is not None:
+        signal_ready = False
+        signal.pthread_sigmask(signal.SIG_BLOCK, managed_signals)
         raise GateCancelled(pending_signal)
     environment = os.environ.copy()
     environment["BASH_ENV"] = ""
@@ -363,7 +369,7 @@ __AGENT_SUPERVISOR__
   fi
 ) &
 _gate_exec_watchdog=$!
-exec python3 "$_gate_runner" "$_gate_dir" "${BASH:-bash}" \
+exec python3 -I "$_gate_runner" "$_gate_dir" "${BASH:-bash}" \
   "$_gate_exec_watchdog" "$_gate_pending"
 ```
 

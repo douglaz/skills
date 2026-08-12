@@ -601,7 +601,8 @@ possible_gate_start=false
       break
     fi
     if $capture_gate; then
-      [[ $line == *'exec python3 "$_gate_runner"'* ]] && found_supervisor=true
+      [[ $line == *'exec python3 '* && $line == *'"$_gate_runner"'* ]] &&
+        found_supervisor=true
       if [[ ${line#"${line%%[![:space:]]*}"} == '<gate>' ]]; then
         printf '%s\n' 'gate() { printf "first\n"; false; printf "should-not-run\n"; }'
         printf '%s\n' 'if [[ ${GATE_MODE:-function} == status ]]; then exit 124'
@@ -638,8 +639,8 @@ possible_gate_start=false
   done < "$discipline_block"
 } > "$gate_script"
 awk '
-  /exec python3 "\$_gate_runner"/ {
-    sub(/exec python3/, "exec /definitely/missing/python3")
+  /exec python3 -I "\$_gate_runner"/ {
+    sub(/exec python3 -I/, "exec /definitely/missing/python3")
   }
   { print }
 ' "$gate_script" >"$execfail_gate_script"
@@ -702,7 +703,7 @@ else
   done
   execfail_leak=$(find "$gate_tmp" -mindepth 1 -print -quit)
   TMPDIR="$gate_tmp" \
-    HOSTILE_BASH_ENV="$bashenv_file" \
+    HOSTILE_BASH_ENV="$bashenv_file" PYTHONINSPECT=1 PYTHONPATH=/definitely/hostile \
     bash "$gate_script" >"$bashenv_stdout" 2>"$bashenv_stderr"; bashenv_rc=$?
   TMPDIR="$gate_tmp" GATE_MODE=stdin \
     bash "$stdin_gate_script" >"$stdin_stdout" 2>"$stdin_stderr"; stdin_rc=$?
@@ -765,6 +766,7 @@ else
     else
       read -r cooperative_child_pid _ <"$cooperative_child_pid_file"
       kill -TERM "$cooperative_pid"
+      kill -TERM "$cooperative_pid" 2>/dev/null || true
       (
         sleep 2
         : >"$cooperative_deadline_marker"
