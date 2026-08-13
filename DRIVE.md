@@ -8,7 +8,7 @@ take.
 · **Branch:** `plan/backlog-execution`
 **Pending:** —
 **Gate:** `./check.sh`
-· last green 2026-08-12 on the `803ec9d` tree (exit 0; 26 installer,
+· last green 2026-08-13 on the `da82ec0` tree (exit 0; 26 installer,
 124 bot-gate, and 70 drive-status fixtures passed under GNU Bash 5.3.15,
 non-POSIX mode).
 
@@ -162,6 +162,22 @@ non-POSIX mode).
   publication for C1 in both plan and bead. A three-second launch passes; the
   old two-second timer fails 25/1. Normal and forced-no-pidfd installers pass
   26/0, and the full gate passes 26/124/70 with empty stderr.
+- The next current-tip review found serial replay could let a blocked stdout
+  consumer starve stderr, cleanup diagnostics could be lost to a full
+  nonblocking stderr pipe, two deadline fixtures lacked explicit setup
+  assertions, and C3's result rename could replace a path raced into existence.
+  Commit `da82ec0` adds fair selector-based stream replay, restores stderr
+  blocking before cleanup diagnostics, makes both fixture preconditions
+  explicit, and specifies same-directory mode-0600 exclusive-link publication
+  for C3 in both plan and bead. The two focused replay/cleanup regressions each
+  fail 25/1 against their mutants; normal and forced-no-pidfd installer runs
+  pass 26/0, and the full gate passes 26/124/70 with empty stderr.
+- Re-audited the current 33-bead, 37-edge graph at immutable JSONL snapshot
+  `276f9a16e6bc62aa49e1ae5faf494d152b5b32a55d32b81ae6447c5ee99c1ff6`
+  after the C3 body correction. On the independent retry, pinned
+  `gpt-5.6-sol`/xhigh and Fable/high both returned semantic PASS. Fable's two
+  optional nits were this now-completed gate-evidence refresh and cosmetic
+  sibling B2 source-section duplication; neither changes the graph.
 
 ## Now
 
