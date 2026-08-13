@@ -515,6 +515,7 @@ stdin_gate_script="$WORK/discipline-stdin-gate.sh"
 execfail_gate_script="$WORK/discipline-execfail-gate.sh"
 cleanupfail_gate_script="$WORK/discipline-cleanupfail-gate.sh"
 replayfail_gate_script="$WORK/discipline-replayfail-gate.sh"
+replayworkers_gate_script="$WORK/discipline-replayworkers-gate.sh"
 canonical_gate_block="$WORK/discipline-canonical-gate.block"
 managed_gate_block="$WORK/discipline-managed-gate.block"
 gate_stdout="$WORK/discipline-gate.stdout"
@@ -613,6 +614,7 @@ replay_deadline_marker="$WORK/discipline-replay-deadline"
 replay_workers_ready="$WORK/discipline-replay-workers.ready"
 replay_workers_release="$WORK/discipline-replay-workers.release"
 replay_workers_rc_file="$WORK/discipline-replay-workers.rc"
+replay_workers_pid_file="$WORK/discipline-replay-workers.pid"
 quit_started="$WORK/discipline-quit-started"
 quit_rc_file="$WORK/discipline-quit.rc"
 quit_child_pid_file="$WORK/discipline-quit-child.pid"
@@ -925,6 +927,24 @@ replacement = (
 )
 if text.count(needle) != 1:
     raise RuntimeError("cannot inject replay-worker failure")
+with open(destination, "w", encoding="utf-8") as mutated:
+    mutated.write(text.replace(needle, replacement))
+PY
+python3 - "$gate_script" "$replayworkers_gate_script" <<'PY'
+import sys
+
+source, destination = sys.argv[1:]
+text = open(source, encoding="utf-8").read()
+needle = "                workers.append(pid)\n        finally:\n"
+replacement = (
+    "                workers.append(pid)\n"
+    "            with open(os.environ['GATE_TEST_REPLAY_WORKERS'], 'x', "
+    "encoding='ascii') as worker_file:\n"
+    "                worker_file.write(' '.join(map(str, workers)) + '\\n')\n"
+    "        finally:\n"
+)
+if text.count(needle) != 1:
+    raise RuntimeError("cannot inject replay-worker PID handshake")
 with open(destination, "w", encoding="utf-8") as mutated:
     mutated.write(text.replace(needle, replacement))
 PY
@@ -1426,7 +1446,9 @@ PY
     TMPDIR="$gate_tmp" GATE_MODE=replay STARTED="$replay_started" \
       CHILD_PID_FILE="$replay_child_pid_file" \
       REPLAY_DONE="$replay_done" \
-      bash "$gate_script" >"$replay_fifo" 2>"$replay_error_fifo" &
+      GATE_TEST_REPLAY_WORKERS="$replay_workers_pid_file" \
+      bash "$replayworkers_gate_script" \
+      >"$replay_fifo" 2>"$replay_error_fifo" &
     replay_pid=$!
     for ((_n=1; _n<=1000; _n++)); do
       [[ -f "$replay_done" ]] && break
@@ -1439,22 +1461,21 @@ PY
       printf '%s' 125 >"$replay_workers_rc_file"
     else
       read -r replay_child_pid _ <"$replay_child_pid_file"
-      python3 - "$replay_pid" "$replay_workers_ready" \
+      python3 - "$replay_workers_pid_file" "$replay_workers_ready" \
           "$replay_workers_release" <<'PY' &
 import os
 import select
 import sys
 import time
 
-owner = int(sys.argv[1])
-ready, release = sys.argv[2:]
+pid_file, ready, release = sys.argv[1:]
 deadline = time.monotonic() + 10.0
 fds = []
 while time.monotonic() < deadline:
     try:
-        with open(f"/proc/{owner}/task/{owner}/children", encoding="ascii") as children:
-            pids = [int(pid) for pid in children.read().split()]
-        if len(pids) == 2:
+        with open(pid_file, encoding="ascii") as workers:
+            pids = [int(pid) for pid in workers.read().split()]
+        if len(pids) == 2 and len(set(pids)) == 2:
             fds = [os.pidfd_open(pid) for pid in pids]
             break
     except (FileNotFoundError, ProcessLookupError):
