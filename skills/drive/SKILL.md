@@ -210,13 +210,11 @@ A phase closes on evidence or it does not close.
 - Run the real gate yourself. rb-lite's panel and every reviewer **read** code; they do
   not **run** it. A clean panel is not a passing build.
 - **Never pipe a gate through `tail`/`head`/`grep`.** The pipeline exit code is the last
-  stage's, so a red gate reports 0. (See `references/autonomy-contract.md` § 2.)
-
-  ```bash
-  <gate-cmd> > /tmp/gate.log 2>&1; echo "EXIT=$?"
-  ```
-
-  Then read the log. Quote the command and the exit code in your report.
+  stage's, so a red gate reports 0. Use the exact fail-closed gate wrapper in the
+  applicable `AGENTS.md` Working agreement; that managed block is the sole owner
+  of the wrapper—do not copy or adapt it here. (See
+  `references/autonomy-contract.md` § 2.) Quote the command and final exit code
+  in your report.
 - For a test you just wrote: make it **fail first** against the unfixed code, then pass. A
   green test that never could have gone red proves nothing.
 - Words that need a number or an exit code behind them: "passing", "working", "clean",

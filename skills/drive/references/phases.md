@@ -198,10 +198,9 @@ Either way the non-negotiables below apply.
 
 Two non-negotiables:
 
-1. **Run it yourself**, unpiped:
-   ```bash
-   <gate-cmd> > /tmp/gate.log 2>&1; echo "EXIT=$?"
-   ```
+1. **Run it yourself**, unpiped, through the exact fail-closed gate wrapper in
+   the applicable `AGENTS.md` Working agreement. That managed block is the sole
+   wrapper owner; do not duplicate or adapt it in Drive.
 2. **Make it fail first — once per property, on the right assertion.** Point the new test
    at the unfixed code and watch it go red. A test that could never have failed proves
    nothing. Two refinements that decide whether the red run means anything:

@@ -507,5 +507,1621 @@ LINKS
 if [[ -n "$link_failures" ]]; then fail "$t" "$link_failures"
 else pass "$t"; fi
 
+t="discipline gate wrapper returns an early && failure"
+repository_discipline_block="$HERE/skills/agents-md/references/discipline-block.md"
+discipline_block=${DISCIPLINE_BLOCK:-"$repository_discipline_block"}
+gate_script="$WORK/discipline-gate.sh"
+stdin_gate_script="$WORK/discipline-stdin-gate.sh"
+execfail_gate_script="$WORK/discipline-execfail-gate.sh"
+cleanupfail_gate_script="$WORK/discipline-cleanupfail-gate.sh"
+replayfail_gate_script="$WORK/discipline-replayfail-gate.sh"
+replayworkers_gate_script="$WORK/discipline-replayworkers-gate.sh"
+canonical_gate_block="$WORK/discipline-canonical-gate.block"
+managed_gate_block="$WORK/discipline-managed-gate.block"
+gate_stdout="$WORK/discipline-gate.stdout"
+gate_stderr="$WORK/discipline-gate.stderr"
+paste_stdout="$WORK/discipline-paste.stdout"
+paste_stderr="$WORK/discipline-paste.stderr"
+execfail_stdout="$WORK/discipline-execfail.stdout"
+execfail_stderr="$WORK/discipline-execfail.stderr"
+bashenv_stdout="$WORK/discipline-bashenv.stdout"
+bashenv_stderr="$WORK/discipline-bashenv.stderr"
+delayedexec_stdout="$WORK/discipline-delayed-exec.stdout"
+delayedexec_stderr="$WORK/discipline-delayed-exec.stderr"
+shellfunc_stdout="$WORK/discipline-shellfunc.stdout"
+shellfunc_stderr="$WORK/discipline-shellfunc.stderr"
+localcommand_stdout="$WORK/discipline-local-command.stdout"
+localcommand_stderr="$WORK/discipline-local-command.stderr"
+localalias_stdout="$WORK/discipline-local-alias.stdout"
+localalias_stderr="$WORK/discipline-local-alias.stderr"
+commandfunc_stdout="$WORK/discipline-commandfunc.stdout"
+commandfunc_stderr="$WORK/discipline-commandfunc.stderr"
+commandfunc_env=$(command -p -v env)
+stdin_stdout="$WORK/discipline-stdin.stdout"
+stdin_stderr="$WORK/discipline-stdin.stderr"
+status_stdout="$WORK/discipline-status.stdout"
+status_stderr="$WORK/discipline-status.stderr"
+pipeline_stdout="$WORK/discipline-pipeline.stdout"
+pipeline_stderr="$WORK/discipline-pipeline.stderr"
+streams_stdout="$WORK/discipline-streams.stdout"
+streams_stderr="$WORK/discipline-streams.stderr"
+pressure_fifo="$WORK/discipline-pressure.fifo"
+pressure_stdout="$WORK/discipline-pressure.stdout"
+pressure_stderr="$WORK/discipline-pressure.stderr"
+pressure_reader_ready="$WORK/discipline-pressure-reader.ready"
+pressure_reader_release="$WORK/discipline-pressure-reader.release"
+shared_flags_result="$WORK/discipline-shared-flags.result"
+shared_flags_stderr="$WORK/discipline-shared-flags.stderr"
+replay_failure_result="$WORK/discipline-replay-failure.result"
+replay_failure_stderr="$WORK/discipline-replay-failure.stderr"
+ignored_sigchld_stdout="$WORK/discipline-ignored-sigchld.stdout"
+ignored_sigchld_stderr="$WORK/discipline-ignored-sigchld.stderr"
+normal_orphan_stdout="$WORK/discipline-normal-orphan.stdout"
+normal_orphan_stderr="$WORK/discipline-normal-orphan.stderr"
+cooperative_stdout="$WORK/discipline-cooperative.stdout"
+cooperative_stderr="$WORK/discipline-cooperative.stderr"
+startup_timeout_stdout="$WORK/discipline-startup-timeout.stdout"
+startup_timeout_stderr="$WORK/discipline-startup-timeout.stderr"
+blocked_term_stdout="$WORK/discipline-blocked-term.stdout"
+blocked_term_stderr="$WORK/discipline-blocked-term.stderr"
+replay_stderr="$WORK/discipline-replay.stderr"
+term_stdout="$WORK/discipline-term.stdout"
+term_stderr="$WORK/discipline-term.stderr"
+quit_stdout="$WORK/discipline-quit.stdout"
+quit_stderr="$WORK/discipline-quit.stderr"
+stop_stdout="$WORK/discipline-stop.stdout"
+stop_stderr="$WORK/discipline-stop.stderr"
+aggregate_stdout="$WORK/discipline-aggregate.stdout"
+aggregate_stderr="$WORK/discipline-aggregate.stderr"
+cleanup_stdout="$WORK/discipline-cleanup.stdout"
+cleanup_stderr="$WORK/discipline-cleanup.stderr"
+cleanup_pressure_fifo="$WORK/discipline-cleanup-pressure.fifo"
+cleanup_pressure_stdout="$WORK/discipline-cleanup-pressure.stdout"
+cleanup_pressure_stderr="$WORK/discipline-cleanup-pressure.stderr"
+cleanup_pressure_reader_ready="$WORK/discipline-cleanup-pressure-reader.ready"
+cleanup_pressure_release="$WORK/discipline-cleanup-pressure.release"
+cleanup_pressure_filled="$WORK/discipline-cleanup-pressure.filled"
+trusted_cleanup_stdout="$WORK/discipline-trusted-cleanup.stdout"
+trusted_cleanup_stderr="$WORK/discipline-trusted-cleanup.stderr"
+gate_tmp="$WORK/discipline-gate-tmp"
+cleanup_tmp="$WORK/discipline-cleanup-tmp"
+trusted_cleanup_tmp="$WORK/discipline-trusted-cleanup-tmp"
+cleanup_bin="$WORK/discipline-cleanup-bin"
+term_started="$WORK/discipline-term-started"
+term_rc_file="$WORK/discipline-term.rc"
+term_child_pid_file="$WORK/discipline-term-child.pid"
+term_deadline_marker="$WORK/discipline-term-deadline"
+cooperative_started="$WORK/discipline-cooperative-started"
+cooperative_rc_file="$WORK/discipline-cooperative.rc"
+cooperative_child_pid_file="$WORK/discipline-cooperative-child.pid"
+cooperative_signal_marker="$WORK/discipline-cooperative-signal"
+cooperative_deadline_marker="$WORK/discipline-cooperative-deadline"
+startup_timeout_started="$WORK/discipline-startup-timeout-started"
+startup_timeout_rc_file="$WORK/discipline-startup-timeout.rc"
+startup_timeout_child_pid_file="$WORK/discipline-startup-timeout-child.pid"
+startup_timeout_leak_file="$WORK/discipline-startup-timeout.leak"
+blocked_term_started="$WORK/discipline-blocked-term-started"
+blocked_term_rc_file="$WORK/discipline-blocked-term.rc"
+blocked_term_child_pid_file="$WORK/discipline-blocked-term-child.pid"
+blocked_term_deadline_marker="$WORK/discipline-blocked-term-deadline"
+replay_fifo="$WORK/discipline-replay.fifo"
+replay_error_fifo="$WORK/discipline-replay-error.fifo"
+replay_started="$WORK/discipline-replay-started"
+replay_done="$WORK/discipline-replay-done"
+replay_rc_file="$WORK/discipline-replay.rc"
+replay_child_pid_file="$WORK/discipline-replay-child.pid"
+replay_deadline_marker="$WORK/discipline-replay-deadline"
+replay_workers_ready="$WORK/discipline-replay-workers.ready"
+replay_workers_release="$WORK/discipline-replay-workers.release"
+replay_workers_rc_file="$WORK/discipline-replay-workers.rc"
+replay_workers_pid_file="$WORK/discipline-replay-workers.pid"
+quit_started="$WORK/discipline-quit-started"
+quit_rc_file="$WORK/discipline-quit.rc"
+quit_child_pid_file="$WORK/discipline-quit-child.pid"
+quit_deadline_marker="$WORK/discipline-quit-deadline"
+stop_started="$WORK/discipline-stop-started"
+stop_rc_file="$WORK/discipline-stop.rc"
+stop_child_pid_file="$WORK/discipline-stop-child.pid"
+stop_deadline_marker="$WORK/discipline-stop-deadline"
+aggregate_started="$WORK/discipline-aggregate-started"
+aggregate_release="$WORK/discipline-aggregate-release"
+aggregate_rc_file="$WORK/discipline-aggregate.rc"
+aggregate_early_file="$WORK/discipline-aggregate.early"
+aggregate_child_pid_file="$WORK/discipline-aggregate-child.pid"
+subreaper_rc_file="$WORK/discipline-subreaper.rc"
+subreaper_stderr="$WORK/discipline-subreaper.stderr"
+subreaper_supervisor="$WORK/discipline-subreaper-supervisor.py"
+deadline_group_ready="$WORK/discipline-deadline-group.ready"
+deadline_group_pid_file="$WORK/discipline-deadline-group.pids"
+deadline_group_marker="$WORK/discipline-deadline-group.deadline"
+bashenv_file="$WORK/hostile-bash-env"
+bashenv_marker="$WORK/hostile-bash-env.sourced"
+bashenv_python_dir="$WORK/hostile-bash-env-python"
+bashenv_real_python=$(command -v python3)
+shellfunc_hostile_dir="$WORK/hostile-mktemp-target"
+shellfunc_hostile_sentinel="$shellfunc_hostile_dir/sentinel"
+mkdir -p "$gate_tmp" "$cleanup_tmp" "$trusted_cleanup_tmp" "$cleanup_bin" \
+  "$bashenv_python_dir" "$shellfunc_hostile_dir"
+printf '%s\n' preserve >"$shellfunc_hostile_sentinel"
+printf '%s\n' '#!/bin/sh' 'exit 0' >"$cleanup_bin/unlink"
+printf '%s\n' '#!/bin/sh' 'exit 0' >"$cleanup_bin/rmdir"
+chmod +x "$cleanup_bin/unlink" "$cleanup_bin/rmdir"
+printf '%s\n' ': >"$BASHENV_MARKER"' 'exit 0' >"$bashenv_file"
+cat >"$bashenv_python_dir/python3" <<'EOF'
+#!/usr/bin/env bash
+if [[ -n ${BASHENV_SUPERVISOR_DELAY:-} &&
+    ${2:-} == */supervisor.py ]]; then
+  sleep "$BASHENV_SUPERVISOR_DELAY"
+fi
+exec "$BASHENV_REAL_PYTHON" "$@"
+EOF
+chmod +x "$bashenv_python_dir/python3"
+
+gate_fixture_group_alive() {
+  python3 - "$1" <<'PY'
+import os
+import sys
+
+try:
+    os.killpg(int(sys.argv[1]), 0)
+except ProcessLookupError:
+    sys.exit(1)
+except PermissionError:
+    pass
+sys.exit(0)
+PY
+}
+
+# A fixture timeout must stop the caller-visible supervisor and any gate process
+# group it may have created concurrently. Killing only the supervisor can orphan
+# the private gate under PID 1 and poison every signal fixture that follows.
+# A watchdog is one Python process with no timer child to orphan. Cancellation
+# is a private file, never a signal to a reusable watchdog PID. On Linux it pins
+# deadline targets with pidfds before publishing readiness and anchors a process
+# group through its stopped leader. If pidfds are unavailable, it publishes an
+# unsupported marker before readiness so the caller can abort before sending the
+# behavior signal; it never falls back to a reusable numeric PID.
+gate_fixture_watchdog() {
+  local marker=$1 wrapper_pid=$2 group_pid=${3:-0}
+  exec python3 - "$marker" "$wrapper_pid" "$group_pid" <<'PY'
+import os
+import signal
+import sys
+import time
+
+marker, wrapper_raw, group_raw = sys.argv[1:]
+cancel = marker + ".cancel"
+ready = marker + ".ready"
+wrapper_pid = int(wrapper_raw)
+group_pid = int(group_raw)
+wrapper_fd = None
+group_fd = None
+
+supported = (
+    sys.platform.startswith("linux")
+    and hasattr(os, "pidfd_open")
+    and hasattr(signal, "pidfd_send_signal")
+)
+if supported:
+    try:
+        wrapper_fd = os.pidfd_open(wrapper_pid)
+        if group_pid > 1:
+            group_fd = os.pidfd_open(group_pid)
+    except (ProcessLookupError, PermissionError, OSError):
+        supported = False
+if not supported or wrapper_fd is None or (group_pid > 1 and group_fd is None):
+    open(marker + ".unsupported", "xb").close()
+
+open(ready, "xb").close()
+if not supported or wrapper_fd is None or (group_pid > 1 and group_fd is None):
+    raise SystemExit(126)
+deadline = time.monotonic() + 2.0
+while not os.path.exists(cancel) and time.monotonic() < deadline:
+    time.sleep(0.01)
+if os.path.exists(cancel):
+    raise SystemExit(0)
+
+open(marker, "xb").close()
+if group_fd is not None:
+    try:
+        # Holding the leader's pidfd pins its numeric PID/PGID against reuse
+        # while the one group-wide escalation reaches every descendant.
+        os.killpg(group_pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+if wrapper_fd is not None:
+    try:
+        signal.pidfd_send_signal(wrapper_fd, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+if group_fd is not None:
+    os.close(group_fd)
+if wrapper_fd is not None:
+    os.close(wrapper_fd)
+PY
+}
+
+gate_fixture_watchdog_ready() {
+  local marker=$1
+  # Startup handshake, not a behavior deadline: allow the same bounded ten
+  # seconds as the other setup polls so interpreter start latency cannot fail
+  # a correct wrapper.
+  for ((_n=1; _n<=1000; _n++)); do
+    if [[ -e "$marker.ready" ]]; then
+      [[ ! -e "$marker.unsupported" ]]
+      return
+    fi
+    sleep 0.01
+  done
+  return 1
+}
+
+gate_fixture_pidfd_supported() {
+  [[ ${FORCE_NO_PIDFD_FIXTURES:-false} != true ]] || return 1
+  python3 - <<'PY'
+import os
+import signal
+import sys
+
+if not (
+    sys.platform.startswith("linux")
+    and hasattr(os, "pidfd_open")
+    and hasattr(signal, "pidfd_send_signal")
+):
+    raise SystemExit(1)
+fd = os.pidfd_open(os.getpid())
+os.close(fd)
+PY
+}
+
+# Wait for whichever owned child finishes first. The watchdog owns all timeout
+# signals through pidfds; Bash only cancels it by file and reaps both exact jobs.
+gate_fixture_wait_with_watchdog() {
+  local wrapper_pid=$1 marker=$2 watchdog_pid=$3
+  local winner= first_rc=0 watchdog_rc=0 wrapper_rc=0
+  wait -n -p winner "$wrapper_pid" "$watchdog_pid" || first_rc=$?
+  if [[ $winner == "$wrapper_pid" ]]; then
+    wrapper_rc=$first_rc
+    : >"$marker.cancel"
+    wait "$watchdog_pid" 2>/dev/null || watchdog_rc=$?
+  else
+    watchdog_rc=$first_rc
+    wait "$wrapper_pid" 2>/dev/null || wrapper_rc=$?
+  fi
+  if [[ -e "$marker" ]]; then
+    gate_fixture_wait_rc=124
+  elif [[ $watchdog_rc -ne 0 ]]; then
+    gate_fixture_wait_rc=126
+  else
+    gate_fixture_wait_rc=$wrapper_rc
+  fi
+}
+
+# Called only before the behavior signal, while both recorded long-running
+# targets are known alive. One hard-signal operation has no later PID use.
+gate_fixture_abort_before_signal() {
+  local wrapper_pid=$1 group_pid=$2
+  if [[ $group_pid != *[!0-9]* && $group_pid -gt 1 ]]; then
+    kill -s KILL -- "-$group_pid" "$wrapper_pid" 2>/dev/null || true
+  else
+    kill -s KILL -- "$wrapper_pid" 2>/dev/null || true
+  fi
+  wait "$wrapper_pid" 2>/dev/null || true
+}
+
+gate_fixture_remove_aborted_artifacts() {
+  # Only setup-failure branches call this after hard containment. Normal signal
+  # fixtures still require the supervisor itself to remove every private file.
+  find "$gate_tmp" -depth -mindepth 1 -delete
+}
+
+capture_gate=false
+found_gate_start=false
+found_gate_command=false
+found_supervisor=false
+possible_gate_start=false
+{
+  printf '%s\n' '#!/usr/bin/env bash'
+  printf '%s\n' 'set -e'
+  printf '%s\n' 'if [[ -n ${HOSTILE_BASH_ENV:-} ]]; then export BASH_ENV=$HOSTILE_BASH_ENV; fi'
+  while IFS= read -r line; do
+    if ! $capture_gate; then
+      if [[ $line == 'POSIXLY_CORRECT=y' ]] ||
+          [[ $line == *'--noprofile --norc -p -s'* ]] ||
+          [[ $line == *'_gate_dir=$(command mktemp -d)'* ]] ||
+          { $possible_gate_start && [[ $line == *'_gate_log=$(mktemp)'* ]]; }; then
+        capture_gate=true
+        found_gate_start=true
+      else
+        possible_gate_start=false
+        [[ $line == '(' ]] && possible_gate_start=true
+        continue
+      fi
+    elif [[ $line == '```' ]]; then
+      break
+    fi
+    if $capture_gate; then
+      [[ $line == *'command exec "$_gate_python" '* &&
+          $line == *'"$_gate_runner"'* ]] &&
+        found_supervisor=true
+      if [[ ${line#"${line%%[![:space:]]*}"} == '<gate>' ]]; then
+        printf '%s\n' 'gate() { printf "first\n"; false; printf "should-not-run\n"; }'
+        printf '%s\n' 'if [[ ${GATE_MODE:-function} == status ]]; then exit 124'
+        printf '%s\n' 'elif [[ ${GATE_MODE:-function} == success ]]; then printf "paste-success\n"'
+        printf '%s\n' 'elif [[ ${GATE_MODE:-function} == pipeline ]]; then'
+        printf '%s\n' '  printf "pipeline-first\n"; false | true; printf "pipeline-last\n"'
+        printf '%s\n' 'elif [[ ${GATE_MODE:-function} == streams ]]; then'
+        printf '%s\n' '  printf "stream-out\n"; printf "stream-error\n" >&2'
+        printf '%s\n' 'elif [[ ${GATE_MODE:-function} == stream-pressure ]]; then'
+        printf '%s\n' '  python3 -c '\''import sys; sys.stdout.write("x" * 262144)'\'''
+        printf '%s\n' '  printf "pressure-error\n" >&2'
+        printf '%s\n' 'elif [[ ${GATE_MODE:-function} == normal-orphan ]]; then'
+        printf '%s\n' '  python3 -c '\''import os, sys, time; (sys.exit(0) if not sys.platform.startswith("linux") else None); pid = os.fork(); (os._exit(0) if pid == 0 else None); deadline = time.monotonic() + 2; info = None; exec("while time.monotonic() < deadline:\n info = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)\n if info is not None and info.si_pid == pid: break\n time.sleep(0.005)"); (None if info is not None and info.si_pid == pid else (_ for _ in ()).throw(RuntimeError("child did not become a zombie")))'\'''
+        printf '%s\n' 'elif [[ ${GATE_MODE:-function} == replay ]]; then'
+        printf '%s\n' '  printf "%s %s\n" "$BASHPID" "$PPID" >"$CHILD_PID_FILE"; : >"$STARTED"'
+        printf '%s\n' '  python3 -c '\''import sys; sys.stdout.write("x" * 2000000)'\'''
+        printf '%s\n' '  python3 -c '\''import sys; sys.stderr.write("y" * 2000000)'\'''
+        printf '%s\n' '  : >"$REPLAY_DONE"'
+        printf '%s\n' 'elif [[ ${GATE_MODE:-function} == cooperative ]]; then'
+        printf '%s\n' '  trap '\''printf term-cleanup >"$SIGNAL_MARKER"; exit 143'\'' TERM'
+        printf '%s\n' '  printf "%s %s\n" "$BASHPID" "$PPID" >"$CHILD_PID_FILE"'
+        printf '%s\n' '  printf "cooperative-sensitive-output\n"; : >"$STARTED"'
+        printf '%s\n' '  while :; do sleep 1; done'
+        printf '%s\n' 'elif [[ ${GATE_MODE:-function} == startup-timeout ]]; then'
+        printf '%s\n' '  printf "%s %s\n" "$BASHPID" "$PPID" >"$CHILD_PID_FILE"'
+        printf '%s\n' '  sleep 30; : >"$STARTED"'
+        printf '%s\n' 'elif [[ ${GATE_MODE:-function} == term ]]; then'
+        printf '%s\n' '  trap "" HUP INT TERM'
+        printf '%s\n' '  bash -c '\''trap "" HUP INT TERM; while :; do sleep 1; done'\'' & term_descendant=$!'
+        printf '%s\n' '  printf "%s %s %s\n" "$BASHPID" "$PPID" "$term_descendant" >"$CHILD_PID_FILE"'
+        printf '%s\n' '  printf "sensitive-output\n"; : >"$STARTED"; wait "$term_descendant"'
+        printf '%s\n' 'elif [[ ${GATE_MODE:-function} == stop ]]; then'
+        printf '%s\n' '  printf "%s %s\n" "$BASHPID" "$PPID" >"$CHILD_PID_FILE"'
+        printf '%s\n' '  printf "stopped-sensitive-output\n"; : >"$STARTED"; kill -STOP "$BASHPID"'
+        printf '%s\n' '  printf "stopped-gate-continued\n"'
+        printf '%s\n' 'elif [[ ${GATE_MODE:-function} == aggregate ]]; then'
+        printf '%s\n' '  printf "%s %s\n" "$BASHPID" "$PPID" >"$CHILD_PID_FILE"'
+        printf '%s\n' '  printf "aggregate-first\n" && { : >"$AGG_STARTED"; while [[ ! -f "$AGG_RELEASE" ]]; do sleep 0.01; done; false; } && printf "aggregate-last\n"'
+        printf '%s\n' 'elif [[ ${GATE_MODE:-function} == cleanup ]]; then'
+        printf '%s\n' '  printf "cleanup-output\n"'
+        printf '%s\n' 'elif [[ ${GATE_MODE:-function} == trusted-cleanup ]]; then'
+        printf '%s\n' '  printf "trusted-cleanup-output\n"'
+        printf '%s\n' 'else gate; fi'
+        found_gate_command=true
+      else
+        printf '%s\n' "$line"
+      fi
+    fi
+  done < "$discipline_block"
+} > "$gate_script"
+awk '
+  /^import os$/ { supervisor=1 }
+  /^__AGENT_SUPERVISOR__$/ { exit }
+  supervisor { print }
+' "$gate_script" >"$subreaper_supervisor"
+awk '
+  /^command exec "\$_gate_python" -I "\$_gate_runner"/ {
+    sub(/^command exec "\$_gate_python"/, "command exec /definitely/missing/python3")
+  }
+  { print }
+' "$gate_script" >"$execfail_gate_script"
+awk '
+  /^def remove_private_dir[(][)]:$/ {
+    print
+    print "    os.unlink = lambda _path: (_ for _ in ()).throw(OSError(\"fixture cleanup failure\"))"
+    print "    os.rmdir = lambda _path: (_ for _ in ()).throw(OSError(\"fixture cleanup failure\"))"
+    next
+  }
+  { print }
+' "$gate_script" >"$cleanupfail_gate_script"
+python3 - "$gate_script" "$replayfail_gate_script" <<'PY'
+import sys
+
+source, destination = sys.argv[1:]
+text = open(source, encoding="utf-8").read()
+needle = "                workers.append(pid)\n"
+replacement = (
+    needle
+    + "                if len(workers) == 2:\n"
+    + "                    os.kill(pid, signal.SIGKILL)\n"
+)
+if text.count(needle) != 1:
+    raise RuntimeError("cannot inject replay-worker failure")
+with open(destination, "w", encoding="utf-8") as mutated:
+    mutated.write(text.replace(needle, replacement))
+PY
+python3 - "$gate_script" "$replayworkers_gate_script" <<'PY'
+import sys
+
+source, destination = sys.argv[1:]
+text = open(source, encoding="utf-8").read()
+needle = "                workers.append(pid)\n        finally:\n"
+replacement = (
+    "                workers.append(pid)\n"
+    "            with open(os.environ['GATE_TEST_REPLAY_WORKERS'], 'x', "
+    "encoding='ascii') as worker_file:\n"
+    "                worker_file.write(' '.join(map(str, workers)) + '\\n')\n"
+    "        finally:\n"
+)
+if text.count(needle) != 1:
+    raise RuntimeError("cannot inject replay-worker PID handshake")
+with open(destination, "w", encoding="utf-8") as mutated:
+    mutated.write(text.replace(needle, replacement))
+PY
+{
+  printf '%s\n' '#!/usr/bin/env bash'
+  printf '%s\n' 'set -e'
+  awk '
+    /Never pipe a gate through/ { section=1 }
+    section && /^```bash$/ { block=1; next }
+    block && /^```$/ { exit }
+    block {
+      trimmed=$0
+      sub(/^[[:space:]]*/, "", trimmed)
+      if (trimmed == "<gate>") {
+        print "read -r swallowed"
+        print "false"
+        print "printf \"stdin-gate-continued\\n\""
+      } else {
+        print
+      }
+    }
+  ' "$discipline_block"
+} >"$stdin_gate_script"
+awk '
+  /Never pipe a gate through/ { section=1 }
+  section && /^```bash$/ { block=1; next }
+  block && /^```$/ { exit }
+  block { print }
+' "$discipline_block" >"$canonical_gate_block"
+awk '
+  /Never pipe a gate through/ { section=1 }
+  section && /^```bash$/ { block=1; next }
+  block && /^```$/ { exit }
+  block { print }
+' "$HERE/AGENTS.md" >"$managed_gate_block"
+gate_copy_failure=
+if [[ $discipline_block == "$repository_discipline_block" ]] &&
+    ! cmp -s "$canonical_gate_block" "$managed_gate_block"; then
+  gate_copy_failure="managed AGENTS gate wrapper diverges from its canonical owner"
+elif grep -Fq -- '_gate_dir=$(mktemp -d)' "$HERE/skills/drive/SKILL.md" ||
+    grep -Fq -- '_gate_dir=$(mktemp -d)' "$HERE/skills/drive/references/phases.md"; then
+  gate_copy_failure="Drive duplicated the canonical AGENTS gate wrapper"
+elif grep -Eq "(^|[[:space:]'])rm[[:space:]]+-" "$discipline_block"; then
+  gate_copy_failure="managed cleanup is rejected by managed command execution"
+fi
+if [[ -n "$gate_copy_failure" ]]; then
+  fail "$t" "$gate_copy_failure"
+elif ! $found_gate_start || ! $found_gate_command || ! $found_supervisor; then
+  fail "$t" "could not extract the canonical gate wrapper"
+else
+  if gate_fixture_pidfd_supported; then
+    pidfd_signal_fixtures=true
+  else
+    pidfd_signal_fixtures=false
+  fi
+  deadline_group_leak=false
+  deadline_group_setup_error=
+  deadline_watchdog_rc=0
+  if $pidfd_signal_fixtures; then
+    python3 - "$deadline_group_ready" "$deadline_group_pid_file" <<'PY' &
+import os
+import sys
+import time
+
+ready, pid_file = sys.argv[1:]
+os.setsid()
+descendant = os.fork()
+if descendant == 0:
+    time.sleep(30)
+    os._exit(0)
+with open(pid_file, "w", encoding="ascii") as output:
+    output.write(f"{os.getpid()} {descendant}\n")
+open(ready, "xb").close()
+time.sleep(30)
+PY
+    deadline_group_pid=$!
+    for ((_n=1; _n<=1000; _n++)); do
+      [[ -e "$deadline_group_ready" ]] && break
+      sleep 0.01
+    done
+    if [[ ! -e "$deadline_group_ready" ]] ||
+        ! read -r deadline_group_pid deadline_descendant_pid \
+          <"$deadline_group_pid_file"; then
+      deadline_group_setup_error="deadline group fixture did not start"
+      gate_fixture_abort_before_signal "$deadline_group_pid" "$deadline_group_pid"
+    else
+      sleep 30 &
+      deadline_wrapper_pid=$!
+      gate_fixture_watchdog \
+        "$deadline_group_marker" "$deadline_wrapper_pid" "$deadline_group_pid" &
+      deadline_watchdog_pid=$!
+      gate_fixture_watchdog_ready "$deadline_group_marker"
+      gate_fixture_wait_with_watchdog \
+        "$deadline_wrapper_pid" "$deadline_group_marker" "$deadline_watchdog_pid" \
+        2>/dev/null
+      deadline_watchdog_rc=$gate_fixture_wait_rc
+      wait "$deadline_group_pid" 2>/dev/null || true
+      for ((_n=1; _n<=200; _n++)); do
+        deadline_group_leak=false
+        for _deadline_pid in "$deadline_group_pid" "$deadline_descendant_pid"; do
+          _deadline_state=$(LC_ALL=C ps -o stat= -p "$_deadline_pid" 2>/dev/null) ||
+            continue
+          [[ $_deadline_state == *Z* ]] || deadline_group_leak=true
+        done
+        $deadline_group_leak || break
+        sleep 0.01
+      done
+    fi
+  fi
+  TMPDIR="$gate_tmp" \
+    bash "$gate_script" >"$gate_stdout" 2>"$gate_stderr"; rc=$?
+  TMPDIR="$gate_tmp" GATE_MODE=success \
+    bash -c "$(<"$gate_script")" >"$paste_stdout" 2>"$paste_stderr"; paste_rc=$?
+  TMPDIR="$gate_tmp" \
+    bash "$execfail_gate_script" >"$execfail_stdout" 2>"$execfail_stderr"
+  execfail_rc=$?
+  for ((_n=1; _n<=300; _n++)); do
+    ! find "$gate_tmp" -mindepth 1 -print -quit | grep -q . && break
+    sleep 0.01
+  done
+  execfail_leak=$(find "$gate_tmp" -mindepth 1 -print -quit)
+  PATH="$bashenv_python_dir:$PATH" BASHENV_REAL_PYTHON="$bashenv_real_python" \
+    BASHENV_MARKER="$bashenv_marker" TMPDIR="$gate_tmp" \
+    HOSTILE_BASH_ENV="$bashenv_file" PYTHONINSPECT=1 PYTHONPATH=/definitely/hostile \
+    bash "$gate_script" >"$bashenv_stdout" 2>"$bashenv_stderr"; bashenv_rc=$?
+  PATH="$bashenv_python_dir:$PATH" BASHENV_REAL_PYTHON="$bashenv_real_python" \
+    BASHENV_SUPERVISOR_DELAY=3 TMPDIR="$gate_tmp" GATE_MODE=success \
+    bash "$gate_script" >"$delayedexec_stdout" 2>"$delayedexec_stderr"
+  delayedexec_rc=$?
+  (
+    builtin() { return 0; }
+    declare() { return 0; }
+    read() { return 1; }
+    export() { return 0; }
+    false() { return 0; }
+    cat() { return 0; }
+    exec() { return 0; }
+    mktemp() { printf '%s\n' "$HOSTILE_GATE_DIR"; }
+    command builtin export -f builtin declare read export false cat exec mktemp
+    PATH="$bashenv_python_dir:$PATH" BASHENV_REAL_PYTHON="$bashenv_real_python" \
+      HOSTILE_GATE_DIR="$shellfunc_hostile_dir" TMPDIR="$gate_tmp" \
+      bash "$gate_script" >"$shellfunc_stdout" 2>"$shellfunc_stderr"
+  ); shellfunc_rc=$?
+  (
+    builtin() { return 0; }
+    exec() { return 0; }
+    unset() { return 0; }
+    command() {
+      if [[ $1 == exec ]]; then
+        return 0
+      fi
+      builtin command "$@"
+    }
+    TMPDIR="$gate_tmp" source "$gate_script"
+  ) >"$localcommand_stdout" 2>"$localcommand_stderr"
+  localcommand_rc=$?
+  (
+    shopt -s expand_aliases
+    alias unset=:
+    alias exec=:
+    alias command='printf /bin/true'
+    BASH=/definitely/missing/caller-controlled-bash
+    TMPDIR="$gate_tmp" source "$gate_script"
+  ) >"$localalias_stdout" 2>"$localalias_stderr"
+  localalias_rc=$?
+  (
+  mkdir -p "$WORK/hostile-command-bin"
+  printf '%s\n' '#!/bin/sh' 'exit 0' >"$WORK/hostile-command-bin/env"
+  chmod +x "$WORK/hostile-command-bin/env"
+  PATH="$WORK/hostile-command-bin:$bashenv_python_dir:$PATH" \
+    BASHENV_REAL_PYTHON="$bashenv_real_python" TMPDIR="$gate_tmp" \
+    "$commandfunc_env" 'BASH_FUNC_command%%=() { if [ "$1" = -p ] && [ "$2" = env ]; then env; return; fi; case "$1" in unset | exec) return 0 ;; builtin) case "$2" in export) return 0 ;; esac ;; esac; builtin command "$@"; }' \
+    bash "$gate_script" >"$commandfunc_stdout" 2>"$commandfunc_stderr"
+  ) 2>>"$commandfunc_stderr"
+  commandfunc_rc=$?
+  TMPDIR="$gate_tmp" GATE_MODE=stdin \
+    bash "$stdin_gate_script" >"$stdin_stdout" 2>"$stdin_stderr"; stdin_rc=$?
+  TMPDIR="$gate_tmp" GATE_MODE=status \
+    bash "$gate_script" >"$status_stdout" 2>"$status_stderr"; status_rc=$?
+  TMPDIR="$gate_tmp" GATE_MODE=pipeline \
+    bash "$gate_script" >"$pipeline_stdout" 2>"$pipeline_stderr"; pipeline_rc=$?
+  TMPDIR="$gate_tmp" GATE_MODE=streams \
+    bash "$gate_script" >"$streams_stdout" 2>"$streams_stderr"; streams_rc=$?
+  mkfifo "$pressure_fifo"
+  python3 - "$pressure_fifo" "$pressure_reader_ready" \
+      "$pressure_reader_release" "$pressure_stdout" <<'PY' &
+import os
+import sys
+import time
+
+fifo, ready, release, output = sys.argv[1:]
+with open(fifo, "rb", buffering=0) as source:
+    open(ready, "xb").close()
+    while not os.path.exists(release):
+        time.sleep(0.01)
+    with open(output, "wb") as destination:
+        while True:
+            chunk = source.read(65536)
+            if not chunk:
+                break
+            destination.write(chunk)
+PY
+  pressure_reader_pid=$!
+  TMPDIR="$gate_tmp" GATE_MODE=stream-pressure \
+    bash "$gate_script" >"$pressure_fifo" 2>"$pressure_stderr" &
+  pressure_pid=$!
+  for ((_n=1; _n<=1000; _n++)); do
+    [[ -e "$pressure_reader_ready" ]] && break
+    sleep 0.01
+  done
+  pressure_error_early=false
+  for ((_n=1; _n<=1000; _n++)); do
+    if grep -Fq pressure-error "$pressure_stderr"; then
+      pressure_error_early=true
+      break
+    fi
+    sleep 0.01
+  done
+  : >"$pressure_reader_release"
+  wait "$pressure_pid"
+  pressure_rc=$?
+  wait "$pressure_reader_pid"
+  pressure_reader_rc=$?
+  python3 - "$gate_script" "$gate_tmp" "$shared_flags_result" \
+      "$shared_flags_stderr" <<'PY'
+import os
+import select
+import subprocess
+import sys
+import time
+
+gate_script, gate_tmp, result_path, stderr_path = sys.argv[1:]
+
+
+def run_case(blocking):
+    stdout_read, stdout_write = os.pipe()
+    stderr_read, stderr_write = os.pipe()
+    os.set_blocking(stdout_write, blocking)
+    os.set_blocking(stderr_write, blocking)
+    stdout_blocking_before = os.get_blocking(stdout_write)
+    stderr_blocking_before = os.get_blocking(stderr_write)
+    environment = os.environ.copy()
+    environment["GATE_MODE"] = "stream-pressure"
+    environment["TMPDIR"] = gate_tmp
+    stdout_bytes = bytearray()
+    stderr_bytes = bytearray()
+    process = None
+    try:
+        process = subprocess.Popen(
+            [os.environ.get("BASH", "bash"), gate_script],
+            stdout=stdout_write,
+            stderr=stderr_write,
+            env=environment,
+        )
+        deadline = time.monotonic() + 10.0
+        while b"pressure-error\n" not in stderr_bytes:
+            readable, _, _ = select.select([stderr_read], [], [], 0.1)
+            if readable:
+                chunk = os.read(stderr_read, 65536)
+                if not chunk:
+                    break
+                stderr_bytes.extend(chunk)
+            if process.poll() is not None or time.monotonic() >= deadline:
+                break
+        stdout_blocking_during = os.get_blocking(stdout_write)
+        stderr_blocking_during = os.get_blocking(stderr_write)
+        os.close(stdout_write)
+        stdout_write = -1
+        os.close(stderr_write)
+        stderr_write = -1
+        open_reads = {stdout_read: stdout_bytes, stderr_read: stderr_bytes}
+        deadline = time.monotonic() + 10.0
+        while open_reads:
+            readable, _, _ = select.select(list(open_reads), [], [], 0.1)
+            for fd in readable:
+                chunk = os.read(fd, 65536)
+                if chunk:
+                    open_reads[fd].extend(chunk)
+                else:
+                    os.close(fd)
+                    del open_reads[fd]
+            if time.monotonic() >= deadline:
+                process.kill()
+                raise RuntimeError("shared-flags wrapper did not finish")
+        stdout_read = -1
+        stderr_read = -1
+        wrapper_rc = process.wait()
+        ok = (
+            stdout_blocking_before is blocking
+            and stderr_blocking_before is blocking
+            and stdout_blocking_during is blocking
+            and stderr_blocking_during is blocking
+            and wrapper_rc == 0
+            and len(stdout_bytes) == 262151
+            and stderr_bytes == b"pressure-error\n"
+        )
+        detail = (
+            f"expected={blocking} stdout-before={stdout_blocking_before} "
+            f"stderr-before={stderr_blocking_before} "
+            f"stdout-during={stdout_blocking_during} "
+            f"stderr-during={stderr_blocking_during} "
+            f"rc={wrapper_rc} stdout-bytes={len(stdout_bytes)} "
+            f"stderr={bytes(stderr_bytes)!r}"
+        )
+        return ok, detail, bytes(stderr_bytes)
+    finally:
+        for fd in (stdout_write, stderr_write, stdout_read, stderr_read):
+            if fd >= 0:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        if process is not None and process.poll() is None:
+            process.kill()
+            process.wait()
+
+
+results = [run_case(True), run_case(False)]
+with open(result_path, "w", encoding="ascii") as result:
+    result.write("; ".join(item[1] for item in results) + "\n")
+with open(stderr_path, "wb") as observed:
+    for _, _, error_bytes in results:
+        observed.write(error_bytes)
+raise SystemExit(0 if all(item[0] for item in results) else 1)
+PY
+  shared_flags_rc=$?
+  python3 - "$replayfail_gate_script" "$gate_tmp" \
+      "$replay_failure_result" "$replay_failure_stderr" <<'PY'
+import os
+import signal
+import subprocess
+import sys
+
+gate_script, gate_tmp, result_path, stderr_path = sys.argv[1:]
+environment = os.environ.copy()
+environment["GATE_MODE"] = "stream-pressure"
+environment["TMPDIR"] = gate_tmp
+process = subprocess.Popen(
+    [os.environ.get("BASH", "bash"), gate_script],
+    stdin=subprocess.DEVNULL,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    env=environment,
+    start_new_session=True,
+)
+timed_out = False
+try:
+    process.wait(timeout=5)
+except subprocess.TimeoutExpired:
+    timed_out = True
+    os.killpg(process.pid, signal.SIGKILL)
+stdout_bytes, stderr_bytes = process.communicate()
+with open(stderr_path, "wb") as errors:
+    errors.write(stderr_bytes)
+with open(result_path, "w", encoding="ascii") as result:
+    result.write(
+        f"timed-out={timed_out} rc={process.returncode} "
+        f"stdout-bytes={len(stdout_bytes)} stderr={stderr_bytes!r}\n"
+    )
+ok = (
+    not timed_out
+    and process.returncode == 1
+    and b"cannot finalize gate: cannot replay gate output\n" in stderr_bytes
+)
+raise SystemExit(0 if ok else 1)
+PY
+  replay_failure_rc=$?
+  TMPDIR="$gate_tmp" GATE_MODE=status \
+    python3 -c '
+import os
+import signal
+import sys
+
+signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
+' "$(command -v bash)" "$gate_script" \
+      >"$ignored_sigchld_stdout" 2>"$ignored_sigchld_stderr"
+  ignored_sigchld_rc=$?
+  TMPDIR="$gate_tmp" GATE_MODE=normal-orphan \
+    bash "$gate_script" >"$normal_orphan_stdout" 2>"$normal_orphan_stderr"
+  normal_orphan_rc=$?
+  python3 - "$subreaper_supervisor" <<'PY' 2>"$subreaper_stderr"
+import ast
+import os
+import signal
+import sys
+import time
+
+source = open(sys.argv[1], encoding="utf-8").read()
+tree = ast.parse(source)
+selected = [
+    node
+    for node in tree.body
+    if isinstance(node, (ast.Import, ast.ImportFrom))
+    or isinstance(node, ast.FunctionDef)
+    and node.name in {"enable_child_subreaper", "reap_adopted_children"}
+]
+namespace = {}
+exec(compile(ast.Module(body=selected, type_ignores=[]), sys.argv[1], "exec"), namespace)
+namespace["enable_child_subreaper"]()
+if not sys.platform.startswith("linux"):
+    # The production function is a portable no-op here; do not create an orphan
+    # in a fixture that has no subreaper contract to test.
+    sys.exit(0)
+if not namespace.get("subreaper_enabled", False):
+    raise RuntimeError("Linux supervisor did not enable child subreaper")
+
+pid_read, pid_write = os.pipe()
+control_read, control_write = os.pipe()
+intermediate = os.fork()
+if intermediate == 0:
+    os.close(pid_read)
+    os.close(control_write)
+    os.setsid()
+    orphan = os.fork()
+    if orphan == 0:
+        os.close(pid_write)
+        os.read(control_read, 1)
+        os.close(control_read)
+        os._exit(0)
+    os.close(control_read)
+    os.write(pid_write, f"{orphan}\n".encode("ascii"))
+    os.close(pid_write)
+    os._exit(0)
+os.close(pid_write)
+os.close(control_read)
+adopted = None
+reaped = False
+try:
+    pid_bytes = b""
+    while not pid_bytes.endswith(b"\n"):
+        chunk = os.read(pid_read, 64)
+        if not chunk:
+            break
+        pid_bytes += chunk
+    os.close(pid_read)
+    pid_read = -1
+    if not pid_bytes.endswith(b"\n"):
+        raise RuntimeError("intermediate did not report the orphan PID")
+    adopted = int(pid_bytes)
+    os.waitpid(intermediate, 0)
+    intermediate = None
+    os.close(control_write)
+    control_write = -1
+    deadline = time.monotonic() + 2.0
+    zombie = None
+    while time.monotonic() < deadline:
+        try:
+            zombie = os.waitid(
+                os.P_PID,
+                adopted,
+                os.WEXITED | os.WNOHANG | os.WNOWAIT,
+            )
+        except ChildProcessError:
+            zombie = None
+        if zombie is not None and zombie.si_pid == adopted:
+            break
+        time.sleep(0.01)
+    else:
+        raise RuntimeError("adopted child did not become a zombie")
+    namespace["reap_adopted_children"]()
+    try:
+        os.waitid(os.P_PID, adopted, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+    except ChildProcessError:
+        reaped = True
+        adopted = None
+    if not reaped:
+        raise RuntimeError("subreaper did not reap adopted zombie")
+finally:
+    for fd in (control_write, pid_read):
+        try:
+            if fd >= 0:
+                os.close(fd)
+        except OSError:
+            pass
+    if intermediate is not None:
+        try:
+            os.waitpid(intermediate, 0)
+        except ChildProcessError:
+            pass
+    if adopted is not None:
+        try:
+            os.waitpid(adopted, 0)
+        except ChildProcessError:
+            pass
+    namespace["reap_adopted_children"]()
+PY
+  printf '%s' "$?" >"$subreaper_rc_file"
+  # These are startup handshakes, not behavior deadlines. Allow ten bounded
+  # seconds so ordinary scheduler latency cannot turn a correct wrapper into a
+  # fixture failure; the timeout cleanup below owns every failure path.
+  if $pidfd_signal_fixtures; then
+  (
+    mkfifo "$replay_fifo" "$replay_error_fifo"
+    sleep 30 <"$replay_fifo" &
+    replay_reader_pid=$!
+    sleep 30 <"$replay_error_fifo" &
+    replay_error_reader_pid=$!
+    TMPDIR="$gate_tmp" GATE_MODE=replay STARTED="$replay_started" \
+      CHILD_PID_FILE="$replay_child_pid_file" \
+      REPLAY_DONE="$replay_done" \
+      GATE_TEST_REPLAY_WORKERS="$replay_workers_pid_file" \
+      bash "$replayworkers_gate_script" \
+      >"$replay_fifo" 2>"$replay_error_fifo" &
+    replay_pid=$!
+    for ((_n=1; _n<=1000; _n++)); do
+      [[ -f "$replay_done" ]] && break
+      sleep 0.01
+    done
+    if [[ ! -f "$replay_done" ]]; then
+      read -r replay_child_pid _ <"$replay_child_pid_file" || replay_child_pid=0
+      gate_fixture_abort_before_signal "$replay_pid" "$replay_child_pid"
+      printf '%s' 125 >"$replay_rc_file"
+      printf '%s' 125 >"$replay_workers_rc_file"
+    else
+      read -r replay_child_pid _ <"$replay_child_pid_file"
+      python3 - "$replay_workers_pid_file" "$replay_workers_ready" \
+          "$replay_workers_release" <<'PY' &
+import os
+import select
+import sys
+import time
+
+pid_file, ready, release = sys.argv[1:]
+deadline = time.monotonic() + 10.0
+fds = []
+while time.monotonic() < deadline:
+    try:
+        with open(pid_file, encoding="ascii") as workers:
+            pids = [int(pid) for pid in workers.read().split()]
+        if len(pids) == 2 and len(set(pids)) == 2:
+            fds = [os.pidfd_open(pid) for pid in pids]
+            break
+    except (FileNotFoundError, ProcessLookupError):
+        pass
+    for fd in fds:
+        os.close(fd)
+    fds = []
+    time.sleep(0.01)
+else:
+    raise RuntimeError("replay workers were not both observable")
+open(ready, "xb").close()
+while not os.path.exists(release):
+    time.sleep(0.01)
+deadline = time.monotonic() + 2.0
+pending = set(fds)
+while pending and time.monotonic() < deadline:
+    readable, _, _ = select.select(list(pending), [], [], 0.05)
+    pending.difference_update(readable)
+for fd in fds:
+    os.close(fd)
+if pending:
+    raise RuntimeError("replay worker survived wrapper cancellation")
+PY
+      replay_workers_pid=$!
+      for ((_n=1; _n<=1000; _n++)); do
+        [[ -f "$replay_workers_ready" ]] && break
+        sleep 0.01
+      done
+      gate_fixture_watchdog \
+        "$replay_deadline_marker" "$replay_pid" 0 &
+      replay_watchdog_pid=$!
+      if [[ -f "$replay_workers_ready" ]] &&
+          gate_fixture_watchdog_ready "$replay_deadline_marker"; then
+        kill -TERM "$replay_pid"
+      else
+        : >"$replay_deadline_marker.cancel"
+        gate_fixture_abort_before_signal "$replay_pid" 0
+        printf '%s' 126 >"$replay_rc_file"
+        wait "$replay_watchdog_pid" 2>/dev/null || true
+        kill "$replay_reader_pid" 2>/dev/null || true
+        wait "$replay_reader_pid" 2>/dev/null || true
+        kill "$replay_error_reader_pid" 2>/dev/null || true
+        wait "$replay_error_reader_pid" 2>/dev/null || true
+        : >"$replay_workers_release"
+        wait "$replay_workers_pid" 2>/dev/null || true
+        printf '%s' 126 >"$replay_workers_rc_file"
+        exit
+      fi
+      gate_fixture_wait_with_watchdog \
+        "$replay_pid" "$replay_deadline_marker" \
+        "$replay_watchdog_pid"
+      replay_wait_rc=$gate_fixture_wait_rc
+      printf '%s' "$replay_wait_rc" >"$replay_rc_file"
+      : >"$replay_workers_release"
+      if wait "$replay_workers_pid"; then
+        printf '%s' 0 >"$replay_workers_rc_file"
+      else
+        printf '%s' "$?" >"$replay_workers_rc_file"
+      fi
+    fi
+    kill "$replay_reader_pid" 2>/dev/null || true
+    wait "$replay_reader_pid" 2>/dev/null || true
+    kill "$replay_error_reader_pid" 2>/dev/null || true
+    wait "$replay_error_reader_pid" 2>/dev/null || true
+  )
+  replay_rc=$(< "$replay_rc_file")
+  replay_workers_rc=$(< "$replay_workers_rc_file")
+  replay_error=
+  (
+    TMPDIR="$gate_tmp" GATE_MODE=cooperative \
+      STARTED="$cooperative_started" CHILD_PID_FILE="$cooperative_child_pid_file" \
+      SIGNAL_MARKER="$cooperative_signal_marker" \
+      bash "$gate_script" >"$cooperative_stdout" 2>"$cooperative_stderr" &
+    cooperative_pid=$!
+    for ((_n=1; _n<=200; _n++)); do
+      [[ -f "$cooperative_started" ]] && break
+      sleep 0.05
+    done
+    if [[ ! -f "$cooperative_started" ]]; then
+      read -r cooperative_child_pid _ <"$cooperative_child_pid_file" ||
+        cooperative_child_pid=0
+      gate_fixture_abort_before_signal "$cooperative_pid" "$cooperative_child_pid"
+      printf '%s' 125 >"$cooperative_rc_file"
+    else
+      read -r cooperative_child_pid _ <"$cooperative_child_pid_file"
+      gate_fixture_watchdog \
+        "$cooperative_deadline_marker" \
+        "$cooperative_pid" "$cooperative_child_pid" &
+      cooperative_watchdog_pid=$!
+      if gate_fixture_watchdog_ready "$cooperative_deadline_marker"; then
+        kill -TERM "$cooperative_pid"
+      else
+        : >"$cooperative_deadline_marker.cancel"
+        gate_fixture_abort_before_signal \
+          "$cooperative_pid" "$cooperative_child_pid"
+        printf '%s' 126 >"$cooperative_rc_file"
+        wait "$cooperative_watchdog_pid" 2>/dev/null || true
+        exit
+      fi
+      gate_fixture_wait_with_watchdog \
+        "$cooperative_pid" "$cooperative_deadline_marker" \
+        "$cooperative_watchdog_pid"
+      cooperative_wait_rc=$gate_fixture_wait_rc
+      printf '%s' "$cooperative_wait_rc" >"$cooperative_rc_file"
+    fi
+  )
+  cooperative_rc=$(< "$cooperative_rc_file")
+  (
+    TMPDIR="$gate_tmp" GATE_MODE=startup-timeout \
+      STARTED="$startup_timeout_started" CHILD_PID_FILE="$startup_timeout_child_pid_file" \
+      bash "$gate_script" >"$startup_timeout_stdout" 2>"$startup_timeout_stderr" &
+    startup_timeout_pid=$!
+    for ((_n=1; _n<=1000; _n++)); do
+      [[ -s "$startup_timeout_child_pid_file" ]] && break
+      sleep 0.01
+    done
+    if [[ ! -s "$startup_timeout_child_pid_file" ]]; then
+      gate_fixture_abort_before_signal "$startup_timeout_pid" 0
+      gate_fixture_remove_aborted_artifacts
+      printf '%s' 126 >"$startup_timeout_rc_file"
+      printf '%s' 0 >"$startup_timeout_leak_file"
+    else
+      read -r startup_timeout_child_pid _ <"$startup_timeout_child_pid_file"
+      gate_fixture_abort_before_signal \
+        "$startup_timeout_pid" "$startup_timeout_child_pid"
+      gate_fixture_remove_aborted_artifacts
+      printf '%s' 0 >"$startup_timeout_leak_file"
+      printf '%s' 125 >"$startup_timeout_rc_file"
+    fi
+  )
+  startup_timeout_rc=$(< "$startup_timeout_rc_file")
+  startup_timeout_leaked=$(< "$startup_timeout_leak_file")
+  startup_timeout_error=$(< "$startup_timeout_stderr")
+  (
+    TMPDIR="$gate_tmp" GATE_MODE=term \
+      STARTED="$blocked_term_started" CHILD_PID_FILE="$blocked_term_child_pid_file" \
+      exec python3 -c '
+import os
+import signal
+import sys
+
+signal.pthread_sigmask(signal.SIG_BLOCK, (signal.SIGTERM,))
+os.execvpe(sys.argv[1], [sys.argv[1], sys.argv[2]], os.environ)
+' "$(command -v bash)" "$gate_script" \
+        >"$blocked_term_stdout" 2>"$blocked_term_stderr"
+  ) &
+  blocked_term_pid=$!
+  for ((_n=1; _n<=200; _n++)); do
+    [[ -f "$blocked_term_started" ]] && break
+    sleep 0.05
+  done
+  if [[ ! -f "$blocked_term_started" ]]; then
+    read -r blocked_term_child_pid _ <"$blocked_term_child_pid_file" ||
+      blocked_term_child_pid=0
+    gate_fixture_abort_before_signal "$blocked_term_pid" "$blocked_term_child_pid"
+    printf '%s' 125 >"$blocked_term_rc_file"
+  else
+    read -r blocked_term_child_pid _ _ <"$blocked_term_child_pid_file"
+    gate_fixture_watchdog \
+      "$blocked_term_deadline_marker" \
+      "$blocked_term_pid" "$blocked_term_child_pid" &
+    blocked_term_watchdog_pid=$!
+    if gate_fixture_watchdog_ready "$blocked_term_deadline_marker"; then
+      kill -TERM "$blocked_term_pid"
+    else
+      : >"$blocked_term_deadline_marker.cancel"
+      gate_fixture_abort_before_signal \
+        "$blocked_term_pid" "$blocked_term_child_pid"
+      printf '%s' 126 >"$blocked_term_rc_file"
+      wait "$blocked_term_watchdog_pid" 2>/dev/null || true
+      exit
+    fi
+    gate_fixture_wait_with_watchdog \
+      "$blocked_term_pid" "$blocked_term_deadline_marker" \
+      "$blocked_term_watchdog_pid"
+    blocked_term_wait_rc=$gate_fixture_wait_rc
+    printf '%s' "$blocked_term_wait_rc" >"$blocked_term_rc_file"
+  fi
+  blocked_term_rc=$(< "$blocked_term_rc_file")
+  (
+    TMPDIR="$gate_tmp" GATE_MODE=term \
+      STARTED="$term_started" CHILD_PID_FILE="$term_child_pid_file" \
+      bash "$gate_script" >"$term_stdout" 2>"$term_stderr" &
+    term_pid=$!
+    for ((_n=1; _n<=200; _n++)); do
+      [[ -f "$term_started" ]] && break
+      sleep 0.05
+    done
+    if [[ ! -f "$term_started" ]]; then
+      read -r term_child_pid _ <"$term_child_pid_file" || term_child_pid=0
+      gate_fixture_abort_before_signal "$term_pid" "$term_child_pid"
+      printf '%s' 125 > "$term_rc_file"
+    else
+      read -r term_child_pid _ _ <"$term_child_pid_file"
+      gate_fixture_watchdog \
+        "$term_deadline_marker" "$term_pid" "$term_child_pid" &
+      term_watchdog_pid=$!
+      if gate_fixture_watchdog_ready "$term_deadline_marker"; then
+        kill -TERM "$term_pid"
+      else
+        : >"$term_deadline_marker.cancel"
+        gate_fixture_abort_before_signal "$term_pid" "$term_child_pid"
+        printf '%s' 126 >"$term_rc_file"
+        wait "$term_watchdog_pid" 2>/dev/null || true
+        exit
+      fi
+      gate_fixture_wait_with_watchdog \
+        "$term_pid" "$term_deadline_marker" \
+        "$term_watchdog_pid"
+      term_wait_rc=$gate_fixture_wait_rc
+      printf '%s' "$term_wait_rc" > "$term_rc_file"
+    fi
+  )
+  term_rc=$(< "$term_rc_file")
+  (
+    TMPDIR="$gate_tmp" GATE_MODE=term \
+      STARTED="$quit_started" CHILD_PID_FILE="$quit_child_pid_file" \
+      bash "$gate_script" >"$quit_stdout" 2>"$quit_stderr" &
+    quit_pid=$!
+    for ((_n=1; _n<=200; _n++)); do
+      [[ -f "$quit_started" ]] && break
+      sleep 0.05
+    done
+    if [[ ! -f "$quit_started" ]]; then
+      read -r quit_child_pid _ <"$quit_child_pid_file" || quit_child_pid=0
+      gate_fixture_abort_before_signal "$quit_pid" "$quit_child_pid"
+      printf '%s' 125 >"$quit_rc_file"
+    else
+      read -r quit_child_pid _ _ <"$quit_child_pid_file"
+      gate_fixture_watchdog \
+        "$quit_deadline_marker" "$quit_pid" "$quit_child_pid" &
+      quit_watchdog_pid=$!
+      if gate_fixture_watchdog_ready "$quit_deadline_marker"; then
+        kill -QUIT "$quit_pid"
+      else
+        : >"$quit_deadline_marker.cancel"
+        gate_fixture_abort_before_signal "$quit_pid" "$quit_child_pid"
+        printf '%s' 126 >"$quit_rc_file"
+        wait "$quit_watchdog_pid" 2>/dev/null || true
+        exit
+      fi
+      gate_fixture_wait_with_watchdog \
+        "$quit_pid" "$quit_deadline_marker" \
+        "$quit_watchdog_pid"
+      quit_wait_rc=$gate_fixture_wait_rc
+      printf '%s' "$quit_wait_rc" >"$quit_rc_file"
+    fi
+  )
+  quit_rc=$(< "$quit_rc_file")
+  (
+    TMPDIR="$gate_tmp" GATE_MODE=stop \
+      STARTED="$stop_started" CHILD_PID_FILE="$stop_child_pid_file" \
+      bash "$gate_script" >"$stop_stdout" 2>"$stop_stderr" &
+    stop_script_pid=$!
+    for ((_n=1; _n<=200; _n++)); do
+      [[ -f "$stop_started" ]] && break
+      sleep 0.05
+    done
+    if [[ ! -f "$stop_started" || ! -s "$stop_child_pid_file" ]]; then
+      read -r stop_child_pid _ <"$stop_child_pid_file" || stop_child_pid=0
+      gate_fixture_abort_before_signal "$stop_script_pid" "$stop_child_pid"
+      printf '%s' 125 >"$stop_rc_file"
+    else
+      read -r stop_child_pid _ <"$stop_child_pid_file"
+      stop_observed=false
+      for ((_n=1; _n<=200; _n++)); do
+        stop_state=$(ps -o stat= -p "$stop_child_pid" 2>/dev/null) || break
+        [[ $stop_state == *T* ]] && { stop_observed=true; break; }
+        sleep 0.05
+      done
+      if ! $stop_observed; then
+        gate_fixture_abort_before_signal "$stop_script_pid" "$stop_child_pid"
+        printf '%s' 125 >"$stop_rc_file"
+      elif ! kill -0 "$stop_script_pid" 2>/dev/null; then
+        gate_fixture_abort_before_signal "$stop_script_pid" "$stop_child_pid"
+        printf '%s' 126 >"$stop_rc_file"
+      else
+        gate_fixture_watchdog \
+          "$stop_deadline_marker" \
+          "$stop_script_pid" "$stop_child_pid" &
+        stop_watchdog_pid=$!
+        if gate_fixture_watchdog_ready "$stop_deadline_marker"; then
+          kill -TERM "$stop_script_pid"
+        else
+          : >"$stop_deadline_marker.cancel"
+          gate_fixture_abort_before_signal "$stop_script_pid" "$stop_child_pid"
+          printf '%s' 126 >"$stop_rc_file"
+          wait "$stop_watchdog_pid" 2>/dev/null || true
+          exit
+        fi
+        gate_fixture_wait_with_watchdog \
+          "$stop_script_pid" "$stop_deadline_marker" \
+          "$stop_watchdog_pid"
+        stop_wait_rc=$gate_fixture_wait_rc
+        printf '%s' "$stop_wait_rc" >"$stop_rc_file"
+      fi
+    fi
+  )
+  stop_rc=$(< "$stop_rc_file")
+  else
+    for _signal_output in \
+        "$cooperative_stdout" "$cooperative_stderr" \
+        "$blocked_term_stdout" "$blocked_term_stderr" \
+        "$term_stdout" "$term_stderr" \
+        "$quit_stdout" "$quit_stderr" \
+        "$stop_stdout" "$stop_stderr"; do
+      : >"$_signal_output"
+    done
+  fi
+  (
+    TMPDIR="$gate_tmp" \
+      GATE_MODE=aggregate AGG_STARTED="$aggregate_started" AGG_RELEASE="$aggregate_release" \
+      CHILD_PID_FILE="$aggregate_child_pid_file" \
+      bash "$gate_script" >"$aggregate_stdout" 2>"$aggregate_stderr" &
+    aggregate_pid=$!
+    for ((_n=1; _n<=500; _n++)); do
+      [[ -f "$aggregate_started" ]] && break
+      sleep 0.02
+    done
+    if [[ -f "$aggregate_started" ]]; then
+      wc -c <"$aggregate_stdout" >"$aggregate_early_file"
+      : >"$aggregate_release"
+      wait "$aggregate_pid"
+      printf '%s' "$?" >"$aggregate_rc_file"
+    else
+      printf '%s\n' -1 >"$aggregate_early_file"
+      read -r aggregate_child_pid _ <"$aggregate_child_pid_file" ||
+        aggregate_child_pid=0
+      gate_fixture_abort_before_signal "$aggregate_pid" "$aggregate_child_pid"
+      printf '%s' 126 >"$aggregate_rc_file"
+    fi
+  )
+  aggregate_rc=$(< "$aggregate_rc_file")
+  TMPDIR="$cleanup_tmp" GATE_MODE=cleanup \
+    bash "$cleanupfail_gate_script" >"$cleanup_stdout" 2>"$cleanup_stderr"; cleanup_rc=$?
+  mkfifo "$cleanup_pressure_fifo"
+  python3 - "$cleanup_pressure_fifo" "$cleanup_pressure_reader_ready" \
+      "$cleanup_pressure_release" "$cleanup_pressure_stderr" <<'PY' &
+import os
+import sys
+import time
+
+fifo, ready, release, output = sys.argv[1:]
+with open(fifo, "rb", buffering=0) as source:
+    open(ready, "xb").close()
+    while not os.path.exists(release):
+        time.sleep(0.01)
+    with open(output, "wb") as destination:
+        while True:
+            chunk = source.read(65536)
+            if not chunk:
+                break
+            destination.write(chunk)
+PY
+  cleanup_pressure_reader_pid=$!
+  python3 - "$cleanup_pressure_fifo" "$cleanup_pressure_filled" \
+      "$cleanup_pressure_release" <<'PY' &
+import os
+import sys
+import time
+
+fifo, filled, release = sys.argv[1:]
+fd = os.open(fifo, os.O_WRONLY)
+os.set_blocking(fd, False)
+try:
+    while True:
+        try:
+            os.write(fd, b"x" * 65536)
+        except BlockingIOError:
+            break
+    open(filled, "xb").close()
+    while not os.path.exists(release):
+        time.sleep(0.01)
+finally:
+    os.close(fd)
+PY
+  cleanup_pressure_filler_pid=$!
+  for ((_n=1; _n<=1000; _n++)); do
+    [[ -e "$cleanup_pressure_reader_ready" &&
+       -e "$cleanup_pressure_filled" ]] && break
+    sleep 0.01
+  done
+  TMPDIR="$cleanup_tmp" GATE_MODE=cleanup \
+    bash "$cleanupfail_gate_script" >"$cleanup_pressure_stdout" \
+      2>"$cleanup_pressure_fifo" &
+  cleanup_pressure_pid=$!
+  sleep 0.1
+  : >"$cleanup_pressure_release"
+  wait "$cleanup_pressure_pid"
+  cleanup_pressure_rc=$?
+  wait "$cleanup_pressure_filler_pid"
+  wait "$cleanup_pressure_reader_pid"
+  TMPDIR="$trusted_cleanup_tmp" GATE_MODE=trusted-cleanup \
+    PATH="$cleanup_bin:$PATH" \
+    bash "$gate_script" >"$trusted_cleanup_stdout" 2>"$trusted_cleanup_stderr"
+  trusted_cleanup_rc=$?
+  gate_output=$(< "$gate_stdout")
+  gate_error=$(< "$gate_stderr")
+  paste_output=$(< "$paste_stdout")
+  paste_error=$(< "$paste_stderr")
+  execfail_output=$(< "$execfail_stdout")
+  execfail_error=$(< "$execfail_stderr")
+  bashenv_output=$(< "$bashenv_stdout")
+  bashenv_error=$(< "$bashenv_stderr")
+  delayedexec_output=$(< "$delayedexec_stdout")
+  delayedexec_error=$(< "$delayedexec_stderr")
+  shellfunc_output=$(< "$shellfunc_stdout")
+  shellfunc_error=$(< "$shellfunc_stderr")
+  localcommand_output=$(< "$localcommand_stdout")
+  localcommand_error=$(< "$localcommand_stderr")
+  localalias_output=$(< "$localalias_stdout")
+  localalias_error=$(< "$localalias_stderr")
+  commandfunc_output=$(< "$commandfunc_stdout")
+  commandfunc_error=$(< "$commandfunc_stderr")
+  stdin_output=$(< "$stdin_stdout")
+  stdin_error=$(< "$stdin_stderr")
+  status_output=$(< "$status_stdout")
+  status_error=$(< "$status_stderr")
+  pipeline_output=$(< "$pipeline_stdout")
+  pipeline_error=$(< "$pipeline_stderr")
+  streams_output=$(< "$streams_stdout")
+  streams_error=$(< "$streams_stderr")
+  pressure_stdout_bytes=$(wc -c <"$pressure_stdout")
+  pressure_error=$(< "$pressure_stderr")
+  shared_flags_detail=$(< "$shared_flags_result")
+  replay_failure_detail=$(< "$replay_failure_result")
+  ignored_sigchld_output=$(< "$ignored_sigchld_stdout")
+  ignored_sigchld_error=$(< "$ignored_sigchld_stderr")
+  normal_orphan_output=$(< "$normal_orphan_stdout")
+  normal_orphan_error=$(< "$normal_orphan_stderr")
+  subreaper_rc=$(< "$subreaper_rc_file")
+  subreaper_error=$(< "$subreaper_stderr")
+  cooperative_output=$(< "$cooperative_stdout")
+  cooperative_error=$(< "$cooperative_stderr")
+  blocked_term_output=$(< "$blocked_term_stdout")
+  blocked_term_error=$(< "$blocked_term_stderr")
+  term_output=$(< "$term_stdout")
+  term_error=$(< "$term_stderr")
+  quit_output=$(< "$quit_stdout")
+  quit_error=$(< "$quit_stderr")
+  stop_output=$(< "$stop_stdout")
+  stop_error=$(< "$stop_stderr")
+  aggregate_output=$(< "$aggregate_stdout")
+  aggregate_error=$(< "$aggregate_stderr")
+  aggregate_early=$(< "$aggregate_early_file")
+  cleanup_output=$(< "$cleanup_stdout")
+  cleanup_error=$(< "$cleanup_stderr")
+  cleanup_pressure_output=$(< "$cleanup_pressure_stdout")
+  trusted_cleanup_output=$(< "$trusted_cleanup_stdout")
+  trusted_cleanup_error=$(< "$trusted_cleanup_stderr")
+  if [[ $rc -ne 1 ]]; then
+    fail "$t" "failed gate wrapper exited $rc"
+  elif [[ $gate_output != $'first\nEXIT=1' ]]; then
+    fail "$t" "unexpected stdout: $gate_output"
+  elif [[ -n "$gate_error" ]]; then
+    fail "$t" "unexpected stderr: $gate_error"
+  elif [[ $gate_output == *should-not-run* ]]; then
+    fail "$t" "gate continued past the failed && command"
+  elif [[ $paste_rc -ne 0 || $paste_output != $'paste-success\nEXIT=0' ]]; then
+    fail "$t" "pasted gate wrapper became rc=$paste_rc stdout=$paste_output"
+  elif [[ -n "$paste_error" ]]; then
+    fail "$t" "pasted gate wrapper wrote stderr: $paste_error"
+  elif [[ $execfail_rc -ne 127 || -n "$execfail_output" ]]; then
+    fail "$t" "failed supervisor exec became rc=$execfail_rc stdout=$execfail_output"
+  elif [[ $execfail_error != *"/definitely/missing/python3"* ]]; then
+    fail "$t" "failed supervisor exec had unexpected stderr: $execfail_error"
+  elif [[ -n "$execfail_leak" ]]; then
+    fail "$t" "failed supervisor exec leaked $execfail_leak"
+  elif [[ $bashenv_rc -ne 1 || $bashenv_output != $'first\nEXIT=1' ]]; then
+    fail "$t" "hostile BASH_ENV bypassed the gate: rc=$bashenv_rc stdout=$bashenv_output"
+  elif [[ -n "$bashenv_error" ]]; then
+    fail "$t" "hostile-BASH_ENV run wrote stderr: $bashenv_error"
+  elif [[ -e "$bashenv_marker" ]]; then
+    fail "$t" "hostile BASH_ENV reached a Python-launch shim"
+  elif [[ $delayedexec_rc -ne 0 ||
+      $delayedexec_output != $'paste-success\nEXIT=0' ]]; then
+    fail "$t" "delayed supervisor handoff became rc=$delayedexec_rc stdout=$delayedexec_output"
+  elif [[ -n "$delayedexec_error" ]]; then
+    fail "$t" "delayed supervisor handoff wrote stderr: $delayedexec_error"
+  elif [[ $localcommand_rc -ne 1 ||
+      $localcommand_output != $'first\nEXIT=1' ]]; then
+    fail "$t" "local command function bypassed the gate: rc=$localcommand_rc stdout=$localcommand_output"
+  elif [[ -n "$localcommand_error" ||
+      $localcommand_output == *should-not-run* ]]; then
+    fail "$t" "local-command run leaked or continued: stderr=$localcommand_error"
+  elif [[ $localalias_rc -ne 1 ||
+      $localalias_output != $'first\nEXIT=1' ]]; then
+    fail "$t" "local alias or caller BASH bypassed the gate: rc=$localalias_rc stdout=$localalias_output"
+  elif [[ -n "$localalias_error" ||
+      $localalias_output == *should-not-run* ]]; then
+    fail "$t" "local-alias run leaked or continued: stderr=$localalias_error"
+  elif [[ $shellfunc_rc -eq 0 || -n "$shellfunc_output" ]]; then
+    fail "$t" "exported Bash function bypassed the refusal: rc=$shellfunc_rc stdout=$shellfunc_output"
+  elif [[ $shellfunc_error != *"refusing exported shell function"* ]]; then
+    fail "$t" "exported-function refusal had unexpected stderr: $shellfunc_error"
+  elif [[ ! -f "$shellfunc_hostile_sentinel" ||
+      $(<"$shellfunc_hostile_sentinel") != preserve ]]; then
+    fail "$t" "exported mktemp function selected or deleted an existing directory"
+  elif [[ $commandfunc_rc -ne 1 ||
+      $commandfunc_output != $'first\nEXIT=1' ]]; then
+    fail "$t" "exported command function bypassed the gate: rc=$commandfunc_rc stdout=$commandfunc_output"
+  elif [[ -n "$commandfunc_error" ||
+      $commandfunc_output == *should-not-run* ]]; then
+    fail "$t" "exported-command run leaked or continued: stderr=$commandfunc_error"
+  elif [[ $stdin_rc -ne 1 || $stdin_output != 'EXIT=1' ]]; then
+    fail "$t" "stdin-consuming gate became rc=$stdin_rc stdout=$stdin_output"
+  elif [[ -n "$stdin_error" || $stdin_output == *stdin-gate-continued* ]]; then
+    fail "$t" "stdin-consuming gate leaked or continued: stderr=$stdin_error"
+  elif [[ $status_rc -ne 124 || $status_output != 'EXIT=124' ]]; then
+    fail "$t" "categorized status became rc=$status_rc stdout=$status_output"
+  elif [[ -n "$status_error" ]]; then
+    fail "$t" "categorized status wrote stderr: $status_error"
+  elif [[ $pipeline_rc -ne 1 || $pipeline_output != $'pipeline-first\nEXIT=1' ]]; then
+    fail "$t" "failed pipeline became rc=$pipeline_rc stdout=$pipeline_output"
+  elif [[ -n "$pipeline_error" || $pipeline_output == *pipeline-last* ]]; then
+    fail "$t" "pipeline gate leaked or continued: stderr=$pipeline_error"
+  elif [[ $streams_rc -ne 0 || $streams_output != $'stream-out\nEXIT=0' ||
+      $streams_error != stream-error ]]; then
+    fail "$t" "gate streams were not preserved: rc=$streams_rc stdout=$streams_output stderr=$streams_error"
+  elif ! $pressure_error_early; then
+    fail "$t" "stderr replay waited behind blocked stdout"
+  elif [[ $pressure_rc -ne 0 || $pressure_reader_rc -ne 0 ||
+      $pressure_stdout_bytes -ne 262151 || $pressure_error != pressure-error ]]; then
+    fail "$t" "backpressured stream replay was incomplete: wrapper=$pressure_rc reader=$pressure_reader_rc stdout-bytes=$pressure_stdout_bytes stderr=$pressure_error"
+  elif [[ $shared_flags_rc -ne 0 ]]; then
+    fail "$t" "stream replay changed a shared inherited descriptor: $shared_flags_detail"
+  elif [[ $replay_failure_rc -ne 0 ]]; then
+    fail "$t" "failed replay worker did not terminate its blocked sibling: $replay_failure_detail"
+  elif [[ $ignored_sigchld_rc -ne 124 ||
+      $ignored_sigchld_output != 'EXIT=124' ]]; then
+    fail "$t" "ignored parent SIGCHLD corrupted status: rc=$ignored_sigchld_rc stdout=$ignored_sigchld_output"
+  elif [[ -n "$ignored_sigchld_error" ]]; then
+    fail "$t" "ignored parent SIGCHLD wrote stderr: $ignored_sigchld_error"
+  elif [[ $normal_orphan_rc -ne 0 ||
+      $normal_orphan_output != 'EXIT=0' || -n "$normal_orphan_error" ]]; then
+    fail "$t" "normal-completion orphan reap failed: rc=$normal_orphan_rc stdout=$normal_orphan_output stderr=$normal_orphan_error"
+  elif [[ $subreaper_rc -ne 0 ]]; then
+    fail "$t" "supervisor did not reap an adopted child: $subreaper_error"
+  elif $pidfd_signal_fixtures && [[ $replay_rc -ne 143 ]]; then
+    fail "$t" "blocked replay ignored TERM: rc=$replay_rc"
+  elif $pidfd_signal_fixtures && [[ $replay_workers_rc -ne 0 ]]; then
+    fail "$t" "replay worker survived or escaped cancellation: rc=$replay_workers_rc"
+  elif $pidfd_signal_fixtures && [[ -n "$replay_error" ]]; then
+    fail "$t" "blocked replay wrote stderr: $replay_error"
+  elif $pidfd_signal_fixtures && [[ $cooperative_rc -ne 143 ]]; then
+    fail "$t" "cooperative TERM gate wrapper exited $cooperative_rc"
+  elif $pidfd_signal_fixtures && [[ ! -s "$cooperative_child_pid_file" ]]; then
+    fail "$t" "cooperative TERM fixture did not record the gate process"
+  elif $pidfd_signal_fixtures &&
+      read -r cooperative_child_pid _ <"$cooperative_child_pid_file" &&
+      kill -0 "$cooperative_child_pid" 2>/dev/null; then
+    fail "$t" "cooperative TERM left the gate process alive"
+  elif $pidfd_signal_fixtures && [[ ! -f "$cooperative_signal_marker" ||
+      $(<"$cooperative_signal_marker") != term-cleanup ]]; then
+    fail "$t" "cooperative TERM trap did not run"
+  elif $pidfd_signal_fixtures &&
+      [[ -n "$cooperative_output" || -n "$cooperative_error" ]]; then
+    fail "$t" "cooperative TERM exposed output: stdout=$cooperative_output stderr=$cooperative_error"
+  elif $pidfd_signal_fixtures && [[ $startup_timeout_rc -ne 125 ]]; then
+    fail "$t" "startup-timeout fixture could not start the gate: rc=$startup_timeout_rc"
+  elif $pidfd_signal_fixtures && [[ $startup_timeout_leaked -ne 0 ]]; then
+    fail "$t" "startup timeout orphaned the gate process group"
+  elif $pidfd_signal_fixtures && [[ -n "$startup_timeout_error" ]]; then
+    fail "$t" "startup-timeout fixture wrote stderr: $startup_timeout_error"
+  elif $pidfd_signal_fixtures && [[ $blocked_term_rc -ne 143 ]]; then
+    fail "$t" "blocked parent TERM escaped cancellation: rc=$blocked_term_rc"
+  elif $pidfd_signal_fixtures && [[ ! -s "$blocked_term_child_pid_file" ]]; then
+    fail "$t" "blocked parent TERM fixture did not record the gate process"
+  elif $pidfd_signal_fixtures &&
+      read -r blocked_term_child_pid _ blocked_term_descendant_pid \
+      <"$blocked_term_child_pid_file" &&
+      { kill -0 "$blocked_term_child_pid" 2>/dev/null ||
+        kill -0 "$blocked_term_descendant_pid" 2>/dev/null; }; then
+    fail "$t" "blocked parent TERM left the gate process group alive"
+  elif $pidfd_signal_fixtures &&
+      [[ -n "$blocked_term_output" || -n "$blocked_term_error" ]]; then
+    fail "$t" "blocked parent TERM exposed output: stdout=$blocked_term_output stderr=$blocked_term_error"
+  elif $pidfd_signal_fixtures && [[ $term_rc -ne 143 ]]; then
+    fail "$t" "terminated gate wrapper exited $term_rc"
+  elif $pidfd_signal_fixtures && [[ ! -s "$term_child_pid_file" ]]; then
+    fail "$t" "PID-only TERM fixture did not record the gate process"
+  elif $pidfd_signal_fixtures &&
+      read -r term_child_pid _ term_descendant_pid <"$term_child_pid_file" &&
+      { kill -0 "$term_child_pid" 2>/dev/null ||
+        kill -0 "$term_descendant_pid" 2>/dev/null; }; then
+    fail "$t" "PID-only TERM left the gate process group alive"
+  elif $pidfd_signal_fixtures && [[ -n "$term_output" || -n "$term_error" ]]; then
+    fail "$t" "terminated gate exposed output: stdout=$term_output stderr=$term_error"
+  elif $pidfd_signal_fixtures && [[ $quit_rc -ne 131 ]]; then
+    fail "$t" "QUIT gate wrapper exited $quit_rc"
+  elif $pidfd_signal_fixtures && [[ ! -s "$quit_child_pid_file" ]]; then
+    fail "$t" "PID-only QUIT fixture did not record the gate process"
+  elif $pidfd_signal_fixtures &&
+      read -r quit_child_pid _ quit_descendant_pid <"$quit_child_pid_file" &&
+      { kill -0 "$quit_child_pid" 2>/dev/null ||
+        kill -0 "$quit_descendant_pid" 2>/dev/null; }; then
+    fail "$t" "PID-only QUIT left the gate process group alive"
+  elif $pidfd_signal_fixtures && [[ -n "$quit_output" || -n "$quit_error" ]]; then
+    fail "$t" "QUIT gate exposed output: stdout=$quit_output stderr=$quit_error"
+  elif $pidfd_signal_fixtures && [[ $stop_rc -ne 143 ]]; then
+    fail "$t" "stopped gate escaped before termination: rc=$stop_rc"
+  elif $pidfd_signal_fixtures && [[ ! -s "$stop_child_pid_file" ]]; then
+    fail "$t" "stopped gate fixture did not record the gate process"
+  elif $pidfd_signal_fixtures &&
+      read -r stop_child_pid _ <"$stop_child_pid_file" &&
+      kill -0 "$stop_child_pid" 2>/dev/null; then
+    fail "$t" "stopped gate remained alive after PID-only TERM"
+  elif $pidfd_signal_fixtures && [[ -n "$stop_output" || -n "$stop_error" ]]; then
+    fail "$t" "stopped gate exposed output: stdout=$stop_output stderr=$stop_error"
+  elif [[ $aggregate_rc -ne 1 || $aggregate_output != $'aggregate-first\nEXIT=1' ]]; then
+    fail "$t" "aggregate gate became rc=$aggregate_rc stdout=$aggregate_output"
+  elif [[ -n "$aggregate_error" || $aggregate_output == *aggregate-last* ]]; then
+    fail "$t" "aggregate gate leaked or continued: stderr=$aggregate_error"
+  elif [[ $aggregate_early -lt 0 ]]; then
+    fail "$t" "aggregate gate never reached the pre-completion checkpoint"
+  elif [[ $aggregate_early -ne 0 ]]; then
+    fail "$t" "aggregate output escaped before the gate completed"
+  elif [[ $cleanup_rc -ne 1 || $cleanup_output != $'cleanup-output\nEXIT=1' ]]; then
+    fail "$t" "cleanup failure became rc=$cleanup_rc stdout=$cleanup_output"
+  elif [[ $cleanup_error != *"cannot remove gate directory"* ]]; then
+    fail "$t" "cleanup failure was not reported: $cleanup_error"
+  elif ! find "$cleanup_tmp" -mindepth 1 -type f -print -quit | grep -q .; then
+    fail "$t" "cleanup-failure fixture left no log to substantiate the failure"
+  elif [[ $cleanup_pressure_rc -ne 1 ||
+      $cleanup_pressure_output != $'cleanup-output\nEXIT=1' ]] ||
+      ! grep -Fq "cannot remove gate directory" "$cleanup_pressure_stderr"; then
+    fail "$t" "full-stderr cleanup failure omitted its diagnostic or terminal status"
+  elif [[ $trusted_cleanup_rc -ne 0 ||
+      $trusted_cleanup_output != $'trusted-cleanup-output\nEXIT=0' ]]; then
+    fail "$t" "trusted cleanup became rc=$trusted_cleanup_rc stdout=$trusted_cleanup_output"
+  elif [[ -n "$trusted_cleanup_error" ]]; then
+    fail "$t" "trusted cleanup wrote stderr: $trusted_cleanup_error"
+  elif [[ -n "$deadline_group_setup_error" ]]; then
+    fail "$t" "$deadline_group_setup_error"
+  elif $pidfd_signal_fixtures && [[ $deadline_watchdog_rc -ne 124 ]]; then
+    fail "$t" "fixture watchdog deadline became rc=$deadline_watchdog_rc"
+  elif $deadline_group_leak; then
+    fail "$t" "fixture watchdog deadline left its process group alive"
+  elif find "$trusted_cleanup_tmp" -mindepth 1 -print -quit | grep -q .; then
+    fail "$t" "PATH cleanup wrappers bypassed trusted artifact removal"
+  elif find "$gate_tmp" -mindepth 1 -print -quit | grep -q .; then
+    fail "$t" "gate wrapper leaked its temporary log"
+  else
+    pass "$t"
+  fi
+fi
+
 printf '\npassed %d, failed %d\n' "$PASS" "$FAIL"
 [[ $FAIL -eq 0 ]]

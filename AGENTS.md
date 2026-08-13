@@ -1,28 +1,6 @@
-# The managed discipline block
+# AGENTS.md
 
-This is the canonical text the skill writes between
-`<!-- agent-discipline-v1 -->` and `<!-- end-agent-discipline -->`.
-
-Two rules govern what may live here:
-
-1. **It must apply to essentially every repo.** Anything language-, tool-, or
-   project-specific belongs outside the markers, where a human maintains it.
-2. **It must be something an agent gets wrong without being told.** "Write good
-   code" is noise. "`sed -i` reports success when it matched nothing" is not —
-   it is a specific, load-bearing fact that has silently corrupted real work.
-
-Every line below was added because its absence produced a concrete failure. If a
-rule cannot be traced to one, it does not belong here — this block is copied into
-every repo, so bloat is expensive and gets ignored wholesale.
-
-`{{GATE}}` is substituted with the repo's real gate command when the skill can
-detect one, and the line is dropped when it cannot.
-
-Everything above this marker is commentary for whoever maintains the block. The
-text the skill copies starts at the next line and runs to the end of the file.
-
-<!-- BLOCK-START -->
-
+<!-- agent-discipline-v1 -->
 ## Working agreement
 
 These rules are here because agents get them wrong by default, not because they
@@ -660,4 +638,5 @@ database, a running service, real money — do the red run in a disposable envir
 or not at all: a deliberately broken build can perform the harmful operation before
 any assertion notices.
 
-Gate for this repo: `{{GATE}}`
+Gate for this repo: `./check.sh`
+<!-- end-agent-discipline -->
