@@ -8,7 +8,7 @@ take.
 · **Branch:** `plan/backlog-execution`
 **Pending:** —
 **Gate:** `./check.sh`
-· last green 2026-08-13 on the `da82ec0` tree (exit 0; 26 installer,
+· last green 2026-08-13 on the `0236179` tree (exit 0; 26 installer,
 124 bot-gate, and 70 drive-status fixtures passed under GNU Bash 5.3.15,
 non-POSIX mode).
 
@@ -178,6 +178,19 @@ non-POSIX mode).
   `gpt-5.6-sol`/xhigh and Fable/high both returned semantic PASS. Fable's two
   optional nits were this now-completed gate-evidence refresh and cosmetic
   sibling B2 source-section duplication; neither changes the graph.
+- The current-tip Codex pass then reproduced inherited pipe flag corruption:
+  setting `O_NONBLOCK` on the supervisor's stdout/stderr descriptors changed
+  the shared open-file descriptions for unrelated writers. Commit `0236179`
+  instead forks one independently killable replay worker per stream without
+  changing inherited flags, supports initially blocking and nonblocking
+  descriptors, polls both workers fail-fast, and kills/reaps every outstanding
+  worker under the managed-signal mask. Fixtures preserve and verify both
+  streams' flags and exact bytes, pin both workers across TERM, and force one
+  worker to fail while its sibling is blocked. Flag mutation, missing EAGAIN
+  retry, and sequential-wait mutants each fail 25/1 at their intended
+  assertion; three consecutive installer runs pass 26/0, the forced-no-pidfd
+  run passes 26/0, an independent focused reviewer reported no P0–P2 findings,
+  and the full gate passes 26/124/70 with empty stderr.
 
 ## Now
 
