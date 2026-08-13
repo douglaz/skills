@@ -8,7 +8,7 @@ take.
 · **Branch:** `plan/backlog-execution`
 **Pending:** —
 **Gate:** `./check.sh`
-· last green 2026-08-13 on the `0236179` tree (exit 0; 26 installer,
+· last green 2026-08-13 on the `bd3a883` tree (exit 0; 26 installer,
 124 bot-gate, and 70 drive-status fixtures passed under GNU Bash 5.3.15,
 non-POSIX mode).
 
@@ -191,6 +191,13 @@ non-POSIX mode).
   assertion; three consecutive installer runs pass 26/0, the forced-no-pidfd
   run passes 26/0, an independent focused reviewer reported no P0–P2 findings,
   and the full gate passes 26/124/70 with empty stderr.
+- Codex's next pass found that the cancellation fixture discovered replay
+  workers through an optional procfs `children` entry even though its
+  capability gate tested only pidfds. Commit `bd3a883` generates a
+  fixture-local wrapper that publishes both exact worker PIDs after both forks;
+  the inspector opens pidfds from that explicit handshake, with no procfs
+  dependency. Three consecutive installer runs pass 26/0, and the full gate
+  passes 26/124/70 with empty stderr.
 
 ## Now
 
