@@ -194,6 +194,88 @@ def write_terminal_status(stdout_fd, status):
         return
 
 
+def replay_worker(path, destination_fd):
+    source_fd = None
+    try:
+        source_fd = os.open(path, os.O_RDONLY)
+        while True:
+            chunk = os.read(source_fd, 65536)
+            if not chunk:
+                os._exit(0)
+            pending = memoryview(chunk)
+            while pending:
+                try:
+                    written = os.write(destination_fd, pending)
+                except BlockingIOError:
+                    select.select([], [destination_fd], [], 0.1)
+                    continue
+                if written <= 0:
+                    os._exit(1)
+                pending = pending[written:]
+    except BaseException:
+        os._exit(1)
+    finally:
+        if source_fd is not None:
+            os.close(source_fd)
+
+
+def replay_logs(items):
+    workers = []
+    reaped = set()
+    try:
+        previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, managed_signals)
+        try:
+            for path, destination_fd in items:
+                pid = os.fork()
+                if pid == 0:
+                    try:
+                        for signum in managed_signals:
+                            signal.signal(signum, signal.SIG_DFL)
+                        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+                        replay_worker(path, destination_fd)
+                    except BaseException:
+                        os._exit(1)
+                workers.append(pid)
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+        while len(reaped) != len(workers):
+            previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, managed_signals)
+            try:
+                for pid in workers:
+                    if pid in reaped:
+                        continue
+                    waited, status = os.waitpid(pid, os.WNOHANG)
+                    if waited == pid:
+                        reaped.add(pid)
+                        if (
+                            not os.WIFEXITED(status)
+                            or os.WEXITSTATUS(status) != 0
+                        ):
+                            raise RuntimeError("cannot replay gate output")
+            finally:
+                signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+            if len(reaped) != len(workers):
+                time.sleep(0.05)
+    except BaseException:
+        previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, managed_signals)
+        try:
+            for pid in workers:
+                if pid not in reaped:
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+            for pid in workers:
+                if pid not in reaped:
+                    try:
+                        os.waitpid(pid, 0)
+                    except ChildProcessError:
+                        pass
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+        raise
+
+
 def group_alive(pgid):
     try:
         os.killpg(pgid, 0)
@@ -406,50 +488,18 @@ try:
     if cancelled is None:
         stdout_fd = sys.stdout.fileno()
         stderr_fd = sys.stderr.fileno()
-        stdout_was_blocking = os.get_blocking(stdout_fd)
-        stderr_was_blocking = os.get_blocking(stderr_fd)
-        os.set_blocking(stdout_fd, False)
-        os.set_blocking(stderr_fd, False)
-        streams = [
-            [open(log_path, "rb"), stdout_fd, memoryview(b"")],
-            [open(error_path, "rb"), stderr_fd, memoryview(b"")],
-        ]
-        try:
-            while streams:
-                active = []
-                for stream in streams:
-                    if not stream[2]:
-                        chunk = stream[0].read(65536)
-                        if not chunk:
-                            stream[0].close()
-                            continue
-                        stream[2] = memoryview(chunk)
-                    active.append(stream)
-                streams = active
-                if not streams:
-                    break
-                _, writable, _ = select.select(
-                    [], [stream[1] for stream in streams], [], 0.1
-                )
-                for stream in streams:
-                    if stream[1] in writable:
-                        written = os.write(stream[1], stream[2])
-                        stream[2] = stream[2][written:]
-        finally:
-            for stream in streams:
-                stream[0].close()
-        os.set_blocking(stderr_fd, stderr_was_blocking)
+        replay_logs(
+            (
+                (log_path, stdout_fd),
+                (error_path, stderr_fd),
+            )
+        )
     if not remove_private_dir():
         print("cannot remove gate directory", file=sys.stderr)
         rc = rc if rc != 0 else 1
     if cancelled is None:
         write_terminal_status(stdout_fd, rc)
-        os.set_blocking(stdout_fd, stdout_was_blocking)
 except GateCancelled as cancellation:
-    if "stdout_fd" in locals() and "stdout_was_blocking" in locals():
-        os.set_blocking(stdout_fd, stdout_was_blocking)
-    if "stderr_fd" in locals() and "stderr_was_blocking" in locals():
-        os.set_blocking(stderr_fd, stderr_was_blocking)
     cancelled = cancellation.signum
     ignore_managed_signals()
     if gate_pgid is not None and group_alive(gate_pgid):
@@ -458,10 +508,6 @@ except GateCancelled as cancellation:
     if not remove_private_dir():
         print("cannot remove gate directory", file=sys.stderr)
 except BaseException as error:
-    if "stdout_fd" in locals() and "stdout_was_blocking" in locals():
-        os.set_blocking(stdout_fd, stdout_was_blocking)
-    if "stderr_fd" in locals() and "stderr_was_blocking" in locals():
-        os.set_blocking(stderr_fd, stderr_was_blocking)
     ignore_managed_signals()
     print(f"cannot finalize gate: {error}", file=sys.stderr)
     rc = rc if rc != 0 else 1

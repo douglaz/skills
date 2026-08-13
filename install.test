@@ -514,6 +514,7 @@ gate_script="$WORK/discipline-gate.sh"
 stdin_gate_script="$WORK/discipline-stdin-gate.sh"
 execfail_gate_script="$WORK/discipline-execfail-gate.sh"
 cleanupfail_gate_script="$WORK/discipline-cleanupfail-gate.sh"
+replayfail_gate_script="$WORK/discipline-replayfail-gate.sh"
 canonical_gate_block="$WORK/discipline-canonical-gate.block"
 managed_gate_block="$WORK/discipline-managed-gate.block"
 gate_stdout="$WORK/discipline-gate.stdout"
@@ -548,6 +549,10 @@ pressure_stdout="$WORK/discipline-pressure.stdout"
 pressure_stderr="$WORK/discipline-pressure.stderr"
 pressure_reader_ready="$WORK/discipline-pressure-reader.ready"
 pressure_reader_release="$WORK/discipline-pressure-reader.release"
+shared_flags_result="$WORK/discipline-shared-flags.result"
+shared_flags_stderr="$WORK/discipline-shared-flags.stderr"
+replay_failure_result="$WORK/discipline-replay-failure.result"
+replay_failure_stderr="$WORK/discipline-replay-failure.stderr"
 ignored_sigchld_stdout="$WORK/discipline-ignored-sigchld.stdout"
 ignored_sigchld_stderr="$WORK/discipline-ignored-sigchld.stderr"
 normal_orphan_stdout="$WORK/discipline-normal-orphan.stdout"
@@ -599,11 +604,15 @@ blocked_term_rc_file="$WORK/discipline-blocked-term.rc"
 blocked_term_child_pid_file="$WORK/discipline-blocked-term-child.pid"
 blocked_term_deadline_marker="$WORK/discipline-blocked-term-deadline"
 replay_fifo="$WORK/discipline-replay.fifo"
+replay_error_fifo="$WORK/discipline-replay-error.fifo"
 replay_started="$WORK/discipline-replay-started"
 replay_done="$WORK/discipline-replay-done"
 replay_rc_file="$WORK/discipline-replay.rc"
 replay_child_pid_file="$WORK/discipline-replay-child.pid"
 replay_deadline_marker="$WORK/discipline-replay-deadline"
+replay_workers_ready="$WORK/discipline-replay-workers.ready"
+replay_workers_release="$WORK/discipline-replay-workers.release"
+replay_workers_rc_file="$WORK/discipline-replay-workers.rc"
 quit_started="$WORK/discipline-quit-started"
 quit_rc_file="$WORK/discipline-quit.rc"
 quit_child_pid_file="$WORK/discipline-quit-child.pid"
@@ -848,7 +857,9 @@ possible_gate_start=false
         printf '%s\n' '  python3 -c '\''import os, sys, time; (sys.exit(0) if not sys.platform.startswith("linux") else None); pid = os.fork(); (os._exit(0) if pid == 0 else None); deadline = time.monotonic() + 2; info = None; exec("while time.monotonic() < deadline:\n info = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)\n if info is not None and info.si_pid == pid: break\n time.sleep(0.005)"); (None if info is not None and info.si_pid == pid else (_ for _ in ()).throw(RuntimeError("child did not become a zombie")))'\'''
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == replay ]]; then'
         printf '%s\n' '  printf "%s %s\n" "$BASHPID" "$PPID" >"$CHILD_PID_FILE"; : >"$STARTED"'
-        printf '%s\n' '  python3 -c '\''import sys; sys.stdout.write("x" * 2000000)'\''; : >"$REPLAY_DONE"'
+        printf '%s\n' '  python3 -c '\''import sys; sys.stdout.write("x" * 2000000)'\'''
+        printf '%s\n' '  python3 -c '\''import sys; sys.stderr.write("y" * 2000000)'\'''
+        printf '%s\n' '  : >"$REPLAY_DONE"'
         printf '%s\n' 'elif [[ ${GATE_MODE:-function} == cooperative ]]; then'
         printf '%s\n' '  trap '\''printf term-cleanup >"$SIGNAL_MARKER"; exit 143'\'' TERM'
         printf '%s\n' '  printf "%s %s\n" "$BASHPID" "$PPID" >"$CHILD_PID_FILE"'
@@ -901,6 +912,22 @@ awk '
   }
   { print }
 ' "$gate_script" >"$cleanupfail_gate_script"
+python3 - "$gate_script" "$replayfail_gate_script" <<'PY'
+import sys
+
+source, destination = sys.argv[1:]
+text = open(source, encoding="utf-8").read()
+needle = "                workers.append(pid)\n"
+replacement = (
+    needle
+    + "                if len(workers) == 2:\n"
+    + "                    os.kill(pid, signal.SIGKILL)\n"
+)
+if text.count(needle) != 1:
+    raise RuntimeError("cannot inject replay-worker failure")
+with open(destination, "w", encoding="utf-8") as mutated:
+    mutated.write(text.replace(needle, replacement))
+PY
 {
   printf '%s\n' '#!/usr/bin/env bash'
   printf '%s\n' 'set -e'
@@ -1121,6 +1148,150 @@ PY
   pressure_rc=$?
   wait "$pressure_reader_pid"
   pressure_reader_rc=$?
+  python3 - "$gate_script" "$gate_tmp" "$shared_flags_result" \
+      "$shared_flags_stderr" <<'PY'
+import os
+import select
+import subprocess
+import sys
+import time
+
+gate_script, gate_tmp, result_path, stderr_path = sys.argv[1:]
+
+
+def run_case(blocking):
+    stdout_read, stdout_write = os.pipe()
+    stderr_read, stderr_write = os.pipe()
+    os.set_blocking(stdout_write, blocking)
+    os.set_blocking(stderr_write, blocking)
+    stdout_blocking_before = os.get_blocking(stdout_write)
+    stderr_blocking_before = os.get_blocking(stderr_write)
+    environment = os.environ.copy()
+    environment["GATE_MODE"] = "stream-pressure"
+    environment["TMPDIR"] = gate_tmp
+    stdout_bytes = bytearray()
+    stderr_bytes = bytearray()
+    process = None
+    try:
+        process = subprocess.Popen(
+            [os.environ.get("BASH", "bash"), gate_script],
+            stdout=stdout_write,
+            stderr=stderr_write,
+            env=environment,
+        )
+        deadline = time.monotonic() + 10.0
+        while b"pressure-error\n" not in stderr_bytes:
+            readable, _, _ = select.select([stderr_read], [], [], 0.1)
+            if readable:
+                chunk = os.read(stderr_read, 65536)
+                if not chunk:
+                    break
+                stderr_bytes.extend(chunk)
+            if process.poll() is not None or time.monotonic() >= deadline:
+                break
+        stdout_blocking_during = os.get_blocking(stdout_write)
+        stderr_blocking_during = os.get_blocking(stderr_write)
+        os.close(stdout_write)
+        stdout_write = -1
+        os.close(stderr_write)
+        stderr_write = -1
+        open_reads = {stdout_read: stdout_bytes, stderr_read: stderr_bytes}
+        deadline = time.monotonic() + 10.0
+        while open_reads:
+            readable, _, _ = select.select(list(open_reads), [], [], 0.1)
+            for fd in readable:
+                chunk = os.read(fd, 65536)
+                if chunk:
+                    open_reads[fd].extend(chunk)
+                else:
+                    os.close(fd)
+                    del open_reads[fd]
+            if time.monotonic() >= deadline:
+                process.kill()
+                raise RuntimeError("shared-flags wrapper did not finish")
+        stdout_read = -1
+        stderr_read = -1
+        wrapper_rc = process.wait()
+        ok = (
+            stdout_blocking_before is blocking
+            and stderr_blocking_before is blocking
+            and stdout_blocking_during is blocking
+            and stderr_blocking_during is blocking
+            and wrapper_rc == 0
+            and len(stdout_bytes) == 262151
+            and stderr_bytes == b"pressure-error\n"
+        )
+        detail = (
+            f"expected={blocking} stdout-before={stdout_blocking_before} "
+            f"stderr-before={stderr_blocking_before} "
+            f"stdout-during={stdout_blocking_during} "
+            f"stderr-during={stderr_blocking_during} "
+            f"rc={wrapper_rc} stdout-bytes={len(stdout_bytes)} "
+            f"stderr={bytes(stderr_bytes)!r}"
+        )
+        return ok, detail, bytes(stderr_bytes)
+    finally:
+        for fd in (stdout_write, stderr_write, stdout_read, stderr_read):
+            if fd >= 0:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        if process is not None and process.poll() is None:
+            process.kill()
+            process.wait()
+
+
+results = [run_case(True), run_case(False)]
+with open(result_path, "w", encoding="ascii") as result:
+    result.write("; ".join(item[1] for item in results) + "\n")
+with open(stderr_path, "wb") as observed:
+    for _, _, error_bytes in results:
+        observed.write(error_bytes)
+raise SystemExit(0 if all(item[0] for item in results) else 1)
+PY
+  shared_flags_rc=$?
+  python3 - "$replayfail_gate_script" "$gate_tmp" \
+      "$replay_failure_result" "$replay_failure_stderr" <<'PY'
+import os
+import signal
+import subprocess
+import sys
+
+gate_script, gate_tmp, result_path, stderr_path = sys.argv[1:]
+environment = os.environ.copy()
+environment["GATE_MODE"] = "stream-pressure"
+environment["TMPDIR"] = gate_tmp
+process = subprocess.Popen(
+    [os.environ.get("BASH", "bash"), gate_script],
+    stdin=subprocess.DEVNULL,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    env=environment,
+    start_new_session=True,
+)
+timed_out = False
+try:
+    process.wait(timeout=5)
+except subprocess.TimeoutExpired:
+    timed_out = True
+    os.killpg(process.pid, signal.SIGKILL)
+stdout_bytes, stderr_bytes = process.communicate()
+with open(stderr_path, "wb") as errors:
+    errors.write(stderr_bytes)
+with open(result_path, "w", encoding="ascii") as result:
+    result.write(
+        f"timed-out={timed_out} rc={process.returncode} "
+        f"stdout-bytes={len(stdout_bytes)} stderr={stderr_bytes!r}\n"
+    )
+ok = (
+    not timed_out
+    and process.returncode == 1
+    and b"cannot finalize gate: cannot replay gate output\n" in stderr_bytes
+)
+raise SystemExit(0 if ok else 1)
+PY
+  replay_failure_rc=$?
   TMPDIR="$gate_tmp" GATE_MODE=status \
     python3 -c '
 import os
@@ -1247,13 +1418,15 @@ PY
   # fixture failure; the timeout cleanup below owns every failure path.
   if $pidfd_signal_fixtures; then
   (
-    mkfifo "$replay_fifo"
+    mkfifo "$replay_fifo" "$replay_error_fifo"
     sleep 30 <"$replay_fifo" &
     replay_reader_pid=$!
+    sleep 30 <"$replay_error_fifo" &
+    replay_error_reader_pid=$!
     TMPDIR="$gate_tmp" GATE_MODE=replay STARTED="$replay_started" \
       CHILD_PID_FILE="$replay_child_pid_file" \
       REPLAY_DONE="$replay_done" \
-      bash "$gate_script" >"$replay_fifo" 2>"$replay_stderr" &
+      bash "$gate_script" >"$replay_fifo" 2>"$replay_error_fifo" &
     replay_pid=$!
     for ((_n=1; _n<=1000; _n++)); do
       [[ -f "$replay_done" ]] && break
@@ -1263,13 +1436,58 @@ PY
       read -r replay_child_pid _ <"$replay_child_pid_file" || replay_child_pid=0
       gate_fixture_abort_before_signal "$replay_pid" "$replay_child_pid"
       printf '%s' 125 >"$replay_rc_file"
+      printf '%s' 125 >"$replay_workers_rc_file"
     else
       read -r replay_child_pid _ <"$replay_child_pid_file"
-      sleep 0.1
+      python3 - "$replay_pid" "$replay_workers_ready" \
+          "$replay_workers_release" <<'PY' &
+import os
+import select
+import sys
+import time
+
+owner = int(sys.argv[1])
+ready, release = sys.argv[2:]
+deadline = time.monotonic() + 10.0
+fds = []
+while time.monotonic() < deadline:
+    try:
+        with open(f"/proc/{owner}/task/{owner}/children", encoding="ascii") as children:
+            pids = [int(pid) for pid in children.read().split()]
+        if len(pids) == 2:
+            fds = [os.pidfd_open(pid) for pid in pids]
+            break
+    except (FileNotFoundError, ProcessLookupError):
+        pass
+    for fd in fds:
+        os.close(fd)
+    fds = []
+    time.sleep(0.01)
+else:
+    raise RuntimeError("replay workers were not both observable")
+open(ready, "xb").close()
+while not os.path.exists(release):
+    time.sleep(0.01)
+deadline = time.monotonic() + 2.0
+pending = set(fds)
+while pending and time.monotonic() < deadline:
+    readable, _, _ = select.select(list(pending), [], [], 0.05)
+    pending.difference_update(readable)
+for fd in fds:
+    os.close(fd)
+if pending:
+    raise RuntimeError("replay worker survived wrapper cancellation")
+PY
+      replay_workers_pid=$!
+      for ((_n=1; _n<=1000; _n++)); do
+        [[ -f "$replay_workers_ready" ]] && break
+        sleep 0.01
+      done
       gate_fixture_watchdog \
         "$replay_deadline_marker" "$replay_pid" 0 &
       replay_watchdog_pid=$!
-      if gate_fixture_watchdog_ready "$replay_deadline_marker"; then
+      if [[ -f "$replay_workers_ready" ]] &&
+          gate_fixture_watchdog_ready "$replay_deadline_marker"; then
         kill -TERM "$replay_pid"
       else
         : >"$replay_deadline_marker.cancel"
@@ -1278,6 +1496,11 @@ PY
         wait "$replay_watchdog_pid" 2>/dev/null || true
         kill "$replay_reader_pid" 2>/dev/null || true
         wait "$replay_reader_pid" 2>/dev/null || true
+        kill "$replay_error_reader_pid" 2>/dev/null || true
+        wait "$replay_error_reader_pid" 2>/dev/null || true
+        : >"$replay_workers_release"
+        wait "$replay_workers_pid" 2>/dev/null || true
+        printf '%s' 126 >"$replay_workers_rc_file"
         exit
       fi
       gate_fixture_wait_with_watchdog \
@@ -1285,12 +1508,21 @@ PY
         "$replay_watchdog_pid"
       replay_wait_rc=$gate_fixture_wait_rc
       printf '%s' "$replay_wait_rc" >"$replay_rc_file"
+      : >"$replay_workers_release"
+      if wait "$replay_workers_pid"; then
+        printf '%s' 0 >"$replay_workers_rc_file"
+      else
+        printf '%s' "$?" >"$replay_workers_rc_file"
+      fi
     fi
     kill "$replay_reader_pid" 2>/dev/null || true
     wait "$replay_reader_pid" 2>/dev/null || true
+    kill "$replay_error_reader_pid" 2>/dev/null || true
+    wait "$replay_error_reader_pid" 2>/dev/null || true
   )
   replay_rc=$(< "$replay_rc_file")
-  replay_error=$(< "$replay_stderr")
+  replay_workers_rc=$(< "$replay_workers_rc_file")
+  replay_error=
   (
     TMPDIR="$gate_tmp" GATE_MODE=cooperative \
       STARTED="$cooperative_started" CHILD_PID_FILE="$cooperative_child_pid_file" \
@@ -1647,6 +1879,8 @@ PY
   streams_error=$(< "$streams_stderr")
   pressure_stdout_bytes=$(wc -c <"$pressure_stdout")
   pressure_error=$(< "$pressure_stderr")
+  shared_flags_detail=$(< "$shared_flags_result")
+  replay_failure_detail=$(< "$replay_failure_result")
   ignored_sigchld_output=$(< "$ignored_sigchld_stdout")
   ignored_sigchld_error=$(< "$ignored_sigchld_stderr")
   normal_orphan_output=$(< "$normal_orphan_stdout")
@@ -1745,6 +1979,10 @@ PY
   elif [[ $pressure_rc -ne 0 || $pressure_reader_rc -ne 0 ||
       $pressure_stdout_bytes -ne 262151 || $pressure_error != pressure-error ]]; then
     fail "$t" "backpressured stream replay was incomplete: wrapper=$pressure_rc reader=$pressure_reader_rc stdout-bytes=$pressure_stdout_bytes stderr=$pressure_error"
+  elif [[ $shared_flags_rc -ne 0 ]]; then
+    fail "$t" "stream replay changed a shared inherited descriptor: $shared_flags_detail"
+  elif [[ $replay_failure_rc -ne 0 ]]; then
+    fail "$t" "failed replay worker did not terminate its blocked sibling: $replay_failure_detail"
   elif [[ $ignored_sigchld_rc -ne 124 ||
       $ignored_sigchld_output != 'EXIT=124' ]]; then
     fail "$t" "ignored parent SIGCHLD corrupted status: rc=$ignored_sigchld_rc stdout=$ignored_sigchld_output"
@@ -1757,6 +1995,8 @@ PY
     fail "$t" "supervisor did not reap an adopted child: $subreaper_error"
   elif $pidfd_signal_fixtures && [[ $replay_rc -ne 143 ]]; then
     fail "$t" "blocked replay ignored TERM: rc=$replay_rc"
+  elif $pidfd_signal_fixtures && [[ $replay_workers_rc -ne 0 ]]; then
+    fail "$t" "replay worker survived or escaped cancellation: rc=$replay_workers_rc"
   elif $pidfd_signal_fixtures && [[ -n "$replay_error" ]]; then
     fail "$t" "blocked replay wrote stderr: $replay_error"
   elif $pidfd_signal_fixtures && [[ $cooperative_rc -ne 143 ]]; then
