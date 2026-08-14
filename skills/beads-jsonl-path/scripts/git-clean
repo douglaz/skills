@@ -349,9 +349,45 @@ case ${1-} in
       printf '%s\n' "$_bjg_audit_name is not a trusted outside-worktree audit tool" >&2
       exit 1
     }
-    _bjg_audit_environment=( -i "PATH=$_bjg_audit_path" "LC_ALL=C" )
-    for _bjg_audit_variable in HOME USER LOGNAME SHELL TERM COLORTERM NO_COLOR \
-      XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME CODEX_HOME CLAUDE_CONFIG_DIR \
+    _bjg_audit_root_raw=$("$_bjg_git" --no-pager --no-replace-objects \
+      -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+      rev-parse --show-toplevel 2>/dev/null) || exit 1
+    _bjg_audit_root=$(
+      CDPATH=
+      export CDPATH
+      cd -P -- "$_bjg_audit_root_raw" 2>/dev/null && pwd -P
+    ) || exit 1
+    _bjg_audit_environment=(
+      -i "PATH=$_bjg_audit_path" "LC_ALL=C"
+      "PYTHONNOUSERSITE=1" "PYTHONSAFEPATH=1"
+    )
+    # Auth/config homes are needed by the real model CLIs, but a repository-
+    # selected HOME can activate interpreter user sites or tool hooks before
+    # read-only flags take effect. Preserve only existing canonical directories
+    # proven outside the driven worktree.
+    for _bjg_audit_variable in HOME CODEX_HOME CLAUDE_CONFIG_DIR; do
+      [[ ! -v $_bjg_audit_variable || -z ${!_bjg_audit_variable} ]] && continue
+      _bjg_audit_config_raw=${!_bjg_audit_variable}
+      [[ "$_bjg_audit_config_raw" == /* && -d "$_bjg_audit_config_raw" \
+         && "$_bjg_audit_config_raw" != *$'\n'* \
+         && "$_bjg_audit_config_raw" != *$'\r'* ]] || {
+        printf '%s\n' 'audit-tool config home is not a valid absolute directory' >&2
+        exit 1
+      }
+      _bjg_audit_config=$(
+        CDPATH=
+        export CDPATH
+        cd -P -- "$_bjg_audit_config_raw" 2>/dev/null && pwd -P
+      ) || exit 1
+      if [[ "$_bjg_audit_root" == / \
+            || "$_bjg_audit_config" == "$_bjg_audit_root" \
+            || "$_bjg_audit_config" == "$_bjg_audit_root/"* ]]; then
+        printf '%s\n' 'audit-tool config home resolves inside the current worktree' >&2
+        exit 1
+      fi
+      _bjg_audit_environment+=( "$_bjg_audit_variable=$_bjg_audit_config" )
+    done
+    for _bjg_audit_variable in USER LOGNAME SHELL TERM COLORTERM NO_COLOR \
       OPENAI_API_KEY ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN \
       HTTPS_PROXY https_proxy ALL_PROXY all_proxy NO_PROXY no_proxy \
       SSL_CERT_FILE SSL_CERT_DIR NIX_SSL_CERT_FILE SSH_AUTH_SOCK; do

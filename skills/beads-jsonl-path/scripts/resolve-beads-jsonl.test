@@ -1024,6 +1024,55 @@ else
   pass "$t"
 fi
 
+# A model/config HOME selected from the driven repository is refused before the
+# validated tool starts.
+rm -f "$b/audit-probe-ran"
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/repo" PATH="$b/outside-audit-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-probe exact argument \
+    >"$b/worktree-home.stdout" 2>"$b/worktree-home.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool runner refuses a worktree-selected HOME'
+if [[ $rc -eq 0 || -e "$b/audit-probe-ran" ]]; then
+  fail "$t" 'runner executed an audit tool with worktree HOME'
+elif ! grep -Fq 'config home resolves inside the current worktree' \
+    "$b/worktree-home.stderr"; then
+  fail "$t" "runner did not diagnose worktree HOME: $(<"$b/worktree-home.stderr")"
+else
+  pass "$t"
+fi
+
+# An allowed outside HOME still cannot activate Python's user-site .pth startup.
+python_path=$(command -p -v python3)
+mkdir "$b/python-audit-home"
+python_user_site=$(HOME="$b/python-audit-home" "$python_path" -c \
+  'import site; print(site.getusersitepackages())')
+mkdir -p "$python_user_site"
+printf '%s\n' \
+  "import pathlib; pathlib.Path('$b/python-user-site-ran').write_text('ran')" \
+  >"$python_user_site/worktree-startup.pth"
+command cat >"$b/outside-audit-bin/python-audit" <<PYTHON_AUDIT
+#!$python_path
+from pathlib import Path
+Path('$b/python-audit-ran').write_text('clean')
+PYTHON_AUDIT
+chmod +x "$b/outside-audit-bin/python-audit"
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/python-audit-home" PATH="$b/outside-audit-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool python-audit \
+    >"$b/python-audit.stdout" 2>"$b/python-audit.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool runner disables Python user-site startup'
+if [[ $rc -ne 0 || ! -e "$b/python-audit-ran" ]]; then
+  fail "$t" "Python audit tool exit $rc: $(<"$b/python-audit.stderr")"
+elif [[ -e "$b/python-user-site-ran" ]]; then
+  fail "$t" 'Python audit tool loaded a user-site .pth file'
+else
+  pass "$t"
+fi
+
 # Index-reading Git commands must not execute a repository-configured fsmonitor
 # hook. Prime the hook once, erase its marker, then keep the fixture snapshots
 # on their own explicit hook-disabled path so only the resolver is measured.
