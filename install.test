@@ -1516,8 +1516,11 @@ transaction_block=$(sed -n '/Then flush and commit/,/Do not stage that file unre
   "$transaction")
 if ! grep -Fq -- 'BEADS_COMMIT_OID=$("$BEADS_GIT_RUNNER" commit --only-reviewed "$BEADS_JSONL"' \
     "$transaction" \
+    || ! grep -Fq -- 'BEADS_REVIEWED_BRANCH=$("$BEADS_GIT_RUNNER" head-branch)' \
+    "$transaction" \
     || ! grep -Fq -- '--expect-oid "$BEADS_REVIEWED_OID"' "$transaction" \
-    || ! grep -Fq -- '--expect-head "$BEADS_REVIEWED_HEAD"' "$transaction"; then
+    || ! grep -Fq -- '--expect-head "$BEADS_REVIEWED_HEAD"' "$transaction" \
+    || ! grep -Fq -- '--expect-branch "$BEADS_REVIEWED_BRANCH"' "$transaction"; then
   fail "$t" 'Beads transaction returns to caller-shell Git for commit'
 elif ! grep -Fq -- '"$BEADS_GIT_RUNNER" push --remote origin --branch "$WORK_BRANCH"' \
     "$transaction" \
@@ -1545,6 +1548,9 @@ elif ! grep -Fq -- 'cannot push the reviewed JSONL commit' "$transaction"; then
 elif ! grep -Fq -- '-c core.hooksPath=/dev/null' \
     "$HERE/skills/beads-jsonl-path/scripts/git-clean"; then
   fail "$t" 'clean commit can execute repository hooks'
+elif ! grep -Fq -- "--no-deref -m 'commit: reviewed Beads JSONL' \"\$_bjg_commit_ref\"" \
+    "$HERE/skills/beads-jsonl-path/scripts/git-clean"; then
+  fail "$t" 'clean commit updates symbolic HEAD instead of the reviewed branch ref'
 elif ! grep -Fq -- '_bjg_push_environment=(' \
     "$HERE/skills/beads-jsonl-path/scripts/git-clean" \
     || ! grep -Fq -- '"$_bjg_env" -i "PATH=$_bjg_safe_path" "LC_ALL=C"' \
@@ -1584,7 +1590,9 @@ elif ! grep -Fq -- '-c push.default=nothing -c push.followTags=false' \
     || ! grep -Fq -- 'push "$_bjg_push_remote" "$_bjg_push_head:refs/heads/$_bjg_push_branch"' \
     "$HERE/skills/beads-jsonl-path/scripts/git-clean"; then
   fail "$t" 'clean push can expand repository-selected refspecs'
-elif ! grep -Fq -- 'symbolic-ref --quiet --short HEAD' \
+elif ! grep -Fq -- 'symbolic-ref --quiet --no-recurse HEAD' \
+    "$HERE/skills/beads-jsonl-path/scripts/git-clean" \
+    || ! grep -Fq -- '_bjg_push_current_branch=${_bjg_push_current_ref#refs/heads/}' \
     "$HERE/skills/beads-jsonl-path/scripts/git-clean" \
     || ! grep -Fq -- 'clean push branch does not match the current branch' \
     "$HERE/skills/beads-jsonl-path/scripts/git-clean"; then

@@ -418,7 +418,38 @@ chmod +x "$b/repo/.git/hooks/pre-commit"
 printf '%s\n' unrelated >"$b/repo/unrelated"
 git -C "$b/repo" add -- unrelated
 real_before=$(git -C "$b/repo" rev-parse HEAD)
+real_branch=$(git -C "$b/repo" symbolic-ref --short HEAD)
 forged_before=$(git -C "$b/forged" rev-parse HEAD)
+
+# `symbolic-ref --short` becomes `heads/<name>` when a tag makes the shortened
+# spelling ambiguous. Read and strip the exact direct refs/heads/ target instead.
+git -C "$b/repo" tag "$real_branch" "$real_before"
+if runner_branch=$(cd "$b/repo" && "$GIT_RUNNER" head-branch); then rc=0; else rc=$?; fi
+t='clean Git runner returns an unambiguous direct branch name'
+if [[ $rc -ne 0 || "$runner_branch" != "$real_branch" ]]; then
+  fail "$t" "branch resolution returned '${runner_branch-}' at exit $rc"
+else
+  pass "$t"
+fi
+git -C "$b/repo" tag -d "$real_branch" >/dev/null
+
+# A valid branch may itself begin with `refs/`; only the full refs/heads/ prefix
+# has structural meaning here.
+nested_branch=refs/topic
+git -C "$b/repo" switch -q -c "$nested_branch" "$real_before"
+if nested_runner_branch=$(cd "$b/repo" && "$GIT_RUNNER" head-branch); then
+  rc=0
+else
+  rc=$?
+fi
+t='clean Git runner accepts a valid nested refs branch name'
+if [[ $rc -ne 0 || "$nested_runner_branch" != "$nested_branch" ]]; then
+  fail "$t" "nested branch resolution returned '${nested_runner_branch-}' at exit $rc"
+else
+  pass "$t"
+fi
+git -C "$b/repo" switch -q "$real_branch"
+git -C "$b/repo" branch -D "$nested_branch" >/dev/null
 
 # The reviewed parent is part of the proof. A concurrent ref update must make
 # the commit fail without overwriting the intervening HEAD.
@@ -430,6 +461,7 @@ if (
   cd "$b/repo" || exit 98
   "$GIT_RUNNER" commit --only-reviewed "$jsonl" \
     --expect-oid "$reviewed_oid" --expect-head "$real_before" \
+    --expect-branch "$real_branch" \
     -m 'must refuse stale HEAD' \
     >"$b/stale-head.stdout" 2>"$b/stale-head.stderr"
 ); then rc=0; else rc=$?; fi
@@ -446,6 +478,62 @@ else
 fi
 git -C "$b/repo" update-ref HEAD "$real_before" "$intervening"
 
+# The reviewed commit OID is not a branch identity. Switching to another branch
+# at the same OID must not advance that newly checked-out ref.
+other_branch=review-other
+git -C "$b/repo" branch "$other_branch" "$real_before"
+git -C "$b/repo" switch -q "$other_branch"
+if (
+  cd "$b/repo" || exit 98
+  "$GIT_RUNNER" commit --only-reviewed "$jsonl" \
+    --expect-oid "$reviewed_oid" --expect-head "$real_before" \
+    --expect-branch "$real_branch" \
+    -m 'must refuse switched branch' \
+    >"$b/switched-branch.stdout" 2>"$b/switched-branch.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner refuses a branch switched after review'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'runner committed to a different branch at the reviewed OID'
+elif [[ $(git -C "$b/repo" rev-parse "$real_branch") != "$real_before" \
+        || $(git -C "$b/repo" rev-parse "$other_branch") != "$real_before" ]]; then
+  fail "$t" 'runner advanced a branch after the reviewed branch changed'
+elif ! grep -Fq 'current branch no longer matches the reviewed branch' \
+    "$b/switched-branch.stderr"; then
+  fail "$t" "runner did not diagnose switched branch: $(<"$b/switched-branch.stderr")"
+else
+  pass "$t"
+fi
+git -C "$b/repo" switch -q "$real_branch"
+git -C "$b/repo" branch -D "$other_branch" >/dev/null
+
+# A branch ref can itself be symbolic. Updating without --no-deref would follow it
+# and advance the target branch even though the reviewed ref name was explicit.
+symref_target=review-symref-target
+git -C "$b/repo" branch "$symref_target" "$real_before"
+git -C "$b/repo" symbolic-ref "refs/heads/$real_branch" \
+  "refs/heads/$symref_target"
+if (
+  cd "$b/repo" || exit 98
+  "$GIT_RUNNER" commit --only-reviewed "$jsonl" \
+    --expect-oid "$reviewed_oid" --expect-head "$real_before" \
+    --expect-branch "$real_branch" \
+    -m 'must refuse symbolic reviewed ref' \
+    >"$b/symbolic-branch.stdout" 2>"$b/symbolic-branch.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner does not dereference a symbolic reviewed branch'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'runner followed and advanced the symbolic branch target'
+elif [[ $(git -C "$b/repo" rev-parse "$symref_target") != "$real_before" ]]; then
+  fail "$t" 'runner mutated the symbolic branch target'
+elif ! grep -Fq 'reviewed branch ref is unexpectedly symbolic' \
+    "$b/symbolic-branch.stderr"; then
+  fail "$t" "runner did not diagnose symbolic branch CAS: $(<"$b/symbolic-branch.stderr")"
+else
+  pass "$t"
+fi
+git -C "$b/repo" update-ref --no-deref "refs/heads/$real_branch" "$real_before"
+git -C "$b/repo" branch -D "$symref_target" >/dev/null
+
 # Temp-index state lives only in the Git administrative directory, ignores a
 # worktree TMPDIR, and is removed even when commit-tree fails after creation.
 mkdir "$b/repo/hostile-tmp" "$b/identity-home"
@@ -456,6 +544,7 @@ if (
   HOME="$b/identity-home" TMPDIR="$b/repo/hostile-tmp" \
     "$GIT_RUNNER" commit --only-reviewed "$jsonl" \
       --expect-oid "$reviewed_oid" --expect-head "$real_before" \
+      --expect-branch "$real_branch" \
       -m 'forced identity failure' \
       >"$b/failed-commit.stdout" 2>"$b/failed-commit.stderr"
 ); then rc=0; else rc=$?; fi
@@ -480,6 +569,7 @@ for unsafe_commit_arg in -a --all --amend -S unrelated; do
     cd "$b/repo" || exit 98
     "$GIT_RUNNER" commit --only-reviewed "$jsonl" \
       --expect-oid "$reviewed_oid" --expect-head "$real_before" \
+      --expect-branch "$real_branch" \
       "$unsafe_commit_arg" unsafe >/dev/null 2>&1
   ); then
     unsafe_commit_accepted=true
@@ -496,6 +586,7 @@ if (
   GIT_DIR="$b/forged/.git" GIT_WORK_TREE="$b/repo" \
     "$GIT_RUNNER" commit --only-reviewed "$jsonl" \
       --expect-oid "$reviewed_oid" --expect-head "$real_before" \
+      --expect-branch "$real_branch" \
       -m 'stage exact JSONL' \
     >"$b/commit.stdout" 2>"$b/commit.stderr"
 ); then rc=0; else rc=$?; fi

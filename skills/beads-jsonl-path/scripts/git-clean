@@ -799,19 +799,57 @@ case ${1-} in
     printf '%s\n' "$_bjg_oid"
     exit 0
     ;;
+  head-branch)
+    shift
+    [ "$#" -eq 0 ] || {
+      printf '%s\n' 'usage: git-clean head-branch' >&2
+      exit 2
+    }
+    _bjg_branch_ref=$("$_bjg_git" --no-pager --no-replace-objects \
+      -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+      symbolic-ref --quiet --no-recurse HEAD) || {
+      printf '%s\n' 'cannot resolve the current attached branch' >&2
+      exit 1
+    }
+    case $_bjg_branch_ref in
+      refs/heads/?*) _bjg_branch=${_bjg_branch_ref#refs/heads/} ;;
+      *)
+        printf '%s\n' 'clean branch resolution returned a non-branch ref' >&2
+        exit 1
+        ;;
+    esac
+    [[ -n "$_bjg_branch" && "$_bjg_branch" != *$'\n'* \
+       && "$_bjg_branch" != *$'\r'* ]] \
+      && "$_bjg_git" check-ref-format "refs/heads/$_bjg_branch" >/dev/null || {
+      printf '%s\n' 'clean branch resolution returned an invalid branch' >&2
+      exit 1
+    }
+    printf '%s\n' "$_bjg_branch"
+    exit 0
+    ;;
   commit)
     shift
-    [ "$#" -eq 8 ] && [ "$1" = --only-reviewed ] \
+    [ "$#" -eq 10 ] && [ "$1" = --only-reviewed ] \
       && [ "$3" = --expect-oid ] && [[ "$4" =~ ^[0-9a-fA-F]+$ ]] \
       && [ "$5" = --expect-head ] && [[ "$6" =~ ^[0-9a-fA-F]+$ ]] \
-      && [ "$7" = -m ] && [ -n "$8" ] || {
-      printf '%s\n' 'usage: git-clean commit --only-reviewed <absolute-file> --expect-oid <oid> --expect-head <commit> -m <message>' >&2
+      && [ "$7" = --expect-branch ] && [ -n "$8" ] \
+      && [ "$9" = -m ] && [ -n "${10}" ] || {
+      printf '%s\n' 'usage: git-clean commit --only-reviewed <absolute-file> --expect-oid <oid> --expect-head <commit> --expect-branch <branch> -m <message>' >&2
       exit 2
     }
     _bjg_commit_path=$2
     _bjg_commit_oid=$4
     _bjg_commit_head=$6
-    _bjg_commit_message=$8
+    _bjg_commit_branch=$8
+    _bjg_commit_message=${10}
+    [[ "$_bjg_commit_branch" != *$'\n'* \
+       && "$_bjg_commit_branch" != *$'\r'* ]] \
+      && "$_bjg_git" check-ref-format \
+        "refs/heads/$_bjg_commit_branch" >/dev/null || {
+      printf '%s\n' 'clean Git commit received an invalid reviewed branch' >&2
+      exit 1
+    }
+    _bjg_commit_ref=refs/heads/$_bjg_commit_branch
     [[ "$_bjg_commit_path" == /* ]] || {
       printf '%s\n' 'clean Git commit requires an absolute reviewed file' >&2
       exit 1
@@ -858,6 +896,43 @@ case ${1-} in
     }
     [[ "$_bjg_commit_live_head" == "$_bjg_commit_head" ]] || {
       printf '%s\n' 'HEAD no longer matches the reviewed commit' >&2
+      exit 1
+    }
+    _bjg_commit_live_ref=$("$_bjg_git" --no-pager --no-replace-objects \
+      -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+      -C "$_bjg_commit_root" symbolic-ref --quiet --no-recurse HEAD) || {
+      printf '%s\n' 'clean commit requires the reviewed attached branch' >&2
+      exit 1
+    }
+    case $_bjg_commit_live_ref in
+      refs/heads/?*)
+        _bjg_commit_live_branch=${_bjg_commit_live_ref#refs/heads/}
+        ;;
+      *)
+        printf '%s\n' 'clean commit HEAD is not attached to a branch ref' >&2
+        exit 1
+        ;;
+    esac
+    [[ "$_bjg_commit_live_branch" == "$_bjg_commit_branch" ]] || {
+      printf '%s\n' 'current branch no longer matches the reviewed branch' >&2
+      exit 1
+    }
+    if "$_bjg_git" --no-pager --no-replace-objects \
+        -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+        -C "$_bjg_commit_root" symbolic-ref --quiet --no-recurse \
+        "$_bjg_commit_ref" >/dev/null; then
+      printf '%s\n' 'reviewed branch ref is unexpectedly symbolic' >&2
+      exit 1
+    fi
+    _bjg_commit_branch_head=$("$_bjg_git" --no-pager --no-replace-objects \
+      -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+      -C "$_bjg_commit_root" rev-parse --verify \
+      "$_bjg_commit_ref^{commit}") || {
+      printf '%s\n' 'cannot resolve the reviewed branch for clean commit' >&2
+      exit 1
+    }
+    [[ "$_bjg_commit_branch_head" == "$_bjg_commit_head" ]] || {
+      printf '%s\n' 'reviewed branch no longer matches the reviewed commit' >&2
       exit 1
     }
 
@@ -948,11 +1023,11 @@ case ${1-} in
       exit 1
     }
     "$_bjg_git" --no-pager --no-replace-objects \
-      -c core.fsmonitor=false -c core.hooksPath=/dev/null \
-      -C "$_bjg_commit_root" update-ref \
-      -m 'commit: reviewed Beads JSONL' HEAD \
+       -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+       -C "$_bjg_commit_root" update-ref \
+      --no-deref -m 'commit: reviewed Beads JSONL' "$_bjg_commit_ref" \
       "$_bjg_commit_new" "$_bjg_commit_head" || {
-      printf '%s\n' 'HEAD changed before the reviewed commit could be installed' >&2
+      printf '%s\n' 'reviewed branch changed before the commit could be installed' >&2
       exit 1
     }
     printf '%s\n' "$_bjg_commit_new"
@@ -969,8 +1044,8 @@ case ${1-} in
     _bjg_push_branch=$4
     _bjg_push_head=$6
     [[ "$_bjg_push_remote" =~ ^[A-Za-z0-9._-]+$ \
-       && "$_bjg_push_branch" != -* && "$_bjg_push_branch" != refs/* \
-       && "$_bjg_push_branch" != *$'\n'* && "$_bjg_push_branch" != *$'\r'* ]] || {
+       && "$_bjg_push_branch" != *$'\n'* \
+       && "$_bjg_push_branch" != *$'\r'* ]] || {
       printf '%s\n' 'clean push received an invalid remote or branch' >&2
       exit 1
     }
@@ -978,12 +1053,21 @@ case ${1-} in
       printf '%s\n' 'clean push received an invalid branch' >&2
       exit 1
     }
-    _bjg_push_current_branch=$("$_bjg_git" --no-pager --no-replace-objects \
+    _bjg_push_current_ref=$("$_bjg_git" --no-pager --no-replace-objects \
       -c core.fsmonitor=false -c core.hooksPath=/dev/null \
-      symbolic-ref --quiet --short HEAD) || {
+      symbolic-ref --quiet --no-recurse HEAD) || {
       printf '%s\n' 'clean push requires an attached current branch' >&2
       exit 1
     }
+    case $_bjg_push_current_ref in
+      refs/heads/?*)
+        _bjg_push_current_branch=${_bjg_push_current_ref#refs/heads/}
+        ;;
+      *)
+        printf '%s\n' 'clean push HEAD is not attached to a branch ref' >&2
+        exit 1
+        ;;
+    esac
     [[ "$_bjg_push_current_branch" == "$_bjg_push_branch" ]] || {
       printf '%s\n' 'clean push branch does not match the current branch' >&2
       exit 1
@@ -1399,7 +1483,7 @@ case ${1-} in
     ;;
 esac
 [ "$#" -ge 2 ] && [ "$1" = --literal-pathspecs ] || {
-  printf '%s\n' 'usage: git-clean {copy-file|diff-files|hash-file|head-oid|worktree-root|make-temp-dir|make-dir|grep|run-posix|resolve-tool|run-audit-tool|snapshot-files|verify-files|commit|push|--literal-pathspecs {diff|add}} ...' >&2
+  printf '%s\n' 'usage: git-clean {copy-file|diff-files|hash-file|head-oid|head-branch|worktree-root|make-temp-dir|make-dir|grep|run-posix|resolve-tool|run-audit-tool|snapshot-files|verify-files|commit|push|--literal-pathspecs {diff|add}} ...' >&2
   exit 2
 }
 shift

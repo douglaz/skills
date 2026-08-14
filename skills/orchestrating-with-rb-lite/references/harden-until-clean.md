@@ -522,6 +522,8 @@ Then flush and commit — `br` never touches git, that part is yours:
 # mode guards writes, and this diff runs after one.
 BEADS_JSONL=$("$BEADS_JSONL_RESOLVER" --allow-dirty) \
   || { echo "cannot resolve the beads JSONL"; exit 1; }
+BEADS_REVIEWED_BRANCH=$("$BEADS_GIT_RUNNER" head-branch) \
+  || { echo "cannot resolve the attached branch before review"; exit 1; }
 BEADS_REVIEWED_HEAD=$("$BEADS_GIT_RUNNER" head-oid) \
   || { echo "cannot resolve HEAD before review"; exit 1; }
 BEADS_REVIEWED_OID=$("$BEADS_GIT_RUNNER" hash-file "$BEADS_JSONL") \
@@ -533,10 +535,13 @@ BEADS_POSTDIFF_OID=$("$BEADS_GIT_RUNNER" hash-file "$BEADS_JSONL") \
   || { echo "cannot hash the JSONL after review"; exit 1; }
 BEADS_POSTDIFF_HEAD=$("$BEADS_GIT_RUNNER" head-oid) \
   || { echo "cannot resolve HEAD after review"; exit 1; }
+BEADS_POSTDIFF_BRANCH=$("$BEADS_GIT_RUNNER" head-branch) \
+  || { echo "cannot resolve the attached branch after review"; exit 1; }
 [[ "$BEADS_REVIEWED_OID" == "$BEADS_POSTDIFF_OID" \
-   && "$BEADS_REVIEWED_HEAD" == "$BEADS_POSTDIFF_HEAD" ]] \
-  || { echo "the JSONL or HEAD changed while its diff was rendered — rerun the review"; exit 1; }
-unset BEADS_POSTDIFF_OID BEADS_POSTDIFF_HEAD
+   && "$BEADS_REVIEWED_HEAD" == "$BEADS_POSTDIFF_HEAD" \
+   && "$BEADS_REVIEWED_BRANCH" == "$BEADS_POSTDIFF_BRANCH" ]] \
+  || { echo "the JSONL, HEAD, or branch changed while its diff was rendered — rerun the review"; exit 1; }
+unset BEADS_POSTDIFF_OID BEADS_POSTDIFF_HEAD BEADS_POSTDIFF_BRANCH
 ```
 
 **Stop the block here and read that diff.** This is a real split, not a comment: run the
@@ -556,14 +561,18 @@ exists to catch. Prose underneath a `git add` cannot stop a shell.
 # ...print and read the diff, then:
 : "${BEADS_DIFF_REVIEWED:?read THIS pass's diff, then set it to \"pass $ITERATION: <what you found>\"}"
 : "${BEADS_REVIEWED_OID:?rerun this pass's stable JSONL diff before staging}"
+: "${BEADS_REVIEWED_BRANCH:?rerun this pass's stable branch proof before staging}"
+: "${WORK_BRANCH:?set the exact reviewed work branch before staging}"
+[[ "$WORK_BRANCH" == "$BEADS_REVIEWED_BRANCH" ]] \
+  || { echo "WORK_BRANCH differs from the branch whose diff was reviewed"; exit 1; }
 "$BEADS_GIT_RUNNER" --literal-pathspecs add --expect-oid "$BEADS_REVIEWED_OID" -- "$BEADS_JSONL" \
   || { echo "cannot stage the reviewed JSONL — do NOT commit"; exit 1; }
 BEADS_COMMIT_OID=$("$BEADS_GIT_RUNNER" commit --only-reviewed "$BEADS_JSONL" \
   --expect-oid "$BEADS_REVIEWED_OID" \
   --expect-head "$BEADS_REVIEWED_HEAD" \
+  --expect-branch "$BEADS_REVIEWED_BRANCH" \
   -m "chore(beads): record review findings (iteration <N>, codex+claude/<model>)") \
   || { echo "cannot commit the reviewed JSONL — do NOT push"; exit 1; }
-: "${WORK_BRANCH:?set the exact reviewed work branch before pushing}"
 "$BEADS_GIT_RUNNER" push --remote origin --branch "$WORK_BRANCH" \
   --expect-head "$BEADS_COMMIT_OID" \
   || { echo "cannot push the reviewed JSONL commit"; exit 1; }
