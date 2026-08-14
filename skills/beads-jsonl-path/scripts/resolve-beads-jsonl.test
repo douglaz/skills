@@ -1055,6 +1055,62 @@ else
   pass "$t"
 fi
 
+# An unsafe executable in an unrelated caller directory omits only that directory;
+# a later valid selected tool still runs. The selected tool's own directory must
+# remain admitted (the hard-linked-child fixture immediately below is the negative
+# sharing-one-directory control).
+mkdir "$b/unrelated-invalid-bin" "$b/later-valid-bin"
+command cat >"$b/unrelated-invalid-bin/unrelated-xonly" <<UNRELATED_XONLY
+#!$b/repo/audit-worktree-interpreter
+exit 0
+UNRELATED_XONLY
+chmod 111 "$b/unrelated-invalid-bin/unrelated-xonly"
+command cat >"$b/later-valid-bin/audit-later-valid" <<LATER_VALID_AUDIT
+#!/bin/sh
+printf '%s\n' valid >'$b/later-valid-audit-ran'
+LATER_VALID_AUDIT
+chmod +x "$b/later-valid-bin/audit-later-valid"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/unrelated-invalid-bin:$b/later-valid-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-later-valid \
+    >"$b/later-valid.stdout" 2>"$b/later-valid.stderr"
+); then rc=0; else rc=$?; fi
+chmod 755 "$b/unrelated-invalid-bin/unrelated-xonly"
+t='clean audit-tool PATH omits an invalid unrelated directory'
+if [[ $rc -ne 0 || ! -e "$b/later-valid-audit-ran" ]]; then
+  fail "$t" "later valid audit tool exit $rc: $(<"$b/later-valid.stderr")"
+else
+  pass "$t"
+fi
+
+# Conversely, do not execute a valid selected tool by absolute path after its own
+# directory was omitted because a sibling executable was unprovable.
+mkdir "$b/mixed-invalid-bin"
+command cat >"$b/mixed-invalid-bin/audit-mixed-valid" <<MIXED_VALID_AUDIT
+#!/bin/sh
+printf '%s\n' valid >'$b/mixed-valid-audit-ran'
+MIXED_VALID_AUDIT
+command cat >"$b/mixed-invalid-bin/unrelated-xonly" <<'MIXED_XONLY'
+#!/missing/interpreter
+exit 0
+MIXED_XONLY
+chmod +x "$b/mixed-invalid-bin/audit-mixed-valid"
+chmod 111 "$b/mixed-invalid-bin/unrelated-xonly"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/mixed-invalid-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-mixed-valid \
+    >"$b/mixed-valid.stdout" 2>"$b/mixed-valid.stderr"
+); then rc=0; else rc=$?; fi
+chmod 755 "$b/mixed-invalid-bin/unrelated-xonly"
+t='clean audit-tool runner requires the selected parent to remain admitted'
+if [[ $rc -eq 0 || -e "$b/mixed-valid-audit-ran" ]]; then
+  fail "$t" 'runner executed a selected tool from an omitted mixed directory'
+else
+  pass "$t"
+fi
+
 # The clean descendant PATH must not expose a nominally outside command whose
 # inode is also repository-controlled through a hard link.
 mkdir "$b/outside-hardlink-bin"
@@ -1082,6 +1138,169 @@ if [[ $rc -eq 0 ]]; then
 elif [[ -e "$b/hardlinked-audit-child-ran" \
         || -e "$b/hardlinked-audit-parent-ran" ]]; then
   fail "$t" 'runner executed through a hard-linked audit descendant'
+else
+  pass "$t"
+fi
+
+# Multiple names for one outside inode are compatible when every hard link is
+# accounted for in the same admitted directory and none can live in the worktree.
+mkdir "$b/outside-hardlink-shims" "$b/outside-hardlink-wrapper"
+command cat >"$b/outside-hardlink-shims/audit-shim-1" <<HARDLINKED_AUDIT_SHIM
+#!/bin/sh
+printf '%s\n' shim >'$b/outside-hardlink-shim-ran'
+HARDLINKED_AUDIT_SHIM
+chmod +x "$b/outside-hardlink-shims/audit-shim-1"
+for hardlink_shim in 2 3 4 5 6 7 8 9 10; do
+  ln "$b/outside-hardlink-shims/audit-shim-1" \
+    "$b/outside-hardlink-shims/audit-shim-$hardlink_shim"
+done
+command cat >"$b/outside-hardlink-wrapper/audit-hardlink-parent" <<HARDLINK_PARENT
+#!/bin/sh
+audit-shim-1
+printf '%s\n' parent >'$b/outside-hardlink-parent-ran'
+HARDLINK_PARENT
+chmod +x "$b/outside-hardlink-wrapper/audit-hardlink-parent"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/outside-hardlink-wrapper:$b/outside-hardlink-shims:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-hardlink-parent \
+    >"$b/outside-hardlinks.stdout" 2>"$b/outside-hardlinks.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool PATH admits fully accounted outside hard-link shims'
+if [[ $rc -ne 0 || ! -e "$b/outside-hardlink-shim-ran" \
+      || ! -e "$b/outside-hardlink-parent-ran" ]]; then
+  fail "$t" "accounted hard-link shim fixture exit $rc: $(<"$b/outside-hardlinks.stderr")"
+else
+  pass "$t"
+fi
+
+# Exercise the exact production identity counter with a stubbed cross-device inode
+# collision: only the matching st_dev record may contribute.
+device_counter_function=$(awk '
+  /^_bjg_count_matching_device_records\(\) \{/ { capture=1 }
+  capture { print }
+  capture && /^}$/ { exit }
+' "$GIT_RUNNER")
+if (
+  eval "$device_counter_function"
+  _bjg_regular_device_number() {
+    case $1 in
+      */same-device) printf '%s\n' 11 ;;
+      */other-device) printf '%s\n' 22 ;;
+      *) return 1 ;;
+    esac
+  }
+  counted=$(
+    printf '%s\0' /fixture/same-device /fixture/other-device |
+      _bjg_count_matching_device_records 11
+  )
+  [[ "$counted" == 1 ]]
+); then rc=0; else rc=$?; fi
+t='hard-link co-location counts matching device and inode together'
+if [[ $rc -ne 0 ]]; then
+  fail "$t" 'cross-device inode collision contributed to co-location'
+else
+  pass "$t"
+fi
+
+# A validated outside script must not hand execution to an absolute shebang
+# interpreter selected from the worktree.
+command cat >"$b/repo/audit-worktree-interpreter" <<AUDIT_WORKTREE_INTERPRETER
+#!/bin/sh
+printf '%s\n' interpreter >'$b/audit-worktree-interpreter-ran'
+exec /bin/sh "\$@"
+AUDIT_WORKTREE_INTERPRETER
+chmod +x "$b/repo/audit-worktree-interpreter"
+mkdir "$b/outside-shebang-bin"
+command cat >"$b/outside-shebang-bin/audit-shebang-parent" <<AUDIT_SHEBANG_PARENT
+#!$b/repo/audit-worktree-interpreter
+printf '%s\n' parent >'$b/audit-shebang-parent-ran'
+AUDIT_SHEBANG_PARENT
+chmod +x "$b/outside-shebang-bin/audit-shebang-parent"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/outside-shebang-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-shebang-parent \
+    >"$b/audit-shebang.stdout" 2>"$b/audit-shebang.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool runner refuses a worktree shebang interpreter'
+if [[ $rc -eq 0 || -e "$b/audit-worktree-interpreter-ran" \
+      || -e "$b/audit-shebang-parent-ran" ]]; then
+  fail "$t" 'runner executed through a worktree-selected shebang interpreter'
+else
+  pass "$t"
+fi
+
+# Execute-only scripts are omitted because their kernel shebang cannot be
+# inspected safely from the caller identity.
+mkdir "$b/outside-xonly-shebang-bin"
+command cat >"$b/outside-xonly-shebang-bin/audit-xonly-parent" <<AUDIT_XONLY_PARENT
+#!$b/repo/audit-worktree-interpreter
+printf '%s\n' parent >'$b/audit-xonly-parent-ran'
+AUDIT_XONLY_PARENT
+chmod 111 "$b/outside-xonly-shebang-bin/audit-xonly-parent"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/outside-xonly-shebang-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-xonly-parent \
+    >"$b/audit-xonly.stdout" 2>"$b/audit-xonly.stderr"
+); then rc=0; else rc=$?; fi
+chmod 755 "$b/outside-xonly-shebang-bin/audit-xonly-parent"
+t='clean audit-tool runner refuses an execute-only script before its shebang'
+if [[ $rc -eq 0 || -e "$b/audit-worktree-interpreter-ran" \
+      || -e "$b/audit-xonly-parent-ran" ]]; then
+  fail "$t" 'execute-only audit script reached its worktree interpreter'
+else
+  pass "$t"
+fi
+
+# A symlink merely named env cannot grant env argument semantics to another
+# interpreter.
+mkdir "$b/outside-env-spoof-bin"
+trusted_python=$(command -p -v python3)
+ln -s "$trusted_python" "$b/outside-env-spoof-bin/env"
+printf '%s\n' \
+  "open('$b/audit-env-name-spoof-ran', 'w').write('ran')" >"$b/repo/python3"
+command cat >"$b/outside-env-spoof-bin/audit-env-spoof-parent" <<AUDIT_ENV_SPOOF
+#!$b/outside-env-spoof-bin/env python3
+raise SystemExit(0)
+AUDIT_ENV_SPOOF
+chmod +x "$b/outside-env-spoof-bin/audit-env-spoof-parent"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/outside-env-spoof-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-env-spoof-parent \
+    >"$b/audit-env-spoof.stdout" 2>"$b/audit-env-spoof.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool runner authenticates env by resolved executable identity'
+if [[ $rc -eq 0 || -e "$b/audit-env-name-spoof-ran" ]]; then
+  fail "$t" 'non-env interpreter executed a worktree-relative shebang argument'
+else
+  pass "$t"
+fi
+
+# CR remains pathname data to the kernel and cannot be dropped by shell
+# whitespace parsing.
+audit_cr_interpreter="$b/repo/audit-cr-only-interpreter"$'\r'
+command cat >"$audit_cr_interpreter" <<AUDIT_CR_INTERPRETER
+#!/bin/sh
+printf '%s\n' interpreter >'$b/audit-cr-interpreter-ran'
+exec /bin/sh "\$@"
+AUDIT_CR_INTERPRETER
+chmod +x "$audit_cr_interpreter"
+mkdir "$b/outside-cr-shebang-bin"
+printf '#!%s\nexit 0\n' "$audit_cr_interpreter" \
+  >"$b/outside-cr-shebang-bin/audit-cr-parent"
+chmod +x "$b/outside-cr-shebang-bin/audit-cr-parent"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/outside-cr-shebang-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-cr-parent \
+    >"$b/audit-cr.stdout" 2>"$b/audit-cr.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool runner refuses a CR-bearing worktree interpreter'
+if [[ $rc -eq 0 || -e "$b/audit-cr-interpreter-ran" ]]; then
+  fail "$t" 'CR-bearing worktree shebang interpreter executed'
 else
   pass "$t"
 fi
@@ -1458,6 +1677,92 @@ WORKTREE_BR
 chmod +x "$b/repo/bin/br"
 assert_refused 'a worktree-controlled br executable is refused' "$b" \
   'br resolves inside the current Git worktree' "$b/repo/bin:$SYSTEM_PATH"
+
+# An outside script pathname is still unsafe when its kernel-selected absolute
+# shebang interpreter comes from the driven worktree.
+b=$(new_fixture)
+mkdir "$b/outside-bin"
+command cat >"$b/repo/worktree-interpreter" <<WORKTREE_INTERPRETER
+#!/bin/sh
+printf '%s\n' interpreter >'$b/worktree-interpreter-ran'
+exec /bin/sh "\$@"
+WORKTREE_INTERPRETER
+chmod +x "$b/repo/worktree-interpreter"
+command cat >"$b/outside-bin/br" <<OUTSIDE_BR_WORKTREE_INTERPRETER
+#!$b/repo/worktree-interpreter
+cat "\$BR_OUTPUT"
+OUTSIDE_BR_WORKTREE_INTERPRETER
+chmod +x "$b/outside-bin/br"
+assert_refused 'an outside br with a worktree shebang interpreter is refused' "$b" \
+  'br interpreter resolves inside the current Git worktree' \
+  "$b/outside-bin:$SYSTEM_PATH"
+if [[ -e "$b/worktree-interpreter-ran" ]]; then
+  fail 'an outside br with a worktree shebang interpreter is refused' \
+    'the worktree-controlled interpreter executed'
+fi
+
+# Execute permission does not make an unreadable script safe: the kernel can
+# still consume its shebang. Refuse rather than infer its format.
+b=$(new_fixture)
+mkdir "$b/outside-bin"
+command cat >"$b/repo/worktree-interpreter" <<WORKTREE_XONLY_INTERPRETER
+#!/bin/sh
+printf '%s\n' interpreter >'$b/worktree-interpreter-ran'
+exec /bin/sh "\$@"
+WORKTREE_XONLY_INTERPRETER
+chmod +x "$b/repo/worktree-interpreter"
+command cat >"$b/outside-bin/br" <<OUTSIDE_XONLY_BR
+#!$b/repo/worktree-interpreter
+cat "\$BR_OUTPUT"
+OUTSIDE_XONLY_BR
+chmod 111 "$b/outside-bin/br"
+assert_refused 'an execute-only outside br script is refused before its shebang' "$b" \
+  'br executable cannot be inspected safely' "$b/outside-bin:$SYSTEM_PATH"
+chmod 755 "$b/outside-bin/br"
+if [[ -e "$b/worktree-interpreter-ran" ]]; then
+  fail 'an execute-only outside br script is refused before its shebang' \
+    'the execute-only script reached its worktree interpreter'
+fi
+
+# A pathname lexically named `env` is not the env executable. Python would treat
+# the shebang argument as a worktree-relative script and execute it.
+b=$(new_fixture)
+mkdir "$b/outside-bin"
+trusted_python=$(command -p -v python3)
+ln -s "$trusted_python" "$b/outside-bin/env"
+printf '%s\n' \
+  "open('$b/env-name-spoof-ran', 'w').write('ran')" >"$b/repo/python3"
+command cat >"$b/outside-bin/br" <<OUTSIDE_ENV_NAME_SPOOF
+#!$b/outside-bin/env python3
+raise SystemExit(0)
+OUTSIDE_ENV_NAME_SPOOF
+chmod +x "$b/outside-bin/br"
+assert_refused 'a non-env interpreter named env cannot gain env semantics' "$b" \
+  'br has an unsupported script interpreter argument' \
+  "$b/outside-bin:$b/bin:$SYSTEM_PATH"
+if [[ -e "$b/env-name-spoof-ran" ]]; then
+  fail 'a non-env interpreter named env cannot gain env semantics' \
+    'the spoofed interpreter executed a worktree-relative script'
+fi
+
+# Linux treats CR as interpreter pathname data, not as a shebang separator.
+b=$(new_fixture)
+mkdir "$b/outside-bin"
+cr_interpreter="$b/repo/worktree-interpreter"$'\r'
+command cat >"$cr_interpreter" <<WORKTREE_CR_INTERPRETER
+#!/bin/sh
+printf '%s\n' interpreter >'$b/worktree-cr-interpreter-ran'
+exec /bin/sh "\$@"
+WORKTREE_CR_INTERPRETER
+chmod +x "$cr_interpreter"
+printf '#!%s\ncat \"$BR_OUTPUT\"\n' "$cr_interpreter" >"$b/outside-bin/br"
+chmod +x "$b/outside-bin/br"
+assert_refused 'a CR-bearing worktree shebang interpreter is refused' "$b" \
+  'br has an unsafe script interpreter' "$b/outside-bin:$SYSTEM_PATH"
+if [[ -e "$b/worktree-cr-interpreter-ran" ]]; then
+  fail 'a CR-bearing worktree shebang interpreter is refused' \
+    'the CR-bearing worktree interpreter executed'
+fi
 
 b=$(new_fixture)
 mkdir "$b/repo/bin"

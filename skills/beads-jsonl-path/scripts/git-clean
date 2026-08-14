@@ -130,6 +130,60 @@ _bjg_regular_link_count() {
   printf '%s\n' "$count"
 }
 
+_bjg_regular_inode_number() {
+  local path=$1 inode
+  if inode=$("$_bjg_stat" -c %i "$path" 2>/dev/null) \
+      && [[ $inode =~ ^[0-9]+$ ]]; then
+    :
+  elif inode=$("$_bjg_stat" -f %i "$path" 2>/dev/null) \
+      && [[ $inode =~ ^[0-9]+$ ]]; then
+    :
+  else
+    return 1
+  fi
+  printf '%s\n' "$inode"
+}
+
+_bjg_regular_device_number() {
+  local path=$1 device
+  if device=$("$_bjg_stat" -c %d "$path" 2>/dev/null) \
+      && [[ $device =~ ^[0-9]+$ ]]; then
+    :
+  elif device=$("$_bjg_stat" -f %d "$path" 2>/dev/null) \
+      && [[ $device =~ ^[0-9]+$ ]]; then
+    :
+  else
+    return 1
+  fi
+  printf '%s\n' "$device"
+}
+
+_bjg_count_matching_device_records() {
+  local expected_device=$1 count _bjg_counted_path device
+  count=0
+  while IFS= read -r -d '' _bjg_counted_path; do
+    device=$(_bjg_regular_device_number "$_bjg_counted_path") || return 1
+    [[ "$device" == "$expected_device" ]] || continue
+    count=$((count + 1))
+    ((count <= 1024)) || return 1
+  done
+  printf '%s\n' "$count"
+}
+
+_bjg_multiple_links_are_colocated() {
+  local path=$1 expected=$2 parent inode device found
+  parent=${path%/*}
+  inode=$(_bjg_regular_inode_number "$path") || return 1
+  device=$(_bjg_regular_device_number "$path") || return 1
+  found=$(
+    "$_bjg_find" "$parent/." ! -name . -prune -inum "$inode" \
+      -exec "$_bjg_sh" -c \
+        'for path do printf "%s\0" "$path"; done' sh '{}' + |
+      _bjg_count_matching_device_records "$device"
+  ) || return 1
+  [[ "$found" == "$expected" ]]
+}
+
 _bjg_canonicalize_directory() {
   local encoded
   encoded=$(
@@ -170,7 +224,7 @@ _bjg_validate_audit_directory_stream() {
   entry_count=0
   while IFS= read -r -d '' candidate; do
     entry_count=$((entry_count + 1))
-    ((entry_count <= entry_limit)) || return 1
+    ((entry_count <= entry_limit)) || return 2
     [[ -x "$candidate" && ! -d "$candidate" ]] || continue
     _bjg_validate_audit_executable "$candidate" >/dev/null || return 1
   done
@@ -179,7 +233,7 @@ _bjg_validate_audit_directory_stream() {
 
 _bjg_prepare_audit_path() {
   local entry canonical seen audited_directories audited_entries
-  local directory_entry_count remaining_entries
+  local directory_entry_count remaining_entries stream_rc
   local -a entries result
   _bjg_load_audit_root || return 1
   result=()
@@ -229,7 +283,14 @@ _bjg_prepare_audit_path() {
         -exec "$_bjg_sh" -c \
           'for path do printf "%s\0" "$path"; done' sh '{}' + |
         _bjg_validate_audit_directory_stream "$remaining_entries"
-    ) || return 1
+    )
+    stream_rc=$?
+    if ((stream_rc != 0)); then
+      ((stream_rc != 2)) || return 1
+      # Omit an unrelated directory containing an unprovable executable. The
+      # selected top-level tool is resolved only from this admitted result below.
+      continue
+    fi
     [[ "$directory_entry_count" =~ ^[0-9]+$ ]] || return 1
     audited_entries=$((audited_entries + directory_entry_count))
     result+=( "$canonical" )
@@ -239,7 +300,10 @@ _bjg_prepare_audit_path() {
 }
 
 _bjg_validate_audit_executable() {
-  local selected=$1 path=$1 parent leaf link hops link_count
+  local selected=$1 path=$1 depth=${2:-0}
+  local parent leaf link hops link_count first_line shebang interpreter argument
+  local interpreter_final safe_entry safe_env_final env_identity
+  local -a safe_entries
   _bjg_load_audit_root || return 1
   [[ "$path" == /* ]] || return 1
   hops=0
@@ -266,18 +330,77 @@ _bjg_validate_audit_executable() {
   done
   [[ -f "$path" && -x "$path" ]] || return 1
   link_count=$(_bjg_regular_link_count "$path") || return 1
-  [[ "$link_count" == 1 ]] || return 1
+  if [[ "$link_count" != 1 ]]; then
+    _bjg_multiple_links_are_colocated "$path" "$link_count" || return 1
+  fi
+
+  # Validate absolute kernel-selected script interpreters recursively. Permit
+  # `/usr/bin/env name` only when `name` is a plain PATH token; the runtime PATH
+  # itself is the fully admitted set assembled above.
+  first_line=
+  if ! IFS= command builtin read -r -n 513 first_line 2>/dev/null <"$path"; then
+    [[ -r "$path" ]] || return 1
+  fi
+  if [[ "$first_line" == '#!'* ]]; then
+    ((${#first_line} <= 512 && depth < 4)) || return 1
+    shebang=${first_line#\#!}
+    while [[ "$shebang" == ' '* || "$shebang" == $'\t'* ]]; do
+      shebang=${shebang#?}
+    done
+    # Linux shebang parsing separates only on space/tab. Treating CR/VT/FF as
+    # shell whitespace would validate a different pathname than the kernel.
+    interpreter=${shebang%%[$' \t']*}
+    [[ "$interpreter" == /* && "$interpreter" != *[$'\r\v\f']* ]] || return 1
+    argument=${shebang#"$interpreter"}
+    while [[ "$argument" == ' '* || "$argument" == $'\t'* ]]; do
+      argument=${argument#?}
+    done
+    # A missing interpreter makes this entry unlaunchable and therefore unable
+    # to execute worktree bytes; do not reject an otherwise unrelated PATH dir.
+    if [[ -e "$interpreter" || -L "$interpreter" ]]; then
+      _bjg_validate_audit_executable "$interpreter" "$((depth + 1))" \
+        >/dev/null || return 1
+      interpreter_final=$_bjg_validated_executable_final
+      if [[ -n "$argument" ]]; then
+        env_identity=false
+        IFS=: read -r -a safe_entries <<<"$_bjg_safe_path"
+        for safe_entry in "${safe_entries[@]}"; do
+          [[ -x "$safe_entry/env" ]] || continue
+          if _bjg_validate_audit_executable "$safe_entry/env" \
+              "$((depth + 1))" >/dev/null; then
+            safe_env_final=$_bjg_validated_executable_final
+            [[ "$interpreter_final" != "$safe_env_final" ]] ||
+              env_identity=true
+          fi
+        done
+        if [[ "$env_identity" == true ]]; then
+          [[ "$argument" =~ ^[A-Za-z0-9._+-]+$ ]] || return 1
+          # Safe-path commands are trusted, and every command in each additional
+          # runtime PATH directory is validated by the enclosing admission scan.
+        else
+          return 1
+        fi
+      fi
+    fi
+  fi
+  _bjg_validated_executable_final=$path
   printf '%s\n' "$selected"
 }
 
 _bjg_external_audit_tool() {
-  local name=$1 selected
+  local name=$1 selected selected_parent
   [[ "$name" =~ ^[A-Za-z0-9._+-]+$ ]] || return 1
   selected=$(
     PATH=$_bjg_caller_path
     export PATH
     type -P -- "$name"
   ) || return 1
+  _bjg_canonicalize_directory "${selected%/*}" || return 1
+  selected_parent=$_bjg_canonical_directory_result
+  case :$_bjg_audit_path: in
+    *:"$selected_parent":*) ;;
+    *) return 1 ;;
+  esac
   _bjg_validate_audit_executable "$selected"
 }
 
