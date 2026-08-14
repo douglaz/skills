@@ -819,7 +819,7 @@ for _bjp_dir in "$HOME/.claude/skills/beads-jsonl-path" \
     printf '%s\n' 'installed beads-jsonl-path resolver is a symbolic link — do NOT write' >&2
     exit 1
   }
-  _bjp_root_raw=$("$_bjp_git" --no-replace-objects rev-parse --show-toplevel 2>/dev/null) || {
+  _bjp_root_raw=$("$_bjp_git" --no-replace-objects -c core.fsmonitor=false rev-parse --show-toplevel 2>/dev/null) || {
     printf '%s\n' 'cannot resolve the current Git worktree — do NOT write' >&2
     exit 1
   }
@@ -898,7 +898,7 @@ and read the field-level changes before staging — resolving its path first, si
 # guards writes, and this diff runs after one. Never hardcode `.beads/issues.jsonl` here.
 BEADS_JSONL=$("$BEADS_JSONL_RESOLVER" --allow-dirty) \
   || { echo "cannot resolve the beads JSONL"; exit 1; }
-git --no-replace-objects --literal-pathspecs diff HEAD -- "$BEADS_JSONL" \
+git --no-replace-objects -c core.fsmonitor=false --literal-pathspecs diff HEAD -- "$BEADS_JSONL" \
   || { echo "cannot diff the JSONL — do NOT stage"; exit 1; }
 ```
 

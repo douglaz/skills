@@ -316,7 +316,7 @@ for _bjp_dir in "$HOME/.claude/skills/beads-jsonl-path" \
     printf '%s\n' 'installed beads-jsonl-path resolver is a symbolic link — do NOT write' >&2
     exit 1
   }
-  _bjp_root_raw=$("$_bjp_git" --no-replace-objects rev-parse --show-toplevel 2>/dev/null) || {
+  _bjp_root_raw=$("$_bjp_git" --no-replace-objects -c core.fsmonitor=false rev-parse --show-toplevel 2>/dev/null) || {
     printf '%s\n' 'cannot resolve the current Git worktree — do NOT write' >&2
     exit 1
   }
@@ -429,7 +429,7 @@ br sync --flush-only || { echo "findings not persisted"; exit 1; }
 # mode guards writes, and this diff runs after one.
 BEADS_JSONL=$("$BEADS_JSONL_RESOLVER" --allow-dirty) \
   || { echo "cannot resolve the beads JSONL"; exit 1; }
-git --no-replace-objects --literal-pathspecs diff HEAD -- "$BEADS_JSONL" \
+git --no-replace-objects -c core.fsmonitor=false --literal-pathspecs diff HEAD -- "$BEADS_JSONL" \
   || { echo "cannot diff the JSONL — do NOT stage"; exit 1; }
 ```
 
@@ -450,7 +450,7 @@ exists to catch. Prose underneath a `git add` cannot stop a shell.
 unset BEADS_DIFF_REVIEWED
 # ...print and read the diff, then:
 : "${BEADS_DIFF_REVIEWED:?read THIS pass's diff, then set it to \"pass $ITERATION: <what you found>\"}"
-git --no-replace-objects --literal-pathspecs add -- "$BEADS_JSONL"
+git --no-replace-objects -c core.fsmonitor=false --literal-pathspecs add -- "$BEADS_JSONL"
 git commit -m "chore(beads): record review findings (iteration <N>, codex+claude/<model>)"
 git push
 ```

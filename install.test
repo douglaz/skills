@@ -525,8 +525,8 @@ skills/plan-to-beads-transfer/SKILL.md|beads-jsonl-path/scripts/resolve-beads-js
 skills/plan-to-beads-transfer/SKILL.md|"$BEADS_JSONL_RESOLVER" --allow-dirty
 skills/second-model-bead-audit/SKILL.md|beads-jsonl-path/scripts/resolve-beads-jsonl
 skills/second-model-bead-audit/references/reviewer-panel.md|beads-jsonl-path/scripts/resolve-beads-jsonl
-skills/second-model-bead-audit/references/reviewer-panel.md|git --no-replace-objects --literal-pathspecs status --porcelain -- "$BEADS_JSONL"
-skills/second-model-bead-audit/SKILL.md|git --no-replace-objects --literal-pathspecs status --porcelain -- "$BEADS_JSONL"
+skills/second-model-bead-audit/references/reviewer-panel.md|git --no-replace-objects -c core.fsmonitor=false --literal-pathspecs status --porcelain -- "$BEADS_JSONL"
+skills/second-model-bead-audit/SKILL.md|git --no-replace-objects -c core.fsmonitor=false --literal-pathspecs status --porcelain -- "$BEADS_JSONL"
 skills/rb-lite-backlog-drain/SKILL.md|"$BEADS_JSONL_RESOLVER" --allow-dirty
 skills/rb-lite-backlog-drain/SKILL.md|"$BEADS_JSONL_RESOLVER" --recovery
 skills/drive/SKILL.md|"$BEADS_JSONL_RESOLVER" --allow-dirty
@@ -899,7 +899,7 @@ while IFS= read -r consumer; do
     resolver_consistency_failures+="$consumer accepts a relative installed target; "
   elif ! grep -Fq -- 'case $_bjp_root:$_bjp_candidate_dir in' "$HERE/$consumer"; then
     resolver_consistency_failures+="$consumer does not compare canonical resolver location to the worktree; "
-  elif ! grep -Fq -- '_bjp_root_raw=$("$_bjp_git" --no-replace-objects rev-parse --show-toplevel' \
+  elif ! grep -Fq -- '_bjp_root_raw=$("$_bjp_git" --no-replace-objects -c core.fsmonitor=false rev-parse --show-toplevel' \
       "$HERE/$consumer"; then
     resolver_consistency_failures+="$consumer caches or replacement-spoofs the driven worktree root; "
   elif ! grep -Fq -- 'installed beads-jsonl-path target is inside the current Git worktree' \
@@ -994,11 +994,11 @@ fi
 # bytes. Every later Git operation must preserve that byte identity and ignore
 # replacement objects: otherwise a pathspec can name a sibling, or a replacement
 # ref can make an unsafe pre-flush diff appear empty.
-t="every Git consumer treats the resolved JSONL literally without replacement objects"
+t="every Git consumer treats the resolved JSONL literally without replacement objects or fsmonitor hooks"
 literal_pathspec_failures=""
 while IFS= read -r occurrence; do
   case $occurrence in
-    *'git --no-replace-objects --literal-pathspecs '*) ;;
+    *'git --no-replace-objects -c core.fsmonitor=false --literal-pathspecs '*) ;;
     *) literal_pathspec_failures+="$occurrence; " ;;
   esac
 done < <(

@@ -99,11 +99,11 @@ snapshot_fixture() {
   resolved=$(<"$base/where-path")
   {
     printf 'STATUS\n'
-    git -C "$repo" status --porcelain=v2 -z --untracked-files=all
+    git -c core.fsmonitor=false -C "$repo" status --porcelain=v2 -z --untracked-files=all
     printf '\nSTAGE\n'
-    git -C "$repo" ls-files --stage -z
+    git -c core.fsmonitor=false -C "$repo" ls-files --stage -z
     printf '\nFLAGS\n'
-    git -C "$repo" ls-files -v -z
+    git -c core.fsmonitor=false -C "$repo" ls-files -v -z
     snapshot_one_path actual "$actual"
     if [[ "$resolved" != "$actual" ]]; then
       snapshot_one_path resolved "$resolved"
@@ -237,6 +237,26 @@ printf '%s\n' 'resolve-beads-jsonl fixtures'
 
 b=$(new_fixture)
 assert_success 'clean tracked JSONL resolves' "$b" "$(<"$b/jsonl-path")"
+
+# Index-reading Git commands must not execute a repository-configured fsmonitor
+# hook. Prime the hook once, erase its marker, then keep the fixture snapshots
+# on their own explicit hook-disabled path so only the resolver is measured.
+b=$(new_fixture)
+command cat >"$b/fsmonitor-hook" <<FSMONITOR_EXECUTION_HOOK
+#!/bin/sh
+printf '%s\n' "\$*" >>"$b/fsmonitor-hook-ran"
+printf 'resolver-fixture-token\\0'
+FSMONITOR_EXECUTION_HOOK
+chmod +x "$b/fsmonitor-hook"
+git -C "$b/repo" config core.fsmonitor "$b/fsmonitor-hook"
+git -C "$b/repo" status --porcelain >/dev/null
+rm -f "$b/fsmonitor-hook-ran"
+assert_success 'resolver Git inspection disables repository fsmonitor hooks' \
+  "$b" "$(<"$b/jsonl-path")"
+if [[ -e "$b/fsmonitor-hook-ran" ]]; then
+  fail 'resolver Git inspection disables repository fsmonitor hooks' \
+    "fsmonitor hook executed: $(tr '\n' ',' <"$b/fsmonitor-hook-ran")"
+fi
 
 # Neither the outer launcher nor the proof may pick up checkout-controlled
 # standard utilities from PATH, a BASH_ENV startup file, or exported functions.
@@ -747,22 +767,18 @@ RESOLVER_ARGS=(--allow-dirty)
 assert_refused '--allow-dirty retains worktree containment' "$b" \
   'beads JSONL is outside the current worktree'
 
-# A file system monitor that misses a write is the one hidden state `ls-files -v` cannot
-# report: the entry keeps its fsmonitor-valid bit, so `-v` prints `H` and Git answers from
-# that bit. Measured on git 2.53.0 with the stub monitor above: after appending to the
-# tracked JSONL, `git status --porcelain` and `git diff --name-only` each printed zero
-# bytes at exit 0, `ls-files -v` printed `H`, and only `ls-files -f` printed `h`. The
-# consumers of this mode read that same status and `git diff HEAD` to decide what the
-# following `br sync --flush-only` may overwrite, so the cache would hand them a
-# clean-looking review of a file whose bead bodies differ.
+# A stale monitor may claim a hand edit does not exist, but this mode deliberately
+# permits content differences. The resolver and every documented consumer force
+# core.fsmonitor=false, so the later status/diff sees the bytes instead of trusting
+# that stale answer; resolution need not reject the difference itself.
 b=$(new_fixture)
-t='--allow-dirty refuses a modification the fsmonitor cache hides'
+t='--allow-dirty permits content differences despite a stale fsmonitor cache'
 if ! mark_fsmonitor_valid "$b"; then
   fail "$t" 'fixture could not mark the JSONL entry fsmonitor-valid'
 else
   printf '%s\n' '{"id":"hand-edit"}' >>"$(<"$b/jsonl-path")"
   RESOLVER_ARGS=(--allow-dirty)
-  assert_refused "$t" "$b" 'beads JSONL modification is hidden by the fsmonitor cache'
+  assert_success "$t" "$b" "$(<"$b/jsonl-path")"
 fi
 
 # The mode proof must also bypass a stale fsmonitor answer. With core.filemode=true,
@@ -794,8 +810,8 @@ else
   assert_success "$t" "$b" "$jsonl"
 fi
 
-# The default mode needs no cache check of its own: it compares the worktree bytes, which
-# no index bit can answer for. That is why the check above belongs to `--allow-dirty`.
+# The default mode compares raw worktree bytes, so it refuses the same edit
+# independently of Git's cached answer.
 b=$(new_fixture)
 t='the default mode refuses a modification the fsmonitor cache hides'
 if ! mark_fsmonitor_valid "$b"; then

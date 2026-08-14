@@ -1055,8 +1055,11 @@ and resolved parent without following the final path, requires the path to be
 inside that root, and reads raw NUL-delimited `git ls-files --stage -z`,
 `git ls-files -v -z`, and
 `git ls-tree -z HEAD -- "$BEADS_JSONL_REL"` records, where
-`BEADS_JSONL_REL` is the validated worktree-relative path. Success requires exactly
-one stage-0 tracked regular-file entry, mode `100644`, tag `H` (not lowercase
+`BEADS_JSONL_REL` is the validated worktree-relative path. Every Git inspection
+uses that literal path with replacement objects and `core.fsmonitor` disabled;
+disabling the monitor prevents a repository-configured executable hook from
+running during this read-only proof. Success requires exactly one stage-0
+tracked regular-file entry, mode `100644`, tag `H` (not lowercase
 assume-unchanged or `S` skip-worktree), the same regular mode in HEAD, and a
 non-symlink regular worktree file. It reads the HEAD blob, index blob, and
 worktree bytes without filters and requires all three byte strings to be
@@ -1069,12 +1072,10 @@ handoffs. `--allow-dirty` relaxes only the three-way byte-identity requirement;
 it retains containment, one normally flagged tracked stage-0 `100644` index
 entry that is not intent-to-add, a matching regular HEAD entry, and a
 non-symlink regular `100644` worktree file before returning a path. Because
-`git ls-files -v` reports `H`
-for an fsmonitor-valid entry, that mode additionally reads `git ls-files -f -z`
-and, when Git is answering for the path from the monitor's cache, requires the
-index blob and worktree bytes to match: a missed write would otherwise leave the
-consumer's own `git status` and `git diff HEAD` showing a clean file. `--recovery` may name an absent or
-untracked path after byte-safe resolution and containment, but it still refuses
+the resolver and every documented consumer force `core.fsmonitor=false`, a
+stale monitor answer cannot hide the content difference this mode intentionally
+permits from the consumer's own `git status` or `git diff HEAD`. `--recovery`
+may name an absent or untracked path after byte-safe resolution and containment, but it still refuses
 symlink and nonregular occupants and every path equal to or below `$GIT_DIR`,
 `--git-common-dir`, or `<worktree>/.git`. Recovery mode names an artifact for
 restoration only and never authorizes a subsequent Beads query, mutation, or

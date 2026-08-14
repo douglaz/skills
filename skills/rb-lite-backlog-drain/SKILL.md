@@ -410,7 +410,7 @@ implement → review loop for each bead.
         printf '%s\n' 'installed beads-jsonl-path resolver is a symbolic link — do NOT write' >&2
         exit 1
       }
-      _bjp_root_raw=$("$_bjp_git" --no-replace-objects rev-parse --show-toplevel 2>/dev/null) || {
+      _bjp_root_raw=$("$_bjp_git" --no-replace-objects -c core.fsmonitor=false rev-parse --show-toplevel 2>/dev/null) || {
         printf '%s\n' 'cannot resolve the current Git worktree — do NOT write' >&2
         exit 1
       }

@@ -200,7 +200,7 @@ for _bjp_dir in "$HOME/.claude/skills/beads-jsonl-path" \
     printf '%s\n' 'installed beads-jsonl-path resolver is a symbolic link — do NOT write' >&2
     exit 1
   }
-  _bjp_root_raw=$("$_bjp_git" --no-replace-objects rev-parse --show-toplevel 2>/dev/null) || {
+  _bjp_root_raw=$("$_bjp_git" --no-replace-objects -c core.fsmonitor=false rev-parse --show-toplevel 2>/dev/null) || {
     printf '%s\n' 'cannot resolve the current Git worktree — do NOT write' >&2
     exit 1
   }
@@ -274,8 +274,8 @@ unset _bjp_candidate
 # Run both commands anyway: status distinguishes staged from
 # unstaged intended edits, while the HEAD diff exposes both for review before the flush.
 BEADS_JSONL=$("$BEADS_JSONL_RESOLVER" --allow-dirty) || exit 1
-git --no-replace-objects --literal-pathspecs status --porcelain -- "$BEADS_JSONL" || { echo "cannot read the worktree — do NOT flush" >&2; exit 1; }
-git --no-replace-objects --literal-pathspecs diff HEAD -- "$BEADS_JSONL"          || { echo "cannot diff the JSONL — do NOT flush" >&2; exit 1; }
+git --no-replace-objects -c core.fsmonitor=false --literal-pathspecs status --porcelain -- "$BEADS_JSONL" || { echo "cannot read the worktree — do NOT flush" >&2; exit 1; }
+git --no-replace-objects -c core.fsmonitor=false --literal-pathspecs diff HEAD -- "$BEADS_JSONL"          || { echo "cannot diff the JSONL — do NOT flush" >&2; exit 1; }
 # Keep a copy of what the worktree held BEFORE the flush. Neither git ref works as the
 # post-flush baseline: if the index holds an earlier damaged export and the worktree holds
 # the good recovery, HEAD-vs-worktree looks fine beforehand, the flush replaces the good
@@ -294,7 +294,7 @@ br sync --flush-only || { echo "flush failed — do not audit an unwritten graph
 # `description` this session did not write, is the tell. Recovery:
 # exact companion skill rb-lite-backlog-drain, step 11:
 # ../../rb-lite-backlog-drain/SKILL.md#backlog-step-11.
-git --no-replace-objects --literal-pathspecs diff -- "$BEADS_JSONL"
+git --no-replace-objects -c core.fsmonitor=false --literal-pathspecs diff -- "$BEADS_JSONL"
 ```
 
 **Stop the block here.** The line above is a real gate, not a comment: run the snapshot

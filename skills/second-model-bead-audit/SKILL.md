@@ -245,7 +245,7 @@ recorded acceptance of the reduced review coverage.
        printf '%s\n' 'installed beads-jsonl-path resolver is a symbolic link — do NOT write' >&2
        exit 1
      }
-     _bjp_root_raw=$("$_bjp_git" --no-replace-objects rev-parse --show-toplevel 2>/dev/null) || {
+     _bjp_root_raw=$("$_bjp_git" --no-replace-objects -c core.fsmonitor=false rev-parse --show-toplevel 2>/dev/null) || {
        printf '%s\n' 'cannot resolve the current Git worktree — do NOT write' >&2
        exit 1
      }
@@ -313,15 +313,15 @@ recorded acceptance of the reduced review coverage.
    # The status and diff are both still required: status
    # distinguishes staged from unstaged intended edits, while the HEAD diff exposes both.
    BEADS_JSONL=$("$BEADS_JSONL_RESOLVER" --allow-dirty) || exit 1
-   git --no-replace-objects --literal-pathspecs status --porcelain -- "$BEADS_JSONL" || { echo "cannot read the worktree — do NOT flush"; exit 1; }
-   git --no-replace-objects --literal-pathspecs diff HEAD -- "$BEADS_JSONL" || { echo "cannot diff the JSONL — do NOT flush"; exit 1; }
+   git --no-replace-objects -c core.fsmonitor=false --literal-pathspecs status --porcelain -- "$BEADS_JSONL" || { echo "cannot read the worktree — do NOT flush"; exit 1; }
+   git --no-replace-objects -c core.fsmonitor=false --literal-pathspecs diff HEAD -- "$BEADS_JSONL" || { echo "cannot diff the JSONL — do NOT flush"; exit 1; }
    : "${BEADS_DIFF_REVIEWED:?read the two commands above, then set this to how you resolved it}"
    br sync --flush-only || { echo "flush failed"; exit 1; }
    # AND AGAIN AFTER. A clean pre-flush diff only means the worktree matched git — it says
    # nothing about the gitignored cache, so a stale DB introduces the damage HERE. Read
    # this before consuming the graph; auditing a truncated one reviews text the reviewers
    # will never see.
-   git --no-replace-objects --literal-pathspecs diff HEAD -- "$BEADS_JSONL" || { echo "cannot diff the JSONL — do NOT audit"; exit 1; }
+   git --no-replace-objects -c core.fsmonitor=false --literal-pathspecs diff HEAD -- "$BEADS_JSONL" || { echo "cannot diff the JSONL — do NOT audit"; exit 1; }
    : "${BEADS_POSTFLUSH_REVIEWED:?read the post-flush diff above before auditing}"
    br list --limit 0 --json -a
    bv --robot-triage

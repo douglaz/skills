@@ -76,7 +76,7 @@ for _bjp_dir in "$HOME/.claude/skills/beads-jsonl-path" \
     printf '%s\n' 'installed beads-jsonl-path resolver is a symbolic link — do NOT write' >&2
     exit 1
   }
-  _bjp_root_raw=$("$_bjp_git" --no-replace-objects rev-parse --show-toplevel 2>/dev/null) || {
+  _bjp_root_raw=$("$_bjp_git" --no-replace-objects -c core.fsmonitor=false rev-parse --show-toplevel 2>/dev/null) || {
     printf '%s\n' 'cannot resolve the current Git worktree — do NOT write' >&2
     exit 1
   }
@@ -146,6 +146,8 @@ current Git worktree whose stage-0 index entry, normal index flags, HEAD entry,
 worktree type and mode, and raw bytes all agree. Both the locator and resolver
 discard inherited `GIT_*` overrides before repository discovery, so a caller
 cannot redirect that proof to another worktree, index, object store, or config.
+Every Git inspection also forces `core.fsmonitor=false`, so the read-only owner
+does not execute a repository-configured monitor hook.
 
 On failure, stop before any Beads write. Do not replace the owner with
 `git status`, porcelain parsing, or a hardcoded `.beads/issues.jsonl` path.
@@ -156,7 +158,7 @@ The default mode refuses a dirty JSONL, which is exactly right before a write an
 after one. Pass `--allow-dirty` when the file is *supposed* to differ from HEAD and you
 still need its real path:
 
-- the post-write field diff (`git --no-replace-objects --literal-pathspecs diff HEAD -- "$BEADS_JSONL"`) that reads what the
+- the post-write field diff (`git --no-replace-objects -c core.fsmonitor=false --literal-pathspecs diff HEAD -- "$BEADS_JSONL"`) that reads what the
   flush actually wrote;
 - a handoff that arrives flushed but uncommitted, such as `bead-polish-loop` →
   `second-model-bead-audit`, where the audit reads the diff rather than gating on it.
@@ -176,11 +178,9 @@ entry with mode `100644` in the index and HEAD, holding real content rather than
 intent-to-add placeholder, plus a non-symlink regular worktree file. It therefore refuses
 hidden flags, intent-to-add, untracked, unmerged, missing, wrong-mode, and wrong-type
 states before an audit flush.
-Where it does still read content is the file system monitor: when Git is answering for
-this path from a monitor's cache rather than the filesystem, the mode compares the index
-blob to the worktree bytes and refuses a difference. A monitor that missed a write leaves
-the `git status` and `git diff HEAD` you are about to read reporting a clean file over
-changed bead bodies.
+The resolver and every documented consumer force `core.fsmonitor=false`, so a
+monitor that missed a write cannot make the `git status` or `git diff HEAD` you
+are about to read report a clean file over changed bead bodies.
 It still performs no Beads mutation or flush.
 
 ## Name a damaged path for recovery
