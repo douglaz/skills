@@ -66,6 +66,20 @@ _bj_readlink=$(command -p -v readlink) ||
 _bj_stat=$(command -p -v stat) ||
   die 'cannot locate a trusted stat for the beads resolver'
 
+_bj_regular_link_count() {
+  local path=$1 count
+  if count=$("$_bj_stat" -c %h "$path" 2>/dev/null) \
+      && [[ $count =~ ^[0-9]+$ ]]; then
+    :
+  elif count=$("$_bj_stat" -f %l "$path" 2>/dev/null) \
+      && [[ $count =~ ^[0-9]+$ ]]; then
+    :
+  else
+    return 1
+  fi
+  printf '%s\n' "$count"
+}
+
 # Git's repository, worktree, index, object store, config, namespace, and pathspec
 # behavior can all be redirected through inherited GIT_* variables. This fact owner
 # is about the repository discovered from the current directory, so remove the
@@ -137,7 +151,7 @@ _bj_root=$(
 # Reject an executable selected from the driven worktree: otherwise a repository
 # could plant a proof tool in (for example) `$PWD/bin` and put it first in PATH.
 _bj_external_tool() {
-  local name=$1 diagnostic=$2 path parent leaf link hops
+  local name=$1 diagnostic=$2 path parent leaf link hops link_count
   path=$(type -P -- "$name") || die "$diagnostic"
   case $path in
     /*) ;;
@@ -170,6 +184,10 @@ _bj_external_tool() {
     hops=$((hops + 1))
   done
   [[ -f "$path" && -x "$path" ]] || die "$diagnostic"
+  link_count=$(_bj_regular_link_count "$path") ||
+    die "cannot inspect the $name executable hard-link count"
+  [[ "$link_count" == 1 ]] ||
+    die "$name executable has multiple hard links"
   printf '%s\n' "$path"
 }
 
@@ -272,13 +290,7 @@ fi
 # hard link could alias Git administrative state or any same-filesystem file, so
 # a later recovery copy or Beads write through this path would modify both.
 if [[ -f "$BEADS_JSONL" && ! -L "$BEADS_JSONL" ]]; then
-  if _bj_link_count=$("$_bj_stat" -c %h "$BEADS_JSONL" 2>/dev/null) \
-      && [[ $_bj_link_count =~ ^[0-9]+$ ]]; then
-    :
-  elif _bj_link_count=$("$_bj_stat" -f %l "$BEADS_JSONL" 2>/dev/null) \
-      && [[ $_bj_link_count =~ ^[0-9]+$ ]]; then
-    :
-  else
+  if ! _bj_link_count=$(_bj_regular_link_count "$BEADS_JSONL"); then
     die 'cannot inspect the beads JSONL hard-link count'
   fi
   [[ "$_bj_link_count" == 1 ]] ||

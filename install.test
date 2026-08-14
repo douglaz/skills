@@ -652,6 +652,36 @@ else
   pass "$t"
 fi
 
+# A candidate pathname outside the driven worktree may still be a hard link to
+# a worktree-controlled resolver inode. Reject it before executing those bytes.
+t="resolver locator refuses a hard-linked worktree companion"
+b=$(mktemp -d "$WORK/locator.XXXXXX")
+mkdir -p "$b/repo" "$b/home/.claude/skills/beads-jsonl-path/scripts"
+git init -q "$b/repo"
+command cat >"$b/repo/planted-resolver" <<'HARDLINKED_WORKTREE_RESOLVER'
+#!/usr/bin/env bash
+printf '%s\n' hardlink >>"$LOCATOR_EXECUTIONS"
+printf '%s\n' /tmp/hardlink.jsonl
+HARDLINKED_WORKTREE_RESOLVER
+chmod +x "$b/repo/planted-resolver"
+ln "$b/repo/planted-resolver" \
+  "$b/home/.claude/skills/beads-jsonl-path/scripts/resolve-beads-jsonl"
+(
+  cd "$b/repo" || exit 98
+  HOME="$b/home" CODEX_HOME="$b/codexhome" LOCATOR_EXECUTIONS="$b/executions" \
+    bash -c "$locator_block" >"$b/stdout" 2>"$b/stderr"
+)
+rc=$?
+if [[ $rc -eq 0 ]]; then
+  fail "$t" "a hard-linked worktree resolver was accepted"
+elif [[ -e "$b/executions" ]]; then
+  fail "$t" "the hard-linked worktree resolver executed"
+elif ! grep -Fq -- 'installed beads-jsonl-path resolver has multiple hard links' "$b/stderr"; then
+  fail "$t" "missing hard-link diagnostic: $(<"$b/stderr")"
+else
+  pass "$t"
+fi
+
 # Hostile functions, PATH executables, and Git repository selectors arrive from
 # the caller at the same time as a repository-controlled absolute CODEX_HOME.
 # The legacy control reports /etc as the worktree, so it executes the planted
@@ -888,6 +918,11 @@ while IFS= read -r consumer; do
     resolver_consistency_failures+="$consumer does not pin Git to Bash's POSIX utility path; "
   elif ! grep -Fq -- '_bjp_cmp=$(command -p -v cmp)' "$HERE/$consumer"; then
     resolver_consistency_failures+="$consumer does not pin cmp to Bash's POSIX utility path; "
+  elif ! grep -Fq -- '_bjp_stat=$(command -p -v stat)' "$HERE/$consumer"; then
+    resolver_consistency_failures+="$consumer does not pin stat to Bash's POSIX utility path; "
+  elif ! grep -Fq -- 'installed beads-jsonl-path resolver has multiple hard links' \
+      "$HERE/$consumer"; then
+    resolver_consistency_failures+="$consumer accepts a multiply linked resolver candidate; "
   elif ! grep -Fq -- '_bjp_git_environment=( "${!GIT_@}" )' "$HERE/$consumer"; then
     resolver_consistency_failures+="$consumer does not clear inherited Git repository selectors; "
   elif ! grep -Fq -- 'elif ! "$_bjp_cmp" -s "$BEADS_JSONL_RESOLVER" "$_bjp_candidate"; then' \

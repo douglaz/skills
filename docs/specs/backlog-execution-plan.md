@@ -989,7 +989,10 @@ on success. Sweep every executable block, prose instruction, and comment that
 resolves the Beads JSONL to use the exact installed companion path. When no
 installed target resolves, the operator may explicitly invoke the checkout owner's
 resolver by its trusted absolute path; do not auto-execute a repository-relative
-fallback. Require:
+fallback. Installed resolver candidates and the fully canonical targets of
+PATH-selected `br`/`jq` must be single-link regular files outside the driven
+worktree so an external pathname cannot alias worktree-controlled proof code.
+Require:
 
 ```bash
 _bw_file=$(mktemp) ||

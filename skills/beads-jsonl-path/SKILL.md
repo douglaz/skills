@@ -53,6 +53,21 @@ _bjp_cmp=$(command -p -v cmp) || {
   printf '%s\n' 'cannot locate a trusted cmp for beads-jsonl-path — do NOT write' >&2
   exit 1
 }
+_bjp_stat=$(command -p -v stat) || {
+  printf '%s\n' 'cannot locate a trusted stat for beads-jsonl-path — do NOT write' >&2
+  exit 1
+}
+_bjp_regular_link_count() {
+  local path=$1 count
+  if count=$("$_bjp_stat" -c %h "$path" 2>/dev/null) && [[ $count =~ ^[0-9]+$ ]]; then
+    :
+  elif count=$("$_bjp_stat" -f %l "$path" 2>/dev/null) && [[ $count =~ ^[0-9]+$ ]]; then
+    :
+  else
+    return 1
+  fi
+  printf '%s\n' "$count"
+}
 _bjp_git_environment=( "${!GIT_@}" )
 for _bjp_git_variable in "${_bjp_git_environment[@]}"; do
   command unset -- "$_bjp_git_variable" || {
@@ -107,6 +122,15 @@ for _bjp_dir in "$HOME/.claude/skills/beads-jsonl-path" \
       exit 1
       ;;
   esac
+  _bjp_link_count=$(_bjp_regular_link_count "$_bjp_candidate") || {
+    printf '%s\n' 'cannot inspect installed beads-jsonl-path resolver hard-link count — do NOT write' >&2
+    exit 1
+  }
+  [ "$_bjp_link_count" = 1 ] || {
+    printf '%s\n' 'installed beads-jsonl-path resolver has multiple hard links — do NOT write' >&2
+    exit 1
+  }
+  unset _bjp_link_count
   unset _bjp_candidate_dir
   if [ -z "$BEADS_JSONL_RESOLVER" ]; then
     BEADS_JSONL_RESOLVER=$_bjp_candidate
@@ -115,7 +139,7 @@ for _bjp_dir in "$HOME/.claude/skills/beads-jsonl-path" \
     exit 1
   fi
 done
-unset _bjp_candidate _bjp_root _bjp_root_raw _bjp_git _bjp_cmp
+unset _bjp_candidate _bjp_root _bjp_root_raw _bjp_git _bjp_cmp _bjp_stat
 [ -n "$BEADS_JSONL_RESOLVER" ] || {
   printf '%s\n' 'beads-jsonl-path companion unavailable — do NOT write' >&2
   exit 1
@@ -139,7 +163,10 @@ BEADS_JSONL=$("$BEADS_JSONL_RESOLVER") || exit 1
 If nothing resolves you are running from a checkout rather than an install: rerun the
 same installer command once, or run this checkout's own `scripts/resolve-beads-jsonl` by
 absolute path — the copy in the skills checkout you are editing, never one named
-relative to the repository you are driving.
+relative to the repository you are driving. The locator refuses symbolic or
+multiply linked resolver candidates, and the resolver applies the same
+single-link rule to PATH-selected `br` and `jq`, so an outside pathname cannot
+alias executable bytes controlled by the driven worktree.
 
 On success, `BEADS_JSONL` is the only stdout: an absolute path inside the
 current Git worktree whose stage-0 index entry, normal index flags, HEAD entry,

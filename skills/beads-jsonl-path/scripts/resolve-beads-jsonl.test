@@ -354,6 +354,45 @@ if [[ -e "$b/worktree-tool-ran" ]]; then
   fail 'a worktree-controlled jq executable is refused' 'the refused jq shim executed'
 fi
 
+# An outside pathname can still name a worktree-controlled inode through a hard
+# link. Reject multiply linked br/jq executables before either proof tool runs.
+b=$(new_fixture)
+mkdir "$b/outside-bin"
+command cat >"$b/repo/evil-br" <<'WORKTREE_BR_HARDLINK'
+#!/bin/sh
+printf '%s\n' ran >"$WORKTREE_TOOL_RAN"
+cat "$BR_OUTPUT"
+WORKTREE_BR_HARDLINK
+chmod +x "$b/repo/evil-br"
+ln "$b/repo/evil-br" "$b/outside-bin/br"
+WORKTREE_TOOL_RAN="$b/worktree-tool-ran"
+export WORKTREE_TOOL_RAN
+assert_refused 'an outside br hard link to a worktree executable is refused' "$b" \
+  'br executable has multiple hard links' "$b/outside-bin:$SYSTEM_PATH"
+unset WORKTREE_TOOL_RAN
+if [[ -e "$b/worktree-tool-ran" ]]; then
+  fail 'an outside br hard link to a worktree executable is refused' 'the refused br executable ran'
+fi
+
+b=$(new_fixture)
+mkdir "$b/outside-bin"
+trusted_jq=$(command -v jq)
+command cat >"$b/repo/evil-jq" <<WORKTREE_JQ_HARDLINK
+#!/bin/sh
+printf '%s\n' ran >"\$WORKTREE_TOOL_RAN"
+exec "$trusted_jq" "\$@"
+WORKTREE_JQ_HARDLINK
+chmod +x "$b/repo/evil-jq"
+ln "$b/repo/evil-jq" "$b/outside-bin/jq"
+WORKTREE_TOOL_RAN="$b/worktree-tool-ran"
+export WORKTREE_TOOL_RAN
+assert_refused 'an outside jq hard link to a worktree executable is refused' "$b" \
+  'jq executable has multiple hard links' "$b/outside-bin:$b/bin:$SYSTEM_PATH"
+unset WORKTREE_TOOL_RAN
+if [[ -e "$b/worktree-tool-ran" ]]; then
+  fail 'an outside jq hard link to a worktree executable is refused' 'the refused jq executable ran'
+fi
+
 # Repository selectors inherited from a caller must not redirect the proof away
 # from the repository containing the current directory. A bare Git directory
 # paired with `/` as its worktree would otherwise make rev-parse report `/`.
