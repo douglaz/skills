@@ -992,6 +992,9 @@ resolver by its trusted absolute path; do not auto-execute a repository-relative
 fallback. Installed resolver candidates and the fully canonical targets of
 PATH-selected `br`/`jq` must be single-link regular files outside the driven
 worktree so an external pathname cannot alias worktree-controlled proof code.
+Installed candidates retain the canonical `#!/bin/sh` entry point, while
+`br`/`jq` run with the implementation's POSIX utility path so a script cannot
+resolve its interpreter or child utilities from the driven worktree.
 Require:
 
 ```bash

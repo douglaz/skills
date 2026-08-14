@@ -465,6 +465,15 @@ implement → review loop for each bead.
         exit 1
       }
       unset _bjp_link_count
+      if ! IFS= command builtin read -r _bjp_shebang <"$_bjp_candidate"; then
+        printf '%s\n' 'cannot inspect installed beads-jsonl-path resolver interpreter — do NOT write' >&2
+        exit 1
+      fi
+      [ "$_bjp_shebang" = '#!/bin/sh' ] || {
+        printf '%s\n' 'installed beads-jsonl-path resolver has an unexpected interpreter — do NOT write' >&2
+        exit 1
+      }
+      unset _bjp_shebang
       unset _bjp_candidate_dir
       if [ -z "$BEADS_JSONL_RESOLVER" ]; then
         BEADS_JSONL_RESOLVER=$_bjp_candidate

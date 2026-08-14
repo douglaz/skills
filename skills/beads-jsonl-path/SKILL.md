@@ -131,6 +131,15 @@ for _bjp_dir in "$HOME/.claude/skills/beads-jsonl-path" \
     exit 1
   }
   unset _bjp_link_count
+  if ! IFS= command builtin read -r _bjp_shebang <"$_bjp_candidate"; then
+    printf '%s\n' 'cannot inspect installed beads-jsonl-path resolver interpreter — do NOT write' >&2
+    exit 1
+  fi
+  [ "$_bjp_shebang" = '#!/bin/sh' ] || {
+    printf '%s\n' 'installed beads-jsonl-path resolver has an unexpected interpreter — do NOT write' >&2
+    exit 1
+  }
+  unset _bjp_shebang
   unset _bjp_candidate_dir
   if [ -z "$BEADS_JSONL_RESOLVER" ]; then
     BEADS_JSONL_RESOLVER=$_bjp_candidate
@@ -164,9 +173,11 @@ If nothing resolves you are running from a checkout rather than an install: reru
 same installer command once, or run this checkout's own `scripts/resolve-beads-jsonl` by
 absolute path — the copy in the skills checkout you are editing, never one named
 relative to the repository you are driving. The locator refuses symbolic or
-multiply linked resolver candidates, and the resolver applies the same
-single-link rule to PATH-selected `br` and `jq`, so an outside pathname cannot
-alias executable bytes controlled by the driven worktree.
+multiply linked resolver candidates and requires the canonical `#!/bin/sh`
+entry point. The resolver applies the same single-link rule to PATH-selected
+`br` and `jq` and launches them with the implementation's POSIX utility path, so
+neither an outside inode alias nor an indirect PATH-resolved interpreter can
+execute bytes controlled by the driven worktree.
 
 On success, `BEADS_JSONL` is the only stdout: an absolute path inside the
 current Git worktree whose stage-0 index entry, normal index flags, HEAD entry,

@@ -577,12 +577,12 @@ b=$(mktemp -d "$WORK/locator.XXXXXX")
 mkdir -p "$b/home/.claude/skills/beads-jsonl-path/scripts" \
   "$b/codexhome/skills/beads-jsonl-path/scripts"
 command cat >"$b/home/.claude/skills/beads-jsonl-path/scripts/resolve-beads-jsonl" <<'CLAUDE_RESOLVER'
-#!/usr/bin/env bash
+#!/bin/sh
 printf '%s\n' claude >>"$LOCATOR_EXECUTIONS"
 printf '%s\n' /tmp/claude.jsonl
 CLAUDE_RESOLVER
 command cat >"$b/codexhome/skills/beads-jsonl-path/scripts/resolve-beads-jsonl" <<'CODEX_RESOLVER'
-#!/usr/bin/env bash
+#!/bin/sh
 printf '%s\n' codex >>"$LOCATOR_EXECUTIONS"
 printf '%s\n' /tmp/codex.jsonl
 CODEX_RESOLVER
@@ -631,7 +631,7 @@ b=$(mktemp -d "$WORK/locator.XXXXXX")
 mkdir -p "$b/repo/.codex/skills/beads-jsonl-path/scripts" "$b/home"
 git init -q "$b/repo"
 command cat >"$b/repo/.codex/skills/beads-jsonl-path/scripts/resolve-beads-jsonl" <<'WORKTREE_RESOLVER'
-#!/usr/bin/env bash
+#!/bin/sh
 printf '%s\n' worktree >>"$LOCATOR_EXECUTIONS"
 printf '%s\n' /tmp/worktree.jsonl
 WORKTREE_RESOLVER
@@ -659,7 +659,7 @@ b=$(mktemp -d "$WORK/locator.XXXXXX")
 mkdir -p "$b/repo" "$b/home/.claude/skills/beads-jsonl-path/scripts"
 git init -q "$b/repo"
 command cat >"$b/repo/planted-resolver" <<'HARDLINKED_WORKTREE_RESOLVER'
-#!/usr/bin/env bash
+#!/bin/sh
 printf '%s\n' hardlink >>"$LOCATOR_EXECUTIONS"
 printf '%s\n' /tmp/hardlink.jsonl
 HARDLINKED_WORKTREE_RESOLVER
@@ -682,6 +682,42 @@ else
   pass "$t"
 fi
 
+# The canonical resolver enters through absolute /bin/sh. Refuse an installed
+# script whose interpreter is PATH-resolved, otherwise a driven worktree can
+# supply that interpreter after the trusted locator returns to the caller shell.
+t="resolver locator refuses a PATH-resolved candidate interpreter"
+b=$(mktemp -d "$WORK/locator.XXXXXX")
+mkdir -p "$b/repo/bin" "$b/home/.claude/skills/beads-jsonl-path/scripts"
+git init -q "$b/repo"
+command cat >"$b/home/.claude/skills/beads-jsonl-path/scripts/resolve-beads-jsonl" <<'ENV_INTERPRETER_RESOLVER'
+#!/usr/bin/env bash
+printf '%s\n' interpreter >>"$LOCATOR_EXECUTIONS"
+printf '%s\n' /tmp/interpreter.jsonl
+ENV_INTERPRETER_RESOLVER
+chmod +x "$b/home/.claude/skills/beads-jsonl-path/scripts/resolve-beads-jsonl"
+trusted_bash=$(command -p -v bash)
+command cat >"$b/repo/bin/bash" <<PATH_BASH
+#!/bin/sh
+printf '%s\n' bash >>"\$LOCATOR_EXECUTIONS"
+exec "$trusted_bash" "\$@"
+PATH_BASH
+chmod +x "$b/repo/bin/bash"
+(
+  cd "$b/repo" || exit 98
+  HOME="$b/home" CODEX_HOME="$b/codexhome" LOCATOR_EXECUTIONS="$b/executions" \
+    PATH="$b/repo/bin:$PATH" "$trusted_bash" -c "$locator_block" >"$b/stdout" 2>"$b/stderr"
+)
+rc=$?
+if [[ $rc -eq 0 ]]; then
+  fail "$t" "a PATH-resolved resolver interpreter was accepted"
+elif [[ -e "$b/executions" ]]; then
+  fail "$t" "the PATH-resolved resolver interpreter executed"
+elif ! grep -Fq -- 'installed beads-jsonl-path resolver has an unexpected interpreter' "$b/stderr"; then
+  fail "$t" "missing interpreter diagnostic: $(<"$b/stderr")"
+else
+  pass "$t"
+fi
+
 # Hostile functions, PATH executables, and Git repository selectors arrive from
 # the caller at the same time as a repository-controlled absolute CODEX_HOME.
 # The legacy control reports /etc as the worktree, so it executes the planted
@@ -700,7 +736,7 @@ git -C "$b/main" worktree add -q -b locator-second "$b/second" HEAD
 git init -q --bare "$b/hostile-admin"
 mkdir -p "$b/second/.codex/skills/beads-jsonl-path/scripts" "$b/second/bin"
 command cat >"$b/second/.codex/skills/beads-jsonl-path/scripts/resolve-beads-jsonl" <<'HOSTILE_WORKTREE_RESOLVER'
-#!/usr/bin/env bash
+#!/bin/sh
 printf '%s\n' planted >>"$LOCATOR_EXECUTIONS"
 printf '%s\n' /tmp/planted.jsonl
 HOSTILE_WORKTREE_RESOLVER
@@ -790,12 +826,12 @@ mkdir -p "$b/repo-a" "$b/repo-b/.codex/skills/beads-jsonl-path/scripts" \
 git init -q "$b/repo-a"
 git init -q "$b/repo-b"
 command cat >"$b/safe-home/.claude/skills/beads-jsonl-path/scripts/resolve-beads-jsonl" <<'SAFE_RESOLVER'
-#!/usr/bin/env bash
+#!/bin/sh
 printf '%s\n' safe >>"$LOCATOR_EXECUTIONS"
 printf '%s\n' /tmp/safe.jsonl
 SAFE_RESOLVER
 command cat >"$b/repo-b/.codex/skills/beads-jsonl-path/scripts/resolve-beads-jsonl" <<'SECOND_WORKTREE_RESOLVER'
-#!/usr/bin/env bash
+#!/bin/sh
 printf '%s\n' worktree >>"$LOCATOR_EXECUTIONS"
 printf '%s\n' /tmp/worktree.jsonl
 SECOND_WORKTREE_RESOLVER
@@ -835,7 +871,7 @@ mkdir -p "$b/home/.claude/skills/beads-jsonl-path" \
 printf -- '---\nname: beads-jsonl-path\n---\n' \
   >"$b/home/.claude/skills/beads-jsonl-path/SKILL.md"
 command cat >"$b/codexhome/skills/beads-jsonl-path/scripts/resolve-beads-jsonl" <<'SIBLING_RESOLVER'
-#!/usr/bin/env bash
+#!/bin/sh
 printf '%s\n' codex >>"$LOCATOR_EXECUTIONS"
 printf '%s\n' /tmp/codex.jsonl
 SIBLING_RESOLVER
@@ -858,7 +894,7 @@ mkdir -p "$b/home/.claude/skills/beads-jsonl-path/scripts" "$b/codexhome/skills"
 printf -- '---\nname: beads-jsonl-path\n---\n' \
   >"$b/home/.claude/skills/beads-jsonl-path/SKILL.md"
 command cat >"$b/home/.claude/skills/beads-jsonl-path/scripts/resolve-beads-jsonl" <<'UNUSABLE_RESOLVER'
-#!/usr/bin/env bash
+#!/bin/sh
 printf '%s\n' claude >>"$LOCATOR_EXECUTIONS"
 printf '%s\n' /tmp/claude.jsonl
 UNUSABLE_RESOLVER
@@ -882,7 +918,7 @@ t="resolver locator refuses a relative installed target before execution"
 b=$(mktemp -d "$WORK/locator.XXXXXX")
 mkdir -p "$b/home" "$b/driven/.codex/skills/beads-jsonl-path/scripts"
 command cat >"$b/driven/.codex/skills/beads-jsonl-path/scripts/resolve-beads-jsonl" <<'RELATIVE_RESOLVER'
-#!/usr/bin/env bash
+#!/bin/sh
 printf '%s\n' relative >>"$LOCATOR_EXECUTIONS"
 printf '%s\n' /tmp/relative.jsonl
 RELATIVE_RESOLVER
@@ -923,6 +959,9 @@ while IFS= read -r consumer; do
   elif ! grep -Fq -- 'installed beads-jsonl-path resolver has multiple hard links' \
       "$HERE/$consumer"; then
     resolver_consistency_failures+="$consumer accepts a multiply linked resolver candidate; "
+  elif ! grep -Fq -- 'installed beads-jsonl-path resolver has an unexpected interpreter' \
+      "$HERE/$consumer"; then
+    resolver_consistency_failures+="$consumer accepts a PATH-resolved resolver interpreter; "
   elif ! grep -Fq -- '_bjp_git_environment=( "${!GIT_@}" )' "$HERE/$consumer"; then
     resolver_consistency_failures+="$consumer does not clear inherited Git repository selectors; "
   elif ! grep -Fq -- 'elif ! "$_bjp_cmp" -s "$BEADS_JSONL_RESOLVER" "$_bjp_candidate"; then' \

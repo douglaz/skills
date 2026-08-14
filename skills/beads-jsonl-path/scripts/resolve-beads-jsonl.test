@@ -264,7 +264,7 @@ fi
 # the otherwise hardened implementation ran the `git` and `cmp` sentinels.
 b=$(new_fixture)
 mkdir "$b/repo/evil"
-for utility in bash git cmp od grep mktemp unlink rmdir readlink stat; do
+for utility in bash git cmp od grep mktemp unlink rmdir readlink stat getconf; do
   trusted_utility=$(command -p -v "$utility") || {
     fail 'hostile startup fixture setup' "cannot locate $utility in the POSIX utility path"
     continue
@@ -277,7 +277,7 @@ HOSTILE_UTILITY
   chmod +x "$b/repo/evil/$utility"
 done
 command cat >"$b/bin/br" <<'SAFE_BR'
-#!/bin/sh
+#!/usr/bin/env bash
 printf '%s\n' "$*" >>"$BR_CALLS"
 if [ "$*" != '--no-auto-flush --no-auto-import where --json' ]; then
   : >"$BR_MUTATION"
@@ -286,6 +286,12 @@ cat "$BR_OUTPUT"
 exit "${BR_EXIT:-0}"
 SAFE_BR
 chmod +x "$b/bin/br"
+trusted_jq=$(command -v jq)
+command cat >"$b/bin/jq" <<SAFE_JQ
+#!/usr/bin/env bash
+exec "$trusted_jq" "\$@"
+SAFE_JQ
+chmod +x "$b/bin/jq"
 printf '%s\n' ': >"$HOSTILE_BASH_ENV_RAN"' >"$b/bash-env"
 snapshot_fixture "$b" "$b/before"
 br() {

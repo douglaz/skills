@@ -65,6 +65,20 @@ _bj_readlink=$(command -p -v readlink) ||
   die 'cannot locate a trusted readlink for the beads resolver'
 _bj_stat=$(command -p -v stat) ||
   die 'cannot locate a trusted stat for the beads resolver'
+_bj_getconf=$(command -p -v getconf) ||
+  die 'cannot locate a trusted getconf for the beads resolver'
+
+_bj_safe_path=$("$_bj_getconf" PATH 2>/dev/null) ||
+  die 'cannot resolve the POSIX utility path for proof tools'
+[[ -n "$_bj_safe_path" && "$_bj_safe_path" != *$'\n'* \
+   && "$_bj_safe_path" != *$'\r'* ]] ||
+  die 'cannot validate the POSIX utility path for proof tools'
+IFS=: read -r -a _bj_safe_path_entries <<<"$_bj_safe_path"
+for _bj_safe_path_entry in "${_bj_safe_path_entries[@]}"; do
+  [[ "$_bj_safe_path_entry" == /* ]] ||
+    die 'cannot validate the POSIX utility path for proof tools'
+done
+unset _bj_safe_path_entry _bj_safe_path_entries
 
 _bj_regular_link_count() {
   local path=$1 count
@@ -196,7 +210,8 @@ _bj_br=$(_bj_external_tool br 'br is required to resolve the beads JSONL') ||
 _bj_jq=$(_bj_external_tool jq 'jq is required to resolve the beads JSONL') ||
   die 'jq is required to resolve the beads JSONL'
 
-if ! "$_bj_br" --no-auto-flush --no-auto-import where --json >"${_bj_files[0]}"; then
+if ! PATH="$_bj_safe_path" "$_bj_br" --no-auto-flush --no-auto-import where --json \
+  >"${_bj_files[0]}"; then
   die 'cannot resolve the beads workspace'
 fi
 if ! LC_ALL=C "$_bj_od" -An -v -t x1 "${_bj_files[0]}" >"${_bj_files[1]}"; then
@@ -210,7 +225,7 @@ else
 fi
 
 BEADS_JSONL=$(
-  "$_bj_jq" -ers '
+  PATH="$_bj_safe_path" "$_bj_jq" -ers '
     if length == 1 and
       ((.[0] | type) == "object") and
       ((.[0].jsonl_path | type) == "string") and
