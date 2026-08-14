@@ -816,7 +816,7 @@ Validate the complete contract, not only whether tags exist:
 
 ```bash
 validate_audit_output() {
-  local file=$1 verdict rationale blockers important nits total closing
+  local file=$1 verdict rationale blockers important nits total closing grep_rc
   local -a closing_lines
   [ -s "$file" ] || return 1
   verdict=$("$BEADS_GIT_RUNNER" run-posix sed -n '1s/^VERDICT: //p' "$file")
@@ -827,9 +827,30 @@ validate_audit_output() {
       <<<"$rationale"; then
     return 1
   fi
-  blockers=$("$BEADS_GIT_RUNNER" grep -cE '^[[:space:]]*\[BLOCKER\]' "$file" || true)
-  important=$("$BEADS_GIT_RUNNER" grep -cE '^[[:space:]]*\[IMPORTANT\]' "$file" || true)
-  nits=$("$BEADS_GIT_RUNNER" grep -cE '^[[:space:]]*\[NIT\]' "$file" || true)
+  if blockers=$("$BEADS_GIT_RUNNER" grep -cE \
+      '^[[:space:]]*\[BLOCKER\]' "$file"); then
+    :
+  else
+    grep_rc=$?
+    [ "$grep_rc" -eq 1 ] || return 1
+    blockers=${blockers:-0}
+  fi
+  if important=$("$BEADS_GIT_RUNNER" grep -cE \
+      '^[[:space:]]*\[IMPORTANT\]' "$file"); then
+    :
+  else
+    grep_rc=$?
+    [ "$grep_rc" -eq 1 ] || return 1
+    important=${important:-0}
+  fi
+  if nits=$("$BEADS_GIT_RUNNER" grep -cE \
+      '^[[:space:]]*\[NIT\]' "$file"); then
+    :
+  else
+    grep_rc=$?
+    [ "$grep_rc" -eq 1 ] || return 1
+    nits=${nits:-0}
+  fi
   total=$((blockers + important + nits))
 
   closing=$("$BEADS_GIT_RUNNER" run-posix tail -n 3 "$file")

@@ -1139,9 +1139,64 @@ case $_bjg_subcommand in
       printf '%s\n' 'clean Git add file is not a non-symlink regular file' >&2
       exit 1
     }
+    _bjg_add_git_dir_raw=$("$_bjg_git" --no-pager --no-replace-objects \
+      -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+      -C "$_bjg_root" rev-parse --absolute-git-dir 2>/dev/null) || {
+      printf '%s\n' 'cannot resolve the Git administrative directory for clean add' >&2
+      exit 1
+    }
+    _bjg_add_git_dir=$(
+      CDPATH=
+      export CDPATH
+      cd -P -- "$_bjg_add_git_dir_raw" 2>/dev/null && pwd -P
+    ) || {
+      printf '%s\n' 'cannot canonicalize the Git administrative directory for clean add' >&2
+      exit 1
+    }
+    _bjg_add_tmp=$("$_bjg_mktemp" -d \
+      "$_bjg_add_git_dir/beads-jsonl-add.XXXXXX") || {
+      printf '%s\n' 'cannot create a private clean-add directory' >&2
+      exit 1
+    }
+    "$_bjg_chmod" 700 "$_bjg_add_tmp" || {
+      "$_bjg_rmdir" "$_bjg_add_tmp" 2>/dev/null || :
+      printf '%s\n' 'cannot protect the private clean-add directory' >&2
+      exit 1
+    }
+    _bjg_add_snapshot=$_bjg_add_tmp/reviewed
+    _bjg_add_cleanup() {
+      local status=$? cleanup_status=0
+      trap - EXIT HUP INT QUIT TERM
+      if [[ -e "$_bjg_add_snapshot" || -L "$_bjg_add_snapshot" ]] \
+          && ! "$_bjg_unlink" "$_bjg_add_snapshot"; then
+        cleanup_status=1
+      fi
+      if ! "$_bjg_rmdir" "$_bjg_add_tmp"; then
+        cleanup_status=1
+      fi
+      if [[ $status -eq 0 && $cleanup_status -ne 0 ]]; then
+        printf '%s\n' 'cannot remove the private clean-add directory' >&2
+        status=1
+      fi
+      exit "$status"
+    }
+    trap _bjg_add_cleanup EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 131' QUIT
+    trap 'exit 143' TERM
+    _bjg_add_cp=$(command -p -v cp) || {
+      printf '%s\n' 'cannot locate a trusted cp for clean add' >&2
+      exit 1
+    }
+    "${_bjg_proof_environment[@]}" "$_bjg_add_cp" \
+      "$_bjg_path" "$_bjg_add_snapshot" || {
+      printf '%s\n' 'cannot snapshot the file for clean add' >&2
+      exit 1
+    }
     _bjg_oid=$("$_bjg_git" --no-pager --no-replace-objects \
       -c core.fsmonitor=false -c core.hooksPath=/dev/null \
-      -C "$_bjg_root" hash-object -w --no-filters "$_bjg_path") || {
+      -C "$_bjg_root" hash-object --no-filters "$_bjg_add_snapshot") || {
       printf '%s\n' 'cannot hash the file for clean add' >&2
       exit 1
     }
@@ -1153,10 +1208,21 @@ case $_bjg_subcommand in
       printf '%s\n' 'clean Git add file no longer matches the reviewed object id' >&2
       exit 1
     }
+    _bjg_written_oid=$("$_bjg_git" --no-pager --no-replace-objects \
+      -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+      -C "$_bjg_root" hash-object -w --no-filters "$_bjg_add_snapshot") || {
+      printf '%s\n' 'cannot persist the reviewed object for clean add' >&2
+      exit 1
+    }
+    [[ "$_bjg_written_oid" == "$_bjg_expected_oid" ]] || {
+      printf '%s\n' 'persisted clean-add object does not match the reviewed object id' >&2
+      exit 1
+    }
     printf '100644 %s\t%s\0' "$_bjg_oid" "$_bjg_relative" |
       "$_bjg_git" --no-pager --no-replace-objects \
         -c core.fsmonitor=false -c core.hooksPath=/dev/null \
         -C "$_bjg_root" update-index -z --index-info
+    exit $?
     ;;
   *)
     printf '%s\n' 'usage: git-clean {copy-file|diff-files|commit|push|--literal-pathspecs {diff|add}} ...' >&2

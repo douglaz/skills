@@ -978,7 +978,7 @@ BEADS_JSONL=$("$BEADS_JSONL_RESOLVER" --allow-dirty) \
 Ids on only one side, or a `description` this phase did not write, is the tell. Never
 hand-edit that file (a hand
 edit does not advance `updated_at`, which is what makes the cache stale and undetectable);
-write bead text with `"$BEADS_JSONL_RESOLVER" --run-br update -d/--notes`. Recovery is in
+write bead text with `"$BEADS_JSONL_RESOLVER" --run-br update <id> --description "<full body>"`. Recovery is in
 [exact companion skill `rb-lite-backlog-drain`, step 11](../../rb-lite-backlog-drain/SKILL.md#backlog-step-11).
 
 A flush

@@ -308,7 +308,7 @@ order.
     copy of is reverted — silently, exit 0. Transferring a plan means writing long
     specification bodies, and pasting one into `.beads/issues.jsonl` by hand is precisely
     what makes the cache stale: a hand edit does not advance `updated_at`, so the two
-    become indistinguishable by timestamp. Write every body through `"$BEADS_JSONL_RESOLVER" --run-br update -d/--notes`,
+    become indistinguishable by timestamp. Write every body through `"$BEADS_JSONL_RESOLVER" --run-br update <id> --description "<full body>"`,
     rerun the resolver-locator block above,
     stopping before its final clean-mode `BEADS_JSONL=` call, and resolve the post-write
     path with

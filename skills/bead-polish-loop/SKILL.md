@@ -348,7 +348,7 @@ run `second-model-bead-audit` by default after the graph meets these gates.
    the cache stale (a hand edit does not advance `updated_at`, so the two are
    indistinguishable by timestamp), and this skill rewrites long bead bodies for a living,
    which is exactly when opening the file is tempting. Write bead text with
-   `"$BEADS_JSONL_RESOLVER" --run-br update -d/--notes`, rerun the resolver-locator block from Preflight,
+   `"$BEADS_JSONL_RESOLVER" --run-br update <id> --description "<full body>"`, rerun the resolver-locator block from Preflight,
    stopping before its final clean-mode `BEADS_JSONL=` call, and resolve the post-write path
    with
    `BEADS_JSONL=$("$BEADS_JSONL_RESOLVER" --allow-dirty) || exit 1` before field-diffing it

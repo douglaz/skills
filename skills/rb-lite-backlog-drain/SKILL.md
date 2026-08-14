@@ -562,7 +562,7 @@ implement → review loop for each bead.
 
     Hand-editing the JSONL is what makes the cache stale — a hand edit does not advance
     `updated_at`, so cache and file hold different bodies under identical timestamps and
-    nothing can tell them apart. **Write bead text through `"$BEADS_JSONL_RESOLVER" --run-br update -d/--notes`, never
+    nothing can tell them apart. **Write bead text through `"$BEADS_JSONL_RESOLVER" --run-br update <id> --description "<full body>"`, never
     the file.** The task template's ".beads/ is orchestration state" line is a *reviewing*
     scope rule, not an editing licence. And the advertised guard does not help: `"$BEADS_JSONL_RESOLVER" --run-br sync
     --help`'s "Stale DB Guard" is an **id**-level check, so same-id-different-body — the

@@ -594,7 +594,7 @@ phrases like "X happens when Y", not only test function names.>
   `.beads/` as orchestration/state directories, not product code to review.
   That is a *reviewing* scope rule, not an editing licence — nobody, implementer
   or operator, hand-edits `.beads/issues.jsonl`; bead text is written with
-  `"$BEADS_JSONL_RESOLVER" --run-br update -d/--notes` or it gets silently reverted by the next flush
+  `"$BEADS_JSONL_RESOLVER" --run-br update <id> --description "<full body>"` or it gets silently reverted by the next flush
   ([exact companion skill `rb-lite-backlog-drain`, step 11](../rb-lite-backlog-drain/SKILL.md#backlog-step-11)).
   This does NOT forbid ordinary git usage: **`git add` any new SOURCE file you
   create** so it appears in the reviewed diff (`git diff <base>` omits untracked

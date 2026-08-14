@@ -463,7 +463,7 @@ A phase closes on evidence or it does not close.
   flush re-exports **every** bead from the gitignored `.beads/beads.db` over the tracked
   JSONL, so any body the cache holds a stale copy of is reverted, silently, at exit 0.
   Hand-editing `.beads/issues.jsonl` is what makes the cache stale — do not; use
-  `"$BEADS_JSONL_RESOLVER" --run-br update -d/--notes`. Then rerun the resolver-locator block above,
+  `"$BEADS_JSONL_RESOLVER" --run-br update <id> --description "<full body>"`. Then rerun the resolver-locator block above,
   stopping before its final clean-mode `BEADS_JSONL=` call, resolve the post-write path
   with `BEADS_JSONL=$("$BEADS_JSONL_RESOLVER" --allow-dirty) || exit 1`,
   and field-diff the tracked JSONL before committing; the write you just made is the

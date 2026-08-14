@@ -1207,6 +1207,17 @@ else
   pass "$t"
 fi
 
+t="Beads write guidance names a complete valid update command"
+invalid_update_guidance=$(grep -RFl --include='*.md' -- '-d/--notes' \
+  "$HERE/skills/bead-polish-loop" "$HERE/skills/drive" \
+  "$HERE/skills/rb-lite-backlog-drain" "$HERE/skills/plan-to-beads-transfer" \
+  "$HERE/skills/orchestrating-with-rb-lite" || true)
+if [[ -n "$invalid_update_guidance" ]]; then
+  fail "$t" "invalid combined br update flag remains in: $invalid_update_guidance"
+else
+  pass "$t"
+fi
+
 t="graph snapshots use clean copy and comparison utilities"
 panel="$HERE/skills/second-model-bead-audit/references/reviewer-panel.md"
 if grep -Eq -- '^[[:space:]]*cp[[:space:]].*\$BEADS_JSONL|^[[:space:]]*diff[[:space:]]+-u' \
@@ -1233,6 +1244,11 @@ elif ! grep -Fq -- 'unset BEADS_POSTFLUSH_REVIEWED' "$panel"; then
   fail "$t" 'review panel can reuse a stale post-flush acknowledgement'
 elif ! grep -Fq -- '0|1) ;;' "$panel"; then
   fail "$t" 'review panel does not distinguish content differences from diff errors'
+elif grep -Fq -- 'grep -cE' "$panel" \
+    && grep -Fq -- '|| true)' "$panel"; then
+  fail "$t" 'review panel masks audit finding-count I/O errors'
+elif [[ $(grep -Fc -- '[ "$grep_rc" -eq 1 ] || return 1' "$panel") -lt 3 ]]; then
+  fail "$t" 'review panel does not distinguish grep no-match from grep failure'
 else
   pass "$t"
 fi

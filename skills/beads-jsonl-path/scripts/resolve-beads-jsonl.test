@@ -377,6 +377,7 @@ fi
 # expected object id is checked against the exact blob before update-index.
 cp "$b/staged.jsonl" "$b/reviewed.jsonl"
 printf '%s\n' '{"id":"changed-after-review"}' >"$jsonl"
+stale_oid=$(git -C "$b/repo" hash-object --no-filters "$jsonl")
 if (
   cd "$b/repo" || exit 98
   "$GIT_RUNNER" --literal-pathspecs add --expect-oid "$reviewed_oid" -- "$jsonl" \
@@ -390,6 +391,10 @@ elif ! grep -Fq 'no longer matches the reviewed object id' "$b/stale-add.stderr"
   fail "$t" "runner did not diagnose the stale review: $(<"$b/stale-add.stderr")"
 elif ! cmp -s "$b/reviewed.jsonl" "$b/after-stale-add.jsonl"; then
   fail "$t" 'runner changed the index after the reviewed bytes changed'
+elif git -C "$b/repo" cat-file -e "$stale_oid^{blob}" 2>/dev/null; then
+  fail "$t" 'runner persisted the unreviewed bytes as a dangling Git object'
+elif compgen -G "$b/repo/.git/beads-jsonl-add.*" >/dev/null; then
+  fail "$t" 'runner left the private clean-add snapshot behind'
 else
   pass "$t"
 fi
@@ -715,6 +720,10 @@ fi
 cp "$GIT_RUNNER" "$b/git-clean-no-ssh"
 sed -i 's/if _bjg_ssh=$(command -p -v ssh); then/if false; then/' \
   "$b/git-clean-no-ssh"
+if ! grep -Fq 'if false; then' "$b/git-clean-no-ssh"; then
+  fail 'clean Git runner disables SSH transport when trusted ssh is unavailable' \
+    'fixture could not disable trusted ssh discovery in the runner copy'
+fi
 chmod +x "$b/git-clean-no-ssh"
 command cat >"$b/repo/runner-path/ssh-from-config" <<'RUNNER_CONFIG_SSH'
 #!/bin/sh
