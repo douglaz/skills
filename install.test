@@ -1545,9 +1545,13 @@ elif ! grep -Fq -- 'cannot push the reviewed JSONL commit' "$transaction"; then
 elif ! grep -Fq -- '-c core.hooksPath=/dev/null' \
     "$HERE/skills/beads-jsonl-path/scripts/git-clean"; then
   fail "$t" 'clean commit can execute repository hooks'
-elif ! grep -Fq -- 'command unset SSH_ASKPASS SSH_ASKPASS_REQUIRE DISPLAY WAYLAND_DISPLAY' \
+elif ! grep -Fq -- '_bjg_push_environment=(' \
+    "$HERE/skills/beads-jsonl-path/scripts/git-clean" \
+    || ! grep -Fq -- '"$_bjg_env" -i "PATH=$_bjg_safe_path" "LC_ALL=C"' \
+    "$HERE/skills/beads-jsonl-path/scripts/git-clean" \
+    || ! grep -Fq -- 'exec "${_bjg_push_environment[@]}" "$_bjg_git"' \
     "$HERE/skills/beads-jsonl-path/scripts/git-clean"; then
-  fail "$t" 'clean push retains caller-selected askpass execution'
+  fail "$t" 'clean push does not cross an explicit environment allowlist'
 elif ! grep -Fq -- 'ProxyCommand=none -o PermitLocalCommand=no -o BatchMode=yes' \
     "$HERE/skills/beads-jsonl-path/scripts/git-clean"; then
   fail "$t" 'clean push retains caller-selected SSH command execution'

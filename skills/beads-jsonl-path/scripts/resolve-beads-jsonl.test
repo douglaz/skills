@@ -622,6 +622,237 @@ else
   pass "$t"
 fi
 
+# The accepted helper path also covers authenticated `/usr/bin/env name`
+# interpreter semantics, distinct from the lexical-env spoof refusal.
+mkdir "$b/env-identity-helper-home" "$b/env-identity-helper-bin"
+printf '#!/usr/bin/env sh\nexit 0\n#\0binary-payload\n' \
+  >"$b/env-identity-helper-bin/git-credential-envfixture"
+chmod +x "$b/env-identity-helper-bin/git-credential-envfixture"
+HOME="$b/env-identity-helper-home" git config --global credential.helper envfixture
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/env-identity-helper-home" \
+    PATH="$b/env-identity-helper-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" push --remote runner-test --branch "$push_branch" \
+      --expect-head "$push_head" \
+    >"$b/env-identity-helper.stdout" 2>"$b/env-identity-helper.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner accepts trusted env helper with post-shebang NUL payload'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'push to a closed local port unexpectedly succeeded'
+elif grep -Eq 'configured credential helper|credential helper (executable|has|env target)' \
+    "$b/env-identity-helper.stderr"; then
+  fail "$t" "runner rejected trusted env helper: $(<"$b/env-identity-helper.stderr")"
+else
+  pass "$t"
+fi
+
+# A named helper's outside pathname is not the end of its executable chain: the
+# kernel-selected absolute shebang interpreter must also stay outside the worktree.
+mkdir "$b/interpreter-helper-home" "$b/interpreter-helper-bin"
+command cat >"$b/repo/credential-interpreter" <<CREDENTIAL_INTERPRETER
+#!/bin/sh
+printf '%s\n' interpreter >'$b/credential-interpreter-ran'
+exec /bin/sh "\$@"
+CREDENTIAL_INTERPRETER
+chmod +x "$b/repo/credential-interpreter"
+command cat >"$b/interpreter-helper-bin/outside-interpreter" \
+  <<OUTSIDE_CREDENTIAL_INTERPRETER
+#!$b/repo/credential-interpreter
+exec /bin/sh "\$@"
+OUTSIDE_CREDENTIAL_INTERPRETER
+chmod +x "$b/interpreter-helper-bin/outside-interpreter"
+command cat >"$b/interpreter-helper-bin/git-credential-interpreter" \
+  <<CREDENTIAL_HELPER_SCRIPT
+#!$b/interpreter-helper-bin/outside-interpreter
+exit 1
+CREDENTIAL_HELPER_SCRIPT
+chmod +x "$b/interpreter-helper-bin/git-credential-interpreter"
+HOME="$b/interpreter-helper-home" git config --global credential.helper interpreter
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/interpreter-helper-home" \
+    PATH="$b/interpreter-helper-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" push --remote runner-test --branch "$push_branch" \
+      --expect-head "$push_head" \
+    >"$b/interpreter-helper.stdout" 2>"$b/interpreter-helper.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner validates a credential helper shebang interpreter'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'push with a worktree helper interpreter unexpectedly succeeded'
+elif [[ -e "$b/credential-interpreter-ran" ]]; then
+  fail "$t" 'worktree credential-helper interpreter executed'
+elif ! grep -Fq 'credential helper resolves inside the current Git worktree' \
+    "$b/interpreter-helper.stderr"; then
+  fail "$t" "runner missed helper interpreter provenance: $(<"$b/interpreter-helper.stderr")"
+else
+  pass "$t"
+fi
+
+# The helper-chain parser must preserve the kernel's NUL termination semantics.
+mkdir "$b/nul-helper-home" "$b/nul-helper-bin"
+printf '#!%s\0suffix\nexit 1\n' "$b/repo/credential-interpreter" \
+  >"$b/nul-helper-bin/git-credential-nulinterpreter"
+chmod +x "$b/nul-helper-bin/git-credential-nulinterpreter"
+HOME="$b/nul-helper-home" git config --global credential.helper nulinterpreter
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/nul-helper-home" PATH="$b/nul-helper-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" push --remote runner-test --branch "$push_branch" \
+      --expect-head "$push_head" \
+    >"$b/nul-helper.stdout" 2>"$b/nul-helper.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner refuses a NUL-bearing credential helper interpreter'
+if [[ $rc -eq 0 || -e "$b/credential-interpreter-ran" ]]; then
+  fail "$t" 'NUL-terminated credential-helper interpreter executed'
+elif ! grep -Fq 'credential helper has a NUL-bearing script interpreter' \
+    "$b/nul-helper.stderr"; then
+  fail "$t" "runner missed helper NUL semantics: $(<"$b/nul-helper.stderr")"
+else
+  pass "$t"
+fi
+
+# Credential helpers run under an explicit allowlist, not a language-by-language
+# startup-variable blacklist. A tiny authenticated HTTPS exchange proves the
+# helper ran while an arbitrary caller variable did not reach it.
+mkdir "$b/env-helper-home" "$b/env-helper-bin" "$b/env-helper-cache" \
+  "$b/env-helper-data" "$b/env-helper-state"
+command cat >"$b/env-helper-bin/git-credential-envprobe" <<ENV_HELPER
+#!/bin/sh
+env >'$b/env-helper.environment'
+if [ "\${1-}" = get ]; then
+  printf '%s\n' username=fixture password=fixture
+fi
+ENV_HELPER
+chmod +x "$b/env-helper-bin/git-credential-envprobe"
+HOME="$b/env-helper-home" git config --global credential.helper envprobe
+HOME="$b/env-helper-home" git config --global http.sslVerify false
+command cat >"$b/tls.crt" <<'TLS_CERTIFICATE'
+-----BEGIN CERTIFICATE-----
+MIIC6jCCAdKgAwIBAgIUUu85vjSHDsKkLH/tMZB8c5KrEM0wDQYJKoZIhvcNAQEL
+BQAwFDESMBAGA1UEAwwJMTI3LjAuMC4xMCAXDTI2MDgxNDIxNTc0MFoYDzIxMjYw
+NzIxMjE1NzQwWjAUMRIwEAYDVQQDDAkxMjcuMC4wLjEwggEiMA0GCSqGSIb3DQEB
+AQUAA4IBDwAwggEKAoIBAQCzBpYIrorf++3qWdJWwGiSX3VDytmWclTjo8iuEMOk
+WZqUSxQl5Muplol3NAq+PItYmOp1jfpiXU1ZdOd7Hh7XZY76KS57iZi9tCc5iJ9c
+Wf6n0/7+da1xhSvZKx09NC4cnsCv6003Gqw6dE4Uw93KtK+6gHr95caBAIS8Ni3C
+HvBBylbAs9vnN1xd85r5wOQFYhMva/namqYuvK7VPgBs3a1oYguML9zuFACd9o0l
+VoqjEwgReMDndF0n2sCf2+kQ0Xrz2t1DgYEjZvdWv1hxn8WP7shvffOxi56KOYlI
+MD+fc/E/oHFlq+Saq8vB9nMN+HnC2Bf/jTKZLj364FMhAgMBAAGjMjAwMA8GA1Ud
+EQQIMAaHBH8AAAEwHQYDVR0OBBYEFDKKCcgOewN8ZIrMX1huCt2NcswKMA0GCSqG
+SIb3DQEBCwUAA4IBAQA6aYOSZ8MqJUPWl0T4fMjZdqH9fjmCy1HYEgIZAElAJmlC
+77df85Z9FXpd2XVU5ZZZYwyep7FKvMRvypZSpTdxq2YwO4eFKrLs3ltjzVpUgP4S
+lxisD0Whm0FLA6T3wk3jgOQXenRDBba+LTGhRa1k9CiEGTpYIm4UX2+vhEkRMfYv
+12j5zjVELAyLJG5AcaI5U2Mv99iecxFbHTsETSYLmDS7eywgui3qdaSjb6zck4Ua
+oL5AtiGuQI0qf1DVrMSxjj43eqNXbHPGwEdi3vKriD5d1jFZRP7jgzlxbYbkBOrX
+MEaZDo11VnSCfU0xZuky+u8WMR8/6UVmVBxW/eef
+-----END CERTIFICATE-----
+TLS_CERTIFICATE
+command cat >"$b/tls.key" <<'TLS_PRIVATE_KEY'
+-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCzBpYIrorf++3q
+WdJWwGiSX3VDytmWclTjo8iuEMOkWZqUSxQl5Muplol3NAq+PItYmOp1jfpiXU1Z
+dOd7Hh7XZY76KS57iZi9tCc5iJ9cWf6n0/7+da1xhSvZKx09NC4cnsCv6003Gqw6
+dE4Uw93KtK+6gHr95caBAIS8Ni3CHvBBylbAs9vnN1xd85r5wOQFYhMva/namqYu
+vK7VPgBs3a1oYguML9zuFACd9o0lVoqjEwgReMDndF0n2sCf2+kQ0Xrz2t1DgYEj
+ZvdWv1hxn8WP7shvffOxi56KOYlIMD+fc/E/oHFlq+Saq8vB9nMN+HnC2Bf/jTKZ
+Lj364FMhAgMBAAECggEAE2qvcxmbLlfgof5D9ezAar+3tDaYCt0zn8zvwxFGZtjh
+DxxlfwaloCsXlborQB7I7j8HjuBrO6fq77ziLlRB/BKjwzYcOIHf8xNK/c53mkiY
+ehNgILEasqlC7Dbk4PJ73dbKB0p6AXP/IgfjQBVOROH7/TpaHJeDRBKOUut9YwRQ
+9aL33jpU+N8AagCm4q7T8k8AG0sI456CYXRSMWGoCw3wwNEhOwrAi9Jt7b3nbwdM
+zrYoQhauusT/tKRnxPSiXnJcxgJk1We2w+zL3XJZTagPNLISj/FLa7HKrjps10Gp
+pkhVOBBY9/tLh28XhQYJDPufZ1pMBSpIg7DfyVA2wQKBgQD7yKcaR2qNXoV+52aj
+aSXInQURhFtAR61JwZTXOvYfnaeTSuyKAgNd65sCZiWIBTfsB3TwQcOhzu3p9aID
+EnZDIvcrn8nGmWP4ZjnOjpIqU/CR+yK+BdDoWA8a4zmIW0bX0wubWe4UYh4kS9mc
+VzVP0P8TxGpTBnYkeSGmXiPcjQKBgQC2Bgisp+Ivu7Gsu8571rPvbXGFQlzImt9Q
+nVHG+V4oGFLr6mSTr3ycKWgTGdt+iXmsXZBM0VSR3JrRWrMI/goxRWqwadmqevyu
+fxncx6ogt8hhp3qr+pvHmrQJfHYrOCqiJV37H4278IckVVqBrD9DHIkozdF7zvDR
+Z0900HRt5QKBgQDBnjqKJdMVZVNpFE9EaE5K6ByGrO5zDut+JWPs4wVzqIu948bk
+Fco7BjwMazp/T+wCEHXnb9sd6f/ggyiUDjVtSU0jedvzYe+TjCD164MRE72StLmx
+wM02bskm1wdeCTsAKuXpEA3aFN2y8bUk2ZdAiqosrEVLFVPylke/JPOU3QKBgDSc
+098L+63uY7HY6xsSeRoImVp6TxVQ5qGHh36qz5NpTHaSXpXtkGgW89UpkS8nD3tJ
+5A7AJuCuUjWXMM61lz6coPTy8456VBUf+dq9/6fLV2kanrOdEXAFgGqJhiKB7pjF
+kj+m5DHhmT5gSXPX1MVSNzcLHrTZoPP2F5pdMnodAoGBALbX36yiQaIx9NpFsdjD
+R9S8MH2GGJh23i/463s6SKmlmuCVQbS28NyL5CDbdDKVC9/DfRplmvd/IVae3OZO
+YCxNu9+fA2IG/nZSZjaNqzwo4EH2O7oR0JYnxfXXiQm2393Wpte2oQN48EwbI6Lv
+87Pt1APuH4gqBMlQrE44iqil
+-----END PRIVATE KEY-----
+TLS_PRIVATE_KEY
+command cat >"$b/auth-server.py" <<'AUTH_SERVER'
+import http.server
+import pathlib
+import ssl
+import sys
+
+port_file, cert_file, key_file = map(pathlib.Path, sys.argv[1:])
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.headers.get("Authorization"):
+            self.send_response(403)
+        else:
+            self.send_response(401)
+            self.send_header("WWW-Authenticate", 'Basic realm="fixture"')
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, *_args):
+        pass
+
+server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+context.load_cert_chain(cert_file, key_file)
+server.socket = context.wrap_socket(server.socket, server_side=True)
+server.timeout = 5
+port_file.write_text(str(server.server_port))
+for _ in range(2):
+    server.handle_request()
+server.server_close()
+AUTH_SERVER
+trusted_python=$(command -p -v python3)
+"$trusted_python" "$b/auth-server.py" "$b/auth-server.port" \
+  "$b/tls.crt" "$b/tls.key" >"$b/auth-server.stdout" \
+  2>"$b/auth-server.stderr" &
+auth_server_pid=$!
+auth_wait=0
+while ((auth_wait < 200)) && [[ ! -s "$b/auth-server.port" ]]; do
+  sleep 0.01
+  auth_wait=$((auth_wait + 1))
+done
+if [[ -s "$b/auth-server.port" ]]; then
+  auth_server_port=$(<"$b/auth-server.port")
+  git -C "$b/repo" remote add helper-https \
+    "https://127.0.0.1:$auth_server_port/repository"
+  if (
+    cd "$b/repo" || exit 98
+    HOME="$b/env-helper-home" PATH="$b/env-helper-bin:$SYSTEM_PATH" \
+      XDG_CACHE_HOME="$b/env-helper-cache" XDG_DATA_HOME="$b/env-helper-data" \
+      XDG_STATE_HOME="$b/env-helper-state" \
+      NO_PROXY=127.0.0.1 no_proxy=127.0.0.1 \
+      UNRELATED_WORKTREE_STARTUP="$b/repo/startup" \
+      ZDOTDIR="$b/repo" JAVA_TOOL_OPTIONS="-javaagent:$b/repo/agent.jar" \
+      "$GIT_RUNNER" push --remote helper-https --branch "$push_branch" \
+        --expect-head "$push_head" \
+      >"$b/env-helper.stdout" 2>"$b/env-helper.stderr"
+  ); then rc=0; else rc=$?; fi
+else
+  rc=99
+fi
+wait "$auth_server_pid" || :
+t='clean Git push gives credential helpers only the explicit environment allowlist'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'fixture HTTPS push unexpectedly succeeded'
+elif [[ ! -s "$b/env-helper.environment" ]]; then
+  fail "$t" "credential helper did not run: $(<"$b/env-helper.stderr")"
+elif grep -Eq '^(UNRELATED_WORKTREE_STARTUP|ZDOTDIR|JAVA_TOOL_OPTIONS)=' \
+    "$b/env-helper.environment"; then
+  fail "$t" 'credential helper inherited a caller startup variable'
+elif ! grep -Fxq "XDG_CACHE_HOME=$b/env-helper-cache" \
+    "$b/env-helper.environment"; then
+  fail "$t" 'credential helper lost the validated XDG cache location'
+else
+  pass "$t"
+fi
+
 # A store path outside the worktree is not sufficient if its inode is also
 # reachable through a worktree hard link.
 mkdir "$b/store-helper-home"
@@ -1091,21 +1322,27 @@ command cat >"$b/mixed-invalid-bin/audit-mixed-valid" <<MIXED_VALID_AUDIT
 #!/bin/sh
 printf '%s\n' valid >'$b/mixed-valid-audit-ran'
 MIXED_VALID_AUDIT
-command cat >"$b/mixed-invalid-bin/unrelated-xonly" <<'MIXED_XONLY'
-#!/missing/interpreter
+command cat >"$b/repo/mixed-worktree-interpreter" <<MIXED_INTERPRETER
+#!/bin/sh
+printf '%s\n' interpreter >'$b/mixed-interpreter-ran'
+exit 1
+MIXED_INTERPRETER
+chmod +x "$b/repo/mixed-worktree-interpreter"
+command cat >"$b/mixed-invalid-bin/invalid-sibling" <<MIXED_INVALID_SIBLING
+#!$b/repo/mixed-worktree-interpreter
 exit 0
-MIXED_XONLY
+MIXED_INVALID_SIBLING
 chmod +x "$b/mixed-invalid-bin/audit-mixed-valid"
-chmod 111 "$b/mixed-invalid-bin/unrelated-xonly"
+chmod +x "$b/mixed-invalid-bin/invalid-sibling"
 if (
   cd "$b/repo" || exit 98
   PATH="$b/mixed-invalid-bin:$SYSTEM_PATH" \
     "$GIT_RUNNER" run-audit-tool audit-mixed-valid \
     >"$b/mixed-valid.stdout" 2>"$b/mixed-valid.stderr"
 ); then rc=0; else rc=$?; fi
-chmod 755 "$b/mixed-invalid-bin/unrelated-xonly"
 t='clean audit-tool runner requires the selected parent to remain admitted'
-if [[ $rc -eq 0 || -e "$b/mixed-valid-audit-ran" ]]; then
+if [[ $rc -eq 0 || -e "$b/mixed-valid-audit-ran" \
+      || -e "$b/mixed-interpreter-ran" ]]; then
   fail "$t" 'runner executed a selected tool from an omitted mixed directory'
 else
   pass "$t"
@@ -1301,6 +1538,50 @@ if (
 t='clean audit-tool runner refuses a CR-bearing worktree interpreter'
 if [[ $rc -eq 0 || -e "$b/audit-cr-interpreter-ran" ]]; then
   fail "$t" 'CR-bearing worktree shebang interpreter executed'
+else
+  pass "$t"
+fi
+
+# A NUL terminates the kernel interpreter path but disappears from Bash `read`.
+audit_nul_interpreter="$b/repo/audit-nul-interpreter"
+command cat >"$audit_nul_interpreter" <<AUDIT_NUL_INTERPRETER
+#!/bin/sh
+printf '%s\n' interpreter >'$b/audit-nul-interpreter-ran'
+exec /bin/sh "\$@"
+AUDIT_NUL_INTERPRETER
+chmod +x "$audit_nul_interpreter"
+mkdir "$b/outside-nul-shebang-bin"
+printf '#!%s\0suffix\nexit 0\n' "$audit_nul_interpreter" \
+  >"$b/outside-nul-shebang-bin/audit-nul-parent"
+chmod +x "$b/outside-nul-shebang-bin/audit-nul-parent"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/outside-nul-shebang-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-nul-parent \
+    >"$b/audit-nul.stdout" 2>"$b/audit-nul.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool runner refuses a NUL-bearing worktree interpreter'
+if [[ $rc -eq 0 || -e "$b/audit-nul-interpreter-ran" ]]; then
+  fail "$t" 'NUL-terminated worktree shebang interpreter executed'
+else
+  pass "$t"
+fi
+
+# NUL after the shebang newline is script payload, not interpreter data.
+mkdir "$b/outside-postline-nul-bin"
+printf '#!/bin/sh\nprintf valid >%s\nexit 0\n#\0binary-payload\n' \
+  "$b/audit-postline-nul-ran" \
+  >"$b/outside-postline-nul-bin/audit-postline-nul"
+chmod +x "$b/outside-postline-nul-bin/audit-postline-nul"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/outside-postline-nul-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-postline-nul \
+    >"$b/audit-postline-nul.stdout" 2>"$b/audit-postline-nul.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool runner accepts NUL after the shebang line'
+if [[ $rc -ne 0 || ! -e "$b/audit-postline-nul-ran" ]]; then
+  fail "$t" "post-shebang NUL audit fixture exit $rc: $(<"$b/audit-postline-nul.stderr")"
 else
   pass "$t"
 fi
@@ -1763,6 +2044,33 @@ if [[ -e "$b/worktree-cr-interpreter-ran" ]]; then
   fail 'a CR-bearing worktree shebang interpreter is refused' \
     'the CR-bearing worktree interpreter executed'
 fi
+
+# Bash drops NUL while reading, but the kernel terminates the interpreter pathname
+# there. The byte-preserving probe must refuse this different parse.
+b=$(new_fixture)
+mkdir "$b/outside-bin"
+command cat >"$b/repo/worktree-nul-interpreter" <<WORKTREE_NUL_INTERPRETER
+#!/bin/sh
+printf '%s\n' interpreter >'$b/worktree-nul-interpreter-ran'
+exec /bin/sh "\$@"
+WORKTREE_NUL_INTERPRETER
+chmod +x "$b/repo/worktree-nul-interpreter"
+printf '#!%s\0suffix\ncat \"$BR_OUTPUT\"\n' "$b/repo/worktree-nul-interpreter" \
+  >"$b/outside-bin/br"
+chmod +x "$b/outside-bin/br"
+assert_refused 'a NUL-bearing worktree shebang interpreter is refused' "$b" \
+  'br has a NUL-bearing script interpreter' "$b/outside-bin:$SYSTEM_PATH"
+if [[ -e "$b/worktree-nul-interpreter-ran" ]]; then
+  fail 'a NUL-bearing worktree shebang interpreter is refused' \
+    'the NUL-terminated worktree interpreter executed'
+fi
+
+# A later NUL belongs to the script body and must not poison interpreter proof.
+b=$(new_fixture)
+printf '#!/bin/sh\ncat "$BR_OUTPUT"\nexit 0\n#\0binary-payload\n' >"$b/bin/br"
+chmod +x "$b/bin/br"
+assert_success 'NUL after the br shebang line remains valid payload' \
+  "$b" "$(<"$b/jsonl-path")"
 
 b=$(new_fixture)
 mkdir "$b/repo/bin"

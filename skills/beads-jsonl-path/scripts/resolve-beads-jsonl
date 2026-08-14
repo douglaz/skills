@@ -137,6 +137,16 @@ _bj_regular_link_count() {
   printf '%s\n' "$count"
 }
 
+_bj_hex_shebang_has_nul() {
+  local bytes=$1 token
+  local IFS=$' \t\n'
+  for token in $bytes; do
+    [[ "$token" != 0a ]] || return 1
+    [[ "$token" != 00 ]] || return 0
+  done
+  return 1
+}
+
 # Git's repository, worktree, index, object store, config, namespace, and pathspec
 # behavior can all be redirected through inherited GIT_* variables. This fact owner
 # is about the repository discovered from the current directory, so remove the
@@ -210,7 +220,7 @@ _bj_root=$(
 _bj_validate_executable_path() {
   local name=$1 diagnostic=$2 path=$3 depth=${4:-0}
   local parent leaf link hops link_count first_line shebang interpreter argument
-  local env_tool interpreter_final safe_entry safe_env_final env_identity
+  local env_tool interpreter_final safe_entry safe_env_final env_identity shebang_bytes
   local -a safe_entries
   # Canonicalize every directory component and the complete final symlink chain.
   # Reject at each hop, not just at the end: an out-of-worktree symlink whose
@@ -251,6 +261,10 @@ _bj_validate_executable_path() {
     [[ -r "$path" ]] || die "$name executable cannot be inspected safely"
   fi
   if [[ "$first_line" == '#!'* ]]; then
+    shebang_bytes=$("$_bj_od" -An -v -N 513 -t x1 "$path" 2>/dev/null) ||
+      die "$diagnostic"
+    ! _bj_hex_shebang_has_nul "$shebang_bytes" ||
+      die "$name has a NUL-bearing script interpreter"
     ((${#first_line} <= 512 && depth < 4)) || die "$diagnostic"
     shebang=${first_line#\#!}
     while [[ "$shebang" == ' '* || "$shebang" == $'\t'* ]]; do

@@ -47,6 +47,10 @@ _bjg_stat=$(command -p -v stat) || {
   printf '%s\n' 'cannot locate a trusted stat for clean Git' >&2
   exit 1
 }
+_bjg_od=$(command -p -v od) || {
+  printf '%s\n' 'cannot locate a trusted od for executable inspection' >&2
+  exit 1
+}
 _bjg_mktemp=$(command -p -v mktemp) || {
   printf '%s\n' 'cannot locate a trusted mktemp for clean Git' >&2
   exit 1
@@ -184,6 +188,16 @@ _bjg_multiple_links_are_colocated() {
   [[ "$found" == "$expected" ]]
 }
 
+_bjg_hex_shebang_has_nul() {
+  local bytes=$1 token
+  local IFS=$' \t\n'
+  for token in $bytes; do
+    [[ "$token" != 0a ]] || return 1
+    [[ "$token" != 00 ]] || return 0
+  done
+  return 1
+}
+
 _bjg_canonicalize_directory() {
   local encoded
   encoded=$(
@@ -302,7 +316,7 @@ _bjg_prepare_audit_path() {
 _bjg_validate_audit_executable() {
   local selected=$1 path=$1 depth=${2:-0}
   local parent leaf link hops link_count first_line shebang interpreter argument
-  local interpreter_final safe_entry safe_env_final env_identity
+  local interpreter_final safe_entry safe_env_final env_identity shebang_bytes
   local -a safe_entries
   _bjg_load_audit_root || return 1
   [[ "$path" == /* ]] || return 1
@@ -342,6 +356,9 @@ _bjg_validate_audit_executable() {
     [[ -r "$path" ]] || return 1
   fi
   if [[ "$first_line" == '#!'* ]]; then
+    shebang_bytes=$("$_bjg_od" -An -v -N 513 -t x1 "$path" 2>/dev/null) ||
+      return 1
+    _bjg_hex_shebang_has_nul "$shebang_bytes" && return 1
     ((${#first_line} <= 512 && depth < 4)) || return 1
     shebang=${first_line#\#!}
     while [[ "$shebang" == ' '* || "$shebang" == $'\t'* ]]; do
@@ -995,7 +1012,8 @@ case ${1-} in
       printf '%s\n' 'cannot canonicalize the current Git worktree for clean push' >&2
       exit 1
     }
-    for _bjg_config_home_name in HOME XDG_CONFIG_HOME; do
+    for _bjg_config_home_name in HOME XDG_CONFIG_HOME XDG_CACHE_HOME \
+      XDG_DATA_HOME XDG_STATE_HOME; do
       if ! command builtin declare -p "$_bjg_config_home_name" >/dev/null 2>&1 \
           || [[ -z ${!_bjg_config_home_name} ]]; then
         continue
@@ -1050,6 +1068,8 @@ case ${1-} in
         printf '%s\n' 'Git/SSH config home is inside the current worktree' >&2
         exit 1
       fi
+      printf -v "$_bjg_config_home_name" '%s' "$_bjg_config_home"
+      export "$_bjg_config_home_name"
     done
     unset _bjg_config_home _bjg_config_home_name _bjg_config_home_raw \
       _bjg_config_leaf _bjg_config_probe _bjg_config_suffix
@@ -1068,7 +1088,10 @@ case ${1-} in
       printf '%s\n' "$count"
     }
     _bjg_external_helper() {
-      local path=$1 diagnostic=$2 parent leaf link hops link_count
+      local path=$1 diagnostic=$2 depth=${3:-0}
+      local parent leaf link hops link_count first_line shebang interpreter argument
+      local interpreter_final safe_entry safe_env_final env_identity env_tool shebang_bytes
+      local -a safe_entries
       [[ "$path" == /* ]] || {
         printf '%s\n' "$diagnostic" >&2
         return 1
@@ -1118,6 +1141,75 @@ case ${1-} in
         printf '%s\n' 'credential helper executable has multiple hard links' >&2
         return 1
       }
+
+      first_line=
+      if ! IFS= command builtin read -r -n 513 first_line 2>/dev/null <"$path"; then
+        [[ -r "$path" ]] || {
+          printf '%s\n' 'credential helper executable cannot be inspected safely' >&2
+          return 1
+        }
+      fi
+      if [[ "$first_line" == '#!'* ]]; then
+        shebang_bytes=$("$_bjg_od" -An -v -N 513 -t x1 "$path" 2>/dev/null) || {
+          printf '%s\n' "$diagnostic" >&2
+          return 1
+        }
+        if _bjg_hex_shebang_has_nul "$shebang_bytes"; then
+          printf '%s\n' 'credential helper has a NUL-bearing script interpreter' >&2
+          return 1
+        fi
+        ((${#first_line} <= 512 && depth < 4)) || {
+          printf '%s\n' "$diagnostic" >&2
+          return 1
+        }
+        shebang=${first_line#\#!}
+        while [[ "$shebang" == ' '* || "$shebang" == $'\t'* ]]; do
+          shebang=${shebang#?}
+        done
+        interpreter=${shebang%%[$' \t']*}
+        [[ "$interpreter" == /* && "$interpreter" != *[$'\r\v\f']* ]] || {
+          printf '%s\n' 'credential helper has an unsafe script interpreter' >&2
+          return 1
+        }
+        argument=${shebang#"$interpreter"}
+        while [[ "$argument" == ' '* || "$argument" == $'\t'* ]]; do
+          argument=${argument#?}
+        done
+        if [[ -e "$interpreter" || -L "$interpreter" ]]; then
+          interpreter_final=$(_bjg_external_helper "$interpreter" "$diagnostic" \
+            "$((depth + 1))") || return 1
+          if [[ -n "$argument" ]]; then
+            env_identity=false
+            IFS=: read -r -a safe_entries <<<"$_bjg_safe_path"
+            for safe_entry in "${safe_entries[@]}"; do
+              [[ -x "$safe_entry/env" ]] || continue
+              safe_env_final=$(_bjg_external_helper "$safe_entry/env" \
+                "$diagnostic" "$((depth + 1))") || continue
+              [[ "$interpreter_final" != "$safe_env_final" ]] ||
+                env_identity=true
+            done
+            if [[ "$env_identity" == true ]]; then
+              [[ "$argument" =~ ^[A-Za-z0-9._+-]+$ ]] || {
+                printf '%s\n' 'credential helper has an unsafe env interpreter argument' >&2
+                return 1
+              }
+              env_tool=$(
+                PATH=$_bjg_safe_path
+                export PATH
+                type -P -- "$argument"
+              ) || {
+                printf '%s\n' 'credential helper env target is unavailable' >&2
+                return 1
+              }
+              _bjg_external_helper "$env_tool" "$diagnostic" \
+                "$((depth + 1))" >/dev/null || return 1
+            else
+              printf '%s\n' 'credential helper has an unsupported script interpreter argument' >&2
+              return 1
+            fi
+          fi
+        fi
+      fi
       printf '%s\n' "$path"
     }
     _bjg_git_exec_path=$("$_bjg_git" --exec-path) || {
@@ -1278,10 +1370,24 @@ case ${1-} in
     else
       _bjg_transport_config+=( -c protocol.ssh.allow=never )
     fi
-    command unset SSH_ASKPASS SSH_ASKPASS_REQUIRE DISPLAY WAYLAND_DISPLAY
-    GIT_TERMINAL_PROMPT=0
-    export GIT_TERMINAL_PROMPT
-    exec "$_bjg_git" --no-pager --no-replace-objects \
+    _bjg_push_environment=(
+      "$_bjg_env" -i "PATH=$_bjg_safe_path" "LC_ALL=C"
+      "GIT_TERMINAL_PROMPT=0" "PYTHONNOUSERSITE=1" "PYTHONSAFEPATH=1"
+    )
+    for _bjg_push_variable in HOME XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME \
+      XDG_STATE_HOME USER LOGNAME SHELL TERM \
+      COLORTERM NO_COLOR GH_TOKEN GITHUB_TOKEN \
+      HTTPS_PROXY https_proxy HTTP_PROXY http_proxy ALL_PROXY all_proxy \
+      NO_PROXY no_proxy SSL_CERT_FILE SSL_CERT_DIR NIX_SSL_CERT_FILE \
+      SSH_AUTH_SOCK DBUS_SESSION_BUS_ADDRESS GCM_CREDENTIAL_STORE; do
+      if command builtin declare -p "$_bjg_push_variable" >/dev/null 2>&1; then
+        _bjg_push_environment+=(
+          "$_bjg_push_variable=${!_bjg_push_variable}"
+        )
+      fi
+    done
+    exec "${_bjg_push_environment[@]}" "$_bjg_git" \
+      --no-pager --no-replace-objects \
       -c core.fsmonitor=false -c core.hooksPath=/dev/null \
       -c push.gpgSign=false -c core.askPass= \
       -c push.default=nothing -c push.followTags=false \
