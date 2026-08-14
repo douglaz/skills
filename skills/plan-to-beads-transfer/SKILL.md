@@ -71,6 +71,14 @@ _bjp_cmp=$(command -p -v cmp) || {
   printf '%s\n' 'cannot locate a trusted cmp for beads-jsonl-path — do NOT write' >&2
   exit 1
 }
+_bjp_git_environment=( "${!GIT_@}" )
+for _bjp_git_variable in "${_bjp_git_environment[@]}"; do
+  command unset -- "$_bjp_git_variable" || {
+    printf '%s\n' 'cannot sanitize the Git environment for beads-jsonl-path — do NOT write' >&2
+    exit 1
+  }
+done
+unset _bjp_git_variable _bjp_git_environment
 
 BEADS_JSONL_RESOLVER=
 for _bjp_dir in "$HOME/.claude/skills/beads-jsonl-path" \

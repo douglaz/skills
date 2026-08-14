@@ -1067,14 +1067,16 @@ gitlink, and wrong-worktree states rather than trusting porcelain visibility.
 The companion also exposes two explicit read-only modes required by existing
 handoffs. `--allow-dirty` relaxes only the three-way byte-identity requirement;
 it retains containment, one normally flagged tracked stage-0 `100644` index
-entry, a matching regular HEAD entry, and a non-symlink regular `100644`
-worktree file before returning a path. Because `git ls-files -v` reports `H`
+entry that is not intent-to-add, a matching regular HEAD entry, and a
+non-symlink regular `100644` worktree file before returning a path. Because
+`git ls-files -v` reports `H`
 for an fsmonitor-valid entry, that mode additionally reads `git ls-files -f -z`
 and, when Git is answering for the path from the monitor's cache, requires the
 index blob and worktree bytes to match: a missed write would otherwise leave the
 consumer's own `git status` and `git diff HEAD` showing a clean file. `--recovery` may name an absent or
 untracked path after byte-safe resolution and containment, but it still refuses
-symlink and nonregular occupants. Recovery mode names an artifact for
+symlink and nonregular occupants and every path equal to or below `$GIT_DIR`,
+`--git-common-dir`, or `<worktree>/.git`. Recovery mode names an artifact for
 restoration only and never authorizes a subsequent Beads query, mutation, or
 flush.
 
@@ -1088,9 +1090,9 @@ returning nonzero after emitting valid JSON; missing, null, empty, or non-string
 `jq`; NUL/CR/LF path values; and a resolved path outside the current worktree.
 Focused fixtures prove that each failure performs no Beads mutation or flush.
 Further fixtures cover staged-only, unstaged-only, staged-plus-unstaged,
-mode-only, assume-unchanged, skip-worktree, unmerged, symlink, gitlink,
+mode-only, intent-to-add, assume-unchanged, skip-worktree, unmerged, symlink, gitlink,
 ignored/untracked, missing, and nonregular JSONL state, plus a path inside a
-different worktree; each is refused before any mutation or flush. This is P0
+different worktree and a Git administrative path; each is refused before any mutation or flush. This is P0
 because the
 first `br` write after an ambiguous resolution can export a stale cache over the
 tracked JSONL and silently destroy unstaged bead bodies.

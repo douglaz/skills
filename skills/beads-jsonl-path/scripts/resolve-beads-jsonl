@@ -64,6 +64,18 @@ _bj_rmdir=$(command -p -v rmdir) ||
 _bj_readlink=$(command -p -v readlink) ||
   die 'cannot locate a trusted readlink for the beads resolver'
 
+# Git's repository, worktree, index, object store, config, namespace, and pathspec
+# behavior can all be redirected through inherited GIT_* variables. This fact owner
+# is about the repository discovered from the current directory, so remove the
+# entire Git environment namespace before its first Git invocation rather than
+# attempting an inevitably incomplete allowlist.
+_bj_git_environment=( "${!GIT_@}" )
+for _bj_git_variable in "${_bj_git_environment[@]}"; do
+  command unset -- "$_bj_git_variable" ||
+    die 'cannot sanitize the Git environment for the beads resolver'
+done
+unset _bj_git_variable _bj_git_environment
+
 _bj_tmp=$("$_bj_mktemp" -d) || die 'cannot create beads resolver workspace'
 _bj_files=(
   "$_bj_tmp/where.json"

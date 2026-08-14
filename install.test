@@ -652,12 +652,12 @@ else
   pass "$t"
 fi
 
-# Hostile functions and PATH executables arrive from the caller at the same time
-# as a repository-controlled absolute CODEX_HOME. The legacy control has the old
-# ambient selection shape: poisoned `git` reports /etc as the worktree, so it
-# executes the planted resolver. The documented block must cross its clean Bash
-# boundary and pin proof utilities before it asks Git or compares candidates.
-t="resolver locator isolates hostile functions and PATH tools before CODEX_HOME provenance"
+# Hostile functions, PATH executables, and Git repository selectors arrive from
+# the caller at the same time as a repository-controlled absolute CODEX_HOME.
+# The legacy control reports /etc as the worktree, so it executes the planted
+# resolver. The documented block must cross its clean Bash boundary, clear
+# inherited GIT_* state, and pin proof utilities before provenance checks.
+t="resolver locator isolates hostile shell and Git state before CODEX_HOME provenance"
 b=$(mktemp -d "$WORK/locator.XXXXXX")
 mkdir -p "$b/main" "$b/home"
 git init -q "$b/main"
@@ -667,6 +667,7 @@ printf '%s\n' baseline >"$b/main/baseline"
 git -C "$b/main" add -- baseline
 git -C "$b/main" commit -qm baseline
 git -C "$b/main" worktree add -q -b locator-second "$b/second" HEAD
+git init -q --bare "$b/hostile-admin"
 mkdir -p "$b/second/.codex/skills/beads-jsonl-path/scripts" "$b/second/bin"
 command cat >"$b/second/.codex/skills/beads-jsonl-path/scripts/resolve-beads-jsonl" <<'HOSTILE_WORKTREE_RESOLVER'
 #!/usr/bin/env bash
@@ -706,6 +707,7 @@ done
 BEADS_JSONL=$("$BEADS_JSONL_RESOLVER") || exit 97
 '
 HOME="$b/home" CODEX_HOME="$b/second/.codex" DRIVEN_WORKTREE="$b/second" \
+  GIT_DIR="$b/hostile-admin" GIT_WORK_TREE=/etc \
   HOSTILE_PATH_TOOLS_RAN="$b/path-tools-ran" PATH="$b/second/bin:$PATH" \
   LOCATOR_EXECUTIONS="$b/executions" LEGACY_LOCATOR_BLOCK="$legacy_locator_block" bash -c '
     git() { printf "%s\n" /etc; }
@@ -722,6 +724,7 @@ else
   unlink "$b/executions"
   rm -f "$b/path-tools-ran"
   if HOME="$b/home" CODEX_HOME="$b/second/.codex" DRIVEN_WORKTREE="$b/second" \
+      GIT_DIR="$b/hostile-admin" GIT_WORK_TREE=/etc \
       HOSTILE_PATH_TOOLS_RAN="$b/path-tools-ran" PATH="$b/second/bin:$PATH" \
       LOCATOR_EXECUTIONS="$b/executions" LOCATOR_BLOCK="$locator_block" bash -c '
         git() { printf "%s\n" /etc; }
@@ -885,6 +888,8 @@ while IFS= read -r consumer; do
     resolver_consistency_failures+="$consumer does not pin Git to Bash's POSIX utility path; "
   elif ! grep -Fq -- '_bjp_cmp=$(command -p -v cmp)' "$HERE/$consumer"; then
     resolver_consistency_failures+="$consumer does not pin cmp to Bash's POSIX utility path; "
+  elif ! grep -Fq -- '_bjp_git_environment=( "${!GIT_@}" )' "$HERE/$consumer"; then
+    resolver_consistency_failures+="$consumer does not clear inherited Git repository selectors; "
   elif ! grep -Fq -- 'elif ! "$_bjp_cmp" -s "$BEADS_JSONL_RESOLVER" "$_bjp_candidate"; then' \
     "$HERE/$consumer"; then
     resolver_consistency_failures+="$consumer does not compare installed resolver candidates; "

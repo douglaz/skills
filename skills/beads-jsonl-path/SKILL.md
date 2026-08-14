@@ -53,6 +53,14 @@ _bjp_cmp=$(command -p -v cmp) || {
   printf '%s\n' 'cannot locate a trusted cmp for beads-jsonl-path — do NOT write' >&2
   exit 1
 }
+_bjp_git_environment=( "${!GIT_@}" )
+for _bjp_git_variable in "${_bjp_git_environment[@]}"; do
+  command unset -- "$_bjp_git_variable" || {
+    printf '%s\n' 'cannot sanitize the Git environment for beads-jsonl-path — do NOT write' >&2
+    exit 1
+  }
+done
+unset _bjp_git_variable _bjp_git_environment
 
 BEADS_JSONL_RESOLVER=
 for _bjp_dir in "$HOME/.claude/skills/beads-jsonl-path" \
@@ -135,7 +143,9 @@ relative to the repository you are driving.
 
 On success, `BEADS_JSONL` is the only stdout: an absolute path inside the
 current Git worktree whose stage-0 index entry, normal index flags, HEAD entry,
-worktree type and mode, and raw bytes all agree.
+worktree type and mode, and raw bytes all agree. Both the locator and resolver
+discard inherited `GIT_*` overrides before repository discovery, so a caller
+cannot redirect that proof to another worktree, index, object store, or config.
 
 On failure, stop before any Beads write. Do not replace the owner with
 `git status`, porcelain parsing, or a hardcoded `.beads/issues.jsonl` path.
@@ -187,7 +197,9 @@ BEADS_JSONL=$("$BEADS_JSONL_RESOLVER" --recovery) || exit 1
 Recovery may need to name a missing export, so this mode retains byte-safe resolution and
 worktree containment but does not require tracked/index/HEAD state. It accepts only an
 absent path or a non-symlink regular file; a symlink, FIFO, directory, or other nonregular
-occupant still refuses. Never use recovery mode before a `br` write.
+occupant still refuses. A path equal to or beneath `$GIT_DIR`, Git's common
+administrative directory, or `<worktree>/.git` also refuses, including a linked
+worktree's `.git` pointer file. Never use recovery mode before a `br` write.
 Read the symlink half at its measured width: on br 0.2.19 a `.beads/issues.jsonl` symlink
 whose target exists is already resolved to that target before this owner sees it, so the
 refusal covers the dangling link and containment covers one pointing out of the worktree,

@@ -123,11 +123,26 @@ safe_br_calls_only() {
 # every assert_* clears them.
 RESOLVER_ARGS=()
 RESOLVER_CWD=
+RESOLVER_GIT_DIR=
+RESOLVER_GIT_WORK_TREE=
+RESOLVER_GIT_INDEX_FILE=
 
 run_resolver() {
   local base=$1 runtime_path=$2
   (
     cd "${RESOLVER_CWD:-$base/repo}" || exit 98
+    if [[ -n "$RESOLVER_GIT_DIR" ]]; then
+      GIT_DIR=$RESOLVER_GIT_DIR
+      export GIT_DIR
+    fi
+    if [[ -n "$RESOLVER_GIT_WORK_TREE" ]]; then
+      GIT_WORK_TREE=$RESOLVER_GIT_WORK_TREE
+      export GIT_WORK_TREE
+    fi
+    if [[ -n "$RESOLVER_GIT_INDEX_FILE" ]]; then
+      GIT_INDEX_FILE=$RESOLVER_GIT_INDEX_FILE
+      export GIT_INDEX_FILE
+    fi
     BR_CALLS="$base/br.calls" BR_MUTATION="$base/br.mutation" \
       BR_OUTPUT="$base/where.out" BR_EXIT="${BR_EXIT:-0}" \
       PATH="$runtime_path" "$RESOLVER" ${RESOLVER_ARGS+"${RESOLVER_ARGS[@]}"} \
@@ -142,6 +157,9 @@ assert_refused() {
   if run_resolver "$base" "$runtime_path"; then rc=0; else rc=$?; fi
   RESOLVER_ARGS=()
   RESOLVER_CWD=
+  RESOLVER_GIT_DIR=
+  RESOLVER_GIT_WORK_TREE=
+  RESOLVER_GIT_INDEX_FILE=
   snapshot_fixture "$base" "$base/after"
   if [[ $rc -eq 0 ]]; then
     fail "$name" 'resolver accepted unsafe state'
@@ -166,6 +184,9 @@ assert_success() {
   if run_resolver "$base" "$base/bin:$SYSTEM_PATH"; then rc=0; else rc=$?; fi
   RESOLVER_ARGS=()
   RESOLVER_CWD=
+  RESOLVER_GIT_DIR=
+  RESOLVER_GIT_WORK_TREE=
+  RESOLVER_GIT_INDEX_FILE=
   snapshot_fixture "$base" "$base/after"
   printf '%s\n' "$expected" >"$base/expected"
   if [[ $rc -ne 0 ]]; then
@@ -313,33 +334,14 @@ if [[ -e "$b/worktree-tool-ran" ]]; then
   fail 'a worktree-controlled jq executable is refused' 'the refused jq shim executed'
 fi
 
-# A Git worktree rooted at `/` contains every absolute PATH executable. The
-# containment special case must therefore refuse before invoking even an
-# otherwise external-looking stub.
+# Repository selectors inherited from a caller must not redirect the proof away
+# from the repository containing the current directory. A bare Git directory
+# paired with `/` as its worktree would otherwise make rev-parse report `/`.
 b=$(new_fixture)
 git init -q --bare "$b/root-admin"
-snapshot_fixture "$b" "$b/before"
-if (
-  cd "$b/repo" || exit 98
-  GIT_DIR="$b/root-admin" GIT_WORK_TREE=/ \
-    BR_CALLS="$b/br.calls" BR_MUTATION="$b/br.mutation" BR_OUTPUT="$b/where.out" \
-    PATH="$b/bin:$SYSTEM_PATH" "$RESOLVER" >"$b/stdout" 2>"$b/stderr"
-); then rc=0; else rc=$?; fi
-snapshot_fixture "$b" "$b/after"
-t='a root worktree refuses every PATH-selected proof executable'
-if [[ $rc -eq 0 ]]; then
-  fail "$t" 'resolver accepted a proof executable contained by the root worktree'
-elif [[ -s "$b/stdout" ]]; then
-  fail "$t" 'resolver printed a path while refusing the root worktree'
-elif ! grep -Fq -- 'br resolves inside the current Git worktree' "$b/stderr"; then
-  fail "$t" "missing root-worktree diagnostic: $(<"$b/stderr")"
-elif [[ -e "$b/br.calls" || -e "$b/br.mutation" ]]; then
-  fail "$t" 'resolver invoked br before refusing the root worktree'
-elif ! cmp -s "$b/before" "$b/after"; then
-  fail "$t" 'root-worktree refusal changed the fixture'
-else
-  pass "$t"
-fi
+RESOLVER_GIT_DIR="$b/root-admin"
+RESOLVER_GIT_WORK_TREE=/
+assert_success 'inherited Git repository selectors are cleared' "$b" "$(<"$b/jsonl-path")"
 
 # Canonicalizing only an executable's parent is insufficient: a PATH directory
 # outside the checkout can contain a final symlink back to checkout-controlled
@@ -503,6 +505,20 @@ b=$(new_fixture)
 printf '%s\n' staged >>"$(<"$b/jsonl-path")"
 git -C "$b/repo" add -- .beads/issues.jsonl
 assert_refused 'staged-only content is refused' "$b" \
+  'beads JSONL differs among HEAD, index, and worktree'
+
+# An inherited alternate index can hide the actual repository's staged bytes
+# from every ls-files/diff-files/cat-file proof. Populate it from HEAD, then
+# diverge the real index while restoring only the worktree copy.
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+alternate_index="$b/alternate.index"
+GIT_INDEX_FILE="$alternate_index" git -C "$b/repo" read-tree HEAD
+printf '%s\n' staged-through-real-index >>"$jsonl"
+git -C "$b/repo" add -- .beads/issues.jsonl
+git -C "$b/repo" show HEAD:.beads/issues.jsonl >"$jsonl"
+RESOLVER_GIT_INDEX_FILE="$alternate_index"
+assert_refused 'an inherited alternate Git index cannot hide staged content' "$b" \
   'beads JSONL differs among HEAD, index, and worktree'
 
 b=$(new_fixture)
