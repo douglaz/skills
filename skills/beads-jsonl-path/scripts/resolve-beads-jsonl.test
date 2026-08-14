@@ -1007,6 +1007,28 @@ else
   pass "$t"
 fi
 
+# Caller-exported values cannot pre-populate the runner's private root cache and
+# make a worktree tool appear to live under a different repository.
+command cat >"$b/repo/audit-tool-path/audit-cache-poison" <<CACHE_POISON_TOOL
+#!/bin/sh
+printf '%s\n' poison >'$b/audit-cache-poison-ran'
+CACHE_POISON_TOOL
+chmod +x "$b/repo/audit-tool-path/audit-cache-poison"
+if (
+  cd "$b/repo" || exit 98
+  _bjg_audit_root_loaded=true _bjg_audit_root=/not-the-repository \
+    _bjg_audit_root_raw=/not-the-repository \
+    PATH="$b/repo/audit-tool-path:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-cache-poison \
+    >"$b/audit-cache-poison.stdout" 2>"$b/audit-cache-poison.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool runner ignores an inherited private root cache'
+if [[ $rc -eq 0 || -e "$b/audit-cache-poison-ran" ]]; then
+  fail "$t" 'caller cache poisoning admitted a worktree audit tool'
+else
+  pass "$t"
+fi
+
 # A validated outside tool receives only the explicit audit environment, not
 # interpreter startup/code-injection variables.
 mkdir "$b/outside-audit-bin"
@@ -1029,6 +1051,245 @@ if (
 t='clean audit-tool runner strips startup state from outside tools'
 if [[ $rc -ne 0 || ! -e "$b/audit-probe-ran" ]]; then
   fail "$t" "outside audit probe exit $rc: $(<"$b/audit-probe.stderr")"
+else
+  pass "$t"
+fi
+
+# The clean descendant PATH must not expose a nominally outside command whose
+# inode is also repository-controlled through a hard link.
+mkdir "$b/outside-hardlink-bin"
+command cat >"$b/repo/hardlinked-child" <<HARDLINKED_AUDIT_CHILD
+#!/bin/sh
+printf '%s\n' child >'$b/hardlinked-audit-child-ran'
+HARDLINKED_AUDIT_CHILD
+chmod +x "$b/repo/hardlinked-child"
+ln "$b/repo/hardlinked-child" "$b/outside-hardlink-bin/audit-child"
+command cat >"$b/outside-hardlink-bin/audit-parent" <<HARDLINKED_AUDIT_PARENT
+#!/bin/sh
+audit-child
+printf '%s\n' parent >'$b/hardlinked-audit-parent-ran'
+HARDLINKED_AUDIT_PARENT
+chmod +x "$b/outside-hardlink-bin/audit-parent"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/outside-hardlink-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-parent \
+    >"$b/hardlinked-audit.stdout" 2>"$b/hardlinked-audit.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool PATH refuses a hard-linked worktree descendant'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'runner admitted an outside PATH directory with a hard-linked child'
+elif [[ -e "$b/hardlinked-audit-child-ran" \
+        || -e "$b/hardlinked-audit-parent-ran" ]]; then
+  fail "$t" 'runner executed through a hard-linked audit descendant'
+else
+  pass "$t"
+fi
+
+# Canonicalization must not turn one validated caller entry into multiple runtime
+# PATH entries. A `:` in the real directory name would otherwise expose the
+# worktree path encoded after it without scanning that injected directory.
+mkdir "$b/repo/colon-child-bin"
+command cat >"$b/repo/colon-child-bin/audit-colon-child" <<COLON_AUDIT_CHILD
+#!/bin/sh
+printf '%s\n' child >'$b/colon-audit-child-ran'
+COLON_AUDIT_CHILD
+chmod +x "$b/repo/colon-child-bin/audit-colon-child"
+colon_audit_dir="$b/colon-prefix:$b/repo/colon-child-bin"
+mkdir -p "$colon_audit_dir"
+ln -s "$colon_audit_dir" "$b/colon-audit-alias"
+command cat >"$colon_audit_dir/audit-colon-parent" <<COLON_AUDIT_PARENT
+#!/bin/sh
+audit-colon-child
+printf '%s\n' parent >'$b/colon-audit-parent-ran'
+COLON_AUDIT_PARENT
+chmod +x "$colon_audit_dir/audit-colon-parent"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/colon-audit-alias:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-colon-parent \
+    >"$b/colon-audit.stdout" 2>"$b/colon-audit.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool PATH refuses a colon-bearing canonical directory'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'runner serialized one validated directory as multiple PATH entries'
+elif [[ -e "$b/colon-audit-child-ran" || -e "$b/colon-audit-parent-ran" ]]; then
+  fail "$t" 'runner executed through an injected worktree PATH entry'
+else
+  pass "$t"
+fi
+
+# Preserve trailing newlines while canonicalizing. Otherwise an alias to `dir\n`
+# is checked as sibling `dir`, while execution through the alias reaches different
+# bytes.
+newline_audit_dir="$b/newline-audit"$'\n'
+mkdir "$b/newline-audit" "$newline_audit_dir"
+ln -s "$newline_audit_dir" "$b/newline-audit-alias"
+command cat >"$b/newline-audit/audit-newline-parent" <<'SAFE_NEWLINE_PARENT'
+#!/bin/sh
+exit 0
+SAFE_NEWLINE_PARENT
+command cat >"$newline_audit_dir/audit-newline-parent" <<NEWLINE_AUDIT_PARENT
+#!/bin/sh
+printf '%s\n' parent >'$b/newline-audit-parent-ran'
+NEWLINE_AUDIT_PARENT
+chmod +x "$b/newline-audit/audit-newline-parent" \
+  "$newline_audit_dir/audit-newline-parent"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/newline-audit-alias:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-newline-parent \
+    >"$b/newline-audit.stdout" 2>"$b/newline-audit.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool PATH preserves and refuses a trailing-newline directory'
+if [[ $rc -eq 0 || -e "$b/newline-audit-parent-ran" ]]; then
+  fail "$t" 'runner validated a different sibling than the executed audit tool'
+else
+  pass "$t"
+fi
+
+# Execute/search permission is insufficient: the runner must be able to enumerate
+# every name that a validated parent could resolve in an admitted directory.
+mkdir "$b/nonlist-audit-bin"
+command cat >"$b/repo/audit-nonlist-child" <<NONLIST_AUDIT_CHILD
+#!/bin/sh
+printf '%s\n' child >'$b/nonlist-audit-child-ran'
+NONLIST_AUDIT_CHILD
+chmod +x "$b/repo/audit-nonlist-child"
+ln "$b/repo/audit-nonlist-child" "$b/nonlist-audit-bin/audit-nonlist-child"
+command cat >"$b/nonlist-audit-bin/audit-nonlist-parent" <<NONLIST_AUDIT_PARENT
+#!/bin/sh
+audit-nonlist-child
+printf '%s\n' parent >'$b/nonlist-audit-parent-ran'
+NONLIST_AUDIT_PARENT
+chmod +x "$b/nonlist-audit-bin/"*
+chmod 111 "$b/nonlist-audit-bin"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/nonlist-audit-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-nonlist-parent \
+    >"$b/nonlist-audit.stdout" 2>"$b/nonlist-audit.stderr"
+); then rc=0; else rc=$?; fi
+chmod 755 "$b/nonlist-audit-bin"
+t='clean audit-tool PATH refuses a search-only non-listable directory'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'runner admitted a caller directory it could not enumerate'
+elif [[ -e "$b/nonlist-audit-child-ran" || -e "$b/nonlist-audit-parent-ran" ]]; then
+  fail "$t" 'runner executed an unenumerated audit descendant'
+else
+  pass "$t"
+fi
+
+# Compatibility control: an outside symlinked parent can invoke an outside
+# symlinked child after every exposed executable has passed the same provenance
+# and single-link validation.
+mkdir "$b/symlink-audit-bin"
+command cat >"$b/symlink-audit-bin/audit-child-real" <<SYMLINK_AUDIT_CHILD
+#!/bin/sh
+[ "\$*" = 'exact child argument' ] || exit 93
+printf '%s\n' child >'$b/symlink-audit-child-ran'
+SYMLINK_AUDIT_CHILD
+command cat >"$b/symlink-audit-bin/audit-parent-real" <<SYMLINK_AUDIT_PARENT
+#!/bin/sh
+audit-symlink-child exact child argument
+printf '%s\n' parent >'$b/symlink-audit-parent-ran'
+SYMLINK_AUDIT_PARENT
+chmod +x "$b/symlink-audit-bin/"*-real
+ln -s audit-child-real "$b/symlink-audit-bin/audit-symlink-child"
+ln -s audit-parent-real "$b/symlink-audit-bin/audit-symlink-parent"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/symlink-audit-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-symlink-parent \
+    >"$b/symlink-audit.stdout" 2>"$b/symlink-audit.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool PATH keeps validated symlinked parents and descendants working'
+if [[ $rc -ne 0 || ! -e "$b/symlink-audit-child-ran" \
+      || ! -e "$b/symlink-audit-parent-ran" ]]; then
+  fail "$t" "validated symlink wrapper fixture exit $rc: $(<"$b/symlink-audit.stderr")"
+else
+  pass "$t"
+fi
+
+# A moderately populated unrelated caller directory remains compatible while its
+# entries count against the one global streamed-admission budget.
+mkdir "$b/large-audit-bin"
+command cat >"$b/large-audit-bin/audit-large-parent" <<LARGE_AUDIT_PARENT
+#!/bin/sh
+printf '%s\n' parent >'$b/large-audit-parent-ran'
+LARGE_AUDIT_PARENT
+chmod +x "$b/large-audit-bin/audit-large-parent"
+large_entry=1
+while ((large_entry <= 65)); do
+  : >"$b/large-audit-bin/non-executable-$large_entry"
+  large_entry=$((large_entry + 1))
+done
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/large-audit-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-large-parent \
+    >"$b/large-audit.stdout" 2>"$b/large-audit.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool PATH accepts a populated directory within the global budget'
+if [[ $rc -ne 0 || ! -e "$b/large-audit-parent-ran" ]]; then
+  fail "$t" 'runner imposed an artificial 64-entry per-directory cliff'
+else
+  pass "$t"
+fi
+
+# More than 1,024 total exposed entries is refused before the selected parent can
+# run, regardless of how many of those names are executable.
+mkdir "$b/over-budget-audit-bin"
+command cat >"$b/over-budget-audit-bin/audit-over-budget-parent" <<OVER_BUDGET_PARENT
+#!/bin/sh
+printf '%s\n' parent >'$b/over-budget-audit-parent-ran'
+OVER_BUDGET_PARENT
+chmod +x "$b/over-budget-audit-bin/audit-over-budget-parent"
+over_budget_entry=1
+while ((over_budget_entry <= 1025)); do
+  : >"$b/over-budget-audit-bin/non-executable-$over_budget_entry"
+  over_budget_entry=$((over_budget_entry + 1))
+done
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/over-budget-audit-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-over-budget-parent \
+    >"$b/over-budget-audit.stdout" 2>"$b/over-budget-audit.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool PATH refuses more than the global streamed entry budget'
+if [[ $rc -eq 0 || -e "$b/over-budget-audit-parent-ran" ]]; then
+  fail "$t" 'runner admitted more than 1,024 caller PATH entries'
+else
+  pass "$t"
+fi
+
+# The separate directory ceiling bounds find/shell workers even when every
+# directory is nearly empty.
+many_audit_path=
+many_directory=1
+while ((many_directory <= 65)); do
+  mkdir "$b/many-audit-bin-$many_directory"
+  : >"$b/many-audit-bin-$many_directory/non-executable"
+  if [[ -n "$many_audit_path" ]]; then
+    many_audit_path=$many_audit_path:
+  fi
+  many_audit_path=$many_audit_path$b/many-audit-bin-$many_directory
+  many_directory=$((many_directory + 1))
+done
+command cat >"$b/many-audit-bin-1/audit-many-parent" <<MANY_AUDIT_PARENT
+#!/bin/sh
+printf '%s\n' parent >'$b/many-audit-parent-ran'
+MANY_AUDIT_PARENT
+chmod +x "$b/many-audit-bin-1/audit-many-parent"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$many_audit_path:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-many-parent \
+    >"$b/many-audit.stdout" 2>"$b/many-audit.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool PATH bounds the combined caller directory count'
+if [[ $rc -eq 0 || -e "$b/many-audit-parent-ran" ]]; then
+  fail "$t" 'runner admitted more than the bounded caller directory count'
 else
   pass "$t"
 fi

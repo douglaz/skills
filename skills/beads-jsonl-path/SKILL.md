@@ -262,6 +262,12 @@ Push also disables credential helpers, askpass, SSH configuration commands, and
 interactive prompts while retaining the caller's SSH agent. For HTTPS, it
 re-enables only system/global credential helpers after refusing a `HOME` or
 `XDG_CONFIG_HOME` inside the driven worktree.
+The runner's audit-tool modes validate every executable exposed by the caller's
+outside-worktree PATH directories at launch (including symbolic and hard-link
+provenance), then execute with only that admitted PATH. This is a static launch
+boundary, not protection from a concurrently hostile process running as the same
+OS user: if another same-identity process can rewrite those tool directories
+between validation and lookup, stop rather than starting the audit.
 
 On failure, stop before any Beads write. Do not replace the owner with
 `git status`, porcelain parsing, or a hardcoded `.beads/issues.jsonl` path.
