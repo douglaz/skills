@@ -15,7 +15,7 @@ compatibility: Requires `rb-lite` on `PATH` or `nix run --refresh github:douglaz
 
 Use `rb-lite` as the default lightweight implement → review loop for
 single-branch, single-task work in the current repo. Also use it as the
-execution engine for draining an existing `br` backlog: `br ready` supplies
+execution engine for draining an existing `br` backlog: `"$BEADS_JSONL_RESOLVER" --run-br ready` supplies
 the work list, and each bead gets one focused rb-lite run. When the work list
 does not exist yet and the goal is a clean branch, the harden-until-clean drive
 generates it from a review panel and feeds the same drain.
@@ -182,11 +182,14 @@ for PR creation/checks/merge, and **`jq` in the HOST shell**. That last one is n
 covered by the Nix-wrapper exemption above: the wrapper supplies `jq` to rb-lite, not
 to you. Load exact companion skill `rb-lite-backlog-drain` for
 [step 11's collateral-damage check and recovery](../rb-lite-backlog-drain/SKILL.md#backlog-step-11),
-which resolve the graph's real path through `br where --json | jq`. Without host `jq` a drain can run `br update`
+which resolve the graph's real path through exact companion
+`beads-jsonl-path/scripts/resolve-beads-jsonl` — its default clean-state mode before the
+first write, `--allow-dirty` for the structurally tracked post-write field diff, and
+`--recovery` only when naming the damaged artifact. Without that owner a drain can run `"$BEADS_JSONL_RESOLVER" --run-br update`
 and flush — silently reverting unrelated bead bodies — and only then fail at the command
 that would have located the damage. Check it before the first bead, not after. Require **`br` ≥ 0.1.45**: older builds corrupt
-their DB after branch resets, so `br update`/`br close` start returning
-`ISSUE_NOT_FOUND` while `br show`/`br list` keep working — which hides the
+their DB after branch resets, so `"$BEADS_JSONL_RESOLVER" --run-br update`/`"$BEADS_JSONL_RESOLVER" --run-br close` start returning
+`ISSUE_NOT_FOUND` while `"$BEADS_JSONL_RESOLVER" --run-br show`/`"$BEADS_JSONL_RESOLVER" --run-br list` keep working — which hides the
 failure until bead state is already lost. Both drain modes reset branches after
 every merge, so they hit that bug hard. It should use the repo's documented local gates;
 for Rust/Nix repos, default to `cargo fmt`, `cargo clippy`, `cargo test`, and
@@ -538,7 +541,7 @@ The load-bearing points, if you read nothing else:
   branch; the loop resets it to origin after every merge.
 - **Run the two reviewers in parallel and never show one the other's findings.**
   Correlated reviewers are one reviewer at twice the price.
-- **One defect, one bead.** Dedupe across reviewers before `br create`, or you
+- **One defect, one bead.** Dedupe across reviewers before `"$BEADS_JSONL_RESOLVER" --run-br create`, or you
   build yourself a merge conflict out of two branches fixing the same line.
 - **Every bead's acceptance criteria name what must KEEP working**, not only
   what is broken. Skip that and a security narrowing produces an over-correction
@@ -591,7 +594,7 @@ phrases like "X happens when Y", not only test function names.>
   `.beads/` as orchestration/state directories, not product code to review.
   That is a *reviewing* scope rule, not an editing licence — nobody, implementer
   or operator, hand-edits `.beads/issues.jsonl`; bead text is written with
-  `br update -d/--notes` or it gets silently reverted by the next flush
+  `"$BEADS_JSONL_RESOLVER" --run-br update <id> --description "<full body>"` or it gets silently reverted by the next flush
   ([exact companion skill `rb-lite-backlog-drain`, step 11](../rb-lite-backlog-drain/SKILL.md#backlog-step-11)).
   This does NOT forbid ordinary git usage: **`git add` any new SOURCE file you
   create** so it appears in the reviewed diff (`git diff <base>` omits untracked
@@ -607,7 +610,7 @@ phrases like "X happens when Y", not only test function names.>
   show.
 
 ## Acceptance criteria
-- <Acceptance criteria copied from `br show <id>`.>
+- <Acceptance criteria copied from `"$BEADS_JSONL_RESOLVER" --run-br show <id>`.>
 - <What must KEEP working — name the legitimate cases the change must preserve.
   Criteria that only describe what to block get signed off, and the breakage
   they cause comes back as its own bead later.>
@@ -625,7 +628,7 @@ while the evidence is fresh:
 - If rb-lite fails for a reason unrelated to the bead (tool crash, reviewer
   panel failure, auth/config breakage, task parser bug, ignored-files problem,
   or implementer self-interference), file a fresh bead with
-  `br create -t bug -p <0|1|2> -l dogfood,rb-lite "..." -d "..."`. Include
+  `"$BEADS_JSONL_RESOLVER" --run-br create -t bug -p <0|1|2> -l dogfood,rb-lite "..." -d "..."`. Include
   observed behavior, repro trace, expected behavior, likely fix options, and
   acceptance criteria.
 - If the dogfood bead is P0 or P1, interrupt the queue and fix it next. Since
@@ -987,7 +990,9 @@ rb-lite run \
 **Run one bead from a backlog:**
 
 ```bash
-br show <id>
+# First initialize BEADS_JSONL_RESOLVER with the installed companion procedure
+# in references/harden-until-clean.md section 2.
+"$BEADS_JSONL_RESOLVER" --run-br show <id>
 rb-lite run \
   --implementer claude,codex \
   --task-file .rb-lite/tasks/bead-<id>.md \

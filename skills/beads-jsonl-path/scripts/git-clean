@@ -1,0 +1,1640 @@
+#!/bin/sh
+# Run one Git command through a clean, non-repository-controlled environment.
+# The documented caller-shell locator clears loader injection before this
+# shebang starts; repeat the cleanup here so it cannot reach later execs.
+POSIXLY_CORRECT=y
+export POSIXLY_CORRECT
+\unset -f command builtin exec unset 2>/dev/null || :
+_bjg_bash=$(command -p -v bash) || {
+  printf '%s\n' 'cannot locate a trusted Bash for clean Git' >&2
+  exit 1
+}
+unset BASH_ENV ENV BASH_COMPAT BASH_LOADABLES_PATH BASH_XTRACEFD CDPATH GLOBIGNORE \
+  LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT LD_DEBUG LD_DEBUG_OUTPUT LD_PROFILE \
+  LD_ORIGIN_PATH LD_PRELOAD_32 LD_PRELOAD_64 DYLD_INSERT_LIBRARIES \
+  DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH \
+  DYLD_FALLBACK_FRAMEWORK_PATH LIBPATH SHLIB_PATH GCONV_PATH LOCPATH
+\exec 3<&0
+\exec "$_bjg_bash" --noprofile --norc -p -s -- "$@" <<'__BJG_TRUSTED_BASH__'
+command unset BASH_ENV ENV BASH_COMPAT BASH_LOADABLES_PATH BASH_XTRACEFD CDPATH \
+  GLOBIGNORE || {
+  printf '%s\n' 'cannot sanitize the clean Git shell environment' >&2
+  exit 1
+}
+while command builtin read -r _ _ _bjg_function; do
+  command unset -f -- "$_bjg_function" || {
+    printf '%s\n' 'cannot sanitize the clean Git shell environment' >&2
+    exit 1
+  }
+done < <(command builtin declare -F)
+unset _bjg_function
+
+set -uo pipefail
+
+_bjg_git=$(command -p -v git) || {
+  printf '%s\n' 'cannot locate a trusted Git' >&2
+  exit 1
+}
+_bjg_getconf=$(command -p -v getconf) || {
+  printf '%s\n' 'cannot locate a trusted getconf for clean Git' >&2
+  exit 1
+}
+_bjg_readlink=$(command -p -v readlink) || {
+  printf '%s\n' 'cannot locate a trusted readlink for clean Git' >&2
+  exit 1
+}
+_bjg_stat=$(command -p -v stat) || {
+  printf '%s\n' 'cannot locate a trusted stat for clean Git' >&2
+  exit 1
+}
+_bjg_od=$(command -p -v od) || {
+  printf '%s\n' 'cannot locate a trusted od for executable inspection' >&2
+  exit 1
+}
+_bjg_mktemp=$(command -p -v mktemp) || {
+  printf '%s\n' 'cannot locate a trusted mktemp for clean Git' >&2
+  exit 1
+}
+_bjg_unlink=$(command -p -v unlink) || {
+  printf '%s\n' 'cannot locate a trusted unlink for clean Git' >&2
+  exit 1
+}
+_bjg_rmdir=$(command -p -v rmdir) || {
+  printf '%s\n' 'cannot locate a trusted rmdir for clean Git' >&2
+  exit 1
+}
+_bjg_chmod=$(command -p -v chmod) || {
+  printf '%s\n' 'cannot locate a trusted chmod for clean Git' >&2
+  exit 1
+}
+_bjg_env=$(command -p -v env) || {
+  printf '%s\n' 'cannot locate a trusted env for clean utilities' >&2
+  exit 1
+}
+_bjg_sh=$(command -p -v sh) || {
+  printf '%s\n' 'cannot locate a trusted shell for clean path enumeration' >&2
+  exit 1
+}
+_bjg_find=$(command -p -v find) || {
+  printf '%s\n' 'cannot locate a trusted find for clean audit-tool paths' >&2
+  exit 1
+}
+_bjg_safe_path=$("$_bjg_getconf" PATH 2>/dev/null) || {
+  printf '%s\n' 'cannot resolve the POSIX utility path for clean Git' >&2
+  exit 1
+}
+[[ -n "$_bjg_safe_path" && "$_bjg_safe_path" != *$'\n'* \
+   && "$_bjg_safe_path" != *$'\r'* ]] || {
+  printf '%s\n' 'cannot validate the POSIX utility path for clean Git' >&2
+  exit 1
+}
+IFS=: read -r -a _bjg_safe_path_entries <<<"$_bjg_safe_path"
+for _bjg_safe_path_entry in "${_bjg_safe_path_entries[@]}"; do
+  [[ "$_bjg_safe_path_entry" == /* ]] || {
+    printf '%s\n' 'cannot validate the POSIX utility path for clean Git' >&2
+    exit 1
+  }
+done
+unset _bjg_safe_path_entry _bjg_safe_path_entries
+
+# `${!GIT@}` includes both the normal GIT_* namespace and exceptions such as
+# GITPERLLIB. Git receives no caller-selected repository, index, object, config,
+# helper, namespace, pathspec, or interpreter state.
+_bjg_git_environment=( "${!GIT@}" )
+for _bjg_git_variable in "${_bjg_git_environment[@]}"; do
+  command unset -- "$_bjg_git_variable" || {
+    printf '%s\n' 'cannot sanitize the Git environment' >&2
+    exit 1
+  }
+done
+unset _bjg_git_variable _bjg_git_environment
+command unset TMPDIR TMP TEMP
+
+_bjg_caller_path=${PATH-}
+PATH=$_bjg_safe_path
+LC_ALL=C
+export PATH LC_ALL
+_bjg_proof_environment=( "$_bjg_env" -i "PATH=$_bjg_safe_path" "LC_ALL=C" )
+# Never honor caller-exported values for the private root-discovery cache.
+command unset _bjg_audit_root _bjg_audit_root_raw \
+  _bjg_audit_root_loaded _bjg_canonical_directory_result
+_bjg_audit_root_loaded=false
+
+_bjg_regular_link_count() {
+  local path=$1 count
+  if count=$("$_bjg_stat" -c %h "$path" 2>/dev/null) \
+      && [[ $count =~ ^[0-9]+$ ]]; then
+    :
+  elif count=$("$_bjg_stat" -f %l "$path" 2>/dev/null) \
+      && [[ $count =~ ^[0-9]+$ ]]; then
+    :
+  else
+    return 1
+  fi
+  printf '%s\n' "$count"
+}
+
+_bjg_regular_inode_number() {
+  local path=$1 inode
+  if inode=$("$_bjg_stat" -c %i "$path" 2>/dev/null) \
+      && [[ $inode =~ ^[0-9]+$ ]]; then
+    :
+  elif inode=$("$_bjg_stat" -f %i "$path" 2>/dev/null) \
+      && [[ $inode =~ ^[0-9]+$ ]]; then
+    :
+  else
+    return 1
+  fi
+  printf '%s\n' "$inode"
+}
+
+_bjg_regular_device_number() {
+  local path=$1 device
+  if device=$("$_bjg_stat" -c %d "$path" 2>/dev/null) \
+      && [[ $device =~ ^[0-9]+$ ]]; then
+    :
+  elif device=$("$_bjg_stat" -f %d "$path" 2>/dev/null) \
+      && [[ $device =~ ^[0-9]+$ ]]; then
+    :
+  else
+    return 1
+  fi
+  printf '%s\n' "$device"
+}
+
+_bjg_count_matching_device_records() {
+  local expected_device=$1 count _bjg_counted_path device
+  count=0
+  while IFS= read -r -d '' _bjg_counted_path; do
+    device=$(_bjg_regular_device_number "$_bjg_counted_path") || return 1
+    [[ "$device" == "$expected_device" ]] || continue
+    count=$((count + 1))
+    ((count <= 1024)) || return 1
+  done
+  printf '%s\n' "$count"
+}
+
+_bjg_multiple_links_are_colocated() {
+  local path=$1 expected=$2 parent inode device found
+  parent=${path%/*}
+  inode=$(_bjg_regular_inode_number "$path") || return 1
+  device=$(_bjg_regular_device_number "$path") || return 1
+  found=$(
+    "$_bjg_find" "$parent/." ! -name . -prune -inum "$inode" \
+      -exec "$_bjg_sh" -c \
+        'for path do printf "%s\0" "$path"; done' sh '{}' + |
+      _bjg_count_matching_device_records "$device"
+  ) || return 1
+  [[ "$found" == "$expected" ]]
+}
+
+_bjg_hex_shebang_has_nul() {
+  local bytes=$1 token
+  local IFS=$' \t\n'
+  for token in $bytes; do
+    [[ "$token" != 0a ]] || return 1
+    [[ "$token" != 00 ]] || return 0
+  done
+  return 1
+}
+
+_bjg_canonicalize_directory() {
+  local encoded
+  encoded=$(
+    CDPATH=
+    export CDPATH
+    cd -P -- "$1" 2>/dev/null && {
+      pwd -P
+      # Keep command substitution from stripping pathname-significant trailing
+      # newlines; remove this sentinel and pwd's one record separator below.
+      printf '/.'
+    }
+  ) || return 1
+  encoded=${encoded%/.}
+  [[ "$encoded" == *$'\n' ]] || return 1
+  _bjg_canonical_directory_result=${encoded%$'\n'}
+}
+
+_bjg_load_audit_root() {
+  local encoded
+  [[ ${_bjg_audit_root_loaded-} == true ]] && return 0
+  encoded=$(
+    "$_bjg_git" --no-pager --no-replace-objects \
+      -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+      rev-parse --show-toplevel 2>/dev/null && printf '/.'
+  ) || return 1
+  encoded=${encoded%/.}
+  [[ "$encoded" == *$'\n' ]] || return 1
+  _bjg_audit_root_raw=${encoded%$'\n'}
+  _bjg_canonicalize_directory "$_bjg_audit_root_raw" || return 1
+  _bjg_audit_root=$_bjg_canonical_directory_result
+  [[ "$_bjg_audit_root" != *:* && "$_bjg_audit_root" != *$'\n'* \
+     && "$_bjg_audit_root" != *$'\r'* ]] || return 1
+  _bjg_audit_root_loaded=true
+}
+
+_bjg_validate_audit_directory_stream() {
+  local entry_limit=$1 candidate entry_count
+  entry_count=0
+  while IFS= read -r -d '' candidate; do
+    entry_count=$((entry_count + 1))
+    ((entry_count <= entry_limit)) || return 2
+    [[ -x "$candidate" && ! -d "$candidate" ]] || continue
+    _bjg_validate_audit_executable "$candidate" >/dev/null || return 1
+  done
+  printf '%s\n' "$entry_count"
+}
+
+_bjg_prepare_audit_path() {
+  local entry canonical seen audited_directories audited_entries
+  local directory_entry_count remaining_entries stream_rc
+  local -a entries result
+  _bjg_load_audit_root || return 1
+  result=()
+  audited_directories=0
+  audited_entries=0
+  IFS=: read -r -a entries <<<"$_bjg_safe_path"
+  for entry in "${entries[@]}"; do
+    [[ "$entry" == /* && -d "$entry" ]] || continue
+    _bjg_canonicalize_directory "$entry" || continue
+    canonical=$_bjg_canonical_directory_result
+    [[ "$canonical" != *:* && "$canonical" != *$'\n'* \
+       && "$canonical" != *$'\r'* ]] || return 1
+    seen=false
+    for entry in "${result[@]}"; do
+      [[ "$entry" != "$canonical" ]] || seen=true
+    done
+    "$seen" || result+=( "$canonical" )
+  done
+  IFS=: read -r -a entries <<<"$_bjg_caller_path"
+  for entry in "${entries[@]}"; do
+    [[ "$entry" == /* && -d "$entry" ]] || continue
+    _bjg_canonicalize_directory "$entry" || continue
+    canonical=$_bjg_canonical_directory_result
+    # This value is serialized back into one colon-delimited PATH. An otherwise
+    # valid delimiter/control byte would inject or disguise runtime entries.
+    [[ "$canonical" != *:* && "$canonical" != *$'\n'* \
+       && "$canonical" != *$'\r'* ]] || return 1
+    if [[ "$_bjg_audit_root" == / || "$canonical" == "$_bjg_audit_root" \
+          || "$canonical" == "$_bjg_audit_root/"* ]]; then
+      continue
+    fi
+    seen=false
+    for entry in "${result[@]}"; do
+      [[ "$entry" != "$canonical" ]] || seen=true
+    done
+    "$seen" && continue
+    audited_directories=$((audited_directories + 1))
+    ((audited_directories <= 64)) || return 1
+    # A child launched by a validated top-level tool can select any executable
+    # name from this directory. POSIX find prunes each child after one level and
+    # a trusted shell emits NUL records, so Bash 3.2 can stream arbitrary names
+    # without materializing an attacker-sized glob. Pipefail also refuses a
+    # search-only directory that find cannot enumerate completely.
+    remaining_entries=$((1024 - audited_entries))
+    directory_entry_count=$(
+      "$_bjg_find" "$canonical/." ! -name . -prune \
+        -exec "$_bjg_sh" -c \
+          'for path do printf "%s\0" "$path"; done' sh '{}' + |
+        _bjg_validate_audit_directory_stream "$remaining_entries"
+    )
+    stream_rc=$?
+    if ((stream_rc != 0)); then
+      ((stream_rc != 2)) || return 1
+      # Omit an unrelated directory containing an unprovable executable. The
+      # selected top-level tool is resolved only from this admitted result below.
+      continue
+    fi
+    [[ "$directory_entry_count" =~ ^[0-9]+$ ]] || return 1
+    audited_entries=$((audited_entries + directory_entry_count))
+    result+=( "$canonical" )
+  done
+  [[ ${#result[@]} -gt 0 ]] || return 1
+  (IFS=:; printf '%s\n' "${result[*]}")
+}
+
+_bjg_validate_audit_executable() {
+  local selected=$1 path=$1 depth=${2:-0}
+  local parent leaf link hops link_count first_line shebang interpreter argument
+  local interpreter_final safe_entry safe_env_final env_identity shebang_bytes
+  local -a safe_entries
+  _bjg_load_audit_root || return 1
+  [[ "$path" == /* ]] || return 1
+  hops=0
+  while :; do
+    parent=${path%/*}
+    leaf=${path##*/}
+    _bjg_canonicalize_directory "$parent" || return 1
+    parent=$_bjg_canonical_directory_result
+    [[ "$parent" != *:* && "$parent" != *$'\n'* \
+       && "$parent" != *$'\r'* ]] || return 1
+    path=$parent/$leaf
+    if [[ "$_bjg_audit_root" == / || "$path" == "$_bjg_audit_root" \
+          || "$path" == "$_bjg_audit_root/"* ]]; then
+      return 1
+    fi
+    [[ -L "$path" ]] || break
+    ((hops < 40)) || return 1
+    link=$("$_bjg_readlink" "$path") || return 1
+    case $link in
+      /*) path=$link ;;
+      *) path=$parent/$link ;;
+    esac
+    hops=$((hops + 1))
+  done
+  [[ -f "$path" && -x "$path" ]] || return 1
+  link_count=$(_bjg_regular_link_count "$path") || return 1
+  if [[ "$link_count" != 1 ]]; then
+    _bjg_multiple_links_are_colocated "$path" "$link_count" || return 1
+  fi
+
+  # Validate absolute kernel-selected script interpreters recursively. Permit
+  # `/usr/bin/env name` only when `name` is a plain PATH token; the runtime PATH
+  # itself is the fully admitted set assembled above.
+  first_line=
+  if ! IFS= command builtin read -r -n 513 first_line 2>/dev/null <"$path"; then
+    [[ -r "$path" ]] || return 1
+  fi
+  if [[ "$first_line" == '#!'* ]]; then
+    shebang_bytes=$("$_bjg_od" -An -v -N 513 -t x1 "$path" 2>/dev/null) ||
+      return 1
+    _bjg_hex_shebang_has_nul "$shebang_bytes" && return 1
+    ((${#first_line} <= 512 && depth < 4)) || return 1
+    shebang=${first_line#\#!}
+    while [[ "$shebang" == ' '* || "$shebang" == $'\t'* ]]; do
+      shebang=${shebang#?}
+    done
+    # Linux shebang parsing separates only on space/tab. Treating CR/VT/FF as
+    # shell whitespace would validate a different pathname than the kernel.
+    interpreter=${shebang%%[$' \t']*}
+    [[ "$interpreter" == /* && "$interpreter" != *[$'\r\v\f']* ]] || return 1
+    argument=${shebang#"$interpreter"}
+    while [[ "$argument" == ' '* || "$argument" == $'\t'* ]]; do
+      argument=${argument#?}
+    done
+    # A missing interpreter makes this entry unlaunchable and therefore unable
+    # to execute worktree bytes; do not reject an otherwise unrelated PATH dir.
+    if [[ -e "$interpreter" || -L "$interpreter" ]]; then
+      _bjg_validate_audit_executable "$interpreter" "$((depth + 1))" \
+        >/dev/null || return 1
+      interpreter_final=$_bjg_validated_executable_final
+      if [[ -n "$argument" ]]; then
+        env_identity=false
+        IFS=: read -r -a safe_entries <<<"$_bjg_safe_path"
+        for safe_entry in "${safe_entries[@]}"; do
+          [[ -x "$safe_entry/env" ]] || continue
+          if _bjg_validate_audit_executable "$safe_entry/env" \
+              "$((depth + 1))" >/dev/null; then
+            safe_env_final=$_bjg_validated_executable_final
+            [[ "$interpreter_final" != "$safe_env_final" ]] ||
+              env_identity=true
+          fi
+        done
+        if [[ "$env_identity" == true ]]; then
+          [[ "$argument" =~ ^[A-Za-z0-9._+-]+$ ]] || return 1
+          # Safe-path commands are trusted, and every command in each additional
+          # runtime PATH directory is validated by the enclosing admission scan.
+        else
+          return 1
+        fi
+      fi
+    fi
+  fi
+  _bjg_validated_executable_final=$path
+  printf '%s\n' "$selected"
+}
+
+_bjg_external_audit_tool() {
+  local name=$1 selected selected_parent
+  [[ "$name" =~ ^[A-Za-z0-9._+-]+$ ]] || return 1
+  selected=$(
+    PATH=$_bjg_caller_path
+    export PATH
+    type -P -- "$name"
+  ) || return 1
+  _bjg_canonicalize_directory "${selected%/*}" || return 1
+  selected_parent=$_bjg_canonical_directory_result
+  case :$_bjg_audit_path: in
+    *:"$selected_parent":*) ;;
+    *) return 1 ;;
+  esac
+  _bjg_validate_audit_executable "$selected"
+}
+
+case ${1-} in
+  copy-file)
+    shift
+    [ "$#" -eq 2 ] || {
+      printf '%s\n' 'usage: git-clean copy-file <source> <destination>' >&2
+      exit 2
+    }
+    [[ "$1" == /* && "$2" == /* ]] || {
+      printf '%s\n' 'clean file copy requires absolute paths' >&2
+      exit 1
+    }
+    _bjg_cp=$(command -p -v cp) || {
+      printf '%s\n' 'cannot locate a trusted cp for clean file copy' >&2
+      exit 1
+    }
+    exec "${_bjg_proof_environment[@]}" "$_bjg_cp" "$1" "$2"
+    ;;
+  diff-files)
+    shift
+    [ "$#" -eq 2 ] || {
+      printf '%s\n' 'usage: git-clean diff-files <before> <after>' >&2
+      exit 2
+    }
+    [[ "$1" == /* && "$2" == /* ]] || {
+      printf '%s\n' 'clean file comparison requires absolute paths' >&2
+      exit 1
+    }
+    _bjg_diff=$(command -p -v diff) || {
+      printf '%s\n' 'cannot locate a trusted diff for clean file comparison' >&2
+      exit 1
+    }
+    exec "${_bjg_proof_environment[@]}" "$_bjg_diff" -u "$1" "$2"
+    ;;
+  worktree-root)
+    shift
+    [ "$#" -eq 0 ] || {
+      printf '%s\n' 'usage: git-clean worktree-root' >&2
+      exit 2
+    }
+    _bjg_root_raw=$("$_bjg_git" --no-pager --no-replace-objects \
+      -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+      rev-parse --show-toplevel 2>/dev/null) || {
+      printf '%s\n' 'cannot resolve the current Git worktree' >&2
+      exit 1
+    }
+    (
+      CDPATH=
+      export CDPATH
+      cd -P -- "$_bjg_root_raw" 2>/dev/null && pwd -P
+    ) || {
+      printf '%s\n' 'cannot canonicalize the current Git worktree' >&2
+      exit 1
+    }
+    exit 0
+    ;;
+  make-temp-dir)
+    shift
+    [ "$#" -eq 1 ] && [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] || {
+      printf '%s\n' 'usage: git-clean make-temp-dir <safe-prefix>' >&2
+      exit 2
+    }
+    _bjg_temp_dir=$("$_bjg_mktemp" -d "/tmp/$1.XXXXXXXX") || {
+      printf '%s\n' 'cannot create the private audit directory' >&2
+      exit 1
+    }
+    "$_bjg_chmod" 700 "$_bjg_temp_dir" || {
+      "$_bjg_rmdir" "$_bjg_temp_dir" 2>/dev/null || :
+      printf '%s\n' 'cannot protect the private audit directory' >&2
+      exit 1
+    }
+    printf '%s\n' "$_bjg_temp_dir"
+    exit 0
+    ;;
+  make-dir)
+    shift
+    [ "$#" -ge 1 ] || {
+      printf '%s\n' 'usage: git-clean make-dir <absolute-dir>...' >&2
+      exit 2
+    }
+    for _bjg_dir in "$@"; do
+      [[ "$_bjg_dir" == /* ]] || {
+        printf '%s\n' 'clean directory creation requires absolute paths' >&2
+        exit 1
+      }
+    done
+    _bjg_mkdir=$(command -p -v mkdir) || {
+      printf '%s\n' 'cannot locate a trusted mkdir' >&2
+      exit 1
+    }
+    exec "${_bjg_proof_environment[@]}" "$_bjg_mkdir" -p "$@"
+    ;;
+  grep)
+    shift
+    [ "$#" -ge 1 ] || {
+      printf '%s\n' 'usage: git-clean grep <grep-args...>' >&2
+      exit 2
+    }
+    _bjg_grep=$(command -p -v grep) || {
+      printf '%s\n' 'cannot locate a trusted grep' >&2
+      exit 1
+    }
+    exec "${_bjg_proof_environment[@]}" "$_bjg_grep" "$@" <&3
+    ;;
+  run-posix)
+    shift
+    [ "$#" -ge 1 ] || {
+      printf '%s\n' 'usage: git-clean run-posix {awk|sed|tail} <args...>' >&2
+      exit 2
+    }
+    _bjg_utility=$1
+    shift
+    case $_bjg_utility in
+      awk|sed|tail) ;;
+      *)
+        printf '%s\n' 'clean POSIX runner refused an unsupported utility' >&2
+        exit 2
+        ;;
+    esac
+    _bjg_utility_path=$(command -p -v "$_bjg_utility") || {
+      printf '%s\n' 'cannot locate a trusted POSIX utility' >&2
+      exit 1
+    }
+    exec "${_bjg_proof_environment[@]}" "$_bjg_utility_path" "$@" <&3
+    ;;
+  resolve-tool)
+    shift
+    [ "$#" -eq 1 ] || {
+      printf '%s\n' 'usage: git-clean resolve-tool <tool-name>' >&2
+      exit 2
+    }
+    _bjg_audit_path=$(_bjg_prepare_audit_path) || {
+      printf '%s\n' 'cannot construct a clean audit-tool path' >&2
+      exit 1
+    }
+    _bjg_audit_tool=$(_bjg_external_audit_tool "$1") || {
+      printf '%s\n' "$1 is not a trusted outside-worktree audit tool" >&2
+      exit 1
+    }
+    printf '%s\n' "$_bjg_audit_tool"
+    exit 0
+    ;;
+  run-audit-tool)
+    shift
+    [ "$#" -ge 1 ] || {
+      printf '%s\n' 'usage: git-clean run-audit-tool <tool-name> <args...>' >&2
+      exit 2
+    }
+    _bjg_audit_name=$1
+    shift
+    _bjg_audit_path=$(_bjg_prepare_audit_path) || {
+      printf '%s\n' 'cannot construct a clean audit-tool path' >&2
+      exit 1
+    }
+    _bjg_audit_tool=$(_bjg_external_audit_tool "$_bjg_audit_name") || {
+      printf '%s\n' "$_bjg_audit_name is not a trusted outside-worktree audit tool" >&2
+      exit 1
+    }
+    _bjg_audit_root_raw=$("$_bjg_git" --no-pager --no-replace-objects \
+      -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+      rev-parse --show-toplevel 2>/dev/null) || exit 1
+    _bjg_audit_root=$(
+      CDPATH=
+      export CDPATH
+      cd -P -- "$_bjg_audit_root_raw" 2>/dev/null && pwd -P
+    ) || exit 1
+    _bjg_audit_environment=(
+      -i "PATH=$_bjg_audit_path" "LC_ALL=C"
+      "PYTHONNOUSERSITE=1" "PYTHONSAFEPATH=1"
+    )
+    # Auth/config homes are needed by the real model CLIs, but a repository-
+    # selected HOME can activate interpreter user sites or tool hooks before
+    # read-only flags take effect. Preserve only existing canonical directories
+    # proven outside the driven worktree.
+    for _bjg_audit_variable in HOME CODEX_HOME CLAUDE_CONFIG_DIR; do
+      if ! command builtin declare -p "$_bjg_audit_variable" >/dev/null 2>&1 \
+          || [[ -z ${!_bjg_audit_variable} ]]; then
+        continue
+      fi
+      _bjg_audit_config_raw=${!_bjg_audit_variable}
+      [[ "$_bjg_audit_config_raw" == /* && -d "$_bjg_audit_config_raw" \
+         && "$_bjg_audit_config_raw" != *$'\n'* \
+         && "$_bjg_audit_config_raw" != *$'\r'* ]] || {
+        printf '%s\n' 'audit-tool config home is not a valid absolute directory' >&2
+        exit 1
+      }
+      _bjg_audit_config=$(
+        CDPATH=
+        export CDPATH
+        cd -P -- "$_bjg_audit_config_raw" 2>/dev/null && pwd -P
+      ) || exit 1
+      if [[ "$_bjg_audit_root" == / \
+            || "$_bjg_audit_config" == "$_bjg_audit_root" \
+            || "$_bjg_audit_config" == "$_bjg_audit_root/"* ]]; then
+        printf '%s\n' 'audit-tool config home resolves inside the current worktree' >&2
+        exit 1
+      fi
+      _bjg_audit_environment+=( "$_bjg_audit_variable=$_bjg_audit_config" )
+    done
+    for _bjg_audit_variable in USER LOGNAME SHELL TERM COLORTERM NO_COLOR \
+      OPENAI_API_KEY ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN \
+      HTTPS_PROXY https_proxy ALL_PROXY all_proxy NO_PROXY no_proxy \
+      SSL_CERT_FILE SSL_CERT_DIR NIX_SSL_CERT_FILE SSH_AUTH_SOCK; do
+      if command builtin declare -p "$_bjg_audit_variable" >/dev/null 2>&1; then
+        _bjg_audit_environment+=( "$_bjg_audit_variable=${!_bjg_audit_variable}" )
+      fi
+    done
+    for _bjg_audit_variable in "${!BEADS_@}" "${!BR_@}"; do
+      _bjg_audit_environment+=( "$_bjg_audit_variable=${!_bjg_audit_variable}" )
+    done
+    exec "$_bjg_env" "${_bjg_audit_environment[@]}" \
+      "$_bjg_audit_tool" "$@" <&3
+    ;;
+  snapshot-files)
+    shift
+    [ "$#" -ge 5 ] && [ "$4" = -- ] || {
+      printf '%s\n' 'usage: git-clean snapshot-files <manifest> <state> <snapshot-dir> -- <absolute-file>...' >&2
+      exit 2
+    }
+    _bjg_manifest=$1
+    _bjg_state=$2
+    _bjg_snapshot_dir=$3
+    shift 4
+    [[ "$_bjg_manifest" == /* && "$_bjg_state" == /* \
+       && "$_bjg_snapshot_dir" == /* && -d "$_bjg_snapshot_dir" ]] || {
+      printf '%s\n' 'clean source snapshot requires absolute existing destinations' >&2
+      exit 1
+    }
+    _bjg_snapshot_root_raw=$("$_bjg_git" --no-pager --no-replace-objects \
+      -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+      rev-parse --show-toplevel 2>/dev/null) || exit 1
+    _bjg_snapshot_root=$(
+      CDPATH=
+      export CDPATH
+      cd -P -- "$_bjg_snapshot_root_raw" 2>/dev/null && pwd -P
+    ) || exit 1
+    _bjg_cp=$(command -p -v cp) || {
+      printf '%s\n' 'cannot locate a trusted cp for source snapshot' >&2
+      exit 1
+    }
+    : >"$_bjg_manifest" && : >"$_bjg_state" || {
+      printf '%s\n' 'cannot initialize source snapshot state' >&2
+      exit 1
+    }
+    _bjg_source_n=0
+    for _bjg_source in "$@"; do
+      [[ "$_bjg_source" == /* && -f "$_bjg_source" && ! -L "$_bjg_source" \
+         && "$_bjg_source" != *$'\t'* && "$_bjg_source" != *$'\n'* \
+         && "$_bjg_source" != *$'\r'* ]] || {
+        printf '%s\n' 'source snapshot received an unsafe or missing file' >&2
+        exit 1
+      }
+      _bjg_source_parent=$(
+        CDPATH=
+        export CDPATH
+        cd -P -- "${_bjg_source%/*}" 2>/dev/null && pwd -P
+      ) || exit 1
+      _bjg_source_canonical=$_bjg_source_parent/${_bjg_source##*/}
+      if [[ "$_bjg_snapshot_root" != / \
+            && "$_bjg_source" == "$_bjg_snapshot_root/"* \
+            && "$_bjg_source_canonical" != "$_bjg_snapshot_root/"* ]]; then
+        printf '%s\n' 'worktree source resolves outside the current Git worktree' >&2
+        exit 1
+      fi
+      _bjg_source_n=$((_bjg_source_n + 1))
+      printf -v _bjg_source_prefix '%03d' "$_bjg_source_n"
+      _bjg_copy=$_bjg_snapshot_dir/$_bjg_source_prefix-${_bjg_source##*/}
+      _bjg_before=$("$_bjg_git" --no-pager --no-replace-objects \
+        -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+        hash-object --no-filters "$_bjg_source") || exit 1
+      "${_bjg_proof_environment[@]}" "$_bjg_cp" \
+        "$_bjg_source" "$_bjg_copy" || exit 1
+      _bjg_after=$("$_bjg_git" --no-pager --no-replace-objects \
+        -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+        hash-object --no-filters "$_bjg_source") || exit 1
+      _bjg_copy_oid=$("$_bjg_git" --no-pager --no-replace-objects \
+        -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+        hash-object --no-filters "$_bjg_copy") || exit 1
+      [[ "$_bjg_before" == "$_bjg_after" && "$_bjg_before" == "$_bjg_copy_oid" ]] || {
+        printf '%s\n' "audit source changed while being snapshotted: $_bjg_source" >&2
+        exit 1
+      }
+      printf '%s\t%s\n' "$_bjg_source" "$_bjg_copy" >>"$_bjg_manifest" || exit 1
+      printf '%s\t%s\n' "$_bjg_before" "$_bjg_source" >>"$_bjg_state" || exit 1
+    done
+    exit 0
+    ;;
+  verify-files)
+    shift
+    [ "$#" -ge 4 ] && [ "$3" = -- ] || {
+      printf '%s\n' 'usage: git-clean verify-files <before-state> <after-state> -- <absolute-file>...' >&2
+      exit 2
+    }
+    _bjg_before_state=$1
+    _bjg_after_state=$2
+    shift 3
+    [[ "$_bjg_before_state" == /* && "$_bjg_after_state" == /* ]] || {
+      printf '%s\n' 'clean source verification requires absolute state files' >&2
+      exit 1
+    }
+    _bjg_cmp=$(command -p -v cmp) || {
+      printf '%s\n' 'cannot locate a trusted cmp for source verification' >&2
+      exit 1
+    }
+    : >"$_bjg_after_state" || {
+      printf '%s\n' 'cannot initialize final source state' >&2
+      exit 1
+    }
+    _bjg_verify_root_raw=$("$_bjg_git" --no-pager --no-replace-objects \
+      -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+      rev-parse --show-toplevel 2>/dev/null) || exit 1
+    _bjg_verify_root=$(
+      CDPATH=
+      export CDPATH
+      cd -P -- "$_bjg_verify_root_raw" 2>/dev/null && pwd -P
+    ) || exit 1
+    for _bjg_source in "$@"; do
+      [[ "$_bjg_source" == /* && -f "$_bjg_source" && ! -L "$_bjg_source" \
+         && "$_bjg_source" != *$'\t'* && "$_bjg_source" != *$'\n'* \
+         && "$_bjg_source" != *$'\r'* ]] || exit 1
+      _bjg_source_parent=$(
+        CDPATH=
+        export CDPATH
+        cd -P -- "${_bjg_source%/*}" 2>/dev/null && pwd -P
+      ) || exit 1
+      _bjg_source_canonical=$_bjg_source_parent/${_bjg_source##*/}
+      if [[ "$_bjg_verify_root" != / \
+            && "$_bjg_source" == "$_bjg_verify_root/"* \
+            && "$_bjg_source_canonical" != "$_bjg_verify_root/"* ]]; then
+        exit 1
+      fi
+      _bjg_after=$("$_bjg_git" --no-pager --no-replace-objects \
+        -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+        hash-object --no-filters "$_bjg_source") || exit 1
+      printf '%s\t%s\n' "$_bjg_after" "$_bjg_source" >>"$_bjg_after_state" ||
+        exit 1
+    done
+    "${_bjg_proof_environment[@]}" "$_bjg_cmp" \
+      -s "$_bjg_before_state" "$_bjg_after_state"
+    exit $?
+    ;;
+  hash-file)
+    shift
+    [ "$#" -eq 1 ] && [[ "$1" == /* && -f "$1" && ! -L "$1" ]] || {
+      printf '%s\n' 'usage: git-clean hash-file <absolute-regular-file>' >&2
+      exit 2
+    }
+    _bjg_oid=$("$_bjg_git" --no-pager --no-replace-objects \
+      -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+      hash-object --no-filters "$1") || {
+      printf '%s\n' 'cannot hash the file' >&2
+      exit 1
+    }
+    [[ "$_bjg_oid" =~ ^[0-9a-fA-F]+$ ]] || {
+      printf '%s\n' 'clean file hash returned an invalid object id' >&2
+      exit 1
+    }
+    printf '%s\n' "$_bjg_oid"
+    exit 0
+    ;;
+  head-oid)
+    shift
+    [ "$#" -eq 0 ] || {
+      printf '%s\n' 'usage: git-clean head-oid' >&2
+      exit 2
+    }
+    _bjg_oid=$("$_bjg_git" --no-pager --no-replace-objects \
+      -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+      rev-parse --verify 'HEAD^{commit}') || {
+      printf '%s\n' 'cannot resolve the current HEAD commit' >&2
+      exit 1
+    }
+    [[ "$_bjg_oid" =~ ^[0-9a-fA-F]+$ ]] || {
+      printf '%s\n' 'clean HEAD resolution returned an invalid object id' >&2
+      exit 1
+    }
+    printf '%s\n' "$_bjg_oid"
+    exit 0
+    ;;
+  head-branch)
+    shift
+    [ "$#" -eq 0 ] || {
+      printf '%s\n' 'usage: git-clean head-branch' >&2
+      exit 2
+    }
+    _bjg_branch_ref=$("$_bjg_git" --no-pager --no-replace-objects \
+      -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+      symbolic-ref --quiet --no-recurse HEAD) || {
+      printf '%s\n' 'cannot resolve the current attached branch' >&2
+      exit 1
+    }
+    case $_bjg_branch_ref in
+      refs/heads/?*) _bjg_branch=${_bjg_branch_ref#refs/heads/} ;;
+      *)
+        printf '%s\n' 'clean branch resolution returned a non-branch ref' >&2
+        exit 1
+        ;;
+    esac
+    [[ -n "$_bjg_branch" && "$_bjg_branch" != *$'\n'* \
+       && "$_bjg_branch" != *$'\r'* ]] \
+      && "$_bjg_git" check-ref-format "refs/heads/$_bjg_branch" >/dev/null || {
+      printf '%s\n' 'clean branch resolution returned an invalid branch' >&2
+      exit 1
+    }
+    printf '%s\n' "$_bjg_branch"
+    exit 0
+    ;;
+  commit)
+    shift
+    [ "$#" -eq 10 ] && [ "$1" = --only-reviewed ] \
+      && [ "$3" = --expect-oid ] && [[ "$4" =~ ^[0-9a-fA-F]+$ ]] \
+      && [ "$5" = --expect-head ] && [[ "$6" =~ ^[0-9a-fA-F]+$ ]] \
+      && [ "$7" = --expect-branch ] && [ -n "$8" ] \
+      && [ "$9" = -m ] && [ -n "${10}" ] || {
+      printf '%s\n' 'usage: git-clean commit --only-reviewed <absolute-file> --expect-oid <oid> --expect-head <commit> --expect-branch <branch> -m <message>' >&2
+      exit 2
+    }
+    _bjg_commit_path=$2
+    _bjg_commit_oid=$4
+    _bjg_commit_head=$6
+    _bjg_commit_branch=$8
+    _bjg_commit_message=${10}
+    [[ "$_bjg_commit_branch" != *$'\n'* \
+       && "$_bjg_commit_branch" != *$'\r'* ]] \
+      && "$_bjg_git" check-ref-format \
+        "refs/heads/$_bjg_commit_branch" >/dev/null || {
+      printf '%s\n' 'clean Git commit received an invalid reviewed branch' >&2
+      exit 1
+    }
+    _bjg_commit_ref=refs/heads/$_bjg_commit_branch
+    [[ "$_bjg_commit_path" == /* ]] || {
+      printf '%s\n' 'clean Git commit requires an absolute reviewed file' >&2
+      exit 1
+    }
+    _bjg_commit_root_raw=$("$_bjg_git" --no-pager --no-replace-objects \
+      -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+      rev-parse --show-toplevel 2>/dev/null) || {
+      printf '%s\n' 'cannot resolve the current Git worktree for clean commit' >&2
+      exit 1
+    }
+    _bjg_commit_root=$(
+      CDPATH=
+      export CDPATH
+      cd -P -- "$_bjg_commit_root_raw" 2>/dev/null && pwd -P
+    ) || {
+      printf '%s\n' 'cannot canonicalize the current Git worktree for clean commit' >&2
+      exit 1
+    }
+    _bjg_commit_name=${_bjg_commit_path##*/}
+    _bjg_commit_parent=${_bjg_commit_path%/*}
+    _bjg_commit_parent=$(
+      CDPATH=
+      export CDPATH
+      cd -P -- "$_bjg_commit_parent" 2>/dev/null && pwd -P
+    ) || {
+      printf '%s\n' 'cannot canonicalize the reviewed file for clean commit' >&2
+      exit 1
+    }
+    _bjg_commit_path=$_bjg_commit_parent/$_bjg_commit_name
+    if [[ "$_bjg_commit_root" == / ]]; then
+      _bjg_commit_relative=${_bjg_commit_path#/}
+    elif [[ "$_bjg_commit_path" == "$_bjg_commit_root/"* ]]; then
+      _bjg_commit_relative=${_bjg_commit_path#"$_bjg_commit_root/"}
+    else
+      printf '%s\n' 'clean Git commit file is outside the current worktree' >&2
+      exit 1
+    fi
+
+    _bjg_commit_live_head=$("$_bjg_git" --no-pager --no-replace-objects \
+      -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+      -C "$_bjg_commit_root" rev-parse --verify 'HEAD^{commit}') || {
+      printf '%s\n' 'cannot resolve HEAD for clean commit' >&2
+      exit 1
+    }
+    [[ "$_bjg_commit_live_head" == "$_bjg_commit_head" ]] || {
+      printf '%s\n' 'HEAD no longer matches the reviewed commit' >&2
+      exit 1
+    }
+    _bjg_commit_live_ref=$("$_bjg_git" --no-pager --no-replace-objects \
+      -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+      -C "$_bjg_commit_root" symbolic-ref --quiet --no-recurse HEAD) || {
+      printf '%s\n' 'clean commit requires the reviewed attached branch' >&2
+      exit 1
+    }
+    case $_bjg_commit_live_ref in
+      refs/heads/?*)
+        _bjg_commit_live_branch=${_bjg_commit_live_ref#refs/heads/}
+        ;;
+      *)
+        printf '%s\n' 'clean commit HEAD is not attached to a branch ref' >&2
+        exit 1
+        ;;
+    esac
+    [[ "$_bjg_commit_live_branch" == "$_bjg_commit_branch" ]] || {
+      printf '%s\n' 'current branch no longer matches the reviewed branch' >&2
+      exit 1
+    }
+    if "$_bjg_git" --no-pager --no-replace-objects \
+        -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+        -C "$_bjg_commit_root" symbolic-ref --quiet --no-recurse \
+        "$_bjg_commit_ref" >/dev/null; then
+      printf '%s\n' 'reviewed branch ref is unexpectedly symbolic' >&2
+      exit 1
+    fi
+    _bjg_commit_branch_head=$("$_bjg_git" --no-pager --no-replace-objects \
+      -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+      -C "$_bjg_commit_root" rev-parse --verify \
+      "$_bjg_commit_ref^{commit}") || {
+      printf '%s\n' 'cannot resolve the reviewed branch for clean commit' >&2
+      exit 1
+    }
+    [[ "$_bjg_commit_branch_head" == "$_bjg_commit_head" ]] || {
+      printf '%s\n' 'reviewed branch no longer matches the reviewed commit' >&2
+      exit 1
+    }
+
+    _bjg_commit_git_dir_raw=$("$_bjg_git" --no-pager --no-replace-objects \
+      -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+      -C "$_bjg_commit_root" rev-parse --absolute-git-dir 2>/dev/null) || {
+      printf '%s\n' 'cannot resolve the Git administrative directory for clean commit' >&2
+      exit 1
+    }
+    _bjg_commit_git_dir=$(
+      CDPATH=
+      export CDPATH
+      cd -P -- "$_bjg_commit_git_dir_raw" 2>/dev/null && pwd -P
+    ) || {
+      printf '%s\n' 'cannot canonicalize the Git administrative directory for clean commit' >&2
+      exit 1
+    }
+    _bjg_commit_tmp=$("$_bjg_mktemp" -d \
+      "$_bjg_commit_git_dir/beads-jsonl-commit.XXXXXX") || {
+      printf '%s\n' 'cannot create a private isolated-index directory' >&2
+      exit 1
+    }
+    "$_bjg_chmod" 700 "$_bjg_commit_tmp" || {
+      "$_bjg_rmdir" "$_bjg_commit_tmp" 2>/dev/null || :
+      printf '%s\n' 'cannot protect the private isolated-index directory' >&2
+      exit 1
+    }
+    _bjg_commit_index=$_bjg_commit_tmp/index
+    _bjg_commit_cleanup() {
+      local status=$? cleanup_status=0 path
+      trap - EXIT HUP INT QUIT TERM
+      for path in "$_bjg_commit_index.lock" "$_bjg_commit_index"; do
+        if [[ -e "$path" || -L "$path" ]] && ! "$_bjg_unlink" "$path"; then
+          cleanup_status=1
+        fi
+      done
+      if ! "$_bjg_rmdir" "$_bjg_commit_tmp"; then
+        cleanup_status=1
+      fi
+      if [[ $status -eq 0 && $cleanup_status -ne 0 ]]; then
+        printf '%s\n' 'cannot remove the private isolated-index directory' >&2
+        status=1
+      fi
+      exit "$status"
+    }
+    trap _bjg_commit_cleanup EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 131' QUIT
+    trap 'exit 143' TERM
+
+    if ! GIT_INDEX_FILE=$_bjg_commit_index \
+        "$_bjg_git" --no-pager --no-replace-objects \
+        -c core.fsmonitor=false -c core.splitIndex=false \
+        -c core.hooksPath=/dev/null -C "$_bjg_commit_root" \
+        read-tree "$_bjg_commit_head"; then
+      printf '%s\n' 'cannot initialize the isolated index for clean commit' >&2
+      exit 1
+    fi
+    if ! printf '100644 %s\t%s\0' "$_bjg_commit_oid" "$_bjg_commit_relative" |
+        GIT_INDEX_FILE=$_bjg_commit_index \
+        "$_bjg_git" --no-pager --no-replace-objects \
+        -c core.fsmonitor=false -c core.splitIndex=false \
+        -c core.hooksPath=/dev/null \
+        -C "$_bjg_commit_root" update-index -z --index-info; then
+      printf '%s\n' 'cannot stage the reviewed object in the isolated index' >&2
+      exit 1
+    fi
+    _bjg_commit_tree=$(GIT_INDEX_FILE=$_bjg_commit_index \
+      "$_bjg_git" --no-pager --no-replace-objects \
+      -c core.fsmonitor=false -c core.splitIndex=false \
+      -c core.hooksPath=/dev/null -C "$_bjg_commit_root" write-tree) || {
+      printf '%s\n' 'cannot write the isolated reviewed tree' >&2
+      exit 1
+    }
+    _bjg_commit_new=$(
+      printf '%s\n' "$_bjg_commit_message" |
+        "$_bjg_git" --no-pager --no-replace-objects \
+        -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+        -c commit.gpgSign=false -C "$_bjg_commit_root" \
+        commit-tree "$_bjg_commit_tree" -p "$_bjg_commit_head"
+    ) || {
+      printf '%s\n' 'cannot create the reviewed commit' >&2
+      exit 1
+    }
+    [[ "$_bjg_commit_new" =~ ^[0-9a-fA-F]+$ ]] || {
+      printf '%s\n' 'clean commit returned an invalid object id' >&2
+      exit 1
+    }
+    "$_bjg_git" --no-pager --no-replace-objects \
+       -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+       -C "$_bjg_commit_root" update-ref \
+      --no-deref -m 'commit: reviewed Beads JSONL' "$_bjg_commit_ref" \
+      "$_bjg_commit_new" "$_bjg_commit_head" || {
+      printf '%s\n' 'reviewed branch changed before the commit could be installed' >&2
+      exit 1
+    }
+    printf '%s\n' "$_bjg_commit_new"
+    exit 0
+    ;;
+  push)
+    shift
+    [ "$#" -eq 6 ] && [ "$1" = --remote ] && [ "$3" = --branch ] \
+      && [ "$5" = --expect-head ] && [[ "$6" =~ ^[0-9a-fA-F]+$ ]] || {
+      printf '%s\n' 'usage: git-clean push --remote <remote-name> --branch <branch-name> --expect-head <commit>' >&2
+      exit 2
+    }
+    _bjg_push_remote=$2
+    _bjg_push_branch=$4
+    _bjg_push_head=$6
+    [[ "$_bjg_push_remote" =~ ^[A-Za-z0-9._-]+$ \
+       && "$_bjg_push_branch" != *$'\n'* \
+       && "$_bjg_push_branch" != *$'\r'* ]] || {
+      printf '%s\n' 'clean push received an invalid remote or branch' >&2
+      exit 1
+    }
+    "$_bjg_git" check-ref-format "refs/heads/$_bjg_push_branch" >/dev/null || {
+      printf '%s\n' 'clean push received an invalid branch' >&2
+      exit 1
+    }
+    _bjg_push_current_ref=$("$_bjg_git" --no-pager --no-replace-objects \
+      -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+      symbolic-ref --quiet --no-recurse HEAD) || {
+      printf '%s\n' 'clean push requires an attached current branch' >&2
+      exit 1
+    }
+    case $_bjg_push_current_ref in
+      refs/heads/?*)
+        _bjg_push_current_branch=${_bjg_push_current_ref#refs/heads/}
+        ;;
+      *)
+        printf '%s\n' 'clean push HEAD is not attached to a branch ref' >&2
+        exit 1
+        ;;
+    esac
+    [[ "$_bjg_push_current_branch" == "$_bjg_push_branch" ]] || {
+      printf '%s\n' 'clean push branch does not match the current branch' >&2
+      exit 1
+    }
+    _bjg_push_live_head=$("$_bjg_git" --no-pager --no-replace-objects \
+      -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+      rev-parse --verify 'HEAD^{commit}') || {
+      printf '%s\n' 'clean push cannot resolve current HEAD' >&2
+      exit 1
+    }
+    [[ "$_bjg_push_live_head" == "$_bjg_push_head" ]] || {
+      printf '%s\n' 'clean push HEAD no longer matches the reviewed commit' >&2
+      exit 1
+    }
+    _bjg_push_root_raw=$("$_bjg_git" --no-pager --no-replace-objects \
+      -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+      rev-parse --show-toplevel 2>/dev/null) || {
+      printf '%s\n' 'cannot resolve the current Git worktree for clean push' >&2
+      exit 1
+    }
+    _bjg_push_root=$(
+      CDPATH=
+      export CDPATH
+      cd -P -- "$_bjg_push_root_raw" 2>/dev/null && pwd -P
+    ) || {
+      printf '%s\n' 'cannot canonicalize the current Git worktree for clean push' >&2
+      exit 1
+    }
+    for _bjg_config_home_name in HOME XDG_CONFIG_HOME XDG_CACHE_HOME \
+      XDG_DATA_HOME XDG_STATE_HOME; do
+      if ! command builtin declare -p "$_bjg_config_home_name" >/dev/null 2>&1 \
+          || [[ -z ${!_bjg_config_home_name} ]]; then
+        continue
+      fi
+      _bjg_config_home_raw=${!_bjg_config_home_name}
+      [[ "$_bjg_config_home_raw" == /* && "$_bjg_config_home_raw" != *$'\n'* \
+         && "$_bjg_config_home_raw" != *$'\r'* ]] || {
+        printf '%s\n' 'cannot canonicalize the Git/SSH config home for clean push' >&2
+        exit 1
+      }
+      if [[ -d "$_bjg_config_home_raw" ]]; then
+        _bjg_config_home=$(
+          CDPATH=
+          export CDPATH
+          cd -P -- "$_bjg_config_home_raw" 2>/dev/null && pwd -P
+        ) || {
+          printf '%s\n' 'cannot canonicalize the Git/SSH config home for clean push' >&2
+          exit 1
+        }
+      elif [[ -e "$_bjg_config_home_raw" || -L "$_bjg_config_home_raw" \
+              || "$_bjg_config_home_raw" == */../* \
+              || "$_bjg_config_home_raw" == */./* \
+              || "$_bjg_config_home_raw" == */.. \
+              || "$_bjg_config_home_raw" == */. ]]; then
+        printf '%s\n' 'cannot canonicalize the Git/SSH config home for clean push' >&2
+        exit 1
+      else
+        # A not-yet-created config directory is normal. Canonicalize its nearest
+        # existing ancestor so a symlinked parent cannot redirect it into the
+        # driven worktree. Keep the absent absolute XDG path: unsetting it
+        # would make Git fall back to a different `$HOME/.config/git/config`.
+        _bjg_config_probe=${_bjg_config_home_raw%/}
+        _bjg_config_suffix=
+        while [[ ! -d "$_bjg_config_probe" ]]; do
+          _bjg_config_leaf=${_bjg_config_probe##*/}
+          _bjg_config_suffix=/$_bjg_config_leaf$_bjg_config_suffix
+          _bjg_config_probe=${_bjg_config_probe%/*}
+          [[ -n "$_bjg_config_probe" ]] || _bjg_config_probe=/
+        done
+        _bjg_config_probe=$(
+          CDPATH=
+          export CDPATH
+          cd -P -- "$_bjg_config_probe" 2>/dev/null && pwd -P
+        ) || {
+          printf '%s\n' 'cannot canonicalize the Git/SSH config home for clean push' >&2
+          exit 1
+        }
+        _bjg_config_home=$_bjg_config_probe$_bjg_config_suffix
+      fi
+      if [[ "$_bjg_push_root" == / || "$_bjg_config_home" == "$_bjg_push_root" \
+            || "$_bjg_config_home" == "$_bjg_push_root/"* ]]; then
+        printf '%s\n' 'Git/SSH config home is inside the current worktree' >&2
+        exit 1
+      fi
+      printf -v "$_bjg_config_home_name" '%s' "$_bjg_config_home"
+      export "$_bjg_config_home_name"
+    done
+    unset _bjg_config_home _bjg_config_home_name _bjg_config_home_raw \
+      _bjg_config_leaf _bjg_config_probe _bjg_config_suffix
+
+    _bjg_regular_link_count() {
+      local path=$1 count
+      if count=$("$_bjg_stat" -c %h "$path" 2>/dev/null) \
+          && [[ $count =~ ^[0-9]+$ ]]; then
+        :
+      elif count=$("$_bjg_stat" -f %l "$path" 2>/dev/null) \
+          && [[ $count =~ ^[0-9]+$ ]]; then
+        :
+      else
+        return 1
+      fi
+      printf '%s\n' "$count"
+    }
+    _bjg_external_helper() {
+      local path=$1 diagnostic=$2 depth=${3:-0}
+      local parent leaf link hops link_count first_line shebang interpreter argument
+      local interpreter_final safe_entry safe_env_final env_identity env_tool shebang_bytes
+      local -a safe_entries
+      [[ "$path" == /* ]] || {
+        printf '%s\n' "$diagnostic" >&2
+        return 1
+      }
+      hops=0
+      while :; do
+        parent=${path%/*}
+        leaf=${path##*/}
+        parent=$(
+          CDPATH=
+          export CDPATH
+          cd -P -- "$parent" 2>/dev/null && pwd -P
+        ) || {
+          printf '%s\n' "$diagnostic" >&2
+          return 1
+        }
+        path=$parent/$leaf
+        if [[ "$_bjg_push_root" == / || "$path" == "$_bjg_push_root" \
+              || "$path" == "$_bjg_push_root/"* ]]; then
+          printf '%s\n' 'credential helper resolves inside the current Git worktree' >&2
+          return 1
+        fi
+        [[ -L "$path" ]] || break
+        ((hops < 40)) || {
+          printf '%s\n' "$diagnostic" >&2
+          return 1
+        }
+        link=$("$_bjg_readlink" "$path") || {
+          printf '%s\n' "$diagnostic" >&2
+          return 1
+        }
+        case $link in
+          /*) path=$link ;;
+          *) path=$parent/$link ;;
+        esac
+        hops=$((hops + 1))
+      done
+      [[ -f "$path" && -x "$path" ]] || {
+        printf '%s\n' "$diagnostic" >&2
+        return 1
+      }
+      link_count=$(_bjg_regular_link_count "$path") || {
+        printf '%s\n' "$diagnostic" >&2
+        return 1
+      }
+      [[ "$link_count" == 1 ]] || {
+        printf '%s\n' 'credential helper executable has multiple hard links' >&2
+        return 1
+      }
+
+      first_line=
+      if ! IFS= command builtin read -r -n 513 first_line 2>/dev/null <"$path"; then
+        [[ -r "$path" ]] || {
+          printf '%s\n' 'credential helper executable cannot be inspected safely' >&2
+          return 1
+        }
+      fi
+      if [[ "$first_line" == '#!'* ]]; then
+        shebang_bytes=$("$_bjg_od" -An -v -N 513 -t x1 "$path" 2>/dev/null) || {
+          printf '%s\n' "$diagnostic" >&2
+          return 1
+        }
+        if _bjg_hex_shebang_has_nul "$shebang_bytes"; then
+          printf '%s\n' 'credential helper has a NUL-bearing script interpreter' >&2
+          return 1
+        fi
+        ((${#first_line} <= 512 && depth < 4)) || {
+          printf '%s\n' "$diagnostic" >&2
+          return 1
+        }
+        shebang=${first_line#\#!}
+        while [[ "$shebang" == ' '* || "$shebang" == $'\t'* ]]; do
+          shebang=${shebang#?}
+        done
+        interpreter=${shebang%%[$' \t']*}
+        [[ "$interpreter" == /* && "$interpreter" != *[$'\r\v\f']* ]] || {
+          printf '%s\n' 'credential helper has an unsafe script interpreter' >&2
+          return 1
+        }
+        argument=${shebang#"$interpreter"}
+        while [[ "$argument" == ' '* || "$argument" == $'\t'* ]]; do
+          argument=${argument#?}
+        done
+        if [[ -e "$interpreter" || -L "$interpreter" ]]; then
+          interpreter_final=$(_bjg_external_helper "$interpreter" "$diagnostic" \
+            "$((depth + 1))") || return 1
+          if [[ -n "$argument" ]]; then
+            env_identity=false
+            IFS=: read -r -a safe_entries <<<"$_bjg_safe_path"
+            for safe_entry in "${safe_entries[@]}"; do
+              [[ -x "$safe_entry/env" ]] || continue
+              safe_env_final=$(_bjg_external_helper "$safe_entry/env" \
+                "$diagnostic" "$((depth + 1))") || continue
+              [[ "$interpreter_final" != "$safe_env_final" ]] ||
+                env_identity=true
+            done
+            if [[ "$env_identity" == true ]]; then
+              [[ "$argument" =~ ^[A-Za-z0-9._+-]+$ ]] || {
+                printf '%s\n' 'credential helper has an unsafe env interpreter argument' >&2
+                return 1
+              }
+              env_tool=$(
+                PATH=$_bjg_safe_path
+                export PATH
+                type -P -- "$argument"
+              ) || {
+                printf '%s\n' 'credential helper env target is unavailable' >&2
+                return 1
+              }
+              _bjg_external_helper "$env_tool" "$diagnostic" \
+                "$((depth + 1))" >/dev/null || return 1
+            else
+              printf '%s\n' 'credential helper has an unsupported script interpreter argument' >&2
+              return 1
+            fi
+          fi
+        fi
+      fi
+      printf '%s\n' "$path"
+    }
+    _bjg_git_exec_path=$("$_bjg_git" --exec-path) || {
+      printf '%s\n' 'cannot resolve the trusted Git helper path' >&2
+      exit 1
+    }
+    _bjg_append_credential_helper() {
+      local key=$1 helper=$2 name program candidate value argument path link_count
+      local -a words
+      [[ "$key" == credential.helper \
+         || ( "$key" == credential.*.helper && "$key" != *$'\n'* \
+              && "$key" != *$'\r'* && "$key" != *=* ) ]] || {
+        printf '%s\n' 'configured credential helper has an invalid scope' >&2
+        return 1
+      }
+      # Empty values deliberately reset helpers accumulated at lower config
+      # precedence. Preserve their position rather than silently skipping them.
+      if [[ -z "$helper" ]]; then
+        _bjg_credential_config+=( -c "$key=" )
+        return 0
+      fi
+      read -r -a words <<<"$helper"
+      name=${words[0]-}
+      [[ "$name" =~ ^[A-Za-z0-9._+-]+$ ]] || {
+        printf '%s\n' 'configured credential helper is not a simple named helper' >&2
+        return 1
+      }
+
+      # Support the argument-bearing forms of Git's standard cache/store
+      # helpers without admitting a shell grammar. Other named helpers remain
+      # supported with no arguments.
+      case $name:${#words[@]} in
+        cache:1) ;;
+        store:1)
+          printf '%s\n' 'credential store requires an explicit --file path' >&2
+          return 1
+          ;;
+        *:1) ;;
+        cache:2)
+          [[ "${words[1]}" =~ ^--timeout=[0-9]+$ \
+             || "${words[1]}" == --socket=/* ]] || {
+            printf '%s\n' 'configured credential helper has unsupported arguments' >&2
+            return 1
+          }
+          ;;
+        cache:3)
+          [[ ( "${words[1]}" == --timeout && "${words[2]}" =~ ^[0-9]+$ ) \
+             || ( "${words[1]}" == --socket && "${words[2]}" == /* ) ]] || {
+            printf '%s\n' 'configured credential helper has unsupported arguments' >&2
+            return 1
+          }
+          ;;
+        store:2)
+          [[ "${words[1]}" == --file=/* ]] || {
+            printf '%s\n' 'configured credential helper has unsupported arguments' >&2
+            return 1
+          }
+          ;;
+        store:3)
+          [[ "${words[1]}" == --file && "${words[2]}" == /* ]] || {
+            printf '%s\n' 'configured credential helper has unsupported arguments' >&2
+            return 1
+          }
+          ;;
+        *)
+          printf '%s\n' 'configured credential helper has unsupported arguments' >&2
+          return 1
+          ;;
+      esac
+      for argument in "${words[@]:1}"; do
+        [[ "$argument" =~ ^[A-Za-z0-9_./+:=@%,-]+$ ]] || {
+          printf '%s\n' 'configured credential helper has unsafe arguments' >&2
+          return 1
+        }
+        case $argument in
+          --socket=/*|--file=/*) path=${argument#*=} ;;
+          /*) path=$argument ;;
+          *) continue ;;
+        esac
+        [[ "$path" != */../* && "$path" != */./* && "$path" != */.. \
+           && "$path" != */. && ! -L "$path" ]] || {
+          printf '%s\n' 'configured credential helper path is unsafe' >&2
+          return 1
+        }
+        candidate=${path%/*}
+        candidate=$(
+          CDPATH=
+          export CDPATH
+          cd -P -- "$candidate" 2>/dev/null && pwd -P
+        ) || {
+          printf '%s\n' 'cannot canonicalize the configured credential helper path' >&2
+          return 1
+        }
+        if [[ "$_bjg_push_root" == / || "$candidate" == "$_bjg_push_root" \
+              || "$candidate" == "$_bjg_push_root/"* ]]; then
+          printf '%s\n' 'credential helper path resolves inside the current Git worktree' >&2
+          return 1
+        fi
+        if [[ "$name" == store && ( -e "$path" || -L "$path" ) ]]; then
+          [[ -f "$path" && ! -L "$path" ]] || {
+            printf '%s\n' 'credential store path is not a non-symlink regular file' >&2
+            return 1
+          }
+          link_count=$(_bjg_regular_link_count "$path") || {
+            printf '%s\n' 'cannot inspect the credential store hard-link count' >&2
+            return 1
+          }
+          [[ "$link_count" == 1 ]] || {
+            printf '%s\n' 'credential store has multiple hard links' >&2
+            return 1
+          }
+        fi
+      done
+
+      program=git-credential-$name
+      if [[ -x "$_bjg_git_exec_path/$program" ]]; then
+        candidate=$_bjg_git_exec_path/$program
+      else
+        candidate=$(
+          PATH=$_bjg_caller_path
+          export PATH
+          type -P -- "$program"
+        ) || {
+          printf '%s\n' 'cannot resolve the configured credential helper' >&2
+          return 1
+        }
+      fi
+      candidate=$(_bjg_external_helper \
+        "$candidate" 'cannot validate the configured credential helper') ||
+        return 1
+      [[ "$candidate" =~ ^[A-Za-z0-9_./+,:=@%-]+$ ]] || {
+        printf '%s\n' 'configured credential helper executable has an unsafe pathname' >&2
+        return 1
+      }
+      value=$candidate
+      for argument in "${words[@]:1}"; do
+        value+=" $argument"
+      done
+      _bjg_credential_config+=( -c "$key=$value" )
+    }
+    _bjg_credential_config=( -c credential.helper= )
+    while IFS=' ' read -r _bjg_credential_key _bjg_credential_helper; do
+      _bjg_append_credential_helper "$_bjg_credential_key" "$_bjg_credential_helper" ||
+        exit 1
+    done < <("$_bjg_git" config --system --get-regexp \
+      '^credential\.(.*\.)?helper$' 2>/dev/null)
+    while IFS=' ' read -r _bjg_credential_key _bjg_credential_helper; do
+      _bjg_append_credential_helper "$_bjg_credential_key" "$_bjg_credential_helper" ||
+        exit 1
+    done < <("$_bjg_git" config --global --get-regexp \
+      '^credential\.(.*\.)?helper$' 2>/dev/null)
+    unset _bjg_credential_helper _bjg_credential_key _bjg_git_exec_path
+    _bjg_transport_config=()
+    if _bjg_ssh=$(command -p -v ssh); then
+      _bjg_ssh_command="$_bjg_ssh -F /dev/null -o ProxyCommand=none -o PermitLocalCommand=no -o BatchMode=yes"
+      _bjg_transport_config+=( -c protocol.ssh.allow=always \
+        -c "core.sshCommand=$_bjg_ssh_command" )
+    else
+      _bjg_transport_config+=( -c protocol.ssh.allow=never )
+    fi
+    _bjg_push_environment=(
+      "$_bjg_env" -i "PATH=$_bjg_safe_path" "LC_ALL=C"
+      "GIT_TERMINAL_PROMPT=0" "PYTHONNOUSERSITE=1" "PYTHONSAFEPATH=1"
+    )
+    for _bjg_push_variable in HOME XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME \
+      XDG_STATE_HOME USER LOGNAME SHELL TERM \
+      COLORTERM NO_COLOR GH_TOKEN GITHUB_TOKEN \
+      HTTPS_PROXY https_proxy HTTP_PROXY http_proxy ALL_PROXY all_proxy \
+      NO_PROXY no_proxy SSL_CERT_FILE SSL_CERT_DIR NIX_SSL_CERT_FILE \
+      SSH_AUTH_SOCK DBUS_SESSION_BUS_ADDRESS GCM_CREDENTIAL_STORE; do
+      if command builtin declare -p "$_bjg_push_variable" >/dev/null 2>&1; then
+        _bjg_push_environment+=(
+          "$_bjg_push_variable=${!_bjg_push_variable}"
+        )
+      fi
+    done
+    exec "${_bjg_push_environment[@]}" "$_bjg_git" \
+      --no-pager --no-replace-objects \
+      -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+      -c push.gpgSign=false -c core.askPass= \
+      -c push.default=nothing -c push.followTags=false \
+      -c "remote.$_bjg_push_remote.mirror=false" \
+      -c protocol.allow=never \
+      -c protocol.https.allow=always -c protocol.http.allow=never \
+      "${_bjg_credential_config[@]}" "${_bjg_transport_config[@]}" \
+      push "$_bjg_push_remote" "$_bjg_push_head:refs/heads/$_bjg_push_branch"
+    ;;
+esac
+[ "$#" -ge 2 ] && [ "$1" = --literal-pathspecs ] || {
+  printf '%s\n' 'usage: git-clean {copy-file|diff-files|hash-file|head-oid|head-branch|worktree-root|make-temp-dir|make-dir|grep|run-posix|resolve-tool|run-audit-tool|snapshot-files|verify-files|commit|push|--literal-pathspecs {diff|add}} ...' >&2
+  exit 2
+}
+shift
+_bjg_subcommand=$1
+shift
+case $_bjg_subcommand in
+  diff)
+    exec "$_bjg_git" --no-pager --no-replace-objects \
+      -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+      --literal-pathspecs diff --no-ext-diff --no-textconv --text "$@"
+    ;;
+  add)
+    [ "$#" -eq 4 ] && [ "$1" = --expect-oid ] && [ "$3" = -- ] \
+      && [[ "$2" =~ ^[0-9a-fA-F]+$ ]] || {
+      printf '%s\n' 'usage: git-clean --literal-pathspecs add --expect-oid <oid> -- <absolute-file>' >&2
+      exit 2
+    }
+    _bjg_expected_oid=$2
+    _bjg_path=$4
+    case $_bjg_path in
+      /*) ;;
+      *)
+        printf '%s\n' 'clean Git add requires an absolute file' >&2
+        exit 1
+        ;;
+    esac
+    _bjg_root_raw=$("$_bjg_git" --no-pager --no-replace-objects \
+      -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+      rev-parse --show-toplevel 2>/dev/null) || {
+      printf '%s\n' 'cannot resolve the current Git worktree for clean add' >&2
+      exit 1
+    }
+    _bjg_root=$(
+      CDPATH=
+      export CDPATH
+      cd -P -- "$_bjg_root_raw" 2>/dev/null && pwd -P
+    ) || {
+      printf '%s\n' 'cannot canonicalize the current Git worktree for clean add' >&2
+      exit 1
+    }
+    _bjg_name=${_bjg_path##*/}
+    _bjg_parent=${_bjg_path%/*}
+    _bjg_parent=$(
+      CDPATH=
+      export CDPATH
+      cd -P -- "$_bjg_parent" 2>/dev/null && pwd -P
+    ) || {
+      printf '%s\n' 'cannot canonicalize the file for clean add' >&2
+      exit 1
+    }
+    _bjg_path=$_bjg_parent/$_bjg_name
+    if [[ "$_bjg_root" == / ]]; then
+      _bjg_relative=${_bjg_path#/}
+    elif [[ "$_bjg_path" == "$_bjg_root/"* ]]; then
+      _bjg_relative=${_bjg_path#"$_bjg_root/"}
+    else
+      printf '%s\n' 'clean Git add file is outside the current worktree' >&2
+      exit 1
+    fi
+    [[ -n "$_bjg_relative" && -f "$_bjg_path" && ! -L "$_bjg_path" ]] || {
+      printf '%s\n' 'clean Git add file is not a non-symlink regular file' >&2
+      exit 1
+    }
+    _bjg_add_git_dir_raw=$("$_bjg_git" --no-pager --no-replace-objects \
+      -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+      -C "$_bjg_root" rev-parse --absolute-git-dir 2>/dev/null) || {
+      printf '%s\n' 'cannot resolve the Git administrative directory for clean add' >&2
+      exit 1
+    }
+    _bjg_add_git_dir=$(
+      CDPATH=
+      export CDPATH
+      cd -P -- "$_bjg_add_git_dir_raw" 2>/dev/null && pwd -P
+    ) || {
+      printf '%s\n' 'cannot canonicalize the Git administrative directory for clean add' >&2
+      exit 1
+    }
+    _bjg_add_tmp=$("$_bjg_mktemp" -d \
+      "$_bjg_add_git_dir/beads-jsonl-add.XXXXXX") || {
+      printf '%s\n' 'cannot create a private clean-add directory' >&2
+      exit 1
+    }
+    "$_bjg_chmod" 700 "$_bjg_add_tmp" || {
+      "$_bjg_rmdir" "$_bjg_add_tmp" 2>/dev/null || :
+      printf '%s\n' 'cannot protect the private clean-add directory' >&2
+      exit 1
+    }
+    _bjg_add_snapshot=$_bjg_add_tmp/reviewed
+    _bjg_add_cleanup() {
+      local status=$? cleanup_status=0
+      trap - EXIT HUP INT QUIT TERM
+      if [[ -e "$_bjg_add_snapshot" || -L "$_bjg_add_snapshot" ]] \
+          && ! "$_bjg_unlink" "$_bjg_add_snapshot"; then
+        cleanup_status=1
+      fi
+      if ! "$_bjg_rmdir" "$_bjg_add_tmp"; then
+        cleanup_status=1
+      fi
+      if [[ $status -eq 0 && $cleanup_status -ne 0 ]]; then
+        printf '%s\n' 'cannot remove the private clean-add directory' >&2
+        status=1
+      fi
+      exit "$status"
+    }
+    trap _bjg_add_cleanup EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 131' QUIT
+    trap 'exit 143' TERM
+    _bjg_add_cp=$(command -p -v cp) || {
+      printf '%s\n' 'cannot locate a trusted cp for clean add' >&2
+      exit 1
+    }
+    "${_bjg_proof_environment[@]}" "$_bjg_add_cp" \
+      "$_bjg_path" "$_bjg_add_snapshot" || {
+      printf '%s\n' 'cannot snapshot the file for clean add' >&2
+      exit 1
+    }
+    _bjg_oid=$("$_bjg_git" --no-pager --no-replace-objects \
+      -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+      -C "$_bjg_root" hash-object --no-filters "$_bjg_add_snapshot") || {
+      printf '%s\n' 'cannot hash the file for clean add' >&2
+      exit 1
+    }
+    [[ "$_bjg_oid" =~ ^[0-9a-fA-F]+$ ]] || {
+      printf '%s\n' 'clean Git add returned an invalid object id' >&2
+      exit 1
+    }
+    [[ "$_bjg_oid" == "$_bjg_expected_oid" ]] || {
+      printf '%s\n' 'clean Git add file no longer matches the reviewed object id' >&2
+      exit 1
+    }
+    _bjg_written_oid=$("$_bjg_git" --no-pager --no-replace-objects \
+      -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+      -C "$_bjg_root" hash-object -w --no-filters "$_bjg_add_snapshot") || {
+      printf '%s\n' 'cannot persist the reviewed object for clean add' >&2
+      exit 1
+    }
+    [[ "$_bjg_written_oid" == "$_bjg_expected_oid" ]] || {
+      printf '%s\n' 'persisted clean-add object does not match the reviewed object id' >&2
+      exit 1
+    }
+    printf '100644 %s\t%s\0' "$_bjg_oid" "$_bjg_relative" |
+      "$_bjg_git" --no-pager --no-replace-objects \
+        -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+        -C "$_bjg_root" update-index -z --index-info
+    exit $?
+    ;;
+  *)
+    printf '%s\n' 'usage: git-clean {copy-file|diff-files|commit|push|--literal-pathspecs {diff|add}} ...' >&2
+    exit 2
+    ;;
+esac
+__BJG_TRUSTED_BASH__

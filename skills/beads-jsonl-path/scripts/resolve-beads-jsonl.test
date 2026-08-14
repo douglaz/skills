@@ -1,0 +1,2819 @@
+#!/usr/bin/env bash
+# Isolated regression fixtures for resolve-beads-jsonl. Every fixture uses a
+# scratch repository and a stubbed br; the real Beads store is never queried or
+# mutated.
+
+set -euo pipefail
+
+HERE=$(cd "$(dirname "$0")" && pwd -P)
+RESOLVER="$HERE/resolve-beads-jsonl"
+GIT_RUNNER="$HERE/git-clean"
+SYSTEM_PATH=$PATH
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+PASS=0
+FAIL=0
+
+pass() { PASS=$((PASS + 1)); printf '  ok   %s\n' "$1"; }
+fail() { FAIL=$((FAIL + 1)); printf '  FAIL %s\n         %s\n' "$1" "$2"; }
+
+set_where_path() {
+  local base=$1 path=$2
+  printf '%s' "$path" >"$base/where-path" || return
+  jq -n --arg path "$path" '{jsonl_path: $path}' >"$base/where.out" || return
+}
+
+new_fixture() {
+  local base repo jsonl
+  base=$(mktemp -d "$WORK/fixture.XXXXXX") || return
+  repo="$base/repo"
+  jsonl="$repo/.beads/issues.jsonl"
+  mkdir -p "$repo/.beads" "$base/bin" || return
+  git init -q "$repo" || return
+  git -C "$repo" symbolic-ref --short HEAD >"$base/initial-branch" || return
+  git -C "$repo" config user.name 'Resolver Test' || return
+  git -C "$repo" config user.email resolver@example.invalid || return
+  printf '%s\n' '{"id":"fixture"}' >"$jsonl" || return
+  git -C "$repo" add -- .beads/issues.jsonl || return
+  git -C "$repo" commit -qm baseline || return
+  printf '%s' "$jsonl" >"$base/jsonl-path" || return
+  set_where_path "$base" "$jsonl" || return
+  command cat >"$base/bin/br" <<'BR_STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$BR_CALLS"
+if [[ "$*" != '--no-auto-flush --no-auto-import where --json' ]]; then
+  : >"$BR_MUTATION"
+fi
+command cat "$BR_OUTPUT"
+exit "${BR_EXIT:-0}"
+BR_STUB
+  chmod +x "$base/bin/br" || return
+  printf '%s' "$base"
+}
+
+# Marks the fixture's JSONL entry fsmonitor-valid and proves it landed. Git sets that bit
+# for entries a configured file system monitor did not report as changed, and then answers
+# from the bit instead of the filesystem. The stub reports no changed paths at all, so
+# whatever happens to the file after this call stays hidden from Git. `ls-files -v` cannot
+# see the bit — it prints `H` — which is why the caller checks `ls-files -f`.
+mark_fsmonitor_valid() {
+  local base=$1 hook flags
+  hook="$base/fsmonitor-stub"
+  command cat >"$hook" <<'FSMONITOR_STUB'
+#!/bin/sh
+printf 'resolver-fixture-token\0'
+FSMONITOR_STUB
+  chmod +x "$hook" || return 1
+  git -C "$base/repo" config core.fsmonitor "$hook" || return 1
+  # Sets the bit while the worktree still matches the index; Git keeps that cached answer
+  # until the monitor names the path, which this stub never does.
+  git -C "$base/repo" status --porcelain >/dev/null || return 1
+  flags=$(git -C "$base/repo" ls-files -f -- .beads/issues.jsonl) || return 1
+  [[ "$flags" == 'h '* ]]
+}
+
+snapshot_one_path() {
+  local label=$1 path=$2
+  printf '\nPATH %s\n' "$label"
+  if [[ -L "$path" ]]; then
+    printf 'symlink\n'
+    readlink "$path"
+  elif [[ -f "$path" ]]; then
+    printf 'regular\n'
+    git hash-object --no-filters --stdin <"$path"
+    if [[ -x "$path" ]]; then printf 'executable\n'; else printf 'non-executable\n'; fi
+  elif [[ -d "$path" ]]; then
+    printf 'directory\n'
+  elif [[ -p "$path" ]]; then
+    printf 'fifo\n'
+  elif [[ -e "$path" ]]; then
+    printf 'other\n'
+  else
+    printf 'missing\n'
+  fi
+}
+
+snapshot_fixture() {
+  local base=$1 output=$2 repo actual resolved
+  repo="$base/repo"
+  actual=$(<"$base/jsonl-path")
+  resolved=$(<"$base/where-path")
+  {
+    printf 'STATUS\n'
+    git -c core.fsmonitor=false -C "$repo" status --porcelain=v2 -z --untracked-files=all
+    printf '\nSTAGE\n'
+    git -c core.fsmonitor=false -C "$repo" ls-files --stage -z
+    printf '\nFLAGS\n'
+    git -c core.fsmonitor=false -C "$repo" ls-files -v -z
+    snapshot_one_path actual "$actual"
+    if [[ "$resolved" != "$actual" ]]; then
+      snapshot_one_path resolved "$resolved"
+    fi
+  } >"$output"
+}
+
+safe_br_calls_only() {
+  local calls=$1 call
+  [[ -e "$calls" ]] || return 0
+  while IFS= read -r call; do
+    [[ "$call" == '--no-auto-flush --no-auto-import where --json' ]] || return 1
+  done <"$calls"
+}
+
+# Extra resolver arguments and invocation worktree for the next assertion only;
+# every assert_* clears them.
+RESOLVER_ARGS=()
+RESOLVER_CWD=
+RESOLVER_GIT_DIR=
+RESOLVER_GIT_WORK_TREE=
+RESOLVER_GIT_INDEX_FILE=
+
+run_resolver() {
+  local base=$1 runtime_path=$2
+  (
+    cd "${RESOLVER_CWD:-$base/repo}" || exit 98
+    if [[ -n "$RESOLVER_GIT_DIR" ]]; then
+      GIT_DIR=$RESOLVER_GIT_DIR
+      export GIT_DIR
+    fi
+    if [[ -n "$RESOLVER_GIT_WORK_TREE" ]]; then
+      GIT_WORK_TREE=$RESOLVER_GIT_WORK_TREE
+      export GIT_WORK_TREE
+    fi
+    if [[ -n "$RESOLVER_GIT_INDEX_FILE" ]]; then
+      GIT_INDEX_FILE=$RESOLVER_GIT_INDEX_FILE
+      export GIT_INDEX_FILE
+    fi
+    BR_CALLS="$base/br.calls" BR_MUTATION="$base/br.mutation" \
+      BR_OUTPUT="$base/where.out" BR_EXIT="${BR_EXIT:-0}" \
+      PATH="$runtime_path" "$RESOLVER" ${RESOLVER_ARGS+"${RESOLVER_ARGS[@]}"} \
+      >"$base/stdout" 2>"$base/stderr"
+  )
+}
+
+assert_refused() {
+  local name=$1 base=$2 diagnostic=$3 runtime_path rc
+  runtime_path=${4:-"$base/bin:$SYSTEM_PATH"}
+  snapshot_fixture "$base" "$base/before"
+  if run_resolver "$base" "$runtime_path"; then rc=0; else rc=$?; fi
+  RESOLVER_ARGS=()
+  RESOLVER_CWD=
+  RESOLVER_GIT_DIR=
+  RESOLVER_GIT_WORK_TREE=
+  RESOLVER_GIT_INDEX_FILE=
+  snapshot_fixture "$base" "$base/after"
+  if [[ $rc -eq 0 ]]; then
+    fail "$name" 'resolver accepted unsafe state'
+  elif [[ -s "$base/stdout" ]]; then
+    fail "$name" 'resolver printed a path while refusing'
+  elif ! grep -Fq -- "$diagnostic" "$base/stderr"; then
+    fail "$name" "missing diagnostic '$diagnostic': $(<"$base/stderr")"
+  elif ! cmp -s "$base/before" "$base/after"; then
+    fail "$name" 'repository or resolved-path state changed'
+  elif [[ -e "$base/br.mutation" ]]; then
+    fail "$name" 'br observed a mutation or flush-shaped invocation'
+  elif ! safe_br_calls_only "$base/br.calls"; then
+    fail "$name" 'br received something other than the exact read-only where invocation'
+  else
+    pass "$name"
+  fi
+}
+
+assert_success() {
+  local name=$1 base=$2 expected=$3 rc
+  snapshot_fixture "$base" "$base/before"
+  if run_resolver "$base" "$base/bin:$SYSTEM_PATH"; then rc=0; else rc=$?; fi
+  RESOLVER_ARGS=()
+  RESOLVER_CWD=
+  RESOLVER_GIT_DIR=
+  RESOLVER_GIT_WORK_TREE=
+  RESOLVER_GIT_INDEX_FILE=
+  snapshot_fixture "$base" "$base/after"
+  printf '%s\n' "$expected" >"$base/expected"
+  if [[ $rc -ne 0 ]]; then
+    fail "$name" "exit $rc: $(<"$base/stderr")"
+  elif ! cmp -s "$base/expected" "$base/stdout"; then
+    fail "$name" 'stdout was not exactly the absolute JSONL path'
+  elif [[ -s "$base/stderr" ]]; then
+    fail "$name" "unexpected stderr: $(<"$base/stderr")"
+  elif ! cmp -s "$base/before" "$base/after"; then
+    fail "$name" 'successful inspection changed repository state'
+  elif [[ -e "$base/br.mutation" ]] || ! safe_br_calls_only "$base/br.calls"; then
+    fail "$name" 'success invoked a Beads mutation or flush'
+  else
+    pass "$name"
+  fi
+}
+
+assert_stdout_failure() {
+  local name=$1 base=$2 rc
+  snapshot_fixture "$base" "$base/before"
+  set +e
+  (
+    cd "$base/repo" || exit 98
+    trap '' PIPE
+    BR_CALLS="$base/br.calls" BR_MUTATION="$base/br.mutation" \
+      BR_OUTPUT="$base/where.out" BR_EXIT=0 PATH="$base/bin:$SYSTEM_PATH" \
+      "$RESOLVER" --allow-dirty 2>"$base/stderr"
+  ) | :
+  rc=${PIPESTATUS[0]}
+  set -e
+  snapshot_fixture "$base" "$base/after"
+  if [[ $rc -eq 0 ]]; then
+    fail "$name" 'resolver masked the failed stdout write'
+  elif [[ ! -s "$base/stderr" ]]; then
+    fail "$name" 'stdout failed without a diagnostic'
+  elif ! cmp -s "$base/before" "$base/after"; then
+    fail "$name" 'failed output changed repository state'
+  elif [[ -e "$base/br.mutation" ]]; then
+    fail "$name" 'failed output invoked a Beads mutation or flush'
+  elif [[ ! -e "$base/br.calls" ]] || ! safe_br_calls_only "$base/br.calls"; then
+    fail "$name" 'failed output did not use only the exact read-only where invocation'
+  else
+    pass "$name"
+  fi
+}
+
+printf '%s\n' 'resolve-beads-jsonl fixtures'
+
+b=$(new_fixture)
+assert_success 'clean tracked JSONL resolves' "$b" "$(<"$b/jsonl-path")"
+
+# The same validated br boundary owns later reads and mutations; caller
+# functions/PATH must not reappear after JSONL resolution.
+b=$(new_fixture)
+br() {
+  printf '%s\n' ran >"$HOSTILE_BR_RUNNER_RAN"
+  return 0
+}
+export -f br
+if (
+  cd "$b/repo" || exit 98
+  HOSTILE_BR_RUNNER_RAN="$b/hostile-br-runner-ran" \
+    BR_CALLS="$b/br.calls" BR_MUTATION="$b/br.mutation" BR_OUTPUT="$b/where.out" \
+    PATH="$b/bin:$SYSTEM_PATH" \
+    "$RESOLVER" --run-br sync --flush-only \
+    >"$b/run-br.stdout" 2>"$b/run-br.stderr"
+); then rc=0; else rc=$?; fi
+unset -f br
+t='validated br runner ignores caller functions for mutations'
+if [[ $rc -ne 0 ]]; then
+  fail "$t" "exit $rc: $(<"$b/run-br.stderr")"
+elif [[ -e "$b/hostile-br-runner-ran" ]]; then
+  fail "$t" 'runner invoked the caller br function'
+elif [[ ! -e "$b/br.calls" || $(<"$b/br.calls") != 'sync --flush-only' ]]; then
+  fail "$t" 'runner did not invoke the validated br with exact arguments'
+elif [[ ! -e "$b/br.mutation" ]]; then
+  fail "$t" 'fixture did not observe the mutation-shaped br invocation'
+else
+  pass "$t"
+fi
+
+# Audit decisions use the same trusted-tool boundary for jq; a caller function
+# cannot forge graph IDs, Claude state, or other JSON-derived control flow.
+b=$(new_fixture)
+jq() {
+  printf '%s\n' ran >"$HOSTILE_JQ_RUNNER_RAN"
+  printf '%s\n' forged
+  return 0
+}
+export -f jq
+if (
+  cd "$b/repo" || exit 98
+  HOSTILE_JQ_RUNNER_RAN="$b/hostile-jq-runner-ran" \
+    PATH="$b/bin:$SYSTEM_PATH" \
+    "$RESOLVER" --run-jq -er '.value' \
+    >"$b/run-jq.stdout" 2>"$b/run-jq.stderr" <<<'{"value":"trusted"}'
+); then rc=0; else rc=$?; fi
+unset -f jq
+t='validated jq runner ignores caller functions for audit decisions'
+if [[ $rc -ne 0 ]]; then
+  fail "$t" "exit $rc: $(<"$b/run-jq.stderr")"
+elif [[ -e "$b/hostile-jq-runner-ran" ]]; then
+  fail "$t" 'runner invoked the caller jq function'
+elif [[ $(<"$b/run-jq.stdout") != trusted ]]; then
+  fail "$t" 'runner did not invoke validated jq with the exact arguments'
+else
+  pass "$t"
+fi
+
+# Consumer Git runs through the installed sibling so caller repository/index
+# selectors and PATH shims cannot falsify a post-resolution diff.
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+alternate_index="$b/alternate.index"
+GIT_INDEX_FILE="$alternate_index" git -C "$b/repo" read-tree HEAD
+printf '%s\n' staged-through-real-index >>"$jsonl"
+git -C "$b/repo" add -- .beads/issues.jsonl
+git -C "$b/repo" show HEAD:.beads/issues.jsonl >"$jsonl"
+printf '%s\n' '.beads/issues.jsonl -diff' >"$b/repo/.gitattributes"
+mkdir "$b/repo/runner-path"
+command cat >"$b/repo/runner-path/git" <<'RUNNER_PATH_GIT'
+#!/bin/sh
+printf '%s\n' ran >"$RUNNER_PATH_GIT_RAN"
+exit 0
+RUNNER_PATH_GIT
+chmod +x "$b/repo/runner-path/git"
+snapshot_fixture "$b" "$b/before"
+if (
+  cd "$b/repo" || exit 98
+  GIT_INDEX_FILE="$alternate_index" RUNNER_PATH_GIT_RAN="$b/runner-path-git-ran" \
+    PATH="$b/repo/runner-path:$SYSTEM_PATH" \
+    "$GIT_RUNNER" --literal-pathspecs diff --cached -- .beads/issues.jsonl \
+    >"$b/runner.stdout" 2>"$b/runner.stderr"
+); then rc=0; else rc=$?; fi
+snapshot_fixture "$b" "$b/after"
+t='clean Git runner ignores inherited index and PATH overrides'
+if [[ $rc -ne 0 ]]; then
+  fail "$t" "exit $rc: $(<"$b/runner.stderr")"
+elif [[ ! -s "$b/runner.stdout" ]]; then
+  fail "$t" 'runner let an alternate index hide the staged diff'
+elif ! grep -Fq -- 'staged-through-real-index' "$b/runner.stdout"; then
+  fail "$t" 'runner let binary attributes hide the staged JSON body'
+elif [[ -s "$b/runner.stderr" ]]; then
+  fail "$t" "unexpected stderr: $(<"$b/runner.stderr")"
+elif [[ -e "$b/runner-path-git-ran" ]]; then
+  fail "$t" 'runner executed the worktree PATH shim'
+elif ! cmp -s "$b/before" "$b/after"; then
+  fail "$t" 'runner changed repository state'
+else
+  pass "$t"
+fi
+
+# `git add` normally executes worktree-selected clean filters. The runner stages
+# the exact bytes with hash-object --no-filters plus update-index instead.
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+command cat >"$b/repo/filter-clean" <<FILTER_CLEAN
+#!/bin/sh
+printf '%s\n' ran >"$b/filter-ran"
+printf '%s\n' filtered
+FILTER_CLEAN
+chmod +x "$b/repo/filter-clean"
+printf '%s\n' '.beads/issues.jsonl filter=fixture' >"$b/repo/.gitattributes"
+git -C "$b/repo" config filter.fixture.clean "$b/repo/filter-clean"
+printf '%s\n' '{"id":"exact-stage"}' >"$jsonl"
+reviewed_oid=$("$GIT_RUNNER" hash-file "$jsonl")
+if (
+  cd "$b/repo" || exit 98
+  "$GIT_RUNNER" --literal-pathspecs add --expect-oid "$reviewed_oid" -- "$jsonl" \
+    >"$b/runner.stdout" 2>"$b/runner.stderr"
+); then rc=0; else rc=$?; fi
+git -C "$b/repo" show :.beads/issues.jsonl >"$b/staged.jsonl"
+t='clean Git runner stages exact bytes without repository filters'
+if [[ $rc -ne 0 ]]; then
+  fail "$t" "exit $rc: $(<"$b/runner.stderr")"
+elif [[ -e "$b/filter-ran" ]]; then
+  fail "$t" 'runner executed the repository clean filter'
+elif ! cmp -s "$jsonl" "$b/staged.jsonl"; then
+  fail "$t" 'runner did not stage the exact worktree bytes'
+elif [[ -s "$b/runner.stdout" || -s "$b/runner.stderr" ]]; then
+  fail "$t" 'runner leaked output while staging'
+else
+  pass "$t"
+fi
+
+# A later write cannot replace the bytes that produced the reviewed diff. The
+# expected object id is checked against the exact blob before update-index.
+cp "$b/staged.jsonl" "$b/reviewed.jsonl"
+printf '%s\n' '{"id":"changed-after-review"}' >"$jsonl"
+stale_oid=$(git -C "$b/repo" hash-object --no-filters "$jsonl")
+if (
+  cd "$b/repo" || exit 98
+  "$GIT_RUNNER" --literal-pathspecs add --expect-oid "$reviewed_oid" -- "$jsonl" \
+    >"$b/stale-add.stdout" 2>"$b/stale-add.stderr"
+); then rc=0; else rc=$?; fi
+git -C "$b/repo" show :.beads/issues.jsonl >"$b/after-stale-add.jsonl"
+t='clean Git runner refuses bytes changed after the reviewed hash'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'runner staged bytes written after review'
+elif ! grep -Fq 'no longer matches the reviewed object id' "$b/stale-add.stderr"; then
+  fail "$t" "runner did not diagnose the stale review: $(<"$b/stale-add.stderr")"
+elif ! cmp -s "$b/reviewed.jsonl" "$b/after-stale-add.jsonl"; then
+  fail "$t" 'runner changed the index after the reviewed bytes changed'
+elif git -C "$b/repo" cat-file -e "$stale_oid^{blob}" 2>/dev/null; then
+  fail "$t" 'runner persisted the unreviewed bytes as a dangling Git object'
+elif compgen -G "$b/repo/.git/beads-jsonl-add.*" >/dev/null; then
+  fail "$t" 'runner left the private clean-add snapshot behind'
+else
+  pass "$t"
+fi
+cp "$b/reviewed.jsonl" "$jsonl"
+
+# Commit must consume the real index just staged above, not an inherited
+# repository selector, and must not execute worktree repository hooks.
+mkdir "$b/forged"
+git init -q "$b/forged"
+git -C "$b/forged" config user.name 'Forged Test'
+git -C "$b/forged" config user.email forged@example.invalid
+printf '%s\n' forged >"$b/forged/baseline"
+git -C "$b/forged" add baseline
+git -C "$b/forged" commit -qm baseline
+command cat >"$b/repo/.git/hooks/pre-commit" <<HOOK_PRE_COMMIT
+#!/bin/sh
+printf '%s\n' ran >"$b/commit-hook-ran"
+exit 1
+HOOK_PRE_COMMIT
+chmod +x "$b/repo/.git/hooks/pre-commit"
+printf '%s\n' unrelated >"$b/repo/unrelated"
+git -C "$b/repo" add -- unrelated
+real_before=$(git -C "$b/repo" rev-parse HEAD)
+real_branch=$(git -C "$b/repo" symbolic-ref --short HEAD)
+forged_before=$(git -C "$b/forged" rev-parse HEAD)
+
+# `symbolic-ref --short` becomes `heads/<name>` when a tag makes the shortened
+# spelling ambiguous. Read and strip the exact direct refs/heads/ target instead.
+git -C "$b/repo" tag "$real_branch" "$real_before"
+if runner_branch=$(cd "$b/repo" && "$GIT_RUNNER" head-branch); then rc=0; else rc=$?; fi
+t='clean Git runner returns an unambiguous direct branch name'
+if [[ $rc -ne 0 || "$runner_branch" != "$real_branch" ]]; then
+  fail "$t" "branch resolution returned '${runner_branch-}' at exit $rc"
+else
+  pass "$t"
+fi
+git -C "$b/repo" tag -d "$real_branch" >/dev/null
+
+# A valid branch may itself begin with `refs/`; only the full refs/heads/ prefix
+# has structural meaning here.
+nested_branch=refs/topic
+git -C "$b/repo" switch -q -c "$nested_branch" "$real_before"
+if nested_runner_branch=$(cd "$b/repo" && "$GIT_RUNNER" head-branch); then
+  rc=0
+else
+  rc=$?
+fi
+t='clean Git runner accepts a valid nested refs branch name'
+if [[ $rc -ne 0 || "$nested_runner_branch" != "$nested_branch" ]]; then
+  fail "$t" "nested branch resolution returned '${nested_runner_branch-}' at exit $rc"
+else
+  pass "$t"
+fi
+git -C "$b/repo" switch -q "$real_branch"
+git -C "$b/repo" branch -D "$nested_branch" >/dev/null
+
+# The reviewed parent is part of the proof. A concurrent ref update must make
+# the commit fail without overwriting the intervening HEAD.
+review_tree=$(git -C "$b/repo" rev-parse "$real_before^{tree}")
+intervening=$(printf '%s\n' intervening |
+  git -C "$b/repo" commit-tree "$review_tree" -p "$real_before")
+git -C "$b/repo" update-ref HEAD "$intervening" "$real_before"
+if (
+  cd "$b/repo" || exit 98
+  "$GIT_RUNNER" commit --only-reviewed "$jsonl" \
+    --expect-oid "$reviewed_oid" --expect-head "$real_before" \
+    --expect-branch "$real_branch" \
+    -m 'must refuse stale HEAD' \
+    >"$b/stale-head.stdout" 2>"$b/stale-head.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner refuses a HEAD changed after review'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'runner committed atop an unreviewed parent'
+elif [[ $(git -C "$b/repo" rev-parse HEAD) != "$intervening" ]]; then
+  fail "$t" 'runner overwrote the intervening HEAD'
+elif ! grep -Fq 'HEAD no longer matches the reviewed commit' \
+    "$b/stale-head.stderr"; then
+  fail "$t" "runner did not diagnose stale HEAD: $(<"$b/stale-head.stderr")"
+else
+  pass "$t"
+fi
+git -C "$b/repo" update-ref HEAD "$real_before" "$intervening"
+
+# The reviewed commit OID is not a branch identity. Switching to another branch
+# at the same OID must not advance that newly checked-out ref.
+other_branch=review-other
+git -C "$b/repo" branch "$other_branch" "$real_before"
+git -C "$b/repo" switch -q "$other_branch"
+if (
+  cd "$b/repo" || exit 98
+  "$GIT_RUNNER" commit --only-reviewed "$jsonl" \
+    --expect-oid "$reviewed_oid" --expect-head "$real_before" \
+    --expect-branch "$real_branch" \
+    -m 'must refuse switched branch' \
+    >"$b/switched-branch.stdout" 2>"$b/switched-branch.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner refuses a branch switched after review'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'runner committed to a different branch at the reviewed OID'
+elif [[ $(git -C "$b/repo" rev-parse "$real_branch") != "$real_before" \
+        || $(git -C "$b/repo" rev-parse "$other_branch") != "$real_before" ]]; then
+  fail "$t" 'runner advanced a branch after the reviewed branch changed'
+elif ! grep -Fq 'current branch no longer matches the reviewed branch' \
+    "$b/switched-branch.stderr"; then
+  fail "$t" "runner did not diagnose switched branch: $(<"$b/switched-branch.stderr")"
+else
+  pass "$t"
+fi
+git -C "$b/repo" switch -q "$real_branch"
+git -C "$b/repo" branch -D "$other_branch" >/dev/null
+
+# A branch ref can itself be symbolic. Updating without --no-deref would follow it
+# and advance the target branch even though the reviewed ref name was explicit.
+symref_target=review-symref-target
+git -C "$b/repo" branch "$symref_target" "$real_before"
+git -C "$b/repo" symbolic-ref "refs/heads/$real_branch" \
+  "refs/heads/$symref_target"
+if (
+  cd "$b/repo" || exit 98
+  "$GIT_RUNNER" commit --only-reviewed "$jsonl" \
+    --expect-oid "$reviewed_oid" --expect-head "$real_before" \
+    --expect-branch "$real_branch" \
+    -m 'must refuse symbolic reviewed ref' \
+    >"$b/symbolic-branch.stdout" 2>"$b/symbolic-branch.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner does not dereference a symbolic reviewed branch'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'runner followed and advanced the symbolic branch target'
+elif [[ $(git -C "$b/repo" rev-parse "$symref_target") != "$real_before" ]]; then
+  fail "$t" 'runner mutated the symbolic branch target'
+elif ! grep -Fq 'reviewed branch ref is unexpectedly symbolic' \
+    "$b/symbolic-branch.stderr"; then
+  fail "$t" "runner did not diagnose symbolic branch CAS: $(<"$b/symbolic-branch.stderr")"
+else
+  pass "$t"
+fi
+git -C "$b/repo" update-ref --no-deref "refs/heads/$real_branch" "$real_before"
+git -C "$b/repo" branch -D "$symref_target" >/dev/null
+
+# Temp-index state lives only in the Git administrative directory, ignores a
+# worktree TMPDIR, and is removed even when commit-tree fails after creation.
+mkdir "$b/repo/hostile-tmp" "$b/identity-home"
+git -C "$b/repo" config --unset user.name
+git -C "$b/repo" config --unset user.email
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/identity-home" TMPDIR="$b/repo/hostile-tmp" \
+    "$GIT_RUNNER" commit --only-reviewed "$jsonl" \
+      --expect-oid "$reviewed_oid" --expect-head "$real_before" \
+      --expect-branch "$real_branch" \
+      -m 'forced identity failure' \
+      >"$b/failed-commit.stdout" 2>"$b/failed-commit.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner removes its private index after commit failure'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'identity-less commit unexpectedly succeeded'
+elif find "$b/repo/hostile-tmp" -mindepth 1 -print -quit | grep -q .; then
+  fail "$t" 'runner used caller-selected worktree TMPDIR'
+elif compgen -G "$b/repo/.git/beads-jsonl-commit.*" >/dev/null; then
+  fail "$t" 'runner left a private isolated-index directory behind'
+else
+  pass "$t"
+fi
+git -C "$b/repo" config user.name 'Resolver Test'
+git -C "$b/repo" config user.email resolver@example.invalid
+
+# No arbitrary commit CLI reaches commit-tree.
+t='clean Git runner rejects commit flags outside the exact message API'
+unsafe_commit_accepted=false
+for unsafe_commit_arg in -a --all --amend -S unrelated; do
+  if (
+    cd "$b/repo" || exit 98
+    "$GIT_RUNNER" commit --only-reviewed "$jsonl" \
+      --expect-oid "$reviewed_oid" --expect-head "$real_before" \
+      --expect-branch "$real_branch" \
+      "$unsafe_commit_arg" unsafe >/dev/null 2>&1
+  ); then
+    unsafe_commit_accepted=true
+  fi
+done
+if "$unsafe_commit_accepted"; then
+  fail "$t" 'runner accepted an unreviewed commit mode or path'
+else
+  pass "$t"
+fi
+
+if (
+  cd "$b/repo" || exit 98
+  GIT_DIR="$b/forged/.git" GIT_WORK_TREE="$b/repo" \
+    "$GIT_RUNNER" commit --only-reviewed "$jsonl" \
+      --expect-oid "$reviewed_oid" --expect-head "$real_before" \
+      --expect-branch "$real_branch" \
+      -m 'stage exact JSONL' \
+    >"$b/commit.stdout" 2>"$b/commit.stderr"
+); then rc=0; else rc=$?; fi
+real_after=$(git -C "$b/repo" rev-parse HEAD)
+forged_after=$(git -C "$b/forged" rev-parse HEAD)
+t='clean Git runner commits the real index without repository hooks'
+if [[ $rc -ne 0 ]]; then
+  fail "$t" "exit $rc: $(<"$b/commit.stderr")"
+elif [[ "$real_before" == "$real_after" ]]; then
+  fail "$t" 'runner did not commit the actual repository'
+elif [[ "$forged_before" != "$forged_after" ]]; then
+  fail "$t" 'runner committed the inherited forged repository'
+elif [[ -e "$b/commit-hook-ran" ]]; then
+  fail "$t" 'runner executed the repository pre-commit hook'
+elif git -C "$b/repo" cat-file -e HEAD:unrelated 2>/dev/null; then
+  fail "$t" 'runner swept an unrelated staged file into the reviewed commit'
+elif git -C "$b/repo" diff --cached --quiet -- unrelated; then
+  fail "$t" 'runner did not preserve the unrelated staged file in the real index'
+elif ! git -C "$b/repo" show HEAD:.beads/issues.jsonl >"$b/committed.jsonl" \
+    || ! cmp -s "$jsonl" "$b/committed.jsonl"; then
+  fail "$t" 'runner committed bytes other than the reviewed JSONL'
+else
+  pass "$t"
+fi
+
+# A push may fail (this fixture points at a closed local port), but it must not
+# execute caller PATH/askpass transport helpers while failing closed.
+push_branch=$(git -C "$b/repo" symbolic-ref --short HEAD)
+push_head=$(git -C "$b/repo" rev-parse HEAD)
+mkdir "$b/repo/runner-path"
+command cat >"$b/repo/runner-path/ssh" <<'RUNNER_PATH_SSH'
+#!/bin/sh
+printf '%s\n' ran >"$RUNNER_PATH_SSH_RAN"
+exit 0
+RUNNER_PATH_SSH
+command cat >"$b/repo/runner-path/askpass" <<'RUNNER_ASKPASS'
+#!/bin/sh
+printf '%s\n' ran >"$RUNNER_ASKPASS_RAN"
+printf '%s\n' secret
+RUNNER_ASKPASS
+chmod +x "$b/repo/runner-path/ssh" "$b/repo/runner-path/askpass"
+git -C "$b/repo" config core.askPass "$b/repo/runner-path/askpass"
+git -C "$b/repo" remote add runner-test ssh://git@127.0.0.1:1/never
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/repo/runner-path:$SYSTEM_PATH" \
+    SSH_ASKPASS="$b/repo/runner-path/askpass" SSH_ASKPASS_REQUIRE=force DISPLAY=:0 \
+    RUNNER_PATH_SSH_RAN="$b/runner-path-ssh-ran" RUNNER_ASKPASS_RAN="$b/runner-askpass-ran" \
+    "$GIT_RUNNER" push --remote runner-test --branch "$push_branch" \
+      --expect-head "$push_head" \
+    >"$b/push.stdout" 2>"$b/push.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner refuses push without PATH or askpass execution'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'push to a closed local port unexpectedly succeeded'
+elif [[ -e "$b/runner-path-ssh-ran" ]]; then
+  fail "$t" 'runner executed the worktree PATH SSH shim'
+elif [[ -e "$b/runner-askpass-ran" ]]; then
+  fail "$t" 'runner executed the worktree askpass helper'
+else
+  pass "$t"
+fi
+
+# A worktree-selected global helper is still untrusted even when HOME itself is
+# outside the repository. Reject shell helpers before Git can invoke them.
+mkdir "$b/helper-home"
+command cat >"$b/repo/runner-path/credential-evil" <<'RUNNER_CREDENTIAL_EVIL'
+#!/bin/sh
+printf '%s\n' ran >"$RUNNER_CREDENTIAL_EVIL_RAN"
+exit 1
+RUNNER_CREDENTIAL_EVIL
+chmod +x "$b/repo/runner-path/credential-evil"
+HOME="$b/helper-home" git config --global credential.helper \
+  "!$b/repo/runner-path/credential-evil"
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/helper-home" \
+    RUNNER_CREDENTIAL_EVIL_RAN="$b/runner-credential-evil-ran" \
+    "$GIT_RUNNER" push --remote runner-test --branch "$push_branch" \
+      --expect-head "$push_head" \
+    >"$b/helper-push.stdout" 2>"$b/helper-push.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner rejects a global helper that names worktree code'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'push with a shell credential helper unexpectedly succeeded'
+elif [[ -e "$b/runner-credential-evil-ran" ]]; then
+  fail "$t" 'runner executed the worktree credential helper'
+elif ! grep -Fq 'configured credential helper is not a simple named helper' \
+    "$b/helper-push.stderr"; then
+  fail "$t" "runner did not diagnose the unsafe helper: $(<"$b/helper-push.stderr")"
+else
+  pass "$t"
+fi
+
+# Simple named helpers from trusted global configuration remain usable even
+# when installed outside Git's POSIX utility path: resolve them once from the
+# caller's PATH, then validate and pass their absolute executable to Git.
+mkdir "$b/named-helper-home" "$b/named-helper-bin"
+command cat >"$b/named-helper-bin/git-credential-fixture" <<'RUNNER_NAMED_HELPER'
+#!/bin/sh
+exit 0
+RUNNER_NAMED_HELPER
+chmod +x "$b/named-helper-bin/git-credential-fixture"
+HOME="$b/named-helper-home" git config --global credential.helper fixture
+HOME="$b/named-helper-home" git config --global --add credential.helper ''
+HOME="$b/named-helper-home" git config --global --add credential.helper \
+  'cache --timeout=3600'
+HOME="$b/named-helper-home" git config --global \
+  credential.https://127.0.0.1.helper 'cache --timeout=60'
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/named-helper-home" PATH="$b/named-helper-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" push --remote runner-test --branch "$push_branch" \
+      --expect-head "$push_head" \
+    >"$b/named-helper.stdout" 2>"$b/named-helper.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner validates a named global helper from the caller PATH'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'push to a closed local port unexpectedly succeeded'
+elif grep -Eq 'configured credential helper|credential helper executable' \
+    "$b/named-helper.stderr"; then
+  fail "$t" "runner rejected the outside-worktree named helper: $(<"$b/named-helper.stderr")"
+else
+  pass "$t"
+fi
+
+# The accepted helper path also covers authenticated `/usr/bin/env name`
+# interpreter semantics, distinct from the lexical-env spoof refusal.
+mkdir "$b/env-identity-helper-home" "$b/env-identity-helper-bin"
+printf '#!/usr/bin/env sh\nexit 0\n#\0binary-payload\n' \
+  >"$b/env-identity-helper-bin/git-credential-envfixture"
+chmod +x "$b/env-identity-helper-bin/git-credential-envfixture"
+HOME="$b/env-identity-helper-home" git config --global credential.helper envfixture
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/env-identity-helper-home" \
+    PATH="$b/env-identity-helper-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" push --remote runner-test --branch "$push_branch" \
+      --expect-head "$push_head" \
+    >"$b/env-identity-helper.stdout" 2>"$b/env-identity-helper.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner accepts trusted env helper with post-shebang NUL payload'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'push to a closed local port unexpectedly succeeded'
+elif grep -Eq 'configured credential helper|credential helper (executable|has|env target)' \
+    "$b/env-identity-helper.stderr"; then
+  fail "$t" "runner rejected trusted env helper: $(<"$b/env-identity-helper.stderr")"
+else
+  pass "$t"
+fi
+
+# A named helper's outside pathname is not the end of its executable chain: the
+# kernel-selected absolute shebang interpreter must also stay outside the worktree.
+mkdir "$b/interpreter-helper-home" "$b/interpreter-helper-bin"
+command cat >"$b/repo/credential-interpreter" <<CREDENTIAL_INTERPRETER
+#!/bin/sh
+printf '%s\n' interpreter >'$b/credential-interpreter-ran'
+exec /bin/sh "\$@"
+CREDENTIAL_INTERPRETER
+chmod +x "$b/repo/credential-interpreter"
+command cat >"$b/interpreter-helper-bin/outside-interpreter" \
+  <<OUTSIDE_CREDENTIAL_INTERPRETER
+#!$b/repo/credential-interpreter
+exec /bin/sh "\$@"
+OUTSIDE_CREDENTIAL_INTERPRETER
+chmod +x "$b/interpreter-helper-bin/outside-interpreter"
+command cat >"$b/interpreter-helper-bin/git-credential-interpreter" \
+  <<CREDENTIAL_HELPER_SCRIPT
+#!$b/interpreter-helper-bin/outside-interpreter
+exit 1
+CREDENTIAL_HELPER_SCRIPT
+chmod +x "$b/interpreter-helper-bin/git-credential-interpreter"
+HOME="$b/interpreter-helper-home" git config --global credential.helper interpreter
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/interpreter-helper-home" \
+    PATH="$b/interpreter-helper-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" push --remote runner-test --branch "$push_branch" \
+      --expect-head "$push_head" \
+    >"$b/interpreter-helper.stdout" 2>"$b/interpreter-helper.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner validates a credential helper shebang interpreter'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'push with a worktree helper interpreter unexpectedly succeeded'
+elif [[ -e "$b/credential-interpreter-ran" ]]; then
+  fail "$t" 'worktree credential-helper interpreter executed'
+elif ! grep -Fq 'credential helper resolves inside the current Git worktree' \
+    "$b/interpreter-helper.stderr"; then
+  fail "$t" "runner missed helper interpreter provenance: $(<"$b/interpreter-helper.stderr")"
+else
+  pass "$t"
+fi
+
+# The helper-chain parser must preserve the kernel's NUL termination semantics.
+mkdir "$b/nul-helper-home" "$b/nul-helper-bin"
+printf '#!%s\0suffix\nexit 1\n' "$b/repo/credential-interpreter" \
+  >"$b/nul-helper-bin/git-credential-nulinterpreter"
+chmod +x "$b/nul-helper-bin/git-credential-nulinterpreter"
+HOME="$b/nul-helper-home" git config --global credential.helper nulinterpreter
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/nul-helper-home" PATH="$b/nul-helper-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" push --remote runner-test --branch "$push_branch" \
+      --expect-head "$push_head" \
+    >"$b/nul-helper.stdout" 2>"$b/nul-helper.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner refuses a NUL-bearing credential helper interpreter'
+if [[ $rc -eq 0 || -e "$b/credential-interpreter-ran" ]]; then
+  fail "$t" 'NUL-terminated credential-helper interpreter executed'
+elif ! grep -Fq 'credential helper has a NUL-bearing script interpreter' \
+    "$b/nul-helper.stderr"; then
+  fail "$t" "runner missed helper NUL semantics: $(<"$b/nul-helper.stderr")"
+else
+  pass "$t"
+fi
+
+# Credential helpers run under an explicit allowlist, not a language-by-language
+# startup-variable blacklist. A tiny authenticated HTTPS exchange proves the
+# helper ran while an arbitrary caller variable did not reach it.
+mkdir "$b/env-helper-home" "$b/env-helper-bin" "$b/env-helper-cache" \
+  "$b/env-helper-data" "$b/env-helper-state"
+command cat >"$b/env-helper-bin/git-credential-envprobe" <<ENV_HELPER
+#!/bin/sh
+env >'$b/env-helper.environment'
+if [ "\${1-}" = get ]; then
+  printf '%s\n' username=fixture password=fixture
+fi
+ENV_HELPER
+chmod +x "$b/env-helper-bin/git-credential-envprobe"
+HOME="$b/env-helper-home" git config --global credential.helper envprobe
+HOME="$b/env-helper-home" git config --global http.sslVerify false
+command cat >"$b/tls.crt" <<'TLS_CERTIFICATE'
+-----BEGIN CERTIFICATE-----
+MIIC6jCCAdKgAwIBAgIUUu85vjSHDsKkLH/tMZB8c5KrEM0wDQYJKoZIhvcNAQEL
+BQAwFDESMBAGA1UEAwwJMTI3LjAuMC4xMCAXDTI2MDgxNDIxNTc0MFoYDzIxMjYw
+NzIxMjE1NzQwWjAUMRIwEAYDVQQDDAkxMjcuMC4wLjEwggEiMA0GCSqGSIb3DQEB
+AQUAA4IBDwAwggEKAoIBAQCzBpYIrorf++3qWdJWwGiSX3VDytmWclTjo8iuEMOk
+WZqUSxQl5Muplol3NAq+PItYmOp1jfpiXU1ZdOd7Hh7XZY76KS57iZi9tCc5iJ9c
+Wf6n0/7+da1xhSvZKx09NC4cnsCv6003Gqw6dE4Uw93KtK+6gHr95caBAIS8Ni3C
+HvBBylbAs9vnN1xd85r5wOQFYhMva/namqYuvK7VPgBs3a1oYguML9zuFACd9o0l
+VoqjEwgReMDndF0n2sCf2+kQ0Xrz2t1DgYEjZvdWv1hxn8WP7shvffOxi56KOYlI
+MD+fc/E/oHFlq+Saq8vB9nMN+HnC2Bf/jTKZLj364FMhAgMBAAGjMjAwMA8GA1Ud
+EQQIMAaHBH8AAAEwHQYDVR0OBBYEFDKKCcgOewN8ZIrMX1huCt2NcswKMA0GCSqG
+SIb3DQEBCwUAA4IBAQA6aYOSZ8MqJUPWl0T4fMjZdqH9fjmCy1HYEgIZAElAJmlC
+77df85Z9FXpd2XVU5ZZZYwyep7FKvMRvypZSpTdxq2YwO4eFKrLs3ltjzVpUgP4S
+lxisD0Whm0FLA6T3wk3jgOQXenRDBba+LTGhRa1k9CiEGTpYIm4UX2+vhEkRMfYv
+12j5zjVELAyLJG5AcaI5U2Mv99iecxFbHTsETSYLmDS7eywgui3qdaSjb6zck4Ua
+oL5AtiGuQI0qf1DVrMSxjj43eqNXbHPGwEdi3vKriD5d1jFZRP7jgzlxbYbkBOrX
+MEaZDo11VnSCfU0xZuky+u8WMR8/6UVmVBxW/eef
+-----END CERTIFICATE-----
+TLS_CERTIFICATE
+command cat >"$b/tls.key" <<'TLS_PRIVATE_KEY'
+-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCzBpYIrorf++3q
+WdJWwGiSX3VDytmWclTjo8iuEMOkWZqUSxQl5Muplol3NAq+PItYmOp1jfpiXU1Z
+dOd7Hh7XZY76KS57iZi9tCc5iJ9cWf6n0/7+da1xhSvZKx09NC4cnsCv6003Gqw6
+dE4Uw93KtK+6gHr95caBAIS8Ni3CHvBBylbAs9vnN1xd85r5wOQFYhMva/namqYu
+vK7VPgBs3a1oYguML9zuFACd9o0lVoqjEwgReMDndF0n2sCf2+kQ0Xrz2t1DgYEj
+ZvdWv1hxn8WP7shvffOxi56KOYlIMD+fc/E/oHFlq+Saq8vB9nMN+HnC2Bf/jTKZ
+Lj364FMhAgMBAAECggEAE2qvcxmbLlfgof5D9ezAar+3tDaYCt0zn8zvwxFGZtjh
+DxxlfwaloCsXlborQB7I7j8HjuBrO6fq77ziLlRB/BKjwzYcOIHf8xNK/c53mkiY
+ehNgILEasqlC7Dbk4PJ73dbKB0p6AXP/IgfjQBVOROH7/TpaHJeDRBKOUut9YwRQ
+9aL33jpU+N8AagCm4q7T8k8AG0sI456CYXRSMWGoCw3wwNEhOwrAi9Jt7b3nbwdM
+zrYoQhauusT/tKRnxPSiXnJcxgJk1We2w+zL3XJZTagPNLISj/FLa7HKrjps10Gp
+pkhVOBBY9/tLh28XhQYJDPufZ1pMBSpIg7DfyVA2wQKBgQD7yKcaR2qNXoV+52aj
+aSXInQURhFtAR61JwZTXOvYfnaeTSuyKAgNd65sCZiWIBTfsB3TwQcOhzu3p9aID
+EnZDIvcrn8nGmWP4ZjnOjpIqU/CR+yK+BdDoWA8a4zmIW0bX0wubWe4UYh4kS9mc
+VzVP0P8TxGpTBnYkeSGmXiPcjQKBgQC2Bgisp+Ivu7Gsu8571rPvbXGFQlzImt9Q
+nVHG+V4oGFLr6mSTr3ycKWgTGdt+iXmsXZBM0VSR3JrRWrMI/goxRWqwadmqevyu
+fxncx6ogt8hhp3qr+pvHmrQJfHYrOCqiJV37H4278IckVVqBrD9DHIkozdF7zvDR
+Z0900HRt5QKBgQDBnjqKJdMVZVNpFE9EaE5K6ByGrO5zDut+JWPs4wVzqIu948bk
+Fco7BjwMazp/T+wCEHXnb9sd6f/ggyiUDjVtSU0jedvzYe+TjCD164MRE72StLmx
+wM02bskm1wdeCTsAKuXpEA3aFN2y8bUk2ZdAiqosrEVLFVPylke/JPOU3QKBgDSc
+098L+63uY7HY6xsSeRoImVp6TxVQ5qGHh36qz5NpTHaSXpXtkGgW89UpkS8nD3tJ
+5A7AJuCuUjWXMM61lz6coPTy8456VBUf+dq9/6fLV2kanrOdEXAFgGqJhiKB7pjF
+kj+m5DHhmT5gSXPX1MVSNzcLHrTZoPP2F5pdMnodAoGBALbX36yiQaIx9NpFsdjD
+R9S8MH2GGJh23i/463s6SKmlmuCVQbS28NyL5CDbdDKVC9/DfRplmvd/IVae3OZO
+YCxNu9+fA2IG/nZSZjaNqzwo4EH2O7oR0JYnxfXXiQm2393Wpte2oQN48EwbI6Lv
+87Pt1APuH4gqBMlQrE44iqil
+-----END PRIVATE KEY-----
+TLS_PRIVATE_KEY
+command cat >"$b/auth-server.py" <<'AUTH_SERVER'
+import http.server
+import pathlib
+import ssl
+import sys
+
+port_file, cert_file, key_file = map(pathlib.Path, sys.argv[1:])
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.headers.get("Authorization"):
+            self.send_response(403)
+        else:
+            self.send_response(401)
+            self.send_header("WWW-Authenticate", 'Basic realm="fixture"')
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, *_args):
+        pass
+
+server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+context.load_cert_chain(cert_file, key_file)
+server.socket = context.wrap_socket(server.socket, server_side=True)
+server.timeout = 5
+port_file.write_text(str(server.server_port))
+for _ in range(2):
+    server.handle_request()
+server.server_close()
+AUTH_SERVER
+trusted_python=$(command -p -v python3)
+"$trusted_python" "$b/auth-server.py" "$b/auth-server.port" \
+  "$b/tls.crt" "$b/tls.key" >"$b/auth-server.stdout" \
+  2>"$b/auth-server.stderr" &
+auth_server_pid=$!
+auth_wait=0
+while ((auth_wait < 200)) && [[ ! -s "$b/auth-server.port" ]]; do
+  sleep 0.01
+  auth_wait=$((auth_wait + 1))
+done
+if [[ -s "$b/auth-server.port" ]]; then
+  auth_server_port=$(<"$b/auth-server.port")
+  git -C "$b/repo" remote add helper-https \
+    "https://127.0.0.1:$auth_server_port/repository"
+  if (
+    cd "$b/repo" || exit 98
+    HOME="$b/env-helper-home" PATH="$b/env-helper-bin:$SYSTEM_PATH" \
+      XDG_CACHE_HOME="$b/env-helper-cache" XDG_DATA_HOME="$b/env-helper-data" \
+      XDG_STATE_HOME="$b/env-helper-state" \
+      NO_PROXY=127.0.0.1 no_proxy=127.0.0.1 \
+      UNRELATED_WORKTREE_STARTUP="$b/repo/startup" \
+      ZDOTDIR="$b/repo" JAVA_TOOL_OPTIONS="-javaagent:$b/repo/agent.jar" \
+      "$GIT_RUNNER" push --remote helper-https --branch "$push_branch" \
+        --expect-head "$push_head" \
+      >"$b/env-helper.stdout" 2>"$b/env-helper.stderr"
+  ); then rc=0; else rc=$?; fi
+else
+  rc=99
+fi
+wait "$auth_server_pid" || :
+t='clean Git push gives credential helpers only the explicit environment allowlist'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'fixture HTTPS push unexpectedly succeeded'
+elif [[ ! -s "$b/env-helper.environment" ]]; then
+  fail "$t" "credential helper did not run: $(<"$b/env-helper.stderr")"
+elif grep -Eq '^(UNRELATED_WORKTREE_STARTUP|ZDOTDIR|JAVA_TOOL_OPTIONS)=' \
+    "$b/env-helper.environment"; then
+  fail "$t" 'credential helper inherited a caller startup variable'
+elif ! grep -Fxq "XDG_CACHE_HOME=$b/env-helper-cache" \
+    "$b/env-helper.environment"; then
+  fail "$t" 'credential helper lost the validated XDG cache location'
+else
+  pass "$t"
+fi
+
+# A store path outside the worktree is not sufficient if its inode is also
+# reachable through a worktree hard link.
+mkdir "$b/store-helper-home"
+printf '%s\n' 'https://user:secret@example.invalid' >"$b/credential-store"
+ln "$b/credential-store" "$b/repo/credential-store-alias"
+HOME="$b/store-helper-home" git config --global credential.helper \
+  "store --file=$b/credential-store"
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/store-helper-home" \
+    "$GIT_RUNNER" push --remote runner-test --branch "$push_branch" \
+      --expect-head "$push_head" \
+    >"$b/store-helper.stdout" 2>"$b/store-helper.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner rejects a credential store hard-linked into the worktree'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'push with aliased credential storage unexpectedly succeeded'
+elif ! grep -Fq 'credential store has multiple hard links' \
+    "$b/store-helper.stderr"; then
+  fail "$t" "runner did not diagnose the credential-store alias: $(<"$b/store-helper.stderr")"
+else
+  pass "$t"
+fi
+
+# The default store locations are not provenance-safe: require an explicit
+# validated --file path instead of following HOME/XDG aliases implicitly.
+mkdir "$b/default-store-home"
+HOME="$b/default-store-home" git config --global credential.helper store
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/default-store-home" \
+    "$GIT_RUNNER" push --remote runner-test --branch "$push_branch" \
+      --expect-head "$push_head" \
+    >"$b/default-store.stdout" 2>"$b/default-store.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner refuses the unvalidated default credential store'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'push with the default credential store unexpectedly succeeded'
+elif ! grep -Fq 'credential store requires an explicit --file path' \
+    "$b/default-store.stderr"; then
+  fail "$t" "runner did not reject the default store: $(<"$b/default-store.stderr")"
+else
+  pass "$t"
+fi
+
+# An absent XDG config directory is equivalent to no XDG config; its canonical
+# existing ancestor is still checked, and retaining the absent setting prevents
+# Git from falling back to a different HOME-relative XDG file.
+mkdir -p "$b/no-config-home/.config/git"
+command cat >"$b/no-config-home/.config/git/config" <<FALLBACK_XDG_CONFIG
+[credential]
+	helper = !$b/repo/runner-path/credential-evil
+FALLBACK_XDG_CONFIG
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/no-config-home" XDG_CONFIG_HOME="$b/not-created/xdg" \
+    RUNNER_CREDENTIAL_EVIL_RAN="$b/fallback-credential-ran" \
+    "$GIT_RUNNER" push --remote runner-test --branch "$push_branch" \
+      --expect-head "$push_head" \
+    >"$b/absent-xdg.stdout" 2>"$b/absent-xdg.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner accepts an absent outside-worktree XDG config directory'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'push to a closed local port unexpectedly succeeded'
+elif grep -Fq 'cannot canonicalize the Git/SSH config home' "$b/absent-xdg.stderr"; then
+  fail "$t" "runner rejected the absent XDG directory: $(<"$b/absent-xdg.stderr")"
+elif grep -Fq 'configured credential helper' "$b/absent-xdg.stderr"; then
+  fail "$t" 'runner fell back to HOME-relative XDG credential configuration'
+elif [[ -e "$b/fallback-credential-ran" ]]; then
+  fail "$t" 'runner executed HOME-relative fallback credential configuration'
+else
+  pass "$t"
+fi
+
+# Credential-bearing pushes never downgrade to plaintext HTTP.
+git -C "$b/repo" remote add http-test http://127.0.0.1:1/never
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/no-config-home" XDG_CONFIG_HOME="$b/not-created/xdg" \
+    "$GIT_RUNNER" push --remote http-test --branch "$push_branch" \
+      --expect-head "$push_head" \
+    >"$b/http-push.stdout" 2>"$b/http-push.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner refuses plaintext HTTP push transport'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'plaintext HTTP push unexpectedly succeeded'
+elif ! grep -Fq "transport 'http' not allowed" "$b/http-push.stderr"; then
+  fail "$t" "runner did not reject HTTP transport: $(<"$b/http-push.stderr")"
+else
+  pass "$t"
+fi
+
+# Exercise the no-trusted-ssh branch even on development hosts that ship ssh:
+# the temporary copy emulates a POSIX utility path without it. SSH transport
+# must then remain disabled rather than falling back to repository config.
+cp "$GIT_RUNNER" "$b/git-clean-no-ssh"
+sed -i 's/if _bjg_ssh=$(command -p -v ssh); then/if false; then/' \
+  "$b/git-clean-no-ssh"
+if ! grep -Fq 'if false; then' "$b/git-clean-no-ssh"; then
+  fail 'clean Git runner disables SSH transport when trusted ssh is unavailable' \
+    'fixture could not disable trusted ssh discovery in the runner copy'
+fi
+chmod +x "$b/git-clean-no-ssh"
+command cat >"$b/repo/runner-path/ssh-from-config" <<'RUNNER_CONFIG_SSH'
+#!/bin/sh
+printf '%s\n' ran >"$RUNNER_CONFIG_SSH_RAN"
+exit 0
+RUNNER_CONFIG_SSH
+chmod +x "$b/repo/runner-path/ssh-from-config"
+git -C "$b/repo" config core.sshCommand "$b/repo/runner-path/ssh-from-config"
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/no-config-home" XDG_CONFIG_HOME="$b/not-created/xdg" \
+    RUNNER_CONFIG_SSH_RAN="$b/runner-config-ssh-ran" \
+    "$b/git-clean-no-ssh" push --remote runner-test --branch "$push_branch" \
+      --expect-head "$push_head" \
+    >"$b/no-ssh.stdout" 2>"$b/no-ssh.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner disables SSH transport when trusted ssh is unavailable'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'push without trusted ssh unexpectedly succeeded'
+elif [[ -e "$b/runner-config-ssh-ran" ]]; then
+  fail "$t" 'runner executed repository-selected core.sshCommand'
+else
+  pass "$t"
+fi
+
+# Even hostile push.default/remote refspec/tag settings cannot widen the single
+# explicit HEAD-to-branch update. A temporary copy enables local file transport
+# solely so the fixture can inspect a bare remote without network services.
+git init -q --bare "$b/scope-remote.git"
+git -C "$b/repo" remote add scope-test "$b/scope-remote.git"
+git -C "$b/repo" branch unrelated-push "$real_before"
+git -C "$b/repo" tag -a unrelated-tag "$real_before" -m unrelated-tag
+git -C "$b/repo" config push.default matching
+git -C "$b/repo" config push.followTags true
+git -C "$b/repo" config remote.scope-test.mirror true
+git -C "$b/repo" config --add remote.scope-test.push \
+  'refs/heads/*:refs/heads/*'
+cp "$GIT_RUNNER" "$b/git-clean-local-push"
+sed -i '/-c protocol.allow=never \\/a\\      -c protocol.file.allow=always \\' \
+  "$b/git-clean-local-push"
+chmod +x "$b/git-clean-local-push"
+
+push_tree=$(git -C "$b/repo" rev-parse "$push_head^{tree}")
+postreview_head=$(printf '%s\n' post-review |
+  git -C "$b/repo" commit-tree "$push_tree" -p "$push_head")
+git -C "$b/repo" update-ref HEAD "$postreview_head" "$push_head"
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/no-config-home" XDG_CONFIG_HOME="$b/not-created/xdg" \
+    "$b/git-clean-local-push" push --remote scope-test --branch "$push_branch" \
+      --expect-head "$push_head" \
+    >"$b/stale-push.stdout" 2>"$b/stale-push.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner refuses a HEAD changed after the reviewed commit'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'runner pushed a post-review commit'
+elif [[ $(git -C "$b/repo" rev-parse HEAD) != "$postreview_head" ]]; then
+  fail "$t" 'runner changed the local post-review HEAD'
+elif ! grep -Fq 'HEAD no longer matches the reviewed commit' \
+    "$b/stale-push.stderr"; then
+  fail "$t" "runner did not diagnose stale push HEAD: $(<"$b/stale-push.stderr")"
+elif git -C "$b/scope-remote.git" show-ref --quiet; then
+  fail "$t" 'runner updated the remote despite stale reviewed HEAD'
+else
+  pass "$t"
+fi
+git -C "$b/repo" update-ref HEAD "$push_head" "$postreview_head"
+
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/no-config-home" XDG_CONFIG_HOME="$b/not-created/xdg" \
+    "$b/git-clean-local-push" push --remote scope-test --branch wrong-branch \
+      --expect-head "$push_head" \
+    >"$b/wrong-branch.stdout" 2>"$b/wrong-branch.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner refuses a push branch other than the attached branch'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'runner pushed HEAD to a mistyped branch'
+elif ! grep -Fq 'does not match the current branch' "$b/wrong-branch.stderr"; then
+  fail "$t" "runner did not diagnose the branch mismatch: $(<"$b/wrong-branch.stderr")"
+else
+  pass "$t"
+fi
+
+git -C "$b/repo" checkout --detach -q
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/no-config-home" XDG_CONFIG_HOME="$b/not-created/xdg" \
+    "$b/git-clean-local-push" push --remote scope-test --branch "$push_branch" \
+      --expect-head "$push_head" \
+    >"$b/detached.stdout" 2>"$b/detached.stderr"
+); then rc=0; else rc=$?; fi
+git -C "$b/repo" checkout -q "$push_branch"
+t='clean Git runner refuses to push a detached HEAD'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'runner pushed detached HEAD'
+elif ! grep -Fq 'requires an attached current branch' "$b/detached.stderr"; then
+  fail "$t" "runner did not diagnose detached HEAD: $(<"$b/detached.stderr")"
+else
+  pass "$t"
+fi
+
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/no-config-home" XDG_CONFIG_HOME="$b/not-created/xdg" \
+    "$b/git-clean-local-push" push --remote scope-test --branch "$push_branch" \
+      --expect-head "$push_head" \
+    >"$b/scope-push.stdout" 2>"$b/scope-push.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner pushes only HEAD to the explicit reviewed branch'
+if [[ $rc -ne 0 ]]; then
+  fail "$t" "exit $rc: $(<"$b/scope-push.stderr")"
+elif [[ $(git -C "$b/scope-remote.git" rev-parse "refs/heads/$push_branch") \
+        != $(git -C "$b/repo" rev-parse HEAD) ]]; then
+  fail "$t" 'runner did not update the exact reviewed branch to HEAD'
+elif git -C "$b/scope-remote.git" show-ref --verify --quiet \
+    refs/heads/unrelated-push \
+    || git -C "$b/scope-remote.git" show-ref --verify --quiet \
+      refs/tags/unrelated-tag; then
+  fail "$t" 'runner widened the push through repository refspec/tag settings'
+elif [[ $(git -C "$b/scope-remote.git" for-each-ref --format='%(refname)' \
+        refs/heads | wc -l) -ne 1 ]]; then
+  fail "$t" 'runner published an extra branch'
+else
+  pass "$t"
+fi
+
+# Snapshot copy/comparison uses the same clean companion rather than caller
+# functions or worktree PATH shims.
+for utility in cp diff; do
+  trusted_utility=$(command -p -v "$utility")
+  command cat >"$b/repo/runner-path/$utility" <<PATH_FILE_UTILITY
+#!/bin/sh
+printf '%s\n' "$utility" >>"\$RUNNER_PATH_FILE_RAN"
+exec "$trusted_utility" "\$@"
+PATH_FILE_UTILITY
+  chmod +x "$b/repo/runner-path/$utility"
+done
+if (
+  cd "$b/repo" || exit 98
+  cp() { printf '%s\n' cp >>"$RUNNER_FUNCTION_FILE_RAN"; }
+  diff() { printf '%s\n' diff >>"$RUNNER_FUNCTION_FILE_RAN"; }
+  export -f cp diff
+  PATH="$b/repo/runner-path:$SYSTEM_PATH" \
+    RUNNER_PATH_FILE_RAN="$b/runner-path-file-ran" \
+    RUNNER_FUNCTION_FILE_RAN="$b/runner-function-file-ran" \
+    "$GIT_RUNNER" copy-file "$jsonl" "$b/copied.jsonl" &&
+  PATH="$b/repo/runner-path:$SYSTEM_PATH" \
+    RUNNER_PATH_FILE_RAN="$b/runner-path-file-ran" \
+    RUNNER_FUNCTION_FILE_RAN="$b/runner-function-file-ran" \
+    "$GIT_RUNNER" diff-files "$b/copied.jsonl" "$jsonl"
+); then rc=0; else rc=$?; fi
+t='clean runner isolates snapshot copy and comparison utilities'
+if [[ $rc -ne 0 ]]; then
+  fail "$t" "copy/comparison exit $rc"
+elif [[ -e "$b/runner-path-file-ran" || -e "$b/runner-function-file-ran" ]]; then
+  fail "$t" 'copy/comparison executed a caller utility'
+elif ! cmp -s "$b/copied.jsonl" "$jsonl"; then
+  fail "$t" 'clean copy changed snapshot bytes'
+else
+  pass "$t"
+fi
+
+# Pure proof utilities run under env -i, so BSD/macOS option variables cannot
+# suppress a diff or invert a grep admission.
+printf '%s\n' before >"$b/env-diff-before"
+printf '%s\n' after >"$b/env-diff-after"
+if DIFF_OPTIONS=-q "$GIT_RUNNER" diff-files \
+    "$b/env-diff-before" "$b/env-diff-after" >"$b/env-diff.out" 2>"$b/env-diff.err"; then
+  diff_rc=0
+else
+  diff_rc=$?
+fi
+if GREP_OPTIONS=-v "$GIT_RUNNER" grep -q before "$b/env-diff-before"; then
+  grep_rc=0
+else
+  grep_rc=$?
+fi
+t='clean proof utilities ignore inherited option environments'
+if [[ $diff_rc -ne 1 || $grep_rc -ne 0 ]]; then
+  fail "$t" "diff rc $diff_rc, grep rc $grep_rc"
+elif ! grep -q '^--- ' "$b/env-diff.out" \
+    || ! grep -q '^+++ ' "$b/env-diff.out"; then
+  fail "$t" 'clean diff output was suppressed by inherited options'
+else
+  pass "$t"
+fi
+
+# The panel's final source-drift admission runs inside the clean companion too.
+# Caller cp/cmp/hash/grep functions and shims cannot forge an unchanged result.
+for utility in cmp grep; do
+  trusted_utility=$(command -p -v "$utility")
+  command cat >"$b/repo/runner-path/$utility" <<PATH_ADMISSION_UTILITY
+#!/bin/sh
+printf '%s\n' "$utility" >>"\$RUNNER_PATH_ADMISSION_RAN"
+exec "$trusted_utility" "\$@"
+PATH_ADMISSION_UTILITY
+  chmod +x "$b/repo/runner-path/$utility"
+done
+if (
+  cd "$b/repo" || exit 98
+  cp() { printf '%s\n' cp >>"$RUNNER_FUNCTION_ADMISSION_RAN"; }
+  cmp() { printf '%s\n' cmp >>"$RUNNER_FUNCTION_ADMISSION_RAN"; return 0; }
+  grep() { printf '%s\n' grep >>"$RUNNER_FUNCTION_ADMISSION_RAN"; return 0; }
+  sha256sum() { printf '%s\n' forged; }
+  shasum() { printf '%s\n' forged; }
+  export -f cp cmp grep sha256sum shasum
+  export RUNNER_PATH_ADMISSION_RAN="$b/runner-path-admission-ran"
+  export RUNNER_FUNCTION_ADMISSION_RAN="$b/runner-function-admission-ran"
+  PATH="$b/repo/runner-path:$SYSTEM_PATH"
+  export PATH
+  "$GIT_RUNNER" make-dir "$b/source-snapshots"
+  "$GIT_RUNNER" snapshot-files "$b/source-manifest" "$b/source-before" \
+    "$b/source-snapshots" -- "$jsonl"
+  printf '%s\n' changed-after-snapshot >>"$jsonl"
+  ! "$GIT_RUNNER" verify-files "$b/source-before" "$b/source-after" -- "$jsonl"
+); then rc=0; else rc=$?; fi
+t='clean runner owns source snapshot and final drift admission'
+if [[ $rc -ne 0 ]]; then
+  fail "$t" 'clean snapshot/drift fixture did not reject changed source'
+elif [[ -e "$b/runner-path-admission-ran" \
+        || -e "$b/runner-function-admission-ran" ]]; then
+  fail "$t" 'source snapshot/drift admission executed a caller utility'
+else
+  pass "$t"
+fi
+
+# Auto-discovered source names cannot follow a repository symlink to outside
+# bytes and copy a user secret into reviewer-visible audit artifacts.
+printf '%s\n' 'outside-user-secret' >"$b/outside-secret"
+ln -s "$b/outside-secret" "$b/repo/README.md"
+"$GIT_RUNNER" make-dir "$b/symlink-source-snapshots"
+if (
+  cd "$b/repo" || exit 98
+  "$GIT_RUNNER" snapshot-files "$b/symlink-manifest" "$b/symlink-state" \
+    "$b/symlink-source-snapshots" -- "$b/repo/README.md" \
+    >"$b/symlink-source.stdout" 2>"$b/symlink-source.stderr"
+); then rc=0; else rc=$?; fi
+t='clean runner refuses a worktree source symlink to outside bytes'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'runner snapshotted a symlinked worktree source'
+elif find "$b/symlink-source-snapshots" -type f -size +0c -print -quit |
+    grep -q .; then
+  fail "$t" 'runner copied outside secret bytes into the audit directory'
+else
+  pass "$t"
+fi
+
+# Audit-side bv/timeout/model commands use the same outside-worktree provenance
+# boundary; a behaviorally plausible PATH shim or exported function is refused.
+b=$(new_fixture)
+mkdir "$b/repo/audit-tool-path"
+for audit_tool in bv timeout codex claude; do
+  command cat >"$b/repo/audit-tool-path/$audit_tool" <<AUDIT_TOOL_SHIM
+#!/bin/sh
+printf '%s\n' '$audit_tool' >>'$b/audit-tool-shim-ran'
+exit 0
+AUDIT_TOOL_SHIM
+  chmod +x "$b/repo/audit-tool-path/$audit_tool"
+  eval "$audit_tool() { printf '%s\\n' '$audit_tool' >>'$b/audit-tool-function-ran'; return 0; }"
+  export -f "$audit_tool"
+done
+audit_tools_refused=true
+for audit_tool in bv timeout codex claude; do
+  if (
+    cd "$b/repo" || exit 98
+    PATH="$b/repo/audit-tool-path:$SYSTEM_PATH" \
+      "$GIT_RUNNER" run-audit-tool "$audit_tool" --version \
+      >"$b/$audit_tool.stdout" 2>"$b/$audit_tool.stderr"
+  ); then
+    audit_tools_refused=false
+  fi
+done
+for audit_tool in bv timeout codex claude; do unset -f "$audit_tool"; done
+t='clean audit-tool runner refuses worktree PATH shims and caller functions'
+if ! "$audit_tools_refused"; then
+  fail "$t" 'runner accepted a worktree-selected audit tool'
+elif [[ -e "$b/audit-tool-shim-ran" || -e "$b/audit-tool-function-ran" ]]; then
+  fail "$t" 'runner executed a caller-selected audit tool'
+else
+  pass "$t"
+fi
+
+# Caller-exported values cannot pre-populate the runner's private root cache and
+# make a worktree tool appear to live under a different repository.
+command cat >"$b/repo/audit-tool-path/audit-cache-poison" <<CACHE_POISON_TOOL
+#!/bin/sh
+printf '%s\n' poison >'$b/audit-cache-poison-ran'
+CACHE_POISON_TOOL
+chmod +x "$b/repo/audit-tool-path/audit-cache-poison"
+if (
+  cd "$b/repo" || exit 98
+  _bjg_audit_root_loaded=true _bjg_audit_root=/not-the-repository \
+    _bjg_audit_root_raw=/not-the-repository \
+    PATH="$b/repo/audit-tool-path:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-cache-poison \
+    >"$b/audit-cache-poison.stdout" 2>"$b/audit-cache-poison.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool runner ignores an inherited private root cache'
+if [[ $rc -eq 0 || -e "$b/audit-cache-poison-ran" ]]; then
+  fail "$t" 'caller cache poisoning admitted a worktree audit tool'
+else
+  pass "$t"
+fi
+
+# A validated outside tool receives only the explicit audit environment, not
+# interpreter startup/code-injection variables.
+mkdir "$b/outside-audit-bin"
+command cat >"$b/outside-audit-bin/audit-probe" <<AUDIT_PROBE
+#!/bin/sh
+[ -z "\${BASH_ENV-}\${ENV-}\${NODE_OPTIONS-}\${PYTHONPATH-}" ] || exit 91
+case ":\$PATH:" in *":$b/repo/audit-tool-path:"*) exit 92 ;; esac
+[ "\$*" = 'exact argument' ] || exit 93
+printf '%s\n' clean >'$b/audit-probe-ran'
+AUDIT_PROBE
+chmod +x "$b/outside-audit-bin/audit-probe"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/outside-audit-bin:$b/repo/audit-tool-path:$SYSTEM_PATH" \
+    BASH_ENV="$b/repo/startup" ENV="$b/repo/startup" \
+    NODE_OPTIONS="--require=$b/repo/module" PYTHONPATH="$b/repo/python" \
+    "$GIT_RUNNER" run-audit-tool audit-probe exact argument \
+    >"$b/audit-probe.stdout" 2>"$b/audit-probe.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool runner strips startup state from outside tools'
+if [[ $rc -ne 0 || ! -e "$b/audit-probe-ran" ]]; then
+  fail "$t" "outside audit probe exit $rc: $(<"$b/audit-probe.stderr")"
+else
+  pass "$t"
+fi
+
+# An unsafe executable in an unrelated caller directory omits only that directory;
+# a later valid selected tool still runs. The selected tool's own directory must
+# remain admitted (the hard-linked-child fixture immediately below is the negative
+# sharing-one-directory control).
+mkdir "$b/unrelated-invalid-bin" "$b/later-valid-bin"
+command cat >"$b/unrelated-invalid-bin/unrelated-xonly" <<UNRELATED_XONLY
+#!$b/repo/audit-worktree-interpreter
+exit 0
+UNRELATED_XONLY
+chmod 111 "$b/unrelated-invalid-bin/unrelated-xonly"
+command cat >"$b/later-valid-bin/audit-later-valid" <<LATER_VALID_AUDIT
+#!/bin/sh
+printf '%s\n' valid >'$b/later-valid-audit-ran'
+LATER_VALID_AUDIT
+chmod +x "$b/later-valid-bin/audit-later-valid"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/unrelated-invalid-bin:$b/later-valid-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-later-valid \
+    >"$b/later-valid.stdout" 2>"$b/later-valid.stderr"
+); then rc=0; else rc=$?; fi
+chmod 755 "$b/unrelated-invalid-bin/unrelated-xonly"
+t='clean audit-tool PATH omits an invalid unrelated directory'
+if [[ $rc -ne 0 || ! -e "$b/later-valid-audit-ran" ]]; then
+  fail "$t" "later valid audit tool exit $rc: $(<"$b/later-valid.stderr")"
+else
+  pass "$t"
+fi
+
+# Conversely, do not execute a valid selected tool by absolute path after its own
+# directory was omitted because a sibling executable was unprovable.
+mkdir "$b/mixed-invalid-bin"
+command cat >"$b/mixed-invalid-bin/audit-mixed-valid" <<MIXED_VALID_AUDIT
+#!/bin/sh
+printf '%s\n' valid >'$b/mixed-valid-audit-ran'
+MIXED_VALID_AUDIT
+command cat >"$b/repo/mixed-worktree-interpreter" <<MIXED_INTERPRETER
+#!/bin/sh
+printf '%s\n' interpreter >'$b/mixed-interpreter-ran'
+exit 1
+MIXED_INTERPRETER
+chmod +x "$b/repo/mixed-worktree-interpreter"
+command cat >"$b/mixed-invalid-bin/invalid-sibling" <<MIXED_INVALID_SIBLING
+#!$b/repo/mixed-worktree-interpreter
+exit 0
+MIXED_INVALID_SIBLING
+chmod +x "$b/mixed-invalid-bin/audit-mixed-valid"
+chmod +x "$b/mixed-invalid-bin/invalid-sibling"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/mixed-invalid-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-mixed-valid \
+    >"$b/mixed-valid.stdout" 2>"$b/mixed-valid.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool runner requires the selected parent to remain admitted'
+if [[ $rc -eq 0 || -e "$b/mixed-valid-audit-ran" \
+      || -e "$b/mixed-interpreter-ran" ]]; then
+  fail "$t" 'runner executed a selected tool from an omitted mixed directory'
+else
+  pass "$t"
+fi
+
+# The clean descendant PATH must not expose a nominally outside command whose
+# inode is also repository-controlled through a hard link.
+mkdir "$b/outside-hardlink-bin"
+command cat >"$b/repo/hardlinked-child" <<HARDLINKED_AUDIT_CHILD
+#!/bin/sh
+printf '%s\n' child >'$b/hardlinked-audit-child-ran'
+HARDLINKED_AUDIT_CHILD
+chmod +x "$b/repo/hardlinked-child"
+ln "$b/repo/hardlinked-child" "$b/outside-hardlink-bin/audit-child"
+command cat >"$b/outside-hardlink-bin/audit-parent" <<HARDLINKED_AUDIT_PARENT
+#!/bin/sh
+audit-child
+printf '%s\n' parent >'$b/hardlinked-audit-parent-ran'
+HARDLINKED_AUDIT_PARENT
+chmod +x "$b/outside-hardlink-bin/audit-parent"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/outside-hardlink-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-parent \
+    >"$b/hardlinked-audit.stdout" 2>"$b/hardlinked-audit.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool PATH refuses a hard-linked worktree descendant'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'runner admitted an outside PATH directory with a hard-linked child'
+elif [[ -e "$b/hardlinked-audit-child-ran" \
+        || -e "$b/hardlinked-audit-parent-ran" ]]; then
+  fail "$t" 'runner executed through a hard-linked audit descendant'
+else
+  pass "$t"
+fi
+
+# Multiple names for one outside inode are compatible when every hard link is
+# accounted for in the same admitted directory and none can live in the worktree.
+mkdir "$b/outside-hardlink-shims" "$b/outside-hardlink-wrapper"
+command cat >"$b/outside-hardlink-shims/audit-shim-1" <<HARDLINKED_AUDIT_SHIM
+#!/bin/sh
+printf '%s\n' shim >'$b/outside-hardlink-shim-ran'
+HARDLINKED_AUDIT_SHIM
+chmod +x "$b/outside-hardlink-shims/audit-shim-1"
+for hardlink_shim in 2 3 4 5 6 7 8 9 10; do
+  ln "$b/outside-hardlink-shims/audit-shim-1" \
+    "$b/outside-hardlink-shims/audit-shim-$hardlink_shim"
+done
+command cat >"$b/outside-hardlink-wrapper/audit-hardlink-parent" <<HARDLINK_PARENT
+#!/bin/sh
+audit-shim-1
+printf '%s\n' parent >'$b/outside-hardlink-parent-ran'
+HARDLINK_PARENT
+chmod +x "$b/outside-hardlink-wrapper/audit-hardlink-parent"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/outside-hardlink-wrapper:$b/outside-hardlink-shims:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-hardlink-parent \
+    >"$b/outside-hardlinks.stdout" 2>"$b/outside-hardlinks.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool PATH admits fully accounted outside hard-link shims'
+if [[ $rc -ne 0 || ! -e "$b/outside-hardlink-shim-ran" \
+      || ! -e "$b/outside-hardlink-parent-ran" ]]; then
+  fail "$t" "accounted hard-link shim fixture exit $rc: $(<"$b/outside-hardlinks.stderr")"
+else
+  pass "$t"
+fi
+
+# Exercise the exact production identity counter with a stubbed cross-device inode
+# collision: only the matching st_dev record may contribute.
+device_counter_function=$(awk '
+  /^_bjg_count_matching_device_records\(\) \{/ { capture=1 }
+  capture { print }
+  capture && /^}$/ { exit }
+' "$GIT_RUNNER")
+if (
+  eval "$device_counter_function"
+  _bjg_regular_device_number() {
+    case $1 in
+      */same-device) printf '%s\n' 11 ;;
+      */other-device) printf '%s\n' 22 ;;
+      *) return 1 ;;
+    esac
+  }
+  counted=$(
+    printf '%s\0' /fixture/same-device /fixture/other-device |
+      _bjg_count_matching_device_records 11
+  )
+  [[ "$counted" == 1 ]]
+); then rc=0; else rc=$?; fi
+t='hard-link co-location counts matching device and inode together'
+if [[ $rc -ne 0 ]]; then
+  fail "$t" 'cross-device inode collision contributed to co-location'
+else
+  pass "$t"
+fi
+
+# A validated outside script must not hand execution to an absolute shebang
+# interpreter selected from the worktree.
+command cat >"$b/repo/audit-worktree-interpreter" <<AUDIT_WORKTREE_INTERPRETER
+#!/bin/sh
+printf '%s\n' interpreter >'$b/audit-worktree-interpreter-ran'
+exec /bin/sh "\$@"
+AUDIT_WORKTREE_INTERPRETER
+chmod +x "$b/repo/audit-worktree-interpreter"
+mkdir "$b/outside-shebang-bin"
+command cat >"$b/outside-shebang-bin/audit-shebang-parent" <<AUDIT_SHEBANG_PARENT
+#!$b/repo/audit-worktree-interpreter
+printf '%s\n' parent >'$b/audit-shebang-parent-ran'
+AUDIT_SHEBANG_PARENT
+chmod +x "$b/outside-shebang-bin/audit-shebang-parent"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/outside-shebang-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-shebang-parent \
+    >"$b/audit-shebang.stdout" 2>"$b/audit-shebang.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool runner refuses a worktree shebang interpreter'
+if [[ $rc -eq 0 || -e "$b/audit-worktree-interpreter-ran" \
+      || -e "$b/audit-shebang-parent-ran" ]]; then
+  fail "$t" 'runner executed through a worktree-selected shebang interpreter'
+else
+  pass "$t"
+fi
+
+# Execute-only scripts are omitted because their kernel shebang cannot be
+# inspected safely from the caller identity.
+mkdir "$b/outside-xonly-shebang-bin"
+command cat >"$b/outside-xonly-shebang-bin/audit-xonly-parent" <<AUDIT_XONLY_PARENT
+#!$b/repo/audit-worktree-interpreter
+printf '%s\n' parent >'$b/audit-xonly-parent-ran'
+AUDIT_XONLY_PARENT
+chmod 111 "$b/outside-xonly-shebang-bin/audit-xonly-parent"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/outside-xonly-shebang-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-xonly-parent \
+    >"$b/audit-xonly.stdout" 2>"$b/audit-xonly.stderr"
+); then rc=0; else rc=$?; fi
+chmod 755 "$b/outside-xonly-shebang-bin/audit-xonly-parent"
+t='clean audit-tool runner refuses an execute-only script before its shebang'
+if [[ $rc -eq 0 || -e "$b/audit-worktree-interpreter-ran" \
+      || -e "$b/audit-xonly-parent-ran" ]]; then
+  fail "$t" 'execute-only audit script reached its worktree interpreter'
+else
+  pass "$t"
+fi
+
+# A symlink merely named env cannot grant env argument semantics to another
+# interpreter.
+mkdir "$b/outside-env-spoof-bin"
+trusted_python=$(command -p -v python3)
+ln -s "$trusted_python" "$b/outside-env-spoof-bin/env"
+printf '%s\n' \
+  "open('$b/audit-env-name-spoof-ran', 'w').write('ran')" >"$b/repo/python3"
+command cat >"$b/outside-env-spoof-bin/audit-env-spoof-parent" <<AUDIT_ENV_SPOOF
+#!$b/outside-env-spoof-bin/env python3
+raise SystemExit(0)
+AUDIT_ENV_SPOOF
+chmod +x "$b/outside-env-spoof-bin/audit-env-spoof-parent"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/outside-env-spoof-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-env-spoof-parent \
+    >"$b/audit-env-spoof.stdout" 2>"$b/audit-env-spoof.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool runner authenticates env by resolved executable identity'
+if [[ $rc -eq 0 || -e "$b/audit-env-name-spoof-ran" ]]; then
+  fail "$t" 'non-env interpreter executed a worktree-relative shebang argument'
+else
+  pass "$t"
+fi
+
+# CR remains pathname data to the kernel and cannot be dropped by shell
+# whitespace parsing.
+audit_cr_interpreter="$b/repo/audit-cr-only-interpreter"$'\r'
+command cat >"$audit_cr_interpreter" <<AUDIT_CR_INTERPRETER
+#!/bin/sh
+printf '%s\n' interpreter >'$b/audit-cr-interpreter-ran'
+exec /bin/sh "\$@"
+AUDIT_CR_INTERPRETER
+chmod +x "$audit_cr_interpreter"
+mkdir "$b/outside-cr-shebang-bin"
+printf '#!%s\nexit 0\n' "$audit_cr_interpreter" \
+  >"$b/outside-cr-shebang-bin/audit-cr-parent"
+chmod +x "$b/outside-cr-shebang-bin/audit-cr-parent"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/outside-cr-shebang-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-cr-parent \
+    >"$b/audit-cr.stdout" 2>"$b/audit-cr.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool runner refuses a CR-bearing worktree interpreter'
+if [[ $rc -eq 0 || -e "$b/audit-cr-interpreter-ran" ]]; then
+  fail "$t" 'CR-bearing worktree shebang interpreter executed'
+else
+  pass "$t"
+fi
+
+# A NUL terminates the kernel interpreter path but disappears from Bash `read`.
+audit_nul_interpreter="$b/repo/audit-nul-interpreter"
+command cat >"$audit_nul_interpreter" <<AUDIT_NUL_INTERPRETER
+#!/bin/sh
+printf '%s\n' interpreter >'$b/audit-nul-interpreter-ran'
+exec /bin/sh "\$@"
+AUDIT_NUL_INTERPRETER
+chmod +x "$audit_nul_interpreter"
+mkdir "$b/outside-nul-shebang-bin"
+printf '#!%s\0suffix\nexit 0\n' "$audit_nul_interpreter" \
+  >"$b/outside-nul-shebang-bin/audit-nul-parent"
+chmod +x "$b/outside-nul-shebang-bin/audit-nul-parent"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/outside-nul-shebang-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-nul-parent \
+    >"$b/audit-nul.stdout" 2>"$b/audit-nul.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool runner refuses a NUL-bearing worktree interpreter'
+if [[ $rc -eq 0 || -e "$b/audit-nul-interpreter-ran" ]]; then
+  fail "$t" 'NUL-terminated worktree shebang interpreter executed'
+else
+  pass "$t"
+fi
+
+# NUL after the shebang newline is script payload, not interpreter data.
+mkdir "$b/outside-postline-nul-bin"
+printf '#!/bin/sh\nprintf valid >%s\nexit 0\n#\0binary-payload\n' \
+  "$b/audit-postline-nul-ran" \
+  >"$b/outside-postline-nul-bin/audit-postline-nul"
+chmod +x "$b/outside-postline-nul-bin/audit-postline-nul"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/outside-postline-nul-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-postline-nul \
+    >"$b/audit-postline-nul.stdout" 2>"$b/audit-postline-nul.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool runner accepts NUL after the shebang line'
+if [[ $rc -ne 0 || ! -e "$b/audit-postline-nul-ran" ]]; then
+  fail "$t" "post-shebang NUL audit fixture exit $rc: $(<"$b/audit-postline-nul.stderr")"
+else
+  pass "$t"
+fi
+
+# Canonicalization must not turn one validated caller entry into multiple runtime
+# PATH entries. A `:` in the real directory name would otherwise expose the
+# worktree path encoded after it without scanning that injected directory.
+mkdir "$b/repo/colon-child-bin"
+command cat >"$b/repo/colon-child-bin/audit-colon-child" <<COLON_AUDIT_CHILD
+#!/bin/sh
+printf '%s\n' child >'$b/colon-audit-child-ran'
+COLON_AUDIT_CHILD
+chmod +x "$b/repo/colon-child-bin/audit-colon-child"
+colon_audit_dir="$b/colon-prefix:$b/repo/colon-child-bin"
+mkdir -p "$colon_audit_dir"
+ln -s "$colon_audit_dir" "$b/colon-audit-alias"
+command cat >"$colon_audit_dir/audit-colon-parent" <<COLON_AUDIT_PARENT
+#!/bin/sh
+audit-colon-child
+printf '%s\n' parent >'$b/colon-audit-parent-ran'
+COLON_AUDIT_PARENT
+chmod +x "$colon_audit_dir/audit-colon-parent"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/colon-audit-alias:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-colon-parent \
+    >"$b/colon-audit.stdout" 2>"$b/colon-audit.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool PATH refuses a colon-bearing canonical directory'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'runner serialized one validated directory as multiple PATH entries'
+elif [[ -e "$b/colon-audit-child-ran" || -e "$b/colon-audit-parent-ran" ]]; then
+  fail "$t" 'runner executed through an injected worktree PATH entry'
+else
+  pass "$t"
+fi
+
+# Preserve trailing newlines while canonicalizing. Otherwise an alias to `dir\n`
+# is checked as sibling `dir`, while execution through the alias reaches different
+# bytes.
+newline_audit_dir="$b/newline-audit"$'\n'
+mkdir "$b/newline-audit" "$newline_audit_dir"
+ln -s "$newline_audit_dir" "$b/newline-audit-alias"
+command cat >"$b/newline-audit/audit-newline-parent" <<'SAFE_NEWLINE_PARENT'
+#!/bin/sh
+exit 0
+SAFE_NEWLINE_PARENT
+command cat >"$newline_audit_dir/audit-newline-parent" <<NEWLINE_AUDIT_PARENT
+#!/bin/sh
+printf '%s\n' parent >'$b/newline-audit-parent-ran'
+NEWLINE_AUDIT_PARENT
+chmod +x "$b/newline-audit/audit-newline-parent" \
+  "$newline_audit_dir/audit-newline-parent"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/newline-audit-alias:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-newline-parent \
+    >"$b/newline-audit.stdout" 2>"$b/newline-audit.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool PATH preserves and refuses a trailing-newline directory'
+if [[ $rc -eq 0 || -e "$b/newline-audit-parent-ran" ]]; then
+  fail "$t" 'runner validated a different sibling than the executed audit tool'
+else
+  pass "$t"
+fi
+
+# Execute/search permission is insufficient: the runner must be able to enumerate
+# every name that a validated parent could resolve in an admitted directory.
+mkdir "$b/nonlist-audit-bin"
+command cat >"$b/repo/audit-nonlist-child" <<NONLIST_AUDIT_CHILD
+#!/bin/sh
+printf '%s\n' child >'$b/nonlist-audit-child-ran'
+NONLIST_AUDIT_CHILD
+chmod +x "$b/repo/audit-nonlist-child"
+ln "$b/repo/audit-nonlist-child" "$b/nonlist-audit-bin/audit-nonlist-child"
+command cat >"$b/nonlist-audit-bin/audit-nonlist-parent" <<NONLIST_AUDIT_PARENT
+#!/bin/sh
+audit-nonlist-child
+printf '%s\n' parent >'$b/nonlist-audit-parent-ran'
+NONLIST_AUDIT_PARENT
+chmod +x "$b/nonlist-audit-bin/"*
+chmod 111 "$b/nonlist-audit-bin"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/nonlist-audit-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-nonlist-parent \
+    >"$b/nonlist-audit.stdout" 2>"$b/nonlist-audit.stderr"
+); then rc=0; else rc=$?; fi
+chmod 755 "$b/nonlist-audit-bin"
+t='clean audit-tool PATH refuses a search-only non-listable directory'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'runner admitted a caller directory it could not enumerate'
+elif [[ -e "$b/nonlist-audit-child-ran" || -e "$b/nonlist-audit-parent-ran" ]]; then
+  fail "$t" 'runner executed an unenumerated audit descendant'
+else
+  pass "$t"
+fi
+
+# Compatibility control: an outside symlinked parent can invoke an outside
+# symlinked child after every exposed executable has passed the same provenance
+# and single-link validation.
+mkdir "$b/symlink-audit-bin"
+command cat >"$b/symlink-audit-bin/audit-child-real" <<SYMLINK_AUDIT_CHILD
+#!/bin/sh
+[ "\$*" = 'exact child argument' ] || exit 93
+printf '%s\n' child >'$b/symlink-audit-child-ran'
+SYMLINK_AUDIT_CHILD
+command cat >"$b/symlink-audit-bin/audit-parent-real" <<SYMLINK_AUDIT_PARENT
+#!/bin/sh
+audit-symlink-child exact child argument
+printf '%s\n' parent >'$b/symlink-audit-parent-ran'
+SYMLINK_AUDIT_PARENT
+chmod +x "$b/symlink-audit-bin/"*-real
+ln -s audit-child-real "$b/symlink-audit-bin/audit-symlink-child"
+ln -s audit-parent-real "$b/symlink-audit-bin/audit-symlink-parent"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/symlink-audit-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-symlink-parent \
+    >"$b/symlink-audit.stdout" 2>"$b/symlink-audit.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool PATH keeps validated symlinked parents and descendants working'
+if [[ $rc -ne 0 || ! -e "$b/symlink-audit-child-ran" \
+      || ! -e "$b/symlink-audit-parent-ran" ]]; then
+  fail "$t" "validated symlink wrapper fixture exit $rc: $(<"$b/symlink-audit.stderr")"
+else
+  pass "$t"
+fi
+
+# A moderately populated unrelated caller directory remains compatible while its
+# entries count against the one global streamed-admission budget.
+mkdir "$b/large-audit-bin"
+command cat >"$b/large-audit-bin/audit-large-parent" <<LARGE_AUDIT_PARENT
+#!/bin/sh
+printf '%s\n' parent >'$b/large-audit-parent-ran'
+LARGE_AUDIT_PARENT
+chmod +x "$b/large-audit-bin/audit-large-parent"
+large_entry=1
+while ((large_entry <= 65)); do
+  : >"$b/large-audit-bin/non-executable-$large_entry"
+  large_entry=$((large_entry + 1))
+done
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/large-audit-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-large-parent \
+    >"$b/large-audit.stdout" 2>"$b/large-audit.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool PATH accepts a populated directory within the global budget'
+if [[ $rc -ne 0 || ! -e "$b/large-audit-parent-ran" ]]; then
+  fail "$t" 'runner imposed an artificial 64-entry per-directory cliff'
+else
+  pass "$t"
+fi
+
+# More than 1,024 total exposed entries is refused before the selected parent can
+# run, regardless of how many of those names are executable.
+mkdir "$b/over-budget-audit-bin"
+command cat >"$b/over-budget-audit-bin/audit-over-budget-parent" <<OVER_BUDGET_PARENT
+#!/bin/sh
+printf '%s\n' parent >'$b/over-budget-audit-parent-ran'
+OVER_BUDGET_PARENT
+chmod +x "$b/over-budget-audit-bin/audit-over-budget-parent"
+over_budget_entry=1
+while ((over_budget_entry <= 1025)); do
+  : >"$b/over-budget-audit-bin/non-executable-$over_budget_entry"
+  over_budget_entry=$((over_budget_entry + 1))
+done
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/over-budget-audit-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-over-budget-parent \
+    >"$b/over-budget-audit.stdout" 2>"$b/over-budget-audit.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool PATH refuses more than the global streamed entry budget'
+if [[ $rc -eq 0 || -e "$b/over-budget-audit-parent-ran" ]]; then
+  fail "$t" 'runner admitted more than 1,024 caller PATH entries'
+else
+  pass "$t"
+fi
+
+# The separate directory ceiling bounds find/shell workers even when every
+# directory is nearly empty.
+many_audit_path=
+many_directory=1
+while ((many_directory <= 65)); do
+  mkdir "$b/many-audit-bin-$many_directory"
+  : >"$b/many-audit-bin-$many_directory/non-executable"
+  if [[ -n "$many_audit_path" ]]; then
+    many_audit_path=$many_audit_path:
+  fi
+  many_audit_path=$many_audit_path$b/many-audit-bin-$many_directory
+  many_directory=$((many_directory + 1))
+done
+command cat >"$b/many-audit-bin-1/audit-many-parent" <<MANY_AUDIT_PARENT
+#!/bin/sh
+printf '%s\n' parent >'$b/many-audit-parent-ran'
+MANY_AUDIT_PARENT
+chmod +x "$b/many-audit-bin-1/audit-many-parent"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$many_audit_path:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-many-parent \
+    >"$b/many-audit.stdout" 2>"$b/many-audit.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool PATH bounds the combined caller directory count'
+if [[ $rc -eq 0 || -e "$b/many-audit-parent-ran" ]]; then
+  fail "$t" 'runner admitted more than the bounded caller directory count'
+else
+  pass "$t"
+fi
+
+# A model/config HOME selected from the driven repository is refused before the
+# validated tool starts.
+rm -f "$b/audit-probe-ran"
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/repo" PATH="$b/outside-audit-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool audit-probe exact argument \
+    >"$b/worktree-home.stdout" 2>"$b/worktree-home.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool runner refuses a worktree-selected HOME'
+if [[ $rc -eq 0 || -e "$b/audit-probe-ran" ]]; then
+  fail "$t" 'runner executed an audit tool with worktree HOME'
+elif ! grep -Fq 'config home resolves inside the current worktree' \
+    "$b/worktree-home.stderr"; then
+  fail "$t" "runner did not diagnose worktree HOME: $(<"$b/worktree-home.stderr")"
+else
+  pass "$t"
+fi
+
+# An allowed outside HOME still cannot activate Python's user-site .pth startup.
+python_path=$(command -p -v python3)
+mkdir "$b/python-audit-home"
+python_user_site=$(HOME="$b/python-audit-home" "$python_path" -c \
+  'import site; print(site.getusersitepackages())')
+mkdir -p "$python_user_site"
+printf '%s\n' \
+  "import pathlib; pathlib.Path('$b/python-user-site-ran').write_text('ran')" \
+  >"$python_user_site/worktree-startup.pth"
+command cat >"$b/outside-audit-bin/python-audit" <<PYTHON_AUDIT
+#!$python_path
+from pathlib import Path
+Path('$b/python-audit-ran').write_text('clean')
+PYTHON_AUDIT
+chmod +x "$b/outside-audit-bin/python-audit"
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/python-audit-home" PATH="$b/outside-audit-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" run-audit-tool python-audit \
+    >"$b/python-audit.stdout" 2>"$b/python-audit.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool runner disables Python user-site startup'
+if [[ $rc -ne 0 || ! -e "$b/python-audit-ran" ]]; then
+  fail "$t" "Python audit tool exit $rc: $(<"$b/python-audit.stderr")"
+elif [[ -e "$b/python-user-site-ran" ]]; then
+  fail "$t" 'Python audit tool loaded a user-site .pth file'
+else
+  pass "$t"
+fi
+
+# Index-reading Git commands must not execute a repository-configured fsmonitor
+# hook. Prime the hook once, erase its marker, then keep the fixture snapshots
+# on their own explicit hook-disabled path so only the resolver is measured.
+b=$(new_fixture)
+command cat >"$b/fsmonitor-hook" <<FSMONITOR_EXECUTION_HOOK
+#!/bin/sh
+printf '%s\n' "\$*" >>"$b/fsmonitor-hook-ran"
+printf 'resolver-fixture-token\\0'
+FSMONITOR_EXECUTION_HOOK
+chmod +x "$b/fsmonitor-hook"
+git -C "$b/repo" config core.fsmonitor "$b/fsmonitor-hook"
+git -C "$b/repo" status --porcelain >/dev/null
+if [[ ! -e "$b/fsmonitor-hook-ran" ]]; then
+  fail 'resolver Git inspection disables repository fsmonitor hooks' \
+    'fixture could not prime the fsmonitor hook'
+fi
+rm -f "$b/fsmonitor-hook-ran"
+assert_success 'resolver Git inspection disables repository fsmonitor hooks' \
+  "$b" "$(<"$b/jsonl-path")"
+if [[ -e "$b/fsmonitor-hook-ran" ]]; then
+  fail 'resolver Git inspection disables repository fsmonitor hooks' \
+    "fsmonitor hook executed: $(tr '\n' ',' <"$b/fsmonitor-hook-ran")"
+fi
+
+# Neither the outer launcher nor the proof may pick up checkout-controlled
+# standard utilities from PATH, a BASH_ENV startup file, or exported functions.
+# Before the launcher existed the `bash` sentinel ran; before proof-tool pinning,
+# the otherwise hardened implementation ran the `git` and `cmp` sentinels.
+b=$(new_fixture)
+mkdir "$b/repo/evil"
+for utility in bash git cmp od grep mktemp unlink rmdir readlink stat getconf env; do
+  trusted_utility=$(command -p -v "$utility") || {
+    fail 'hostile startup fixture setup' "cannot locate $utility in the POSIX utility path"
+    continue
+  }
+  command cat >"$b/repo/evil/$utility" <<HOSTILE_UTILITY
+#!/bin/sh
+printf '%s\n' "\$0" >>"\$HOSTILE_PATH_RAN"
+exec "$trusted_utility" "\$@"
+HOSTILE_UTILITY
+  chmod +x "$b/repo/evil/$utility"
+done
+command cat >"$b/bin/br" <<'SAFE_BR'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$BR_CALLS"
+if [ "$*" != '--no-auto-flush --no-auto-import where --json' ]; then
+  : >"$BR_MUTATION"
+fi
+cat "$BR_OUTPUT"
+exit "${BR_EXIT:-0}"
+SAFE_BR
+chmod +x "$b/bin/br"
+trusted_jq=$(command -v jq)
+command cat >"$b/bin/jq" <<SAFE_JQ
+#!/usr/bin/env python3
+import os
+import sys
+os.execv("$trusted_jq", ["$trusted_jq", *sys.argv[1:]])
+SAFE_JQ
+chmod +x "$b/bin/jq"
+mkdir "$b/repo/py"
+command cat >"$b/repo/py/sitecustomize.py" <<PYTHON_STARTUP
+from pathlib import Path
+Path("$b/python-ran").write_text("ran\\n")
+PYTHON_STARTUP
+printf '%s\n' ': >"$HOSTILE_BASH_ENV_RAN"' >"$b/bash-env"
+snapshot_fixture "$b" "$b/before"
+br() {
+  : >"$HOSTILE_FUNCTION_RAN"
+  printf '%s\n' '{"jsonl_path":"/not/the/fixture.jsonl"}'
+}
+git() {
+  : >"$HOSTILE_GIT_FUNCTION_RAN"
+  command git "$@"
+}
+export -f br git
+if (
+  cd "$b/repo" || exit 98
+  HOSTILE_PATH_RAN="$b/path-ran" HOSTILE_BASH_ENV_RAN="$b/bash-env-ran" \
+    HOSTILE_FUNCTION_RAN="$b/function-ran" HOSTILE_GIT_FUNCTION_RAN="$b/git-function-ran" \
+    BR_CALLS="$b/br.calls" BR_MUTATION="$b/br.mutation" BR_OUTPUT="$b/where.out" \
+    PATH="$b/repo/evil:$b/bin:$SYSTEM_PATH" BASH_ENV="$b/bash-env" \
+    PYTHONPATH="$b/repo/py" \
+    "$RESOLVER" >"$b/stdout" 2>"$b/stderr"
+); then rc=0; else rc=$?; fi
+unset -f br git
+snapshot_fixture "$b" "$b/after"
+t='hostile PATH, BASH_ENV, and exported functions cannot alter resolver startup'
+printf '%s\n' "$(<"$b/jsonl-path")" >"$b/expected"
+if [[ $rc -ne 0 ]]; then
+  fail "$t" "exit $rc: $(<"$b/stderr")"
+elif [[ -e "$b/path-ran" || -e "$b/python-ran" || -e "$b/bash-env-ran" || -e "$b/function-ran" \
+         || -e "$b/git-function-ran" ]]; then
+  fail "$t" "a hostile startup sentinel ran: path=$(test -e "$b/path-ran" && tr '\n' ',' <"$b/path-ran" || echo no), python=$(test -e "$b/python-ran" && echo yes || echo no), bash-env=$(test -e "$b/bash-env-ran" && echo yes || echo no), br=$(test -e "$b/function-ran" && echo yes || echo no), git=$(test -e "$b/git-function-ran" && echo yes || echo no)"
+elif ! cmp -s "$b/expected" "$b/stdout" || [[ -s "$b/stderr" ]]; then
+  fail "$t" 'resolver output changed under hostile startup state'
+elif ! cmp -s "$b/before" "$b/after" || ! safe_br_calls_only "$b/br.calls"; then
+  fail "$t" 'hostile startup state changed the fixture or br invocation'
+else
+  pass "$t"
+fi
+
+# `br` and `jq` are resolved from PATH because they are not portable members of
+# Bash's POSIX utility path. That exception must not let the driven checkout
+# supply either executable.
+b=$(new_fixture)
+mkdir "$b/repo/bin"
+command cat >"$b/repo/bin/br" <<'WORKTREE_BR'
+#!/bin/sh
+printf '%s\n' ran >"$WORKTREE_TOOL_RAN"
+cat "$BR_OUTPUT"
+WORKTREE_BR
+chmod +x "$b/repo/bin/br"
+assert_refused 'a worktree-controlled br executable is refused' "$b" \
+  'br resolves inside the current Git worktree' "$b/repo/bin:$SYSTEM_PATH"
+
+# An outside script pathname is still unsafe when its kernel-selected absolute
+# shebang interpreter comes from the driven worktree.
+b=$(new_fixture)
+mkdir "$b/outside-bin"
+command cat >"$b/repo/worktree-interpreter" <<WORKTREE_INTERPRETER
+#!/bin/sh
+printf '%s\n' interpreter >'$b/worktree-interpreter-ran'
+exec /bin/sh "\$@"
+WORKTREE_INTERPRETER
+chmod +x "$b/repo/worktree-interpreter"
+command cat >"$b/outside-bin/br" <<OUTSIDE_BR_WORKTREE_INTERPRETER
+#!$b/repo/worktree-interpreter
+cat "\$BR_OUTPUT"
+OUTSIDE_BR_WORKTREE_INTERPRETER
+chmod +x "$b/outside-bin/br"
+assert_refused 'an outside br with a worktree shebang interpreter is refused' "$b" \
+  'br interpreter resolves inside the current Git worktree' \
+  "$b/outside-bin:$SYSTEM_PATH"
+if [[ -e "$b/worktree-interpreter-ran" ]]; then
+  fail 'an outside br with a worktree shebang interpreter is refused' \
+    'the worktree-controlled interpreter executed'
+fi
+
+# Execute permission does not make an unreadable script safe: the kernel can
+# still consume its shebang. Refuse rather than infer its format.
+b=$(new_fixture)
+mkdir "$b/outside-bin"
+command cat >"$b/repo/worktree-interpreter" <<WORKTREE_XONLY_INTERPRETER
+#!/bin/sh
+printf '%s\n' interpreter >'$b/worktree-interpreter-ran'
+exec /bin/sh "\$@"
+WORKTREE_XONLY_INTERPRETER
+chmod +x "$b/repo/worktree-interpreter"
+command cat >"$b/outside-bin/br" <<OUTSIDE_XONLY_BR
+#!$b/repo/worktree-interpreter
+cat "\$BR_OUTPUT"
+OUTSIDE_XONLY_BR
+chmod 111 "$b/outside-bin/br"
+assert_refused 'an execute-only outside br script is refused before its shebang' "$b" \
+  'br executable cannot be inspected safely' "$b/outside-bin:$SYSTEM_PATH"
+chmod 755 "$b/outside-bin/br"
+if [[ -e "$b/worktree-interpreter-ran" ]]; then
+  fail 'an execute-only outside br script is refused before its shebang' \
+    'the execute-only script reached its worktree interpreter'
+fi
+
+# A pathname lexically named `env` is not the env executable. Python would treat
+# the shebang argument as a worktree-relative script and execute it.
+b=$(new_fixture)
+mkdir "$b/outside-bin"
+trusted_python=$(command -p -v python3)
+ln -s "$trusted_python" "$b/outside-bin/env"
+printf '%s\n' \
+  "open('$b/env-name-spoof-ran', 'w').write('ran')" >"$b/repo/python3"
+command cat >"$b/outside-bin/br" <<OUTSIDE_ENV_NAME_SPOOF
+#!$b/outside-bin/env python3
+raise SystemExit(0)
+OUTSIDE_ENV_NAME_SPOOF
+chmod +x "$b/outside-bin/br"
+assert_refused 'a non-env interpreter named env cannot gain env semantics' "$b" \
+  'br has an unsupported script interpreter argument' \
+  "$b/outside-bin:$b/bin:$SYSTEM_PATH"
+if [[ -e "$b/env-name-spoof-ran" ]]; then
+  fail 'a non-env interpreter named env cannot gain env semantics' \
+    'the spoofed interpreter executed a worktree-relative script'
+fi
+
+# Linux treats CR as interpreter pathname data, not as a shebang separator.
+b=$(new_fixture)
+mkdir "$b/outside-bin"
+cr_interpreter="$b/repo/worktree-interpreter"$'\r'
+command cat >"$cr_interpreter" <<WORKTREE_CR_INTERPRETER
+#!/bin/sh
+printf '%s\n' interpreter >'$b/worktree-cr-interpreter-ran'
+exec /bin/sh "\$@"
+WORKTREE_CR_INTERPRETER
+chmod +x "$cr_interpreter"
+printf '#!%s\ncat \"$BR_OUTPUT\"\n' "$cr_interpreter" >"$b/outside-bin/br"
+chmod +x "$b/outside-bin/br"
+assert_refused 'a CR-bearing worktree shebang interpreter is refused' "$b" \
+  'br has an unsafe script interpreter' "$b/outside-bin:$SYSTEM_PATH"
+if [[ -e "$b/worktree-cr-interpreter-ran" ]]; then
+  fail 'a CR-bearing worktree shebang interpreter is refused' \
+    'the CR-bearing worktree interpreter executed'
+fi
+
+# Bash drops NUL while reading, but the kernel terminates the interpreter pathname
+# there. The byte-preserving probe must refuse this different parse.
+b=$(new_fixture)
+mkdir "$b/outside-bin"
+command cat >"$b/repo/worktree-nul-interpreter" <<WORKTREE_NUL_INTERPRETER
+#!/bin/sh
+printf '%s\n' interpreter >'$b/worktree-nul-interpreter-ran'
+exec /bin/sh "\$@"
+WORKTREE_NUL_INTERPRETER
+chmod +x "$b/repo/worktree-nul-interpreter"
+printf '#!%s\0suffix\ncat \"$BR_OUTPUT\"\n' "$b/repo/worktree-nul-interpreter" \
+  >"$b/outside-bin/br"
+chmod +x "$b/outside-bin/br"
+assert_refused 'a NUL-bearing worktree shebang interpreter is refused' "$b" \
+  'br has a NUL-bearing script interpreter' "$b/outside-bin:$SYSTEM_PATH"
+if [[ -e "$b/worktree-nul-interpreter-ran" ]]; then
+  fail 'a NUL-bearing worktree shebang interpreter is refused' \
+    'the NUL-terminated worktree interpreter executed'
+fi
+
+# A later NUL belongs to the script body and must not poison interpreter proof.
+b=$(new_fixture)
+printf '#!/bin/sh\ncat "$BR_OUTPUT"\nexit 0\n#\0binary-payload\n' >"$b/bin/br"
+chmod +x "$b/bin/br"
+assert_success 'NUL after the br shebang line remains valid payload' \
+  "$b" "$(<"$b/jsonl-path")"
+
+b=$(new_fixture)
+mkdir "$b/repo/bin"
+trusted_jq=$(command -v jq)
+command cat >"$b/repo/bin/jq" <<WORKTREE_JQ
+#!/bin/sh
+printf '%s\n' ran >"\$WORKTREE_TOOL_RAN"
+exec "$trusted_jq" "\$@"
+WORKTREE_JQ
+chmod +x "$b/repo/bin/jq"
+WORKTREE_TOOL_RAN="$b/worktree-tool-ran"
+export WORKTREE_TOOL_RAN
+assert_refused 'a worktree-controlled jq executable is refused' "$b" \
+  'jq resolves inside the current Git worktree' "$b/repo/bin:$b/bin:$SYSTEM_PATH"
+unset WORKTREE_TOOL_RAN
+if [[ -e "$b/worktree-tool-ran" ]]; then
+  fail 'a worktree-controlled jq executable is refused' 'the refused jq shim executed'
+fi
+
+# An outside pathname can still name a worktree-controlled inode through a hard
+# link. Reject multiply linked br/jq executables before either proof tool runs.
+b=$(new_fixture)
+mkdir "$b/outside-bin"
+command cat >"$b/repo/evil-br" <<'WORKTREE_BR_HARDLINK'
+#!/bin/sh
+printf '%s\n' ran >"$WORKTREE_TOOL_RAN"
+cat "$BR_OUTPUT"
+WORKTREE_BR_HARDLINK
+chmod +x "$b/repo/evil-br"
+ln "$b/repo/evil-br" "$b/outside-bin/br"
+WORKTREE_TOOL_RAN="$b/worktree-tool-ran"
+export WORKTREE_TOOL_RAN
+assert_refused 'an outside br hard link to a worktree executable is refused' "$b" \
+  'br executable has multiple hard links' "$b/outside-bin:$SYSTEM_PATH"
+unset WORKTREE_TOOL_RAN
+if [[ -e "$b/worktree-tool-ran" ]]; then
+  fail 'an outside br hard link to a worktree executable is refused' 'the refused br executable ran'
+fi
+
+b=$(new_fixture)
+mkdir "$b/outside-bin"
+trusted_jq=$(command -v jq)
+command cat >"$b/repo/evil-jq" <<WORKTREE_JQ_HARDLINK
+#!/bin/sh
+printf '%s\n' ran >"\$WORKTREE_TOOL_RAN"
+exec "$trusted_jq" "\$@"
+WORKTREE_JQ_HARDLINK
+chmod +x "$b/repo/evil-jq"
+ln "$b/repo/evil-jq" "$b/outside-bin/jq"
+WORKTREE_TOOL_RAN="$b/worktree-tool-ran"
+export WORKTREE_TOOL_RAN
+assert_refused 'an outside jq hard link to a worktree executable is refused' "$b" \
+  'jq executable has multiple hard links' "$b/outside-bin:$b/bin:$SYSTEM_PATH"
+unset WORKTREE_TOOL_RAN
+if [[ -e "$b/worktree-tool-ran" ]]; then
+  fail 'an outside jq hard link to a worktree executable is refused' 'the refused jq executable ran'
+fi
+
+# Repository selectors inherited from a caller must not redirect the proof away
+# from the repository containing the current directory. A bare Git directory
+# paired with `/` as its worktree would otherwise make rev-parse report `/`.
+b=$(new_fixture)
+git init -q --bare "$b/root-admin"
+RESOLVER_GIT_DIR="$b/root-admin"
+RESOLVER_GIT_WORK_TREE=/
+assert_success 'inherited Git repository selectors are cleared' "$b" "$(<"$b/jsonl-path")"
+
+# Canonicalizing only an executable's parent is insufficient: a PATH directory
+# outside the checkout can contain a final symlink back to checkout-controlled
+# bytes. Pin the complete target and refuse before either shim can run.
+b=$(new_fixture)
+mkdir "$b/outside-bin"
+command cat >"$b/repo/evil-br" <<'WORKTREE_BR_TARGET'
+#!/bin/sh
+printf '%s\n' ran >"$WORKTREE_TOOL_RAN"
+cat "$BR_OUTPUT"
+WORKTREE_BR_TARGET
+chmod +x "$b/repo/evil-br"
+ln -s "$b/repo/evil-br" "$b/outside-bin/br"
+WORKTREE_TOOL_RAN="$b/worktree-tool-ran"
+export WORKTREE_TOOL_RAN
+assert_refused 'an outside br symlink into the worktree is refused' "$b" \
+  'br resolves inside the current Git worktree' "$b/outside-bin:$SYSTEM_PATH"
+unset WORKTREE_TOOL_RAN
+if [[ -e "$b/worktree-tool-ran" ]]; then
+  fail 'an outside br symlink into the worktree is refused' 'the refused br target executed'
+fi
+
+# The last target reached by the maximum permitted 40 follows must still pass
+# through canonicalization and containment before it is accepted. An earlier
+# bounded `for` loop read this target on its final iteration, then type-checked it
+# without inspecting where it lived.
+b=$(new_fixture)
+mkdir "$b/outside-bin"
+command cat >"$b/repo/evil-br" <<'WORKTREE_BR_40_TARGET'
+#!/bin/sh
+printf '%s\n' ran >"$WORKTREE_TOOL_RAN"
+cat "$BR_OUTPUT"
+WORKTREE_BR_40_TARGET
+chmod +x "$b/repo/evil-br"
+chain_target="$b/repo/evil-br"
+for ((chain_hop = 39; chain_hop >= 1; chain_hop--)); do
+  ln -s "$chain_target" "$b/outside-bin/br-link-$chain_hop"
+  chain_target="$b/outside-bin/br-link-$chain_hop"
+done
+ln -s "$chain_target" "$b/outside-bin/br"
+WORKTREE_TOOL_RAN="$b/worktree-tool-ran"
+export WORKTREE_TOOL_RAN
+assert_refused 'a 40-hop outside br chain into the worktree is refused' "$b" \
+  'br resolves inside the current Git worktree' "$b/outside-bin:$SYSTEM_PATH"
+unset WORKTREE_TOOL_RAN
+if [[ -e "$b/worktree-tool-ran" ]]; then
+  fail 'a 40-hop outside br chain into the worktree is refused' 'the refused br target executed'
+fi
+
+b=$(new_fixture)
+mkdir "$b/outside-bin"
+trusted_jq=$(command -v jq)
+command cat >"$b/repo/evil-jq" <<WORKTREE_JQ_TARGET
+#!/bin/sh
+printf '%s\n' ran >"\$WORKTREE_TOOL_RAN"
+exec "$trusted_jq" "\$@"
+WORKTREE_JQ_TARGET
+chmod +x "$b/repo/evil-jq"
+ln -s "$b/repo/evil-jq" "$b/outside-bin/jq"
+WORKTREE_TOOL_RAN="$b/worktree-tool-ran"
+export WORKTREE_TOOL_RAN
+assert_refused 'an outside jq symlink into the worktree is refused' "$b" \
+  'jq resolves inside the current Git worktree' "$b/outside-bin:$b/bin:$SYSTEM_PATH"
+unset WORKTREE_TOOL_RAN
+if [[ -e "$b/worktree-tool-ran" ]]; then
+  fail 'an outside jq symlink into the worktree is refused' 'the refused jq target executed'
+fi
+
+b=$(new_fixture)
+old=$(<"$b/jsonl-path")
+tab_path="$b/repo/.beads/issues with"$'\t'"tab.jsonl"
+git -C "$b/repo" mv -- "${old#"$b/repo/"}" "${tab_path#"$b/repo/"}"
+git -C "$b/repo" commit -qm 'tab path'
+printf '%s' "$tab_path" >"$b/jsonl-path"
+set_where_path "$b" "$tab_path"
+assert_success 'NUL-delimited Git records preserve a tab in the path' "$b" "$tab_path"
+
+# `br where` may name any tracked file, including one whose bytes read as Git pathspec
+# magic or a wildmatch pattern. Both lookups must be byte-exact: magic silently resolves a
+# DIFFERENT path, and a wildcard can pull in a sibling and make the entry look ambiguous.
+b=$(new_fixture)
+magic_path="$b/repo/:(literal)graph.beads.jsonl"
+mv -- "$(<"$b/jsonl-path")" "$magic_path"
+git -C "$b/repo" add -A
+git -C "$b/repo" commit -qm 'pathspec-magic path'
+printf '%s' "$magic_path" >"$b/jsonl-path"
+set_where_path "$b" "$magic_path"
+assert_success 'a filename that reads as pathspec magic resolves' "$b" "$magic_path"
+
+b=$(new_fixture)
+glob_path="$b/repo/.beads/is[s]ues.jsonl"
+mv -- "$(<"$b/jsonl-path")" "$glob_path"
+printf '%s\n' '{"id":"sibling"}' >"$b/repo/.beads/issues.jsonl"
+git -C "$b/repo" add -A
+git -C "$b/repo" commit -qm 'wildmatch path'
+printf '%s' "$glob_path" >"$b/jsonl-path"
+set_where_path "$b" "$glob_path"
+assert_success 'a filename holding wildmatch metacharacters resolves' "$b" "$glob_path"
+
+b=$(new_fixture)
+BR_EXIT=9 assert_refused 'br failure after valid JSON is refused' "$b" \
+  'cannot resolve the beads workspace'
+
+while IFS='|' read -r name payload diagnostic; do
+  b=$(new_fixture)
+  printf '%b' "$payload" >"$b/where.out"
+  assert_refused "$name" "$b" "$diagnostic"
+done <<'INVALID_JSON'
+missing jsonl_path|{}\n|cannot resolve exactly one beads JSONL
+null jsonl_path|{"jsonl_path":null}\n|cannot resolve exactly one beads JSONL
+empty jsonl_path|{"jsonl_path":""}\n|cannot resolve exactly one beads JSONL
+non-string jsonl_path|{"jsonl_path":7}\n|cannot resolve exactly one beads JSONL
+zero JSON documents||cannot resolve exactly one beads JSONL
+multiple JSON documents|{"jsonl_path":"one"}\n{"jsonl_path":"two"}\n|cannot resolve exactly one beads JSONL
+malformed JSON|{"jsonl_path":\n|cannot resolve exactly one beads JSONL
+relative jsonl_path|{"jsonl_path":".beads/issues.jsonl"}\n|cannot resolve exactly one beads JSONL
+decoded CR in path|{"jsonl_path":"bad\\rpath"}\n|cannot resolve exactly one beads JSONL
+decoded LF in path|{"jsonl_path":"bad\\npath"}\n|cannot resolve exactly one beads JSONL
+INVALID_JSON
+
+# If the decoded-NUL guard regresses, Bash strips the NUL from command substitution and
+# this payload becomes the fixture's valid tracked path. That makes this a behavior check,
+# not merely an assertion about which diagnostic an independently-invalid path reports.
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+printf '{"jsonl_path":"%s%s%s"}\n' "${jsonl%.jsonl}" '\u0000' '.jsonl' >"$b/where.out"
+assert_refused 'JSON-escaped NUL in path is refused before shell capture' "$b" \
+  'cannot resolve exactly one beads JSONL'
+
+b=$(new_fixture)
+printf '{"jsonl_path":"bad\0path"}\n' >"$b/where.out"
+assert_refused 'raw NUL in workspace JSON is refused before jq' "$b" \
+  'beads workspace JSON contains a raw NUL byte'
+
+b=$(new_fixture)
+command cat >"$b/bin/jq" <<'JQ_FAIL'
+#!/usr/bin/env bash
+exit 23
+JQ_FAIL
+chmod +x "$b/bin/jq"
+assert_refused 'failing jq is refused' "$b" 'cannot resolve exactly one beads JSONL'
+
+b=$(new_fixture)
+mkdir -p "$b/no-jq-bin"
+for utility in bash git od grep cmp mktemp unlink rmdir; do
+  utility_path=$(command -v "$utility")
+  ln -s "$utility_path" "$b/no-jq-bin/$utility"
+done
+ln -s "$b/bin/br" "$b/no-jq-bin/br"
+assert_refused 'missing jq is refused' "$b" 'jq is required to resolve the beads JSONL' \
+  "$b/no-jq-bin"
+
+b=$(new_fixture)
+outside="$b/outside.jsonl"
+printf '%s\n' outside >"$outside"
+set_where_path "$b" "$outside"
+assert_refused 'path outside the current worktree is refused' "$b" \
+  'beads JSONL is outside the current worktree'
+
+b=$(new_fixture)
+ln "$(<"$b/jsonl-path")" "$b/outside-hardlink"
+assert_refused 'a clean JSONL with an outside hard-link alias is refused' "$b" \
+  'beads JSONL worktree path has multiple hard links'
+
+b=$(new_fixture)
+printf '%s\n' staged >>"$(<"$b/jsonl-path")"
+git -C "$b/repo" add -- .beads/issues.jsonl
+assert_refused 'staged-only content is refused' "$b" \
+  'beads JSONL differs among HEAD, index, and worktree'
+
+# An inherited alternate index can hide the actual repository's staged bytes
+# from every ls-files/diff-files/cat-file proof. Populate it from HEAD, then
+# diverge the real index while restoring only the worktree copy.
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+alternate_index="$b/alternate.index"
+GIT_INDEX_FILE="$alternate_index" git -C "$b/repo" read-tree HEAD
+printf '%s\n' staged-through-real-index >>"$jsonl"
+git -C "$b/repo" add -- .beads/issues.jsonl
+git -C "$b/repo" show HEAD:.beads/issues.jsonl >"$jsonl"
+RESOLVER_GIT_INDEX_FILE="$alternate_index"
+assert_refused 'an inherited alternate Git index cannot hide staged content' "$b" \
+  'beads JSONL differs among HEAD, index, and worktree'
+
+b=$(new_fixture)
+printf '%s\n' unstaged >>"$(<"$b/jsonl-path")"
+assert_refused 'unstaged-only content is refused' "$b" \
+  'beads JSONL differs among HEAD, index, and worktree'
+
+# `cat-file blob <HEAD-oid>` follows replacement refs by default.  Replacing the
+# clean HEAD/index blob with the dirty worktree bytes made the old proof accept
+# an unstaged edit, even though the object stored in HEAD was different.
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+printf '%s\n' replacement-dirty >>"$jsonl"
+head_oid=$(git -C "$b/repo" rev-parse HEAD:.beads/issues.jsonl)
+replacement_oid=$(git -C "$b/repo" hash-object -w "$jsonl")
+if ! git -C "$b/repo" replace "$head_oid" "$replacement_oid"; then
+  fail 'replacement-ref fixture setup' 'git could not create the replacement ref'
+else
+  assert_refused 'replacement refs cannot spoof the HEAD/index/worktree proof' "$b" \
+    'beads JSONL differs among HEAD, index, and worktree'
+fi
+
+b=$(new_fixture)
+printf '%s\n' staged >>"$(<"$b/jsonl-path")"
+git -C "$b/repo" add -- .beads/issues.jsonl
+printf '%s\n' unstaged >>"$(<"$b/jsonl-path")"
+assert_refused 'staged-plus-unstaged content is refused' "$b" \
+  'beads JSONL differs among HEAD, index, and worktree'
+
+# `git add -N` — on its own or after `git rm --cached` — leaves an index record that every
+# structural check accepts: one stage-0 `100644` entry tagged `H`. Its OID is the empty
+# blob rather than the file's content, so an *empty* tracked JSONL also passes byte
+# identity while Git reports the path as `DA`. The index holds no content for it.
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+rel=${jsonl#"$b/repo/"}
+: >"$jsonl"
+git -C "$b/repo" commit -qam 'empty jsonl'
+git -C "$b/repo" rm --cached -q -- "$rel"
+git -C "$b/repo" add -N -- "$rel"
+assert_refused 'intent-to-add JSONL is refused' "$b" \
+  'beads JSONL index entry is intent-to-add'
+
+b=$(new_fixture)
+chmod +x "$(<"$b/jsonl-path")"
+assert_refused 'worktree mode-only change is refused' "$b" \
+  'beads JSONL worktree mode is not 100644'
+
+# The mode a tracked file has is Git's answer, not the invoking user's access rights: Git
+# reads the owner-exec bit and honors `core.filemode`, while an `access(2)` probe such as
+# bash `[[ -x ]]` does neither. Measured on git 2.53.0 with the streams separated by
+# redirection: after `core.filemode=false` and `chmod +x` on the tracked JSONL,
+# `diff-files --raw -z` and `git status --porcelain` each wrote 0 bytes to stdout at exit 0
+# with empty stderr, while bash `[[ -x ]]` was true; with `core.filemode=true` the same
+# chmod wrote `:100644 100755 …`. Every filesystem that carries no executable bit sets
+# exactly that config, so an access probe would refuse forever on a JSONL Git itself
+# reports pristine — and the improvisation that unblocks a dead-ended consumer is the
+# hardcoded `.beads/issues.jsonl` this companion exists to prevent.
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+git -C "$b/repo" config core.filemode false
+chmod +x "$jsonl"
+assert_success 'an exec bit Git is configured to ignore still resolves' "$b" "$jsonl"
+
+b=$(new_fixture)
+git -C "$b/repo" update-index --assume-unchanged -- .beads/issues.jsonl
+assert_refused 'assume-unchanged JSONL is refused' "$b" \
+  'beads JSONL has hidden index flags'
+
+b=$(new_fixture)
+git -C "$b/repo" update-index --skip-worktree -- .beads/issues.jsonl
+assert_refused 'skip-worktree JSONL is refused' "$b" \
+  'beads JSONL has hidden index flags'
+
+b=$(new_fixture)
+git -C "$b/repo" checkout -qb conflict-side
+printf '%s\n' side >"$(<"$b/jsonl-path")"
+git -C "$b/repo" commit -qam side
+git -C "$b/repo" checkout -q "$(<"$b/initial-branch")"
+printf '%s\n' main >"$(<"$b/jsonl-path")"
+git -C "$b/repo" commit -qam main
+git -C "$b/repo" merge conflict-side >/dev/null 2>&1 || :
+assert_refused 'unmerged JSONL is refused' "$b" \
+  'beads JSONL index entry is not one stage-0 regular file'
+
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+printf '%s\n' target >"$b/link-target"
+unlink "$jsonl"
+ln -s "$b/link-target" "$jsonl"
+assert_refused 'symlink JSONL is refused' "$b" \
+  'beads JSONL worktree path is not a non-symlink regular file'
+
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+rel=${jsonl#"$b/repo/"}
+oid=$(git -C "$b/repo" rev-parse HEAD)
+git -C "$b/repo" rm -q -- "$rel"
+mkdir -p "$jsonl"
+git -C "$b/repo" update-index --add --cacheinfo "160000,$oid,$rel"
+git -C "$b/repo" commit -qm gitlink
+assert_refused 'gitlink JSONL is refused' "$b" \
+  'beads JSONL index entry is not one stage-0 regular file'
+
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+rel=${jsonl#"$b/repo/"}
+git -C "$b/repo" rm --cached -q -- "$rel"
+printf '%s\n' "/$rel" >"$b/repo/.gitignore"
+git -C "$b/repo" add -- .gitignore
+git -C "$b/repo" commit -qm 'ignore jsonl'
+assert_refused 'ignored untracked JSONL is refused' "$b" \
+  'beads JSONL index entry is not one stage-0 regular file'
+
+b=$(new_fixture)
+unlink "$(<"$b/jsonl-path")"
+assert_refused 'missing JSONL is refused' "$b" \
+  'beads JSONL worktree path is not a non-symlink regular file'
+
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+unlink "$jsonl"
+mkfifo "$jsonl"
+assert_refused 'nonregular JSONL is refused without reading it' "$b" \
+  'beads JSONL worktree path is not a non-symlink regular file'
+
+b=$(new_fixture)
+git -C "$b/repo" worktree add -qb other "$b/other"
+other_jsonl="$b/other/.beads/issues.jsonl"
+set_where_path "$b" "$other_jsonl"
+assert_refused 'path in a different worktree is refused' "$b" \
+  'beads JSONL is outside the current worktree'
+
+# `--allow-dirty` permits content differences while retaining the structural proof needed
+# before another write: the file is still one normally flagged, tracked stage-0 regular
+# file in both HEAD and the index. Consumers that inspect a flushed-but-uncommitted graph
+# still have to name it through this owner rather than guessing `.beads/issues.jsonl`.
+b=$(new_fixture)
+printf '%s\n' '{"id":"flushed-round"}' >>"$(<"$b/jsonl-path")"
+RESOLVER_ARGS=(--allow-dirty)
+assert_success '--allow-dirty resolves a legitimately dirty JSONL' "$b" "$(<"$b/jsonl-path")"
+
+b=$(new_fixture)
+printf '%s\n' '{"id":"flushed-round"}' >>"$(<"$b/jsonl-path")"
+assert_stdout_failure '--allow-dirty propagates a failed stdout write' "$b"
+
+b=$(new_fixture)
+git -C "$b/repo" update-index --assume-unchanged -- .beads/issues.jsonl
+RESOLVER_ARGS=(--allow-dirty)
+assert_refused '--allow-dirty refuses assume-unchanged JSONL before another write' "$b" \
+  'beads JSONL has hidden index flags'
+
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+rel=${jsonl#"$b/repo/"}
+git -C "$b/repo" rm --cached -q -- "$rel"
+printf '%s\n' "/$rel" >"$b/repo/.gitignore"
+git -C "$b/repo" add -- .gitignore
+git -C "$b/repo" commit -qm 'ignore jsonl'
+RESOLVER_ARGS=(--allow-dirty)
+assert_refused '--allow-dirty refuses ignored untracked JSONL before another write' "$b" \
+  'beads JSONL index entry is not one stage-0 regular file'
+
+b=$(new_fixture)
+unlink "$(<"$b/jsonl-path")"
+RESOLVER_ARGS=(--allow-dirty)
+assert_refused '--allow-dirty refuses a missing JSONL before another write' "$b" \
+  'beads JSONL worktree path is not a non-symlink regular file'
+
+# Byte identity is what catches intent-to-add for a non-empty file, and `--allow-dirty` is
+# exactly the mode that drops it — so the flush it authorizes would write over a path the
+# index does not hold at all.
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+rel=${jsonl#"$b/repo/"}
+git -C "$b/repo" rm --cached -q -- "$rel"
+git -C "$b/repo" add -N -- "$rel"
+printf '%s\n' '{"id":"flushed-round"}' >>"$jsonl"
+RESOLVER_ARGS=(--allow-dirty)
+assert_refused '--allow-dirty refuses intent-to-add JSONL before another write' "$b" \
+  'beads JSONL index entry is intent-to-add'
+
+b=$(new_fixture)
+git -C "$b/repo" update-index --chmod=+x -- .beads/issues.jsonl
+RESOLVER_ARGS=(--allow-dirty)
+assert_refused '--allow-dirty retains the regular index-mode requirement' "$b" \
+  'beads JSONL index entry is not one stage-0 regular file'
+
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+chmod +x "$jsonl"
+git -C "$b/repo" add -- .beads/issues.jsonl
+git -C "$b/repo" commit -qm 'executable head entry'
+chmod -x "$jsonl"
+git -C "$b/repo" add -- .beads/issues.jsonl
+RESOLVER_ARGS=(--allow-dirty)
+assert_refused '--allow-dirty retains the regular HEAD-mode requirement' "$b" \
+  'beads JSONL HEAD entry is not one regular file'
+
+b=$(new_fixture)
+git -C "$b/repo" checkout -qb conflict-side
+printf '%s\n' side >"$(<"$b/jsonl-path")"
+git -C "$b/repo" commit -qam side
+git -C "$b/repo" checkout -q "$(<"$b/initial-branch")"
+printf '%s\n' main >"$(<"$b/jsonl-path")"
+git -C "$b/repo" commit -qam main
+git -C "$b/repo" merge conflict-side >/dev/null 2>&1 || :
+RESOLVER_ARGS=(--allow-dirty)
+assert_refused '--allow-dirty retains the stage-0 index requirement' "$b" \
+  'beads JSONL index entry is not one stage-0 regular file'
+
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+printf '%s\n' target >"$b/link-target"
+unlink "$jsonl"
+ln -s "$b/link-target" "$jsonl"
+RESOLVER_ARGS=(--allow-dirty)
+assert_refused '--allow-dirty retains the non-symlink worktree requirement' "$b" \
+  'beads JSONL worktree path is not a non-symlink regular file'
+
+b=$(new_fixture)
+outside="$b/outside.jsonl"
+printf '%s\n' outside >"$outside"
+set_where_path "$b" "$outside"
+RESOLVER_ARGS=(--allow-dirty)
+assert_refused '--allow-dirty retains worktree containment' "$b" \
+  'beads JSONL is outside the current worktree'
+
+# A stale monitor may claim a hand edit does not exist, but this mode deliberately
+# permits content differences. The resolver and every documented consumer force
+# core.fsmonitor=false, so the later status/diff sees the bytes instead of trusting
+# that stale answer; resolution need not reject the difference itself.
+b=$(new_fixture)
+t='--allow-dirty permits content differences despite a stale fsmonitor cache'
+if ! mark_fsmonitor_valid "$b"; then
+  fail "$t" 'fixture could not mark the JSONL entry fsmonitor-valid'
+else
+  printf '%s\n' '{"id":"hand-edit"}' >>"$(<"$b/jsonl-path")"
+  RESOLVER_ARGS=(--allow-dirty)
+  assert_success "$t" "$b" "$(<"$b/jsonl-path")"
+fi
+
+# The mode proof must also bypass a stale fsmonitor answer. With core.filemode=true,
+# Git must inspect the filesystem and report the owner-exec change even when the
+# monitor says the path is unchanged.
+b=$(new_fixture)
+t='--allow-dirty refuses a mode change the fsmonitor cache hides'
+if ! mark_fsmonitor_valid "$b"; then
+  fail "$t" 'fixture could not mark the JSONL entry fsmonitor-valid'
+else
+  chmod +x "$(<"$b/jsonl-path")"
+  RESOLVER_ARGS=(--allow-dirty)
+  assert_refused "$t" "$b" 'beads JSONL worktree mode is not 100644'
+fi
+
+# The bit alone is not the fault, and refusing it would be wrong: every entry in a
+# monitored repository carries it whenever Git last saw the file match the index. That
+# includes the staged-but-uncommitted JSONL this mode's consumers explicitly expect,
+# where the cached answer and the bytes agree and the diff they read is truthful.
+b=$(new_fixture)
+t='--allow-dirty accepts an fsmonitor-valid entry that hides nothing'
+jsonl=$(<"$b/jsonl-path")
+printf '%s\n' '{"id":"flushed-round"}' >>"$jsonl"
+git -C "$b/repo" add -- .beads/issues.jsonl
+if ! mark_fsmonitor_valid "$b"; then
+  fail "$t" 'fixture could not mark the JSONL entry fsmonitor-valid'
+else
+  RESOLVER_ARGS=(--allow-dirty)
+  assert_success "$t" "$b" "$jsonl"
+fi
+
+# The default mode compares raw worktree bytes, so it refuses the same edit
+# independently of Git's cached answer.
+b=$(new_fixture)
+t='the default mode refuses a modification the fsmonitor cache hides'
+if ! mark_fsmonitor_valid "$b"; then
+  fail "$t" 'fixture could not mark the JSONL entry fsmonitor-valid'
+else
+  printf '%s\n' '{"id":"hand-edit"}' >>"$(<"$b/jsonl-path")"
+  assert_refused "$t" "$b" 'beads JSONL differs among HEAD, index, and worktree'
+fi
+
+# Recovery is the narrower reason to name a path without the tracked/index/HEAD proof:
+# the JSONL may be the deleted artifact that recovery must restore. Resolution,
+# containment, and non-symlink/nonregular refusal still apply, and the mode remains
+# read-only with respect to Beads.
+b=$(new_fixture)
+unlink "$(<"$b/jsonl-path")"
+RESOLVER_ARGS=(--recovery)
+assert_success '--recovery names a destroyed JSONL for restoration' "$b" "$(<"$b/jsonl-path")"
+
+# The deleted-export exception must not extend to Git's own administrative files:
+# recovery consumers copy and later restore the returned name, so accepting HEAD would
+# let that restoration overwrite repository control state. `assert_refused` snapshots
+# both the actual JSONL and this distinct resolved path, and requires the stub's sole
+# read-only `where` call (no flush-shaped invocation).
+b=$(new_fixture)
+set_where_path "$b" "$b/repo/.git/HEAD"
+RESOLVER_ARGS=(--recovery)
+assert_refused '--recovery refuses a Git administrative HEAD path' "$b" \
+  'beads JSONL is inside the Git administrative directory'
+
+# Path checks alone cannot see that the in-worktree pathname aliases an
+# administrative inode. Writing a recovery copy through this hard link would
+# overwrite .git/HEAD.
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+unlink "$jsonl"
+ln "$b/repo/.git/HEAD" "$jsonl"
+RESOLVER_ARGS=(--recovery)
+assert_refused '--recovery refuses a hard link to Git administrative state' "$b" \
+  'beads JSONL worktree path has multiple hard links'
+
+# In a linked worktree, `<worktree>/.git` is a regular pointer file rather than
+# the directory returned by `rev-parse --git-dir`. It is administrative state
+# just as surely as the shared/common directory, and a recovery consumer must
+# never copy over it.
+b=$(new_fixture)
+git -C "$b/repo" worktree add -q -b resolver-linked-worktree "$b/linked" HEAD
+set_where_path "$b" "$b/linked/.git"
+RESOLVER_CWD="$b/linked"
+RESOLVER_ARGS=(--recovery)
+assert_refused '--recovery refuses a linked-worktree .git pointer file' "$b" \
+  'beads JSONL is inside the Git administrative directory'
+
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+printf '%s\n' outside >"$b/link-target"
+unlink "$jsonl"
+ln -s "$b/link-target" "$jsonl"
+RESOLVER_ARGS=(--recovery)
+assert_refused '--recovery refuses a symlink JSONL' "$b" \
+  'beads JSONL worktree path is not a non-symlink regular file'
+
+# A dangling symlink is the symlink state real `br` hands this check, and it is the one
+# `--recovery` must not mistake for the absent artifact it exists to name. Measured on
+# br 0.2.19, streams separated by redirection, against a scratch repository whose
+# `.beads/issues.jsonl` was a symlink: `br --no-auto-flush --no-auto-import where --json`
+# printed the canonical *target* when that target existed (a link to `../unrelated.jsonl`
+# resolved to `<repo>/unrelated.jsonl`, one outside the worktree to its outside path, one
+# to a directory to that directory), and printed the symlink pathname itself only when the
+# target did not exist. So a live link is inspected as the file `br` will write through it,
+# containment refuses one that leaves the worktree, and the stub above additionally covers
+# a path replaced by a symlink after `br` answered.
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+unlink "$jsonl"
+ln -s "$b/repo/never-written.jsonl" "$jsonl"
+RESOLVER_ARGS=(--recovery)
+assert_refused '--recovery refuses a dangling symlink rather than calling it absent' "$b" \
+  'beads JSONL worktree path is not a non-symlink regular file'
+
+# Absent is the one non-regular state `--recovery` exists to name. Anything else that
+# occupies the path is not the damaged export: consumers `cp` and diff the resolved name,
+# and a FIFO blocks that read indefinitely rather than failing.
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+unlink "$jsonl"
+mkfifo "$jsonl"
+RESOLVER_ARGS=(--recovery)
+assert_refused '--recovery refuses a FIFO JSONL' "$b" \
+  'beads JSONL worktree path is not a non-symlink regular file'
+
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+unlink "$jsonl"
+mkdir -- "$jsonl"
+RESOLVER_ARGS=(--recovery)
+assert_refused '--recovery refuses a directory at the JSONL path' "$b" \
+  'beads JSONL worktree path is not a non-symlink regular file'
+
+b=$(new_fixture)
+set_where_path "$b" "$b/repo/."
+RESOLVER_ARGS=(--recovery)
+assert_refused '--recovery refuses dot as the final path component' "$b" \
+  'beads JSONL path has an unsafe final component'
+
+b=$(new_fixture)
+set_where_path "$b" "$b/repo/.."
+RESOLVER_ARGS=(--recovery)
+assert_refused '--recovery refuses dot-dot as the final path component' "$b" \
+  'beads JSONL path has an unsafe final component'
+
+b=$(new_fixture)
+outside="$b/outside.jsonl"
+printf '%s\n' outside >"$outside"
+set_where_path "$b" "$outside"
+RESOLVER_ARGS=(--recovery)
+assert_refused '--recovery still refuses a path outside the current worktree' "$b" \
+  'beads JSONL is outside the current worktree'
+
+b=$(new_fixture)
+printf '{}\n' >"$b/where.out"
+RESOLVER_ARGS=(--recovery)
+assert_refused '--recovery still refuses invalid workspace JSON' "$b" \
+  'cannot resolve exactly one beads JSONL'
+
+b=$(new_fixture)
+RESOLVER_ARGS=(--allow-everything)
+assert_refused 'an unknown option is refused' "$b" \
+  'usage: resolve-beads-jsonl [--allow-dirty|--recovery]'
+t='an unknown option refuses before br is invoked'
+if [[ -e "$b/br.calls" ]]; then fail "$t" 'br ran for an unparsed command line'
+else pass "$t"; fi
+
+printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
+[[ $FAIL -eq 0 ]]

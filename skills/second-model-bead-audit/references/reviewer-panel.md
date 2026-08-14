@@ -26,9 +26,218 @@ set -euo pipefail
 
 : "${PLAN_PATH:?Set PLAN_PATH to an absolute plan/spec path}"
 : "${AUDIT_SCOPE:?Set AUDIT_SCOPE before capture}"
-REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-_PROJECT=$(basename "$REPO_ROOT")
-AUDIT_DIR=$(mktemp -d "/tmp/bead-audit-${_PROJECT}.XXXXXXXX")
+# Clear loader injection in this already-running shell before the locator starts
+# any new process. The resolver/git-clean script bodies are too late: a shebang
+# interpreter would already have loaded caller-selected libraries.
+_bjp_posixly_was_set=${POSIXLY_CORRECT+x}
+_bjp_posixly_value=${POSIXLY_CORRECT-}
+POSIXLY_CORRECT=y
+export POSIXLY_CORRECT
+\unset LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT LD_DEBUG LD_DEBUG_OUTPUT LD_PROFILE \
+  LD_ORIGIN_PATH LD_PRELOAD_32 LD_PRELOAD_64 DYLD_INSERT_LIBRARIES \
+  DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH \
+  DYLD_FALLBACK_FRAMEWORK_PATH LIBPATH SHLIB_PATH GCONV_PATH LOCPATH || {
+  printf '%s\n' 'cannot clear dynamic-loader injection before beads-jsonl-path — do NOT write' >&2
+  exit 1
+}
+if [ -n "$_bjp_posixly_was_set" ]; then
+  POSIXLY_CORRECT=$_bjp_posixly_value
+  export POSIXLY_CORRECT
+else
+  \unset POSIXLY_CORRECT
+fi
+BEADS_JSONL_RESOLVER=$(
+  (
+    # Resolve the clean interpreter in a subshell. POSIX special-builtin precedence
+    # prevents exported caller functions from redefining this trust path, and the
+    # subshell leaves the caller's shell state untouched.
+    POSIXLY_CORRECT=y
+    export POSIXLY_CORRECT
+    \unset -f command builtin exec unset 2>/dev/null || :
+    _bjp_bash=$(command -p -v bash) || {
+      printf '%s\n' 'cannot locate a trusted Bash for the beads JSONL locator — do NOT write' >&2
+      exit 1
+    }
+    unset BASH_ENV ENV BASH_COMPAT BASH_LOADABLES_PATH BASH_XTRACEFD CDPATH GLOBIGNORE
+    exec "$_bjp_bash" --noprofile --norc -p -s <<'__BJP_TRUSTED_BASH__'
+# Privileged Bash ignores inherited functions. Clear the other startup controls too,
+# then perform every candidate, worktree, provenance, and byte-agreement decision here.
+command unset BASH_ENV ENV BASH_COMPAT BASH_LOADABLES_PATH BASH_XTRACEFD CDPATH GLOBIGNORE || {
+  printf '%s\n' 'cannot sanitize the beads JSONL locator shell environment — do NOT write' >&2
+  exit 1
+}
+while command builtin read -r _ _ _bjp_function; do
+  command unset -f -- "$_bjp_function" || {
+    printf '%s\n' 'cannot sanitize the beads JSONL locator shell environment — do NOT write' >&2
+    exit 1
+  }
+done < <(command builtin declare -F)
+unset _bjp_function
+_bjp_git=$(command -p -v git) || {
+  printf '%s\n' 'cannot locate a trusted Git for beads-jsonl-path — do NOT write' >&2
+  exit 1
+}
+_bjp_cmp=$(command -p -v cmp) || {
+  printf '%s\n' 'cannot locate a trusted cmp for beads-jsonl-path — do NOT write' >&2
+  exit 1
+}
+_bjp_stat=$(command -p -v stat) || {
+  printf '%s\n' 'cannot locate a trusted stat for beads-jsonl-path — do NOT write' >&2
+  exit 1
+}
+_bjp_regular_link_count() {
+  local path=$1 count
+  if count=$("$_bjp_stat" -c %h "$path" 2>/dev/null) && [[ $count =~ ^[0-9]+$ ]]; then
+    :
+  elif count=$("$_bjp_stat" -f %l "$path" 2>/dev/null) && [[ $count =~ ^[0-9]+$ ]]; then
+    :
+  else
+    return 1
+  fi
+  printf '%s\n' "$count"
+}
+_bjp_git_environment=( "${!GIT@}" )
+for _bjp_git_variable in "${_bjp_git_environment[@]}"; do
+  command unset -- "$_bjp_git_variable" || {
+    printf '%s\n' 'cannot sanitize the Git environment for beads-jsonl-path — do NOT write' >&2
+    exit 1
+  }
+done
+unset _bjp_git_variable _bjp_git_environment
+
+BEADS_JSONL_RESOLVER=
+BEADS_GIT_RUNNER=
+for _bjp_dir in "$HOME/.claude/skills/beads-jsonl-path" \
+  "${CODEX_HOME:-$HOME/.codex}/skills/beads-jsonl-path" \
+  "$HOME/.agents/skills/beads-jsonl-path"; do
+  case $_bjp_dir in
+    /*) ;;
+    *) printf '%s\n' 'installed beads-jsonl-path target is not absolute — do NOT write' >&2; exit 1 ;;
+  esac
+  _bjp_candidate="$_bjp_dir/scripts/resolve-beads-jsonl"
+  [ -x "$_bjp_candidate" ] || continue
+  [ ! -L "$_bjp_candidate" ] || {
+    printf '%s\n' 'installed beads-jsonl-path resolver is a symbolic link — do NOT write' >&2
+    exit 1
+  }
+  _bjp_root_raw=$("$_bjp_git" --no-replace-objects -c core.fsmonitor=false rev-parse --show-toplevel 2>/dev/null) || {
+    printf '%s\n' 'cannot resolve the current Git worktree — do NOT write' >&2
+    exit 1
+  }
+  _bjp_root=$(
+    CDPATH=
+    export CDPATH
+    cd -P -- "$_bjp_root_raw" 2>/dev/null && pwd -P
+  ) || {
+    printf '%s\n' 'cannot canonicalize the current Git worktree — do NOT write' >&2
+    exit 1
+  }
+  _bjp_candidate_dir=$(
+    CDPATH=
+    export CDPATH
+    cd -P -- "$_bjp_dir/scripts" 2>/dev/null && pwd -P
+  ) || {
+    printf '%s\n' 'cannot canonicalize installed beads-jsonl-path target — do NOT write' >&2
+    exit 1
+  }
+  _bjp_candidate="$_bjp_candidate_dir/resolve-beads-jsonl"
+  [ ! -L "$_bjp_candidate" ] || {
+    printf '%s\n' 'installed beads-jsonl-path resolver is a symbolic link — do NOT write' >&2
+    exit 1
+  }
+  case $_bjp_root:$_bjp_candidate_dir in
+    /:/*|*:"$_bjp_root"|*:"$_bjp_root"/*)
+      printf '%s\n' 'installed beads-jsonl-path target is inside the current Git worktree — do NOT write' >&2
+      exit 1
+      ;;
+  esac
+  [ -f "$_bjp_candidate" ] || {
+    printf '%s\n' 'installed beads-jsonl-path resolver is not a regular file — do NOT write' >&2
+    exit 1
+  }
+  _bjp_link_count=$(_bjp_regular_link_count "$_bjp_candidate") || {
+    printf '%s\n' 'cannot inspect installed beads-jsonl-path resolver hard-link count — do NOT write' >&2
+    exit 1
+  }
+  [ "$_bjp_link_count" = 1 ] || {
+    printf '%s\n' 'installed beads-jsonl-path resolver has multiple hard links — do NOT write' >&2
+    exit 1
+  }
+  unset _bjp_link_count
+  if ! IFS= command builtin read -r _bjp_shebang <"$_bjp_candidate"; then
+    printf '%s\n' 'cannot inspect installed beads-jsonl-path resolver interpreter — do NOT write' >&2
+    exit 1
+  fi
+  [ "$_bjp_shebang" = '#!/bin/sh' ] || {
+    printf '%s\n' 'installed beads-jsonl-path resolver has an unexpected interpreter — do NOT write' >&2
+    exit 1
+  }
+  unset _bjp_shebang
+  _bjp_runner="$_bjp_candidate_dir/git-clean"
+  [ -x "$_bjp_runner" ] || {
+    printf '%s\n' 'installed beads-jsonl-path Git runner unavailable — do NOT write' >&2
+    exit 1
+  }
+  [ ! -L "$_bjp_runner" ] || {
+    printf '%s\n' 'installed beads-jsonl-path Git runner is a symbolic link — do NOT write' >&2
+    exit 1
+  }
+  [ -f "$_bjp_runner" ] || {
+    printf '%s\n' 'installed beads-jsonl-path Git runner is not a regular file — do NOT write' >&2
+    exit 1
+  }
+  _bjp_link_count=$(_bjp_regular_link_count "$_bjp_runner") || {
+    printf '%s\n' 'cannot inspect installed beads-jsonl-path Git runner hard-link count — do NOT write' >&2
+    exit 1
+  }
+  [ "$_bjp_link_count" = 1 ] || {
+    printf '%s\n' 'installed beads-jsonl-path Git runner has multiple hard links — do NOT write' >&2
+    exit 1
+  }
+  unset _bjp_link_count
+  if ! IFS= command builtin read -r _bjp_shebang <"$_bjp_runner"; then
+    printf '%s\n' 'cannot inspect installed beads-jsonl-path Git runner interpreter — do NOT write' >&2
+    exit 1
+  fi
+  [ "$_bjp_shebang" = '#!/bin/sh' ] || {
+    printf '%s\n' 'installed beads-jsonl-path Git runner has an unexpected interpreter — do NOT write' >&2
+    exit 1
+  }
+  unset _bjp_shebang
+  unset _bjp_candidate_dir
+  if [ -z "$BEADS_JSONL_RESOLVER" ]; then
+    BEADS_JSONL_RESOLVER=$_bjp_candidate
+    BEADS_GIT_RUNNER=$_bjp_runner
+  elif ! "$_bjp_cmp" -s "$BEADS_JSONL_RESOLVER" "$_bjp_candidate" \
+      || ! "$_bjp_cmp" -s "$BEADS_GIT_RUNNER" "$_bjp_runner"; then
+    printf '%s\n' 'installed beads-jsonl-path companions disagree — do NOT write' >&2
+    exit 1
+  fi
+  unset _bjp_runner
+done
+unset _bjp_candidate _bjp_root _bjp_root_raw _bjp_git _bjp_cmp _bjp_stat
+[ -n "$BEADS_JSONL_RESOLVER" ] && [ -n "$BEADS_GIT_RUNNER" ] || {
+  printf '%s\n' 'beads-jsonl-path companion unavailable — do NOT write' >&2
+  exit 1
+}
+printf '%s\n' "$BEADS_JSONL_RESOLVER"
+__BJP_TRUSTED_BASH__
+  )
+) || exit 1
+BEADS_GIT_RUNNER=${BEADS_JSONL_RESOLVER%/*}/git-clean
+unset _bjp_candidate
+# Installed targets only. A relative `skills/beads-jsonl-path/scripts/resolve-beads-jsonl`
+# is whatever executable the audited repo planted there, and this snippet would run it.
+# From a checkout, run that checkout's copy by absolute path instead.
+[ -n "$BEADS_JSONL_RESOLVER" ] || {
+  echo "beads-jsonl-path companion unavailable — do NOT flush" >&2
+  exit 1
+}
+REPO_ROOT=$("$BEADS_GIT_RUNNER" worktree-root) || exit 1
+_PROJECT=${REPO_ROOT##*/}
+[[ -n "$_PROJECT" ]] || _PROJECT=root
+_PROJECT=${_PROJECT//[^A-Za-z0-9._-]/_}
+AUDIT_DIR=$("$BEADS_GIT_RUNNER" make-temp-dir "bead-audit-${_PROJECT}") || exit 1
 
 AUDIT_PROMPT_FILE="$AUDIT_DIR/audit-prompt.txt"
 CODEX_OUT="$AUDIT_DIR/codex.txt"
@@ -41,6 +250,7 @@ MERGED_OUT="$AUDIT_DIR/merged.md"
 GRAPH_JSON="$AUDIT_DIR/graph.json"
 GRAPH_JSONL="$AUDIT_DIR/issues.jsonl"
 GRAPH_AFTER_JSONL="$AUDIT_DIR/issues.after.jsonl"
+GRAPH_AFTER_SYNC_JSONL="$AUDIT_DIR/issues.after-sync.jsonl"
 TRIAGE_OUT="$AUDIT_DIR/triage.txt"
 PLAN_OUT="$AUDIT_DIR/plan.txt"
 SUGGEST_OUT="$AUDIT_DIR/suggest.txt"
@@ -50,7 +260,7 @@ SOURCE_DIR="$AUDIT_DIR/sources"
 SOURCE_MANIFEST="$AUDIT_DIR/source-manifest.txt"
 SOURCE_STATE_BEFORE="$AUDIT_DIR/source-state.before.txt"
 SOURCE_STATE_AFTER="$AUDIT_DIR/source-state.after.txt"
-mkdir -p "$ISSUE_DIR" "$SOURCE_DIR"
+"$BEADS_GIT_RUNNER" make-dir "$ISSUE_DIR" "$SOURCE_DIR"
 ```
 
 Use a unique directory so retries never overwrite the evidence from a failed or
@@ -70,17 +280,7 @@ The panel must not discover requirement sources live.
 
 ```bash
 fingerprint_file() {
-  local raw
-  if command -v sha256sum >/dev/null 2>&1; then
-    raw=$(sha256sum "$1") || return
-    printf '%s\n' "${raw%% *}"
-  elif command -v shasum >/dev/null 2>&1; then
-    raw=$(shasum -a 256 "$1") || return
-    printf '%s\n' "${raw%% *}"
-  else
-    echo "SHA-256 unavailable: install sha256sum or shasum" >&2
-    return 1
-  fi
+  "$BEADS_GIT_RUNNER" hash-file "$1"
 }
 
 # Add every authoritative/linked requirement file before capture, without
@@ -103,52 +303,35 @@ add_source "$PLAN_PATH"
 # ancestor directory, and the repository root.
 governed_sources=("${SOURCE_FILES[@]}")
 for governed in "${governed_sources[@]}"; do
-  dir=$(dirname "$governed")
-  while [ "$dir" = "$REPO_ROOT" ] || [[ "$dir" == "$REPO_ROOT/"* ]]; do
+  [[ "$governed" == /*/* ]] || {
+    echo "Audit source is not an absolute file path: $governed" >&2
+    exit 1
+  }
+  dir=${governed%/*}
+  [[ -n "$dir" ]] || dir=/
+  while [[ "$REPO_ROOT" == / || "$dir" == "$REPO_ROOT" \
+           || "$dir" == "$REPO_ROOT/"* ]]; do
     [ ! -f "$dir/AGENTS.md" ] || add_source "$dir/AGENTS.md"
     [ "$dir" != "$REPO_ROOT" ] || break
-    dir=$(dirname "$dir")
+    dir=${dir%/*}
+    [[ -n "$dir" ]] || dir=/
   done
 done
 
-: >"$SOURCE_MANIFEST"
-: >"$SOURCE_STATE_BEFORE"
-source_n=0
-for src in "${SOURCE_FILES[@]}"; do
-  [ -f "$src" ] || {
-    echo "Missing audit source: $src" >&2
-    exit 1
-  }
-  source_n=$((source_n + 1))
-  copy="$SOURCE_DIR/$(printf '%03d' "$source_n")-$(basename "$src")"
-  cp "$src" "$copy"
-  copy_fp=$(fingerprint_file "$copy") || {
-    echo "Could not fingerprint source snapshot: $copy" >&2
-    exit 1
-  }
-  live_fp=$(fingerprint_file "$src") || {
-    echo "Could not fingerprint source: $src" >&2
-    exit 1
-  }
-  [ -n "$copy_fp" ] && [ "$copy_fp" = "$live_fp" ] || {
-    echo "Audit source changed while being snapshotted: $src" >&2
-    exit 1
-  }
-  printf '%s\t%s\n' "$src" "$copy" >>"$SOURCE_MANIFEST"
-  printf '%s\t%s\n' "$live_fp" "$src" >>"$SOURCE_STATE_BEFORE"
-done
+"$BEADS_GIT_RUNNER" snapshot-files \
+  "$SOURCE_MANIFEST" "$SOURCE_STATE_BEFORE" "$SOURCE_DIR" -- \
+  "${SOURCE_FILES[@]}" || {
+  echo "Could not capture a stable authoritative-source snapshot" >&2
+  exit 1
+}
 
 # RESOLVE AND INSPECT BEFORE FLUSHING. The flush writes the cache over the tracked file,
 # so an unstaged hand-edit is destroyed HERE — and the diff below then compares the file
 # against an index that already matches it, comes back empty, and the audit snapshots the
 # truncated graph having "checked". The check has to precede the write it guards.
-_bw=$(br where --json) || { echo "cannot resolve the beads JSONL path" >&2; exit 1; }
-BEADS_JSONL=$(printf '%s' "$_bw" | jq -er .jsonl_path) || { echo "cannot resolve the beads JSONL path" >&2; exit 1; }
-# INSPECT before flushing — the next line writes the cache over this file, so anything in
-# the worktree that the cache does not know about is gone afterwards, with no diff left to
-# show it. Do NOT gate on a clean file: the normal `bead-polish-loop` handoff arrives with
-# the round's intended `br` edits uncommitted, so demanding cleanliness would block the
-# audit after every non-noop round.
+# --allow-dirty: do NOT gate on a clean file here. The normal `bead-polish-loop` handoff
+# arrives with the round's intended `br` edits flushed and uncommitted, so the owner's
+# default clean-state mode would block the audit after every non-noop round.
 #
 # The question is not "is it dirty" but "is any of this dirt something the cache will
 # destroy" — i.e. hand-edited bead text, which never advances `updated_at`. Read the diff
@@ -156,16 +339,29 @@ BEADS_JSONL=$(printf '%s' "$_bw" | jq -er .jsonl_path) || { echo "cannot resolve
 # Against HEAD, not the index: a damaged JSONL that is STAGED makes a worktree-vs-index
 # diff empty while HEAD still holds the good bodies, so the operator would acknowledge a
 # clean-looking diff and flush the damage.
-git status --porcelain -- "$BEADS_JSONL" || { echo "cannot read the worktree — do NOT flush" >&2; exit 1; }
-git diff HEAD -- "$BEADS_JSONL"          || { echo "cannot diff the JSONL — do NOT flush" >&2; exit 1; }
+#
+# `--allow-dirty` retains the owner's tracked stage-0, normal-flag, regular-mode proof and
+# drops byte identity only where the HEAD diff below can still expose both staged and
+# unstaged differences. The clean runner disables stale fsmonitor answers, external
+# diff drivers, textconv, and binary attributes.
+unset BEADS_DIFF_REVIEWED
+BEADS_JSONL=$("$BEADS_JSONL_RESOLVER" --allow-dirty) || exit 1
+"$BEADS_GIT_RUNNER" --literal-pathspecs diff --no-ext-diff --no-textconv --text HEAD -- "$BEADS_JSONL"          || { echo "cannot diff the JSONL — do NOT flush" >&2; exit 1; }
 # Keep a copy of what the worktree held BEFORE the flush. Neither git ref works as the
 # post-flush baseline: if the index holds an earlier damaged export and the worktree holds
 # the good recovery, HEAD-vs-worktree looks fine beforehand, the flush replaces the good
 # copy with the indexed damage, and a worktree-vs-index diff afterwards is EMPTY because
 # both now hold it. Only the pre-flush bytes can show that.
-cp "$BEADS_JSONL" "$AUDIT_DIR/preflush.jsonl" || { echo "cannot preserve the pre-flush graph" >&2; exit 1; }
-: "${BEADS_DIFF_REVIEWED:?read the two commands above, then set this to how you resolved it}"
-br sync --flush-only || { echo "flush failed — do not audit an unwritten graph" >&2; exit 1; }
+"$BEADS_GIT_RUNNER" copy-file "$BEADS_JSONL" "$AUDIT_DIR/preflush.jsonl" || { echo "cannot preserve the pre-flush graph" >&2; exit 1; }
+```
+
+**Stop the block here and read the HEAD diff.** Continue in the same Bash process
+only after binding `BEADS_DIFF_REVIEWED` to this audit. A value from an earlier
+skill step or audit was explicitly cleared above and cannot authorize this flush.
+
+```bash
+: "${BEADS_DIFF_REVIEWED:?read the HEAD diff above, then set this to how you resolved it}"
+"$BEADS_JSONL_RESOLVER" --run-br sync --flush-only || { echo "flush failed — do not audit an unwritten graph" >&2; exit 1; }
 
 # STOP HERE AND READ THIS DIFF before snapshotting. The flush just re-exported EVERY bead
 # from the gitignored cache over the tracked JSONL, so any body the cache held a stale copy
@@ -176,7 +372,16 @@ br sync --flush-only || { echo "flush failed — do not audit an unwritten graph
 # `description` this session did not write, is the tell. Recovery:
 # exact companion skill rb-lite-backlog-drain, step 11:
 # ../../rb-lite-backlog-drain/SKILL.md#backlog-step-11.
-git diff -- "$BEADS_JSONL"
+unset BEADS_POSTFLUSH_REVIEWED
+if "$BEADS_GIT_RUNNER" diff-files "$AUDIT_DIR/preflush.jsonl" "$BEADS_JSONL"; then
+  _BEADS_POSTFLUSH_DIFF_RC=0
+else
+  _BEADS_POSTFLUSH_DIFF_RC=$?
+fi
+case $_BEADS_POSTFLUSH_DIFF_RC in
+  0|1) ;;
+  *) echo "cannot compare the pre/post-flush JSONL bytes — do NOT audit" >&2; exit 1 ;;
+esac
 ```
 
 **Stop the block here.** The line above is a real gate, not a comment: run the snapshot
@@ -187,11 +392,14 @@ exists to catch. If you must automate it, make the continuation conditional on a
 recorded acknowledgement rather than on the diff having been printed.
 
 ```bash
-# Compare against the PRE-FLUSH bytes, not against the index. This is the only baseline
-# that can show a flush replacing a good worktree copy with an indexed damaged one.
-diff -u "$AUDIT_DIR/preflush.jsonl" "$BEADS_JSONL" \
-  || : "${BEADS_POSTFLUSH_REVIEWED:?the flush changed the graph — read that diff, then set this}"
-cp "$BEADS_JSONL" "$GRAPH_JSONL"
+# The first block accepted only diff statuses 0 (same) and 1 (different). Status
+# 1 needs an acknowledgement bound to this audit after reading that block's output.
+case $_BEADS_POSTFLUSH_DIFF_RC in
+  0) ;;
+  1) : "${BEADS_POSTFLUSH_REVIEWED:?the flush changed the graph — read this audit's diff, then set this}" ;;
+  *) echo "missing a valid pre/post-flush comparison — do NOT audit" >&2; exit 1 ;;
+esac
+"$BEADS_GIT_RUNNER" copy-file "$BEADS_JSONL" "$GRAPH_JSONL"
 GRAPH_FINGERPRINT=$(fingerprint_file "$GRAPH_JSONL") || {
   echo "Could not fingerprint initial graph snapshot" >&2
   exit 1
@@ -201,13 +409,13 @@ GRAPH_FINGERPRINT=$(fingerprint_file "$GRAPH_JSONL") || {
   exit 1
 }
 
-br list --limit 0 --json -a >"$GRAPH_JSON"
-bv --robot-triage >"$TRIAGE_OUT"
-bv --robot-plan >"$PLAN_OUT"
-bv --robot-suggest >"$SUGGEST_OUT"
-br graph --all --json >"$GRAPH_DEPS_JSON"
+"$BEADS_JSONL_RESOLVER" --run-br list --limit 0 --json -a >"$GRAPH_JSON"
+"$BEADS_GIT_RUNNER" run-audit-tool bv --robot-triage >"$TRIAGE_OUT"
+"$BEADS_GIT_RUNNER" run-audit-tool bv --robot-plan >"$PLAN_OUT"
+"$BEADS_GIT_RUNNER" run-audit-tool bv --robot-suggest >"$SUGGEST_OUT"
+"$BEADS_JSONL_RESOLVER" --run-br graph --all --json >"$GRAPH_DEPS_JSON"
 
-if ISSUE_IDS=$(jq -er '(.issues // .)[] | .id' <"$GRAPH_JSON"); then
+if ISSUE_IDS=$("$BEADS_JSONL_RESOLVER" --run-jq -er '(.issues // .)[] | .id' <"$GRAPH_JSON"); then
   :
 else
   echo "Could not extract issue IDs from graph snapshot" >&2
@@ -215,13 +423,13 @@ else
 fi
 
 while IFS= read -r id; do
-  safe_id=$(printf '%s' "$id" | tr -c 'A-Za-z0-9._-' '_')
-  br show "$id" --json >"$ISSUE_DIR/$safe_id.json"
+  safe_id=${id//[^A-Za-z0-9._-]/_}
+  "$BEADS_JSONL_RESOLVER" --run-br show "$id" --json >"$ISSUE_DIR/$safe_id.json"
 done <<<"$ISSUE_IDS"
 
-br sync --flush-only
+"$BEADS_JSONL_RESOLVER" --run-br sync --flush-only
 CAPTURE_AFTER_JSONL="$AUDIT_DIR/issues.capture-after.jsonl"
-cp "$BEADS_JSONL" "$CAPTURE_AFTER_JSONL"
+"$BEADS_GIT_RUNNER" copy-file "$BEADS_JSONL" "$CAPTURE_AFTER_JSONL"
 CAPTURE_AFTER_FINGERPRINT=$(fingerprint_file "$CAPTURE_AFTER_JSONL") || {
   echo "Could not fingerprint graph after capture" >&2
   exit 1
@@ -259,7 +467,7 @@ instructions and shell quoting cannot truncate the rubric.
   printf 'Shared suggest output: %s\n' "$SUGGEST_OUT"
   printf 'Shared dependency graph: %s\n' "$GRAPH_DEPS_JSON"
   printf 'Per-issue JSON directory: %s\n\n' "$ISSUE_DIR"
-  cat <<'EOF'
+  "$BEADS_GIT_RUNNER" run-posix sed -n 'p' <<'EOF'
 This is the final read-only launch-readiness gate after bead polishing. Independently
 derive your judgment from the plan and graph. Do not trust or search for another
 reviewer's conclusions.
@@ -379,12 +587,50 @@ if [ -n "$CLAUDE_MODEL_PIN" ]; then export CLAUDE_REVIEWER_MODELS="$CLAUDE_MODEL
 not pay for a probe of a reviewer it excluded — up to 90 seconds per unreachable rung,
 and a real model call.
 
-Run the bounded probe in
-[multi-reviewer-loop/references/reviewer-panel.md](../../multi-reviewer-loop/references/reviewer-panel.md)
-§ Resolving the Claude reviewer's model — same ladder, same acceptance rule, reading the
-`CLAUDE_REVIEWER_MODELS` just set. An unreachable model hangs rather than erroring, so
-without the probe the 900s `timeout` is the first thing that notices, and it reports the
-auditor as `failed` after fifteen minutes rather than as `substituted` after one.
+Use this audit's already validated tool boundary for the probe. Do **not** run the
+ambient-tool probe from `multi-reviewer-loop`: its caller-PATH lookup would cross
+the trust boundary before this panel's hardened dispatch.
+
+```bash
+CLAUDE_MODEL=""
+CLAUDE_MODEL_LADDER="${CLAUDE_REVIEWER_MODELS:-fable opus}"
+_CLAUDE_PROBE="$AUDIT_DIR/claude-model-probe.json"
+_CLAUDE_PROBE_TIMEOUT=
+if "$BEADS_GIT_RUNNER" run-audit-tool timeout \
+     --kill-after=1s 1s true >/dev/null 2>&1; then
+  _CLAUDE_PROBE_TIMEOUT=timeout
+elif "$BEADS_GIT_RUNNER" run-audit-tool gtimeout \
+     --kill-after=1s 1s true >/dev/null 2>&1; then
+  _CLAUDE_PROBE_TIMEOUT=gtimeout
+fi
+if [ -n "$_CLAUDE_PROBE_TIMEOUT" ] \
+    && CLAUDE_BIN=$("$BEADS_GIT_RUNNER" resolve-tool claude); then
+  for _m in $CLAUDE_MODEL_LADDER; do
+    _rc=0
+    "$BEADS_GIT_RUNNER" run-audit-tool "$_CLAUDE_PROBE_TIMEOUT" \
+      --kill-after=15 90 "$CLAUDE_BIN" -p 'Reply with exactly: PANEL_OK' \
+      --model "$_m" --output-format json \
+      --no-session-persistence --safe-mode --strict-mcp-config \
+      --mcp-config '{"mcpServers":{}}' \
+      --tools "Read" --allowedTools "Read" \
+      --disallowedTools "Edit,Write,NotebookEdit" \
+      </dev/null >"$_CLAUDE_PROBE" 2>/dev/null || _rc=$?
+    if [ "$_rc" -eq 0 ] \
+       && "$BEADS_JSONL_RESOLVER" --run-jq -e \
+          '(.is_error | not) and ((.result // "") != "")' \
+          <"$_CLAUDE_PROBE" >/dev/null 2>&1; then
+      CLAUDE_MODEL=$_m
+      break
+    fi
+    echo "claude auditor: '$_m' did not answer (exit $_rc)"
+  done
+fi
+unset _CLAUDE_PROBE_TIMEOUT _rc
+```
+
+An unreachable model hangs rather than erroring, so without the bounded probe
+the 900s audit timeout is the first thing that notices and reports a failure
+after fifteen minutes rather than a substitution after one.
 
 If no candidate answers, **drop `claude` from `PANEL_REVIEWERS`** and record why —
 rebuilding the list rather than deleting a token, since `codex,claude` minus a token
@@ -423,12 +669,12 @@ fi
 
 ```bash
 # $PANEL_REVIEWERS was defaulted and normalized in step 1 — do not re-default it here.
-if command -v timeout >/dev/null 2>&1 &&
-   timeout --kill-after=1s 1s true >/dev/null 2>&1; then
-  TIMEOUT_BIN=$(command -v timeout)
-elif command -v gtimeout >/dev/null 2>&1 &&
-     gtimeout --kill-after=1s 1s true >/dev/null 2>&1; then
-  TIMEOUT_BIN=$(command -v gtimeout)
+if "$BEADS_GIT_RUNNER" run-audit-tool timeout \
+     --kill-after=1s 1s true >/dev/null 2>&1; then
+  TIMEOUT_TOOL=timeout
+elif "$BEADS_GIT_RUNNER" run-audit-tool gtimeout \
+     --kill-after=1s 1s true >/dev/null 2>&1; then
+  TIMEOUT_TOOL=gtimeout
 else
   echo "GNU timeout is required (timeout or gtimeout)" >&2
   exit 1
@@ -444,7 +690,9 @@ case "$PANEL_REVIEWERS" in
 esac
 
 if $RUN_CODEX; then
-  "$TIMEOUT_BIN" --kill-after=30s 900s codex exec \
+  CODEX_BIN=$("$BEADS_GIT_RUNNER" resolve-tool codex) || exit 1
+  "$BEADS_GIT_RUNNER" run-audit-tool "$TIMEOUT_TOOL" \
+    --kill-after=30s 900s "$CODEX_BIN" exec \
     -C "$REPO_ROOT" \
     --sandbox read-only \
     --ephemeral \
@@ -453,15 +701,16 @@ if $RUN_CODEX; then
     -m gpt-5.6-sol \
     -c 'model_reasoning_effort="xhigh"' \
     --output-last-message "$CODEX_OUT" \
-    "$(cat "$AUDIT_PROMPT_FILE")" \
+    "$(<"$AUDIT_PROMPT_FILE")" \
     </dev/null >"$CODEX_TRACE" 2>"$CODEX_ERR" &
   CODEX_PID=$!
 fi
 
 if $RUN_CLAUDE; then
+  CLAUDE_BIN=$("$BEADS_GIT_RUNNER" resolve-tool claude) || exit 1
   (
-    cd "$REPO_ROOT"
-    "$TIMEOUT_BIN" --kill-after=30s 900s claude -p "$(cat "$AUDIT_PROMPT_FILE")" \
+    "$BEADS_GIT_RUNNER" run-audit-tool "$TIMEOUT_TOOL" \
+      --kill-after=30s 900s "$CLAUDE_BIN" -p "$(<"$AUDIT_PROMPT_FILE")" \
       --model "$CLAUDE_MODEL" \
       --effort high \
       --output-format json \
@@ -517,8 +766,9 @@ Keep both facts true together: any future read of these variables that is *not* 
 `$RUN_CLAUDE` needs them initialised here or it aborts.
 
 ```bash
-if jq -er 'if .is_error then error(.result // "claude auditor returned is_error")
-           else (.result // empty) end' <"$CLAUDE_RAW" >"$CLAUDE_OUT"; then
+if "$BEADS_JSONL_RESOLVER" --run-jq -er \
+     'if .is_error then error(.result // "claude auditor returned is_error")
+      else (.result // empty) end' <"$CLAUDE_RAW" >"$CLAUDE_OUT"; then
   JQ_RC=0
 else
   JQ_RC=$?
@@ -532,10 +782,19 @@ into reviewer state:
 CLAUDE_DENIALS=
 CLAUDE_INSPECTION_BLOCKED=false
 if [ "$JQ_RC" -eq 0 ]; then
-  if CLAUDE_DENIALS=$(jq -r '.permission_denials[]?.tool_name' <"$CLAUDE_RAW"); then
-    if printf '%s\n' "$CLAUDE_DENIALS" |
-       grep -qE '^(Read|Glob|Grep)$'; then
+  if CLAUDE_DENIALS=$("$BEADS_JSONL_RESOLVER" --run-jq -r \
+      '.permission_denials[]?.tool_name' <"$CLAUDE_RAW"); then
+    if "$BEADS_JSONL_RESOLVER" --run-jq -e \
+         'any(.permission_denials[]?.tool_name;
+              . == "Read" or . == "Glob" or . == "Grep")' \
+         <"$CLAUDE_RAW" >/dev/null; then
       CLAUDE_INSPECTION_BLOCKED=true
+    else
+      _CLAUDE_DENIAL_PREDICATE_RC=$?
+      if [ "$_CLAUDE_DENIAL_PREDICATE_RC" -ne 1 ]; then
+        JQ_RC=$_CLAUDE_DENIAL_PREDICATE_RC
+      fi
+      unset _CLAUDE_DENIAL_PREDICATE_RC
     fi
   else
     JQ_RC=$?
@@ -554,7 +813,7 @@ Optionally confirm the actual model:
 
 ```bash
 if [ "$JQ_RC" -eq 0 ]; then
-  jq -r '.modelUsage | keys[]' <"$CLAUDE_RAW" || true
+  "$BEADS_JSONL_RESOLVER" --run-jq -r '.modelUsage | keys[]' <"$CLAUDE_RAW" || true
 fi
 ```
 
@@ -577,27 +836,52 @@ Validate the complete contract, not only whether tags exist:
 
 ```bash
 validate_audit_output() {
-  local file=$1 verdict rationale blockers important nits total closing
+  local file=$1 verdict rationale blockers important nits total closing grep_rc
+  local -a closing_lines
   [ -s "$file" ] || return 1
-  verdict=$(sed -n '1s/^VERDICT: //p' "$file")
-  rationale=$(sed -n '2p' "$file")
+  verdict=$("$BEADS_GIT_RUNNER" run-posix sed -n '1s/^VERDICT: //p' "$file")
+  rationale=$("$BEADS_GIT_RUNNER" run-posix sed -n '2p' "$file")
   [ -n "$rationale" ] || return 1
-  if printf '%s\n' "$rationale" |
-     grep -qE '^(\[(BLOCKER|IMPORTANT|NIT)\]|No findings\.|COVERAGE:|DEPENDENCIES:|VERIFICATION:)'; then
+  if "$BEADS_GIT_RUNNER" grep -qE \
+      '^(\[(BLOCKER|IMPORTANT|NIT)\]|No findings\.|COVERAGE:|DEPENDENCIES:|VERIFICATION:)' \
+      <<<"$rationale"; then
     return 1
   fi
-  blockers=$(grep -cE '^[[:space:]]*\[BLOCKER\]' "$file" || true)
-  important=$(grep -cE '^[[:space:]]*\[IMPORTANT\]' "$file" || true)
-  nits=$(grep -cE '^[[:space:]]*\[NIT\]' "$file" || true)
+  if blockers=$("$BEADS_GIT_RUNNER" grep -cE \
+      '^[[:space:]]*\[BLOCKER\]' "$file"); then
+    :
+  else
+    grep_rc=$?
+    [ "$grep_rc" -eq 1 ] || return 1
+    blockers=${blockers:-0}
+  fi
+  if important=$("$BEADS_GIT_RUNNER" grep -cE \
+      '^[[:space:]]*\[IMPORTANT\]' "$file"); then
+    :
+  else
+    grep_rc=$?
+    [ "$grep_rc" -eq 1 ] || return 1
+    important=${important:-0}
+  fi
+  if nits=$("$BEADS_GIT_RUNNER" grep -cE \
+      '^[[:space:]]*\[NIT\]' "$file"); then
+    :
+  else
+    grep_rc=$?
+    [ "$grep_rc" -eq 1 ] || return 1
+    nits=${nits:-0}
+  fi
   total=$((blockers + important + nits))
 
-  closing=$(tail -n 3 "$file")
-  printf '%s\n' "$closing" | sed -n '1p' | grep -q '^COVERAGE:' || return 1
-  printf '%s\n' "$closing" | sed -n '2p' | grep -q '^DEPENDENCIES:' || return 1
-  printf '%s\n' "$closing" | sed -n '3p' | grep -q '^VERIFICATION:' || return 1
+  closing=$("$BEADS_GIT_RUNNER" run-posix tail -n 3 "$file")
+  mapfile -t closing_lines <<<"$closing"
+  [ "${#closing_lines[@]}" -eq 3 ] || return 1
+  [[ "${closing_lines[0]}" == COVERAGE:* ]] || return 1
+  [[ "${closing_lines[1]}" == DEPENDENCIES:* ]] || return 1
+  [[ "${closing_lines[2]}" == VERIFICATION:* ]] || return 1
 
   # Every finding must carry all three support fields before the next finding.
-  awk '
+  "$BEADS_GIT_RUNNER" run-posix awk '
     function finish() {
       if (in_item && !(have_evidence && have_why && have_fix)) exit 1
     }
@@ -622,9 +906,9 @@ validate_audit_output() {
   fi
 
   if [ "$total" -eq 0 ]; then
-    grep -qx 'No findings\.' "$file" || return 1
+    "$BEADS_GIT_RUNNER" grep -qx 'No findings\.' "$file" || return 1
   else
-    ! grep -qx 'No findings\.' "$file" || return 1
+    ! "$BEADS_GIT_RUNNER" grep -qx 'No findings\.' "$file" || return 1
   fi
 }
 
@@ -658,37 +942,44 @@ After both reviewers finish:
 ```bash
 PANEL_INVALID=false
 
-br sync --flush-only
-cp "$BEADS_JSONL" "$GRAPH_AFTER_JSONL"
-GRAPH_AFTER_FINGERPRINT=$(fingerprint_file "$GRAPH_AFTER_JSONL") || {
-  echo "Could not fingerprint graph after audit" >&2
-  exit 1
-}
-[ -n "$GRAPH_AFTER_FINGERPRINT" ] || {
-  echo "Post-audit graph fingerprint is empty" >&2
-  exit 1
-}
-if [ "$GRAPH_FINGERPRINT" != "$GRAPH_AFTER_FINGERPRINT" ]; then
-  printf 'Graph changed during audit: before=%s after=%s\n' \
+# Read and preserve the live JSONL BEFORE any flush can overwrite a concurrent
+# hand edit. Only an unchanged live snapshot may proceed to the cache-drift
+# flush below.
+if BEADS_CURRENT_JSONL=$("$BEADS_JSONL_RESOLVER" --allow-dirty) \
+    && [ "$BEADS_CURRENT_JSONL" = "$BEADS_JSONL" ] \
+    && "$BEADS_GIT_RUNNER" copy-file "$BEADS_CURRENT_JSONL" "$GRAPH_AFTER_JSONL" \
+    && GRAPH_AFTER_FINGERPRINT=$(fingerprint_file "$GRAPH_AFTER_JSONL") \
+    && [ -n "$GRAPH_AFTER_FINGERPRINT" ]; then
+  :
+else
+  echo "Could not preserve the live graph before the final drift check" >&2
+  PANEL_INVALID=true
+fi
+if ! $PANEL_INVALID && [ "$GRAPH_FINGERPRINT" != "$GRAPH_AFTER_FINGERPRINT" ]; then
+  printf 'Graph changed during audit before any final flush: before=%s after=%s\n' \
     "$GRAPH_FINGERPRINT" "$GRAPH_AFTER_FINGERPRINT" >&2
   PANEL_INVALID=true
 fi
 
-: >"$SOURCE_STATE_AFTER"
-for src in "${SOURCE_FILES[@]}"; do
-  [ -f "$src" ] || {
-    echo "Audit source disappeared during panel: $src" >&2
-    PANEL_INVALID=true
-    continue
+if ! $PANEL_INVALID; then
+  "$BEADS_JSONL_RESOLVER" --run-br sync --flush-only || {
+    echo "Could not flush for the final cache-drift check" >&2
+    exit 1
   }
-  if source_fp=$(fingerprint_file "$src") && [ -n "$source_fp" ]; then
-    printf '%s\t%s\n' "$source_fp" "$src" >>"$SOURCE_STATE_AFTER"
-  else
-    echo "Could not fingerprint audit source after panel: $src" >&2
+  "$BEADS_GIT_RUNNER" copy-file "$BEADS_CURRENT_JSONL" "$GRAPH_AFTER_SYNC_JSONL"
+  GRAPH_AFTER_SYNC_FINGERPRINT=$(fingerprint_file "$GRAPH_AFTER_SYNC_JSONL") || {
+    echo "Could not fingerprint graph after final cache flush" >&2
+    exit 1
+  }
+  if [ "$GRAPH_FINGERPRINT" != "$GRAPH_AFTER_SYNC_FINGERPRINT" ]; then
+    printf 'Beads cache changed during audit: before=%s after-sync=%s\n' \
+      "$GRAPH_FINGERPRINT" "$GRAPH_AFTER_SYNC_FINGERPRINT" >&2
     PANEL_INVALID=true
   fi
-done
-if ! cmp -s "$SOURCE_STATE_BEFORE" "$SOURCE_STATE_AFTER"; then
+fi
+
+if ! "$BEADS_GIT_RUNNER" verify-files \
+    "$SOURCE_STATE_BEFORE" "$SOURCE_STATE_AFTER" -- "${SOURCE_FILES[@]}"; then
   echo "One or more requirement sources changed during audit" >&2
   PANEL_INVALID=true
 fi
@@ -749,18 +1040,18 @@ must fail closed:
   echo "Audit BLOCKED: merged report was not created" >&2
   exit 1
 }
-grep -q '^# Bead Graph Audit$' "$MERGED_OUT"
-grep -q '^## Panel$' "$MERGED_OUT"
-grep -q '^## Launch verdict$' "$MERGED_OUT"
-grep -q '^## Logs$' "$MERGED_OUT"
+"$BEADS_GIT_RUNNER" grep -q '^# Bead Graph Audit$' "$MERGED_OUT"
+"$BEADS_GIT_RUNNER" grep -q '^## Panel$' "$MERGED_OUT"
+"$BEADS_GIT_RUNNER" grep -q '^## Launch verdict$' "$MERGED_OUT"
+"$BEADS_GIT_RUNNER" grep -q '^## Logs$' "$MERGED_OUT"
 
 if $RUN_CODEX && [ "${CODEX_STATE:-failed}" = usable ]; then
   [ -s "$CODEX_OUT" ]
-  cp "$CODEX_OUT" "$AUDIT_DIR/audit.codex.txt"
+  "$BEADS_GIT_RUNNER" copy-file "$CODEX_OUT" "$AUDIT_DIR/audit.codex.txt"
 fi
 if $RUN_CLAUDE && [ "${CLAUDE_STATE:-failed}" = usable ]; then
   [ -s "$CLAUDE_OUT" ]
-  cp "$CLAUDE_OUT" "$AUDIT_DIR/audit.claude.txt"
+  "$BEADS_GIT_RUNNER" copy-file "$CLAUDE_OUT" "$AUDIT_DIR/audit.claude.txt"
 fi
-cp "$MERGED_OUT" "$AUDIT_DIR/audit.merged.md"
+"$BEADS_GIT_RUNNER" copy-file "$MERGED_OUT" "$AUDIT_DIR/audit.merged.md"
 ```

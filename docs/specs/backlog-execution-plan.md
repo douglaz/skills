@@ -986,8 +986,32 @@ Create exact companion owner:
 `resolve-beads-jsonl` runs the following resolution, additionally verifies that
 the result is inside the current Git worktree, and prints only that absolute path
 on success. Sweep every executable block, prose instruction, and comment that
-resolves the Beads JSONL to use the exact installed companion path, falling back
-to the checkout owner only when no installed target resolves. Require:
+resolves the Beads JSONL to use the exact installed companion path. When no
+installed target resolves, the operator may explicitly invoke the checkout owner's
+resolver by its trusted absolute path; do not auto-execute a repository-relative
+fallback. Installed resolver candidates and the fully canonical targets of
+PATH-selected `br`/`jq` must be single-link regular files outside the driven
+worktree so an external pathname cannot alias worktree-controlled proof code.
+Installed candidates retain the canonical `#!/bin/sh` entry point, while
+`br`/`jq` run with the implementation's POSIX utility path so a script cannot
+resolve its interpreter or child utilities from the driven worktree.
+Every later Beads command runs as
+`"$BEADS_JSONL_RESOLVER" --run-br <args...>`, which revalidates and launches
+the same `br` through that clean environment rather than returning to a
+caller-shell function or PATH lookup.
+The installed companion also owns a validated `git-clean` sibling: caller-side
+diff/add commands run through it so inherited `GIT*` selectors cannot
+reappear after the resolver child exits; the runner pins trusted Git, disables
+replacement objects and fsmonitor, and uses the POSIX utility path. Diff
+consumers additionally disable external diff drivers and textconv filters, and
+add consumers hash/stage the exact file bytes without repository clean filters.
+When the documented transaction immediately commits and pushes that staged
+JSONL, it stays inside the runner, with inherited transport selectors,
+repository hooks, and signing disabled. Push additionally disables credential
+helpers, askpass, SSH config commands, and interactive prompts while retaining
+the caller's SSH agent. HTTPS re-enables only system/global credential helpers
+after refusing a `HOME` or `XDG_CONFIG_HOME` inside the driven worktree.
+Require:
 
 ```bash
 _bw_file=$(mktemp) ||
@@ -1028,6 +1052,7 @@ BEADS_JSONL=$(
          ((.[0] | type) == "object") and
          ((.[0].jsonl_path | type) == "string") and
          ((.[0].jsonl_path | length) > 0) and
+         (.[0].jsonl_path | startswith("/")) and
          ((.[0].jsonl_path | contains("\u0000")) | not) and
          ((.[0].jsonl_path | test("[\r\n]")) | not)
        then .[0].jsonl_path
@@ -1046,20 +1071,37 @@ or one tested fact owner with equivalent fail-closed behavior.
 The displayed shell captures raw stdout to a private file and rejects a NUL at
 the byte level before JSON parsing or command substitution; only validated jq
 output enters a shell variable. It also pins JSON cardinality and rejects
-NUL/CR/LF in the decoded path before jq emits it. The companion owns
+relative or NUL/CR/LF-bearing decoded paths before jq emits one. The companion owns
 the remaining byte-safe inspection. It canonicalizes the current worktree root
 and resolved parent without following the final path, requires the path to be
 inside that root, and reads raw NUL-delimited `git ls-files --stage -z`,
 `git ls-files -v -z`, and
 `git ls-tree -z HEAD -- "$BEADS_JSONL_REL"` records, where
-`BEADS_JSONL_REL` is the validated worktree-relative path. Success requires exactly
-one stage-0 tracked regular-file entry, mode `100644`, tag `H` (not lowercase
+`BEADS_JSONL_REL` is the validated worktree-relative path. Every Git inspection
+uses that literal path with replacement objects and `core.fsmonitor` disabled;
+disabling the monitor prevents a repository-configured executable hook from
+running during this read-only proof. Success requires exactly one stage-0
+tracked regular-file entry, mode `100644`, tag `H` (not lowercase
 assume-unchanged or `S` skip-worktree), the same regular mode in HEAD, and a
-non-symlink regular worktree file. It reads the HEAD blob, index blob, and
+non-symlink, single-link regular worktree file. It reads the HEAD blob, index blob, and
 worktree bytes without filters and requires all three byte strings to be
 identical before printing the path. It therefore refuses staged, unstaged,
 mode-only, hidden-index-flag, unmerged, missing, ignored/untracked, symlink,
 gitlink, and wrong-worktree states rather than trusting porcelain visibility.
+
+The companion also exposes two explicit read-only modes required by existing
+handoffs. `--allow-dirty` relaxes only the three-way byte-identity requirement;
+it retains containment, one normally flagged tracked stage-0 `100644` index
+entry that is not intent-to-add, a matching regular HEAD entry, and a
+non-symlink regular `100644` worktree file before returning a path. Because
+the resolver and every documented consumer force `core.fsmonitor=false`, a
+stale monitor answer cannot hide the content difference this mode intentionally
+permits from the consumer's own `git status` or `git diff HEAD`. `--recovery`
+may name an absent or untracked path after byte-safe resolution and containment, but it still refuses
+symlink, multiply linked, and nonregular occupants and every path equal to or below `$GIT_DIR`,
+`--git-common-dir`, or `<worktree>/.git`. Recovery mode names an artifact for
+restoration only and never authorizes a subsequent Beads query, mutation, or
+flush.
 
 Likely consumers include Drive, plan transfer, bead polish, rb-lite backlog
 drain, and orchestration guidance. Add this companion to their selective-install
@@ -1071,9 +1113,10 @@ returning nonzero after emitting valid JSON; missing, null, empty, or non-string
 `jq`; NUL/CR/LF path values; and a resolved path outside the current worktree.
 Focused fixtures prove that each failure performs no Beads mutation or flush.
 Further fixtures cover staged-only, unstaged-only, staged-plus-unstaged,
-mode-only, assume-unchanged, skip-worktree, unmerged, symlink, gitlink,
+mode-only, intent-to-add, assume-unchanged, skip-worktree, unmerged, symlink,
+hard-link, gitlink,
 ignored/untracked, missing, and nonregular JSONL state, plus a path inside a
-different worktree; each is refused before any mutation or flush. This is P0
+different worktree and a Git administrative path; each is refused before any mutation or flush. This is P0
 because the
 first `br` write after an ambiguous resolution can export a stale cache over the
 tracked JSONL and silently destroy unstaged bead bodies.

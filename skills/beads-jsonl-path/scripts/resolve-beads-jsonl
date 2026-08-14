@@ -1,0 +1,634 @@
+#!/bin/sh
+# A shebang cannot defend its own interpreter against LD_PRELOAD/DYLD injection.
+# Invoke through the documented caller-shell locator, which clears loader state
+# before this process starts; this cleanup prevents it from reaching later execs.
+# Enter the implementation through a known Bash, not through `/usr/bin/env` and
+# the worktree-controlled PATH.  The inherited POSIX mode makes the cleanup
+# below use the real special builtins even if an exported Bash function tries to
+# claim one of their names.
+POSIXLY_CORRECT=y
+export POSIXLY_CORRECT
+\unset -f command builtin exec unset 2>/dev/null || :
+_bj_bash=$(command -p -v bash) || {
+  printf '%s\n' 'cannot locate a trusted Bash for the beads resolver' >&2
+  exit 1
+}
+unset BASH_ENV ENV BASH_COMPAT BASH_LOADABLES_PATH BASH_XTRACEFD CDPATH GLOBIGNORE \
+  LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT LD_DEBUG LD_DEBUG_OUTPUT LD_PROFILE \
+  LD_ORIGIN_PATH LD_PRELOAD_32 LD_PRELOAD_64 DYLD_INSERT_LIBRARIES \
+  DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH \
+  DYLD_FALLBACK_FRAMEWORK_PATH LIBPATH SHLIB_PATH GCONV_PATH LOCPATH
+\exec 3<&0
+\exec "$_bj_bash" --noprofile --norc -p -s -- "$@" <<'__BJ_TRUSTED_BASH__'
+# Privileged Bash ignores BASH_ENV and inherited functions. Clear the remaining
+# startup controls before resolving `br` or Git as a defense in depth.
+command unset BASH_ENV ENV BASH_COMPAT BASH_LOADABLES_PATH BASH_XTRACEFD CDPATH \
+  GLOBIGNORE || {
+  printf '%s\n' 'cannot sanitize the beads resolver shell environment' >&2
+  exit 1
+}
+while command builtin read -r _ _ _bj_function; do
+  command unset -f -- "$_bj_function" || {
+    printf '%s\n' 'cannot sanitize the beads resolver shell environment' >&2
+    exit 1
+  }
+done < <(command builtin declare -F)
+unset _bj_function
+
+set -uo pipefail
+
+die() {
+  printf '%s\n' "$1" >&2
+  exit 1
+}
+
+_bj_mode=clean
+_bj_run_br_arguments=()
+_bj_run_jq_arguments=()
+if [[ $# -ge 2 && $1 == --run-br ]]; then
+  _bj_mode=run-br
+  shift
+  _bj_run_br_arguments=( "$@" )
+elif [[ $# -ge 2 && $1 == --run-jq ]]; then
+  _bj_mode=run-jq
+  shift
+  _bj_run_jq_arguments=( "$@" )
+else
+  case $# in
+    0) ;;
+    1)
+    case $1 in
+      --allow-dirty) _bj_mode=allow-dirty ;;
+      --recovery) _bj_mode=recovery ;;
+      *) die 'usage: resolve-beads-jsonl [--allow-dirty|--recovery] | --run-{br|jq} <args...>' ;;
+    esac
+    ;;
+    *) die 'usage: resolve-beads-jsonl [--allow-dirty|--recovery] | --run-{br|jq} <args...>' ;;
+  esac
+fi
+
+_bj_git=$(command -p -v git) ||
+  die 'cannot locate a trusted Git for the beads resolver'
+_bj_cmp=$(command -p -v cmp) ||
+  die 'cannot locate a trusted cmp for the beads resolver'
+_bj_od=$(command -p -v od) ||
+  die 'cannot locate a trusted od for the beads resolver'
+_bj_grep=$(command -p -v grep) ||
+  die 'cannot locate a trusted grep for the beads resolver'
+_bj_mktemp=$(command -p -v mktemp) ||
+  die 'cannot locate a trusted mktemp for the beads resolver'
+_bj_unlink=$(command -p -v unlink) ||
+  die 'cannot locate a trusted unlink for the beads resolver'
+_bj_rmdir=$(command -p -v rmdir) ||
+  die 'cannot locate a trusted rmdir for the beads resolver'
+_bj_readlink=$(command -p -v readlink) ||
+  die 'cannot locate a trusted readlink for the beads resolver'
+_bj_stat=$(command -p -v stat) ||
+  die 'cannot locate a trusted stat for the beads resolver'
+_bj_getconf=$(command -p -v getconf) ||
+  die 'cannot locate a trusted getconf for the beads resolver'
+_bj_env=$(command -p -v env) ||
+  die 'cannot locate a trusted env for the beads resolver'
+
+_bj_safe_path=$("$_bj_getconf" PATH 2>/dev/null) ||
+  die 'cannot resolve the POSIX utility path for proof tools'
+[[ -n "$_bj_safe_path" && "$_bj_safe_path" != *$'\n'* \
+   && "$_bj_safe_path" != *$'\r'* ]] ||
+  die 'cannot validate the POSIX utility path for proof tools'
+IFS=: read -r -a _bj_safe_path_entries <<<"$_bj_safe_path"
+for _bj_safe_path_entry in "${_bj_safe_path_entries[@]}"; do
+  [[ "$_bj_safe_path_entry" == /* ]] ||
+    die 'cannot validate the POSIX utility path for proof tools'
+done
+unset _bj_safe_path_entry _bj_safe_path_entries
+
+# Do not let a script-based proof tool import caller-selected language modules,
+# loader shims, or interpreter startup files. `br` retains only the location
+# inputs it needs to discover the same workspace as the caller; jq needs none.
+_bj_br_environment=(
+  -i "PATH=$_bj_safe_path" "LC_ALL=C"
+  "PYTHONNOUSERSITE=1" "PYTHONSAFEPATH=1"
+)
+for _bj_proof_variable in HOME XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME; do
+  if [[ -v $_bj_proof_variable ]]; then
+    _bj_br_environment+=( "$_bj_proof_variable=${!_bj_proof_variable}" )
+  fi
+done
+for _bj_proof_variable in "${!BEADS_@}" "${!BR_@}"; do
+  _bj_br_environment+=( "$_bj_proof_variable=${!_bj_proof_variable}" )
+done
+_bj_jq_environment=(
+  -i "PATH=$_bj_safe_path" "LC_ALL=C"
+  "PYTHONNOUSERSITE=1" "PYTHONSAFEPATH=1"
+)
+unset _bj_proof_variable
+
+_bj_regular_link_count() {
+  local path=$1 count
+  if count=$("$_bj_stat" -c %h "$path" 2>/dev/null) \
+      && [[ $count =~ ^[0-9]+$ ]]; then
+    :
+  elif count=$("$_bj_stat" -f %l "$path" 2>/dev/null) \
+      && [[ $count =~ ^[0-9]+$ ]]; then
+    :
+  else
+    return 1
+  fi
+  printf '%s\n' "$count"
+}
+
+_bj_hex_shebang_has_nul() {
+  local bytes=$1 token
+  local IFS=$' \t\n'
+  for token in $bytes; do
+    [[ "$token" != 0a ]] || return 1
+    [[ "$token" != 00 ]] || return 0
+  done
+  return 1
+}
+
+# Git's repository, worktree, index, object store, config, namespace, and pathspec
+# behavior can all be redirected through inherited GIT_* variables. This fact owner
+# is about the repository discovered from the current directory, so remove the
+# entire Git environment namespace before its first Git invocation rather than
+# attempting an inevitably incomplete allowlist.
+_bj_git_environment=( "${!GIT@}" )
+for _bj_git_variable in "${_bj_git_environment[@]}"; do
+  command unset -- "$_bj_git_variable" ||
+    die 'cannot sanitize the Git environment for the beads resolver'
+done
+unset _bj_git_variable _bj_git_environment
+
+_bj_tmp=$("$_bj_mktemp" -d) || die 'cannot create beads resolver workspace'
+_bj_files=(
+  "$_bj_tmp/where.json"
+  "$_bj_tmp/where.hex"
+  "$_bj_tmp/index.records"
+  "$_bj_tmp/flags.records"
+  "$_bj_tmp/head.records"
+  "$_bj_tmp/head.blob"
+  "$_bj_tmp/index.blob"
+  "$_bj_tmp/intent.records"
+  "$_bj_tmp/mode.records"
+)
+
+_bj_cleanup() {
+  local path cleanup_rc=0
+  for path in "${_bj_files[@]}"; do
+    if [[ -e "$path" ]] && ! "$_bj_unlink" "$path"; then
+      cleanup_rc=1
+    fi
+  done
+  if ! "$_bj_rmdir" "$_bj_tmp"; then
+    cleanup_rc=1
+  fi
+  return "$cleanup_rc"
+}
+
+_bj_on_exit() {
+  local status=$?
+  if ! _bj_cleanup; then
+    printf '%s\n' 'cannot remove beads resolver workspace' >&2
+    [[ $status -ne 0 ]] || status=1
+  fi
+  trap - EXIT
+  exit "$status"
+}
+trap _bj_on_exit EXIT
+
+_bj_finish() {
+  if ! _bj_cleanup; then
+    trap - EXIT
+    die 'cannot remove beads resolver workspace'
+  fi
+  trap - EXIT
+  printf '%s\n' "$BEADS_JSONL"
+}
+
+_bj_root_raw=$("$_bj_git" --no-replace-objects -c core.fsmonitor=false rev-parse --show-toplevel 2>/dev/null) \
+  || die 'cannot resolve the current Git worktree'
+_bj_root=$(
+  CDPATH=
+  export CDPATH
+  cd -P -- "$_bj_root_raw" 2>/dev/null && pwd -P
+) || die 'cannot canonicalize the current Git worktree'
+
+# `br` and `jq` are not both guaranteed to exist in Bash's implementation-defined
+# POSIX utility path, so find executables rather than accepting aliases/functions.
+# Reject an executable selected from the driven worktree: otherwise a repository
+# could plant a proof tool in (for example) `$PWD/bin` and put it first in PATH.
+_bj_validate_executable_path() {
+  local name=$1 diagnostic=$2 path=$3 depth=${4:-0}
+  local parent leaf link hops link_count first_line shebang interpreter argument
+  local env_tool interpreter_final safe_entry safe_env_final env_identity shebang_bytes
+  local -a safe_entries
+  # Canonicalize every directory component and the complete final symlink chain.
+  # Reject at each hop, not just at the end: an out-of-worktree symlink whose
+  # target is a worktree-controlled symlink is itself an unstable proof tool.
+  hops=0
+  while :; do
+    parent=${path%/*}
+    leaf=${path##*/}
+    parent=$(
+      CDPATH=
+      export CDPATH
+      cd -P -- "$parent" 2>/dev/null && pwd -P
+    ) || die "$diagnostic"
+    path=$parent/$leaf
+    if [[ "$_bj_root" == / || "$path" == "$_bj_root" || "$path" == "$_bj_root/"* ]]; then
+      die "$name resolves inside the current Git worktree"
+    fi
+    [[ -L "$path" ]] || break
+    ((hops < 40)) || die "$diagnostic"
+    link=$("$_bj_readlink" "$path") || die "$diagnostic"
+    case $link in
+      /*) path=$link ;;
+      *) path=$parent/$link ;;
+    esac
+    hops=$((hops + 1))
+  done
+  [[ -f "$path" && -x "$path" ]] || die "$diagnostic"
+  link_count=$(_bj_regular_link_count "$path") ||
+    die "cannot inspect the $name executable hard-link count"
+  [[ "$link_count" == 1 ]] ||
+    die "$name executable has multiple hard links"
+
+  # The kernel follows an absolute shebang interpreter without consulting the
+  # sanitized PATH. Validate that second executable chain too; otherwise an
+  # outside br/jq script can name a worktree-controlled interpreter directly.
+  first_line=
+  if ! IFS= command builtin read -r -n 513 first_line 2>/dev/null <"$path"; then
+    [[ -r "$path" ]] || die "$name executable cannot be inspected safely"
+  fi
+  if [[ "$first_line" == '#!'* ]]; then
+    shebang_bytes=$("$_bj_od" -An -v -N 513 -t x1 "$path" 2>/dev/null) ||
+      die "$diagnostic"
+    ! _bj_hex_shebang_has_nul "$shebang_bytes" ||
+      die "$name has a NUL-bearing script interpreter"
+    ((${#first_line} <= 512 && depth < 4)) || die "$diagnostic"
+    shebang=${first_line#\#!}
+    while [[ "$shebang" == ' '* || "$shebang" == $'\t'* ]]; do
+      shebang=${shebang#?}
+    done
+    interpreter=${shebang%%[$' \t']*}
+    [[ "$interpreter" == /* && "$interpreter" != *[$'\r\v\f']* ]] ||
+      die "$name has an unsafe script interpreter"
+    argument=${shebang#"$interpreter"}
+    while [[ "$argument" == ' '* || "$argument" == $'\t'* ]]; do
+      argument=${argument#?}
+    done
+    # A missing interpreter makes this script unlaunchable; execution will fail
+    # closed without running any worktree bytes.
+    if [[ -e "$interpreter" || -L "$interpreter" ]]; then
+      interpreter_final=$(
+        _bj_validate_executable_path "$name interpreter" "$diagnostic" \
+          "$interpreter" "$((depth + 1))"
+      ) || die "$diagnostic"
+      if [[ -n "$argument" ]]; then
+        env_identity=false
+        IFS=: read -r -a safe_entries <<<"$_bj_safe_path"
+        for safe_entry in "${safe_entries[@]}"; do
+          [[ -x "$safe_entry/env" ]] || continue
+          safe_env_final=$(
+            _bj_validate_executable_path "$name env interpreter" "$diagnostic" \
+              "$safe_entry/env" "$((depth + 1))"
+          ) || continue
+          [[ "$interpreter_final" != "$safe_env_final" ]] ||
+            env_identity=true
+        done
+        if [[ "$env_identity" == true ]]; then
+          [[ "$argument" =~ ^[A-Za-z0-9._+-]+$ ]] ||
+            die "$name has an unsafe env interpreter argument"
+          env_tool=$(
+            PATH=$_bj_safe_path
+            export PATH
+            type -P -- "$argument"
+          ) || die "$name env interpreter target is unavailable"
+          _bj_validate_executable_path "$name env target" "$diagnostic" \
+            "$env_tool" "$((depth + 1))" >/dev/null
+        else
+          die "$name has an unsupported script interpreter argument"
+        fi
+      fi
+    fi
+  fi
+  printf '%s\n' "$path"
+}
+
+_bj_external_tool() {
+  local name=$1 diagnostic=$2 path
+  path=$(type -P -- "$name") || die "$diagnostic"
+  case $path in
+    /*) ;;
+    *) die "$diagnostic" ;;
+  esac
+  _bj_validate_executable_path "$name" "$diagnostic" "$path" 0
+}
+
+if [[ $_bj_mode == run-jq ]]; then
+  _bj_jq=$(_bj_external_tool jq 'jq is required to inspect Beads data') ||
+    die 'jq is required to inspect Beads data'
+  "$_bj_env" "${_bj_jq_environment[@]}" "$_bj_jq" "${_bj_run_jq_arguments[@]}" <&3
+  _bj_run_jq_rc=$?
+  exit "$_bj_run_jq_rc"
+fi
+_bj_br=$(_bj_external_tool br 'br is required to resolve the beads JSONL') ||
+  die 'br is required to resolve the beads JSONL'
+if [[ $_bj_mode == run-br ]]; then
+  "$_bj_env" "${_bj_br_environment[@]}" "$_bj_br" "${_bj_run_br_arguments[@]}"
+  _bj_run_br_rc=$?
+  exit "$_bj_run_br_rc"
+fi
+_bj_jq=$(_bj_external_tool jq 'jq is required to resolve the beads JSONL') ||
+  die 'jq is required to resolve the beads JSONL'
+
+if ! "$_bj_env" "${_bj_br_environment[@]}" \
+  "$_bj_br" --no-auto-flush --no-auto-import where --json \
+  >"${_bj_files[0]}"; then
+  die 'cannot resolve the beads workspace'
+fi
+if ! LC_ALL=C "$_bj_od" -An -v -t x1 "${_bj_files[0]}" >"${_bj_files[1]}"; then
+  die 'cannot scan beads workspace JSON'
+fi
+if "$_bj_grep" -Eq '(^|[[:space:]])00([[:space:]]|$)' "${_bj_files[1]}"; then
+  die 'beads workspace JSON contains a raw NUL byte'
+else
+  _bj_grep_rc=$?
+  [[ $_bj_grep_rc -eq 1 ]] || die 'cannot inspect beads workspace JSON'
+fi
+
+BEADS_JSONL=$(
+  "$_bj_env" "${_bj_jq_environment[@]}" "$_bj_jq" -ers '
+    if length == 1 and
+      ((.[0] | type) == "object") and
+      ((.[0].jsonl_path | type) == "string") and
+      ((.[0].jsonl_path | length) > 0) and
+      (.[0].jsonl_path | startswith("/")) and
+      ((.[0].jsonl_path | contains("\u0000")) | not) and
+      ((.[0].jsonl_path | test("[\r\n]")) | not)
+    then .[0].jsonl_path
+    else error("expected exactly one non-empty string jsonl_path")
+    end
+  ' <"${_bj_files[0]}"
+) || die 'cannot resolve exactly one beads JSONL'
+
+_bj_name=${BEADS_JSONL##*/}
+[[ -n "$_bj_name" ]] || die 'beads JSONL path has no final component'
+case $_bj_name in
+  .|..) die 'beads JSONL path has an unsafe final component' ;;
+esac
+if [[ "$BEADS_JSONL" == */* ]]; then
+  _bj_parent=${BEADS_JSONL%/*}
+  [[ -n "$_bj_parent" ]] || _bj_parent=/
+else
+  _bj_parent=.
+fi
+_bj_parent=$(
+  CDPATH=
+  export CDPATH
+  cd -P -- "$_bj_parent" 2>/dev/null && pwd -P
+) || die 'cannot canonicalize the beads JSONL parent'
+if [[ "$_bj_parent" == / ]]; then
+  _bj_absolute="/$_bj_name"
+else
+  _bj_absolute="$_bj_parent/$_bj_name"
+fi
+
+if [[ "$_bj_root" == / ]]; then
+  BEADS_JSONL_REL=${_bj_absolute#/}
+elif [[ "$_bj_absolute" == "$_bj_root/"* ]]; then
+  BEADS_JSONL_REL=${_bj_absolute#"$_bj_root/"}
+else
+  die 'beads JSONL is outside the current worktree'
+fi
+[[ -n "$BEADS_JSONL_REL" ]] || die 'beads JSONL does not name a worktree file'
+BEADS_JSONL=$_bj_absolute
+
+# Recovery intentionally permits the missing export, but never a Git administrative
+# file.  `--git-dir` can be a relative `.git` path (or a worktree's gitdir file
+# target), and `--git-common-dir` can name the shared administration directory, so
+# canonicalize both actual locations before comparing them with the already
+# canonical final JSONL pathname.
+if [[ $_bj_mode == recovery ]]; then
+  _bj_git_dir_raw=$("$_bj_git" --no-replace-objects -c core.fsmonitor=false rev-parse --git-dir 2>/dev/null) \
+    || die 'cannot resolve the current Git administrative directory'
+  _bj_git_common_dir_raw=$("$_bj_git" --no-replace-objects -c core.fsmonitor=false rev-parse --git-common-dir 2>/dev/null) \
+    || die 'cannot resolve the current Git common directory'
+  _bj_git_dir=$(
+    CDPATH=
+    export CDPATH
+    cd -P -- "$_bj_git_dir_raw" 2>/dev/null && pwd -P
+  ) || die 'cannot canonicalize the current Git administrative directory'
+  _bj_git_common_dir=$(
+    CDPATH=
+    export CDPATH
+    cd -P -- "$_bj_git_common_dir_raw" 2>/dev/null && pwd -P
+  ) || die 'cannot canonicalize the current Git common directory'
+  if [[ "$BEADS_JSONL" == "$_bj_root/.git" \
+        || "$BEADS_JSONL" == "$_bj_root/.git/"* \
+        || "$_bj_git_dir" == / || "$BEADS_JSONL" == "$_bj_git_dir" \
+        || "$BEADS_JSONL" == "$_bj_git_dir/"* \
+        || "$_bj_git_common_dir" == / || "$BEADS_JSONL" == "$_bj_git_common_dir" \
+        || "$BEADS_JSONL" == "$_bj_git_common_dir/"* ]]; then
+    die 'beads JSONL is inside the Git administrative directory'
+  fi
+fi
+
+# Path containment cannot see inode aliases. A regular occupant with another
+# hard link could alias Git administrative state or any same-filesystem file, so
+# a later recovery copy or Beads write through this path would modify both.
+if [[ -f "$BEADS_JSONL" && ! -L "$BEADS_JSONL" ]]; then
+  if ! _bj_link_count=$(_bj_regular_link_count "$BEADS_JSONL"); then
+    die 'cannot inspect the beads JSONL hard-link count'
+  fi
+  [[ "$_bj_link_count" == 1 ]] ||
+    die 'beads JSONL worktree path has multiple hard links'
+fi
+
+# Recovery stops here: it must name the deleted artifact that restoration will recreate,
+# so tracked/index/HEAD state cannot be a precondition. All writing gates and dirty audit
+# handoffs continue below through the structural proof.
+if [[ $_bj_mode == recovery ]]; then
+  # A missing final path is useful to recovery, but anything else occupying it is not the
+  # export: a symlink escapes the containment proof when a recovery command writes through
+  # the resolved name, and a FIFO or directory breaks the `cp` and byte diff consumers run
+  # against it — a FIFO by blocking that read indefinitely rather than failing. The
+  # default mode proves the same thing below, after the index and HEAD records have had
+  # their chance to name the more specific fault.
+  #
+  # Scope of the symlink half, since `br` resolves before this check sees anything.
+  # Measured on br 0.2.19, streams separated by redirection, with `.beads/issues.jsonl` a
+  # symlink: `where --json` printed the canonical *target* whenever that target existed
+  # (`../unrelated.jsonl` came back as `<repo>/unrelated.jsonl`) and the symlink pathname
+  # itself only when it dangled. So what this clause refuses is the dangling link and a
+  # path swapped for a link after `br` answered; a live link is inspected as its target,
+  # which is the same file `br` writes through it, and one leaving the worktree was already
+  # refused by containment above.
+  if [[ -L "$BEADS_JSONL" || ( -e "$BEADS_JSONL" && ! -f "$BEADS_JSONL" ) ]]; then
+    die 'beads JSONL worktree path is not a non-symlink regular file'
+  fi
+  _bj_finish
+  _bj_finish_rc=$?
+  exit "$_bj_finish_rc"
+fi
+
+# `--literal-pathspecs` on every lookup below: `br where` may name a tracked file whose
+# bytes read as pathspec magic (`:(literal)graph.beads.jsonl`) or as a wildmatch pattern,
+# and either one asks Git about a different set of paths than the resolved one.
+if ! "$_bj_git" --no-replace-objects -c core.fsmonitor=false -C "$_bj_root" --literal-pathspecs ls-files --stage -z -- "$BEADS_JSONL_REL" \
+  >"${_bj_files[2]}"; then
+  die 'cannot inspect the beads JSONL index entry'
+fi
+_bj_index_count=0
+_bj_index_record=
+while IFS= read -r -d '' _bj_record; do
+  _bj_index_count=$((_bj_index_count + 1))
+  _bj_index_record=$_bj_record
+done <"${_bj_files[2]}"
+
+_bj_index_mode=
+_bj_index_oid=
+_bj_index_stage=
+_bj_index_extra=
+_bj_index_path=
+if [[ $_bj_index_count -eq 1 && "$_bj_index_record" == *$'\t'* ]]; then
+  _bj_index_meta=${_bj_index_record%%$'\t'*}
+  _bj_index_path=${_bj_index_record#*$'\t'}
+  IFS=' ' read -r _bj_index_mode _bj_index_oid _bj_index_stage _bj_index_extra \
+    <<<"$_bj_index_meta"
+fi
+if [[ $_bj_index_count -ne 1 || "$_bj_index_mode" != 100644 \
+      || "$_bj_index_stage" != 0 || -n "$_bj_index_extra" \
+      || "$_bj_index_path" != "$BEADS_JSONL_REL" ]]; then
+  die 'beads JSONL index entry is not one stage-0 regular file'
+fi
+
+if ! "$_bj_git" --no-replace-objects -c core.fsmonitor=false -C "$_bj_root" --literal-pathspecs ls-files -v -z -- "$BEADS_JSONL_REL" \
+  >"${_bj_files[3]}"; then
+  die 'cannot inspect the beads JSONL index flags'
+fi
+_bj_flag_count=0
+_bj_flag_record=
+while IFS= read -r -d '' _bj_record; do
+  _bj_flag_count=$((_bj_flag_count + 1))
+  _bj_flag_record=$_bj_record
+done <"${_bj_files[3]}"
+if [[ $_bj_flag_count -ne 1 || "$_bj_flag_record" != "H $BEADS_JSONL_REL" ]]; then
+  die 'beads JSONL has hidden index flags or an ambiguous index record'
+fi
+
+# `git add -N`, on its own or after `git rm --cached`, leaves a record every check above
+# accepts — one stage-0 `100644` entry tagged `H` — whose OID is the empty blob rather than
+# the file's content. The index holds no bytes for such a path, Git reports it as `DA`, and
+# byte identity below therefore only holds when the tracked file is empty; `--allow-dirty`
+# drops that comparison entirely. `diff-files` is where the flag surfaces: with exactly one
+# stage-0 entry already proven, an `A` against the worktree means the file is absent from
+# the index, which only intent-to-add produces. Measured on git 2.53.0 with the streams
+# separated by redirection: after `rm --cached` plus `add -N`, this exact command wrote
+# `.beads/issues.jsonl\0` to stdout at exit 0 with empty stderr, and `--raw` showed the
+# `:000000 100644` source mode behind it. Unmeasured on other versions — a git that
+# reported the entry differently would leave `--allow-dirty` accepting an index that holds
+# no bytes for the path, so the fixture below is what pins this to the git in use.
+if ! "$_bj_git" --no-replace-objects -c core.fsmonitor=false -C "$_bj_root" --literal-pathspecs diff-files --diff-filter=A --name-only -z \
+  -- "$BEADS_JSONL_REL" >"${_bj_files[7]}"; then
+  die 'cannot inspect the beads JSONL intent-to-add state'
+fi
+if [[ -s "${_bj_files[7]}" ]]; then
+  die 'beads JSONL index entry is intent-to-add'
+fi
+
+if ! "$_bj_git" --no-replace-objects -c core.fsmonitor=false -C "$_bj_root" --literal-pathspecs ls-tree -z HEAD -- "$BEADS_JSONL_REL" \
+  >"${_bj_files[4]}"; then
+  die 'cannot inspect the beads JSONL HEAD entry'
+fi
+_bj_head_count=0
+_bj_head_record=
+while IFS= read -r -d '' _bj_record; do
+  _bj_head_count=$((_bj_head_count + 1))
+  _bj_head_record=$_bj_record
+done <"${_bj_files[4]}"
+
+_bj_head_mode=
+_bj_head_type=
+_bj_head_oid=
+_bj_head_extra=
+_bj_head_path=
+if [[ $_bj_head_count -eq 1 && "$_bj_head_record" == *$'\t'* ]]; then
+  _bj_head_meta=${_bj_head_record%%$'\t'*}
+  _bj_head_path=${_bj_head_record#*$'\t'}
+  IFS=' ' read -r _bj_head_mode _bj_head_type _bj_head_oid _bj_head_extra \
+    <<<"$_bj_head_meta"
+fi
+if [[ $_bj_head_count -ne 1 || "$_bj_head_mode" != 100644 \
+      || "$_bj_head_type" != blob || -n "$_bj_head_extra" \
+      || "$_bj_head_path" != "$BEADS_JSONL_REL" ]]; then
+  die 'beads JSONL HEAD entry is not one regular file'
+fi
+
+if [[ ! -f "$BEADS_JSONL" || -L "$BEADS_JSONL" ]]; then
+  die 'beads JSONL worktree path is not a non-symlink regular file'
+fi
+# The mode a tracked file has is Git's answer, not the invoking user's access rights. Git
+# reads the owner-exec bit and honors `core.filemode`; bash `[[ -x ]]` is an `access(2)`
+# probe that does neither, so it diverges in both directions — refusing forever on the
+# filesystems that carry no executable bit and configure `core.filemode=false`, and
+# accepting a file another user owns at 0744 that Git already calls `100755`. Measured on
+# git 2.53.0 with the streams separated by redirection: after `core.filemode=false` and
+# `chmod +x`, `diff-files --raw -z` and `git status --porcelain` each wrote 0 bytes to
+# stdout at exit 0 with empty stderr while `[[ -x ]]` was true; under `core.filemode=true`
+# the same chmod wrote `:100644 100755 …`. So ask Git. No record means the worktree agrees
+# with the stage-0 entry proven `100644` above; a record carries the worktree mode Git sees
+# in its second field, and a content-only difference leaves `100644` there for the byte
+# comparison below — or, deliberately, for `--allow-dirty` — to judge instead.
+if ! "$_bj_git" --no-replace-objects -c core.fsmonitor=false -C "$_bj_root" \
+  --literal-pathspecs diff-files --raw -z -- "$BEADS_JSONL_REL" \
+  >"${_bj_files[8]}"; then
+  die 'cannot inspect the beads JSONL worktree mode'
+fi
+if [[ -s "${_bj_files[8]}" ]]; then
+  if ! IFS= read -r -d '' _bj_mode_record <"${_bj_files[8]}"; then
+    die 'cannot inspect the beads JSONL worktree mode'
+  fi
+  _bj_worktree_mode=
+  IFS=' ' read -r _ _bj_worktree_mode _ <<<"${_bj_mode_record#:}"
+  if [[ "$_bj_worktree_mode" != 100644 ]]; then
+    die 'beads JSONL worktree mode is not 100644'
+  fi
+fi
+
+# A post-write diff or flushed-but-uncommitted audit handoff expects content to differ,
+# but it still needs the path-ownership proof above before another `br` write can run.
+# Skip only the byte-identity requirement; retain stage, mode, flag, HEAD, and worktree
+# structure checks so hidden, untracked, unmerged, missing, and wrong-type states refuse.
+if [[ $_bj_mode == allow-dirty ]]; then
+  # All resolver and documented consumer Git commands force core.fsmonitor=false,
+  # so a stale monitor cache cannot hide the content difference this mode permits.
+  _bj_finish
+  _bj_finish_rc=$?
+  exit "$_bj_finish_rc"
+fi
+
+if ! "$_bj_git" --no-replace-objects -c core.fsmonitor=false -C "$_bj_root" cat-file blob "$_bj_head_oid" >"${_bj_files[5]}"; then
+  die 'cannot read the beads JSONL HEAD blob'
+fi
+if ! "$_bj_git" --no-replace-objects -c core.fsmonitor=false -C "$_bj_root" cat-file blob "$_bj_index_oid" >"${_bj_files[6]}"; then
+  die 'cannot read the beads JSONL index blob'
+fi
+
+"$_bj_cmp" -s "${_bj_files[5]}" "${_bj_files[6]}"
+_bj_cmp_rc=$?
+if [[ $_bj_cmp_rc -eq 1 ]]; then
+  die 'beads JSONL differs among HEAD, index, and worktree'
+elif [[ $_bj_cmp_rc -ne 0 ]]; then
+  die 'cannot compare the beads JSONL HEAD and index bytes'
+fi
+"$_bj_cmp" -s "${_bj_files[6]}" "$BEADS_JSONL"
+_bj_cmp_rc=$?
+if [[ $_bj_cmp_rc -eq 1 ]]; then
+  die 'beads JSONL differs among HEAD, index, and worktree'
+elif [[ $_bj_cmp_rc -ne 0 ]]; then
+  die 'cannot compare the beads JSONL index and worktree bytes'
+fi
+
+_bj_finish
+__BJ_TRUSTED_BASH__
