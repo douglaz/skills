@@ -517,9 +517,13 @@ implement → review loop for each bead.
     - **(b) the flush already ran and the diff shows damage** — the working copy *is* the
       damaged artifact. Restore it from the good side, **rebuild the cache**, and only then
       replay: replaying first lets the still-stale cache auto-flush over what you just
-      restored. Read `git diff --cached` and `git diff` and decide explicitly which of
-      the index or `HEAD` holds the good bodies; a staged copy only proves a choice exists,
-      and an earlier flush may have been staged before anyone noticed.
+      restored. Read
+      `git --no-replace-objects -c core.fsmonitor=false --literal-pathspecs diff --cached -- "$BEADS_JSONL"`
+      and
+      `git --no-replace-objects -c core.fsmonitor=false --literal-pathspecs diff -- "$BEADS_JSONL"`,
+      then decide explicitly which of the index, worktree, or `HEAD` holds the good
+      bodies; a staged copy only proves a choice exists, and an earlier flush may
+      have been staged before anyone noticed.
 
     Four things the recipe must do in both cases, each learned by getting it wrong: back up
     the cache and **check the copy succeeded**; **verify the DB and its `-wal`/`-shm`

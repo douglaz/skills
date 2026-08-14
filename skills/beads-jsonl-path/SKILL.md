@@ -143,7 +143,7 @@ relative to the repository you are driving.
 
 On success, `BEADS_JSONL` is the only stdout: an absolute path inside the
 current Git worktree whose stage-0 index entry, normal index flags, HEAD entry,
-worktree type and mode, and raw bytes all agree. Both the locator and resolver
+single-link worktree type and mode, and raw bytes all agree. Both the locator and resolver
 discard inherited `GIT_*` overrides before repository discovery, so a caller
 cannot redirect that proof to another worktree, index, object store, or config.
 Every Git inspection also forces `core.fsmonitor=false`, so the read-only owner
@@ -197,7 +197,8 @@ BEADS_JSONL=$("$BEADS_JSONL_RESOLVER" --recovery) || exit 1
 Recovery may need to name a missing export, so this mode retains byte-safe resolution and
 worktree containment but does not require tracked/index/HEAD state. It accepts only an
 absent path or a non-symlink regular file; a symlink, FIFO, directory, or other nonregular
-occupant still refuses. A path equal to or beneath `$GIT_DIR`, Git's common
+occupant still refuses, as does a regular file with another hard-link alias. A
+path equal to or beneath `$GIT_DIR`, Git's common
 administrative directory, or `<worktree>/.git` also refuses, including a linked
 worktree's `.git` pointer file. Never use recovery mode before a `br` write.
 Read the symlink half at its measured width: on br 0.2.19 a `.beads/issues.jsonl` symlink

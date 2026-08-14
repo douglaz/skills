@@ -264,7 +264,7 @@ fi
 # the otherwise hardened implementation ran the `git` and `cmp` sentinels.
 b=$(new_fixture)
 mkdir "$b/repo/evil"
-for utility in bash git cmp od grep mktemp unlink rmdir; do
+for utility in bash git cmp od grep mktemp unlink rmdir readlink stat; do
   trusted_utility=$(command -p -v "$utility") || {
     fail 'hostile startup fixture setup' "cannot locate $utility in the POSIX utility path"
     continue
@@ -520,6 +520,11 @@ printf '%s\n' outside >"$outside"
 set_where_path "$b" "$outside"
 assert_refused 'path outside the current worktree is refused' "$b" \
   'beads JSONL is outside the current worktree'
+
+b=$(new_fixture)
+ln "$(<"$b/jsonl-path")" "$b/outside-hardlink"
+assert_refused 'a clean JSONL with an outside hard-link alias is refused' "$b" \
+  'beads JSONL worktree path has multiple hard links'
 
 b=$(new_fixture)
 printf '%s\n' staged >>"$(<"$b/jsonl-path")"
@@ -840,6 +845,17 @@ set_where_path "$b" "$b/repo/.git/HEAD"
 RESOLVER_ARGS=(--recovery)
 assert_refused '--recovery refuses a Git administrative HEAD path' "$b" \
   'beads JSONL is inside the Git administrative directory'
+
+# Path checks alone cannot see that the in-worktree pathname aliases an
+# administrative inode. Writing a recovery copy through this hard link would
+# overwrite .git/HEAD.
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+unlink "$jsonl"
+ln "$b/repo/.git/HEAD" "$jsonl"
+RESOLVER_ARGS=(--recovery)
+assert_refused '--recovery refuses a hard link to Git administrative state' "$b" \
+  'beads JSONL worktree path has multiple hard links'
 
 # In a linked worktree, `<worktree>/.git` is a regular pointer file rather than
 # the directory returned by `rev-parse --git-dir`. It is administrative state

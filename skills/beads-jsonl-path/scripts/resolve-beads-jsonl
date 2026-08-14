@@ -63,6 +63,8 @@ _bj_rmdir=$(command -p -v rmdir) ||
   die 'cannot locate a trusted rmdir for the beads resolver'
 _bj_readlink=$(command -p -v readlink) ||
   die 'cannot locate a trusted readlink for the beads resolver'
+_bj_stat=$(command -p -v stat) ||
+  die 'cannot locate a trusted stat for the beads resolver'
 
 # Git's repository, worktree, index, object store, config, namespace, and pathspec
 # behavior can all be redirected through inherited GIT_* variables. This fact owner
@@ -264,6 +266,23 @@ if [[ $_bj_mode == recovery ]]; then
         || "$BEADS_JSONL" == "$_bj_git_common_dir/"* ]]; then
     die 'beads JSONL is inside the Git administrative directory'
   fi
+fi
+
+# Path containment cannot see inode aliases. A regular occupant with another
+# hard link could alias Git administrative state or any same-filesystem file, so
+# a later recovery copy or Beads write through this path would modify both.
+if [[ -f "$BEADS_JSONL" && ! -L "$BEADS_JSONL" ]]; then
+  if _bj_link_count=$("$_bj_stat" -c %h "$BEADS_JSONL" 2>/dev/null) \
+      && [[ $_bj_link_count =~ ^[0-9]+$ ]]; then
+    :
+  elif _bj_link_count=$("$_bj_stat" -f %l "$BEADS_JSONL" 2>/dev/null) \
+      && [[ $_bj_link_count =~ ^[0-9]+$ ]]; then
+    :
+  else
+    die 'cannot inspect the beads JSONL hard-link count'
+  fi
+  [[ "$_bj_link_count" == 1 ]] ||
+    die 'beads JSONL worktree path has multiple hard links'
 fi
 
 # Recovery stops here: it must name the deleted artifact that restoration will recreate,

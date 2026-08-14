@@ -1061,7 +1061,7 @@ disabling the monitor prevents a repository-configured executable hook from
 running during this read-only proof. Success requires exactly one stage-0
 tracked regular-file entry, mode `100644`, tag `H` (not lowercase
 assume-unchanged or `S` skip-worktree), the same regular mode in HEAD, and a
-non-symlink regular worktree file. It reads the HEAD blob, index blob, and
+non-symlink, single-link regular worktree file. It reads the HEAD blob, index blob, and
 worktree bytes without filters and requires all three byte strings to be
 identical before printing the path. It therefore refuses staged, unstaged,
 mode-only, hidden-index-flag, unmerged, missing, ignored/untracked, symlink,
@@ -1076,7 +1076,7 @@ the resolver and every documented consumer force `core.fsmonitor=false`, a
 stale monitor answer cannot hide the content difference this mode intentionally
 permits from the consumer's own `git status` or `git diff HEAD`. `--recovery`
 may name an absent or untracked path after byte-safe resolution and containment, but it still refuses
-symlink and nonregular occupants and every path equal to or below `$GIT_DIR`,
+symlink, multiply linked, and nonregular occupants and every path equal to or below `$GIT_DIR`,
 `--git-common-dir`, or `<worktree>/.git`. Recovery mode names an artifact for
 restoration only and never authorizes a subsequent Beads query, mutation, or
 flush.
@@ -1091,7 +1091,8 @@ returning nonzero after emitting valid JSON; missing, null, empty, or non-string
 `jq`; NUL/CR/LF path values; and a resolved path outside the current worktree.
 Focused fixtures prove that each failure performs no Beads mutation or flush.
 Further fixtures cover staged-only, unstaged-only, staged-plus-unstaged,
-mode-only, intent-to-add, assume-unchanged, skip-worktree, unmerged, symlink, gitlink,
+mode-only, intent-to-add, assume-unchanged, skip-worktree, unmerged, symlink,
+hard-link, gitlink,
 ignored/untracked, missing, and nonregular JSONL state, plus a path inside a
 different worktree and a Git administrative path; each is refused before any mutation or flush. This is P0
 because the
