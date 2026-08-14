@@ -4,13 +4,13 @@
 `docs/specs/backlog-execution-plan.md` (#30–#66, exact set in that plan); the
 Beads graph created from the reviewed plan will be the ONLY work this drive may
 take.
-**Phase:** HARDEN · **Bead:** n/a (planning/bootstrap graph)
-· **Branch:** `plan/backlog-execution`
-**Pending:** —
+**Phase:** HARDEN · **Bead:** `skills-iog` (E1 closure metadata)
+· **Branch:** `chore/skills-iog-closure`
+**Pending:** current-tip bot gate and merge of the exclusive E1 closure PR
 **Gate:** `./check.sh`
-· last green 2026-08-13 on the `bd3a883` tree (exit 0; 26 installer,
-124 bot-gate, and 70 drive-status fixtures passed under GNU Bash 5.3.15,
-non-POSIX mode).
+· last green 2026-08-14 on the E1 closure tree (exit 0; 139 resolver,
+53 installer, 124 bot-gate, and 70 drive-status fixtures passed under GNU Bash
+5.3.15, non-POSIX mode, Git 2.55.0, `br` 0.2.19, and uid 1000).
 
 ## Done
 
@@ -198,19 +198,42 @@ non-POSIX mode).
   the inspector opens pidfds from that explicit handshake, with no procfs
   dependency. Three consecutive installer runs pass 26/0, and the full gate
   passes 26/124/70 with empty stderr.
+- Implemented E1 (`skills-iog`) in PR #69 and squash-merged it as `a70670d`.
+  The installed `beads-jsonl-path` owner now resolves the tracked JSONL
+  fail-closed, isolates all Git/Beads/audit execution boundaries, and migrates
+  every consumer. The current-tip Codex gate returned
+  `NO_PENDING_EVIDENCE` for reviewed tip `20905d8`; CodeRabbit succeeded; all
+  review threads were dispositioned; and independent focused reviewers passed.
+- Refreshed clean `master` after PR #69 and reran `./check.sh` under GNU Bash
+  5.3.15, non-POSIX mode, Git 2.55.0, `br` 0.2.19, and uid 1000; all 139
+  resolver, 53 installer, 124 bot-gate, and 70 drive-status fixtures passed.
+  The generic `nix build` placeholder is not this repository's gate and
+  correctly reported that the checkout has no `flake.nix`.
+- Started E1's exclusive closure transaction from merged `master`: saved exact
+  clean JSONL hash
+  `276f9a16e6bc62aa49e1ae5faf494d152b5b32a55d32b81ae6447c5ee99c1ff6`,
+  required the pinned typed sync-status fields and matching hash, closed only
+  `skills-iog` with auto import/flush disabled, explicitly flushed once, and
+  proved the ID set unchanged with only E1 `status`, `closed_at`,
+  `close_reason`, and `updated_at` differing. `./check.sh` then passed all 386
+  fixtures on the exclusive two-file closure tree under that same recorded
+  Bash/Git/`br`/uid environment.
 
 ## Now
 
-Land this fully reviewed planning/bootstrap branch without changing the audited
-graph. Refresh clean master after merge, reserve the single `executor-skills`
-lane, and dispatch sole-ready E1 through rb-lite.
+Run the repository gate and independent review on this exclusive E1 metadata
+branch, then merge it before any further scoped Beads query or mutation. Refresh
+and import clean `master` after merge, verify and release E1's
+`skills-iog`/`feat/skills-iog-beads-jsonl-path` reservation, atomically create a
+new exact `skills-dhm`/E3 `executor-skills` reservation, and only then dispatch
+E3 through rb-lite.
 
 ## Next
 
-Bootstrap E1 and then E3 exactly as plan global rule 8 requires, including each
-exclusive reviewed closure-metadata PR. Only then start A1, GitHub issue #42,
-through rb-lite and continue the highest-priority unblocked lane while
-respecting the two human-authority checkpoints.
+Bootstrap E3 exactly as plan global rule 8 requires, including its exclusive
+reviewed closure-metadata PR. Only then start A1, GitHub issue #42, through
+rb-lite and continue the highest-priority unblocked lane while respecting the
+two human-authority checkpoints.
 
 ## Open questions for the human
 
