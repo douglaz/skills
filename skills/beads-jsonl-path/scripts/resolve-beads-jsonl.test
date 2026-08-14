@@ -1,0 +1,905 @@
+#!/usr/bin/env bash
+# Isolated regression fixtures for resolve-beads-jsonl. Every fixture uses a
+# scratch repository and a stubbed br; the real Beads store is never queried or
+# mutated.
+
+set -euo pipefail
+
+HERE=$(cd "$(dirname "$0")" && pwd -P)
+RESOLVER="$HERE/resolve-beads-jsonl"
+SYSTEM_PATH=$PATH
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+PASS=0
+FAIL=0
+
+pass() { PASS=$((PASS + 1)); printf '  ok   %s\n' "$1"; }
+fail() { FAIL=$((FAIL + 1)); printf '  FAIL %s\n         %s\n' "$1" "$2"; }
+
+set_where_path() {
+  local base=$1 path=$2
+  printf '%s' "$path" >"$base/where-path" || return
+  jq -n --arg path "$path" '{jsonl_path: $path}' >"$base/where.out" || return
+}
+
+new_fixture() {
+  local base repo jsonl
+  base=$(mktemp -d "$WORK/fixture.XXXXXX") || return
+  repo="$base/repo"
+  jsonl="$repo/.beads/issues.jsonl"
+  mkdir -p "$repo/.beads" "$base/bin" || return
+  git init -q "$repo" || return
+  git -C "$repo" symbolic-ref --short HEAD >"$base/initial-branch" || return
+  git -C "$repo" config user.name 'Resolver Test' || return
+  git -C "$repo" config user.email resolver@example.invalid || return
+  printf '%s\n' '{"id":"fixture"}' >"$jsonl" || return
+  git -C "$repo" add -- .beads/issues.jsonl || return
+  git -C "$repo" commit -qm baseline || return
+  printf '%s' "$jsonl" >"$base/jsonl-path" || return
+  set_where_path "$base" "$jsonl" || return
+  command cat >"$base/bin/br" <<'BR_STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$BR_CALLS"
+if [[ "$*" != '--no-auto-flush --no-auto-import where --json' ]]; then
+  : >"$BR_MUTATION"
+fi
+command cat "$BR_OUTPUT"
+exit "${BR_EXIT:-0}"
+BR_STUB
+  chmod +x "$base/bin/br" || return
+  printf '%s' "$base"
+}
+
+# Marks the fixture's JSONL entry fsmonitor-valid and proves it landed. Git sets that bit
+# for entries a configured file system monitor did not report as changed, and then answers
+# from the bit instead of the filesystem. The stub reports no changed paths at all, so
+# whatever happens to the file after this call stays hidden from Git. `ls-files -v` cannot
+# see the bit — it prints `H` — which is why the caller checks `ls-files -f`.
+mark_fsmonitor_valid() {
+  local base=$1 hook flags
+  hook="$base/fsmonitor-stub"
+  command cat >"$hook" <<'FSMONITOR_STUB'
+#!/bin/sh
+printf 'resolver-fixture-token\0'
+FSMONITOR_STUB
+  chmod +x "$hook" || return 1
+  git -C "$base/repo" config core.fsmonitor "$hook" || return 1
+  # Sets the bit while the worktree still matches the index; Git keeps that cached answer
+  # until the monitor names the path, which this stub never does.
+  git -C "$base/repo" status --porcelain >/dev/null || return 1
+  flags=$(git -C "$base/repo" ls-files -f -- .beads/issues.jsonl) || return 1
+  [[ "$flags" == 'h '* ]]
+}
+
+snapshot_one_path() {
+  local label=$1 path=$2
+  printf '\nPATH %s\n' "$label"
+  if [[ -L "$path" ]]; then
+    printf 'symlink\n'
+    readlink "$path"
+  elif [[ -f "$path" ]]; then
+    printf 'regular\n'
+    git hash-object --no-filters --stdin <"$path"
+    if [[ -x "$path" ]]; then printf 'executable\n'; else printf 'non-executable\n'; fi
+  elif [[ -d "$path" ]]; then
+    printf 'directory\n'
+  elif [[ -p "$path" ]]; then
+    printf 'fifo\n'
+  elif [[ -e "$path" ]]; then
+    printf 'other\n'
+  else
+    printf 'missing\n'
+  fi
+}
+
+snapshot_fixture() {
+  local base=$1 output=$2 repo actual resolved
+  repo="$base/repo"
+  actual=$(<"$base/jsonl-path")
+  resolved=$(<"$base/where-path")
+  {
+    printf 'STATUS\n'
+    git -C "$repo" status --porcelain=v2 -z --untracked-files=all
+    printf '\nSTAGE\n'
+    git -C "$repo" ls-files --stage -z
+    printf '\nFLAGS\n'
+    git -C "$repo" ls-files -v -z
+    snapshot_one_path actual "$actual"
+    if [[ "$resolved" != "$actual" ]]; then
+      snapshot_one_path resolved "$resolved"
+    fi
+  } >"$output"
+}
+
+safe_br_calls_only() {
+  local calls=$1 call
+  [[ -e "$calls" ]] || return 0
+  while IFS= read -r call; do
+    [[ "$call" == '--no-auto-flush --no-auto-import where --json' ]] || return 1
+  done <"$calls"
+}
+
+# Extra resolver arguments and invocation worktree for the next assertion only;
+# every assert_* clears them.
+RESOLVER_ARGS=()
+RESOLVER_CWD=
+
+run_resolver() {
+  local base=$1 runtime_path=$2
+  (
+    cd "${RESOLVER_CWD:-$base/repo}" || exit 98
+    BR_CALLS="$base/br.calls" BR_MUTATION="$base/br.mutation" \
+      BR_OUTPUT="$base/where.out" BR_EXIT="${BR_EXIT:-0}" \
+      PATH="$runtime_path" "$RESOLVER" ${RESOLVER_ARGS+"${RESOLVER_ARGS[@]}"} \
+      >"$base/stdout" 2>"$base/stderr"
+  )
+}
+
+assert_refused() {
+  local name=$1 base=$2 diagnostic=$3 runtime_path rc
+  runtime_path=${4:-"$base/bin:$SYSTEM_PATH"}
+  snapshot_fixture "$base" "$base/before"
+  if run_resolver "$base" "$runtime_path"; then rc=0; else rc=$?; fi
+  RESOLVER_ARGS=()
+  RESOLVER_CWD=
+  snapshot_fixture "$base" "$base/after"
+  if [[ $rc -eq 0 ]]; then
+    fail "$name" 'resolver accepted unsafe state'
+  elif [[ -s "$base/stdout" ]]; then
+    fail "$name" 'resolver printed a path while refusing'
+  elif ! grep -Fq -- "$diagnostic" "$base/stderr"; then
+    fail "$name" "missing diagnostic '$diagnostic': $(<"$base/stderr")"
+  elif ! cmp -s "$base/before" "$base/after"; then
+    fail "$name" 'repository or resolved-path state changed'
+  elif [[ -e "$base/br.mutation" ]]; then
+    fail "$name" 'br observed a mutation or flush-shaped invocation'
+  elif ! safe_br_calls_only "$base/br.calls"; then
+    fail "$name" 'br received something other than the exact read-only where invocation'
+  else
+    pass "$name"
+  fi
+}
+
+assert_success() {
+  local name=$1 base=$2 expected=$3 rc
+  snapshot_fixture "$base" "$base/before"
+  if run_resolver "$base" "$base/bin:$SYSTEM_PATH"; then rc=0; else rc=$?; fi
+  RESOLVER_ARGS=()
+  RESOLVER_CWD=
+  snapshot_fixture "$base" "$base/after"
+  printf '%s\n' "$expected" >"$base/expected"
+  if [[ $rc -ne 0 ]]; then
+    fail "$name" "exit $rc: $(<"$base/stderr")"
+  elif ! cmp -s "$base/expected" "$base/stdout"; then
+    fail "$name" 'stdout was not exactly the absolute JSONL path'
+  elif [[ -s "$base/stderr" ]]; then
+    fail "$name" "unexpected stderr: $(<"$base/stderr")"
+  elif ! cmp -s "$base/before" "$base/after"; then
+    fail "$name" 'successful inspection changed repository state'
+  elif [[ -e "$base/br.mutation" ]] || ! safe_br_calls_only "$base/br.calls"; then
+    fail "$name" 'success invoked a Beads mutation or flush'
+  else
+    pass "$name"
+  fi
+}
+
+assert_stdout_failure() {
+  local name=$1 base=$2 rc
+  snapshot_fixture "$base" "$base/before"
+  set +e
+  (
+    cd "$base/repo" || exit 98
+    trap '' PIPE
+    BR_CALLS="$base/br.calls" BR_MUTATION="$base/br.mutation" \
+      BR_OUTPUT="$base/where.out" BR_EXIT=0 PATH="$base/bin:$SYSTEM_PATH" \
+      "$RESOLVER" --allow-dirty 2>"$base/stderr"
+  ) | :
+  rc=${PIPESTATUS[0]}
+  set -e
+  snapshot_fixture "$base" "$base/after"
+  if [[ $rc -eq 0 ]]; then
+    fail "$name" 'resolver masked the failed stdout write'
+  elif [[ ! -s "$base/stderr" ]]; then
+    fail "$name" 'stdout failed without a diagnostic'
+  elif ! cmp -s "$base/before" "$base/after"; then
+    fail "$name" 'failed output changed repository state'
+  elif [[ -e "$base/br.mutation" ]]; then
+    fail "$name" 'failed output invoked a Beads mutation or flush'
+  elif [[ ! -e "$base/br.calls" ]] || ! safe_br_calls_only "$base/br.calls"; then
+    fail "$name" 'failed output did not use only the exact read-only where invocation'
+  else
+    pass "$name"
+  fi
+}
+
+printf '%s\n' 'resolve-beads-jsonl fixtures'
+
+b=$(new_fixture)
+assert_success 'clean tracked JSONL resolves' "$b" "$(<"$b/jsonl-path")"
+
+# Neither the outer launcher nor the proof may pick up checkout-controlled
+# standard utilities from PATH, a BASH_ENV startup file, or exported functions.
+# Before the launcher existed the `bash` sentinel ran; before proof-tool pinning,
+# the otherwise hardened implementation ran the `git` and `cmp` sentinels.
+b=$(new_fixture)
+mkdir "$b/repo/evil"
+for utility in bash git cmp od grep mktemp unlink rmdir; do
+  trusted_utility=$(command -p -v "$utility") || {
+    fail 'hostile startup fixture setup' "cannot locate $utility in the POSIX utility path"
+    continue
+  }
+  command cat >"$b/repo/evil/$utility" <<HOSTILE_UTILITY
+#!/bin/sh
+printf '%s\n' "\$0" >>"\$HOSTILE_PATH_RAN"
+exec "$trusted_utility" "\$@"
+HOSTILE_UTILITY
+  chmod +x "$b/repo/evil/$utility"
+done
+command cat >"$b/bin/br" <<'SAFE_BR'
+#!/bin/sh
+printf '%s\n' "$*" >>"$BR_CALLS"
+if [ "$*" != '--no-auto-flush --no-auto-import where --json' ]; then
+  : >"$BR_MUTATION"
+fi
+cat "$BR_OUTPUT"
+exit "${BR_EXIT:-0}"
+SAFE_BR
+chmod +x "$b/bin/br"
+printf '%s\n' ': >"$HOSTILE_BASH_ENV_RAN"' >"$b/bash-env"
+snapshot_fixture "$b" "$b/before"
+br() {
+  : >"$HOSTILE_FUNCTION_RAN"
+  printf '%s\n' '{"jsonl_path":"/not/the/fixture.jsonl"}'
+}
+git() {
+  : >"$HOSTILE_GIT_FUNCTION_RAN"
+  command git "$@"
+}
+export -f br git
+if (
+  cd "$b/repo" || exit 98
+  HOSTILE_PATH_RAN="$b/path-ran" HOSTILE_BASH_ENV_RAN="$b/bash-env-ran" \
+    HOSTILE_FUNCTION_RAN="$b/function-ran" HOSTILE_GIT_FUNCTION_RAN="$b/git-function-ran" \
+    BR_CALLS="$b/br.calls" BR_MUTATION="$b/br.mutation" BR_OUTPUT="$b/where.out" \
+    PATH="$b/repo/evil:$b/bin:$SYSTEM_PATH" BASH_ENV="$b/bash-env" \
+    "$RESOLVER" >"$b/stdout" 2>"$b/stderr"
+); then rc=0; else rc=$?; fi
+unset -f br git
+snapshot_fixture "$b" "$b/after"
+t='hostile PATH, BASH_ENV, and exported functions cannot alter resolver startup'
+printf '%s\n' "$(<"$b/jsonl-path")" >"$b/expected"
+if [[ $rc -ne 0 ]]; then
+  fail "$t" "exit $rc: $(<"$b/stderr")"
+elif [[ -e "$b/path-ran" || -e "$b/bash-env-ran" || -e "$b/function-ran" \
+        || -e "$b/git-function-ran" ]]; then
+  fail "$t" "a hostile startup sentinel ran: path=$(test -e "$b/path-ran" && tr '\n' ',' <"$b/path-ran" || echo no), bash-env=$(test -e "$b/bash-env-ran" && echo yes || echo no), br=$(test -e "$b/function-ran" && echo yes || echo no), git=$(test -e "$b/git-function-ran" && echo yes || echo no)"
+elif ! cmp -s "$b/expected" "$b/stdout" || [[ -s "$b/stderr" ]]; then
+  fail "$t" 'resolver output changed under hostile startup state'
+elif ! cmp -s "$b/before" "$b/after" || ! safe_br_calls_only "$b/br.calls"; then
+  fail "$t" 'hostile startup state changed the fixture or br invocation'
+else
+  pass "$t"
+fi
+
+# `br` and `jq` are resolved from PATH because they are not portable members of
+# Bash's POSIX utility path. That exception must not let the driven checkout
+# supply either executable.
+b=$(new_fixture)
+mkdir "$b/repo/bin"
+command cat >"$b/repo/bin/br" <<'WORKTREE_BR'
+#!/bin/sh
+printf '%s\n' ran >"$WORKTREE_TOOL_RAN"
+cat "$BR_OUTPUT"
+WORKTREE_BR
+chmod +x "$b/repo/bin/br"
+assert_refused 'a worktree-controlled br executable is refused' "$b" \
+  'br resolves inside the current Git worktree' "$b/repo/bin:$SYSTEM_PATH"
+
+b=$(new_fixture)
+mkdir "$b/repo/bin"
+trusted_jq=$(command -v jq)
+command cat >"$b/repo/bin/jq" <<WORKTREE_JQ
+#!/bin/sh
+printf '%s\n' ran >"\$WORKTREE_TOOL_RAN"
+exec "$trusted_jq" "\$@"
+WORKTREE_JQ
+chmod +x "$b/repo/bin/jq"
+WORKTREE_TOOL_RAN="$b/worktree-tool-ran"
+export WORKTREE_TOOL_RAN
+assert_refused 'a worktree-controlled jq executable is refused' "$b" \
+  'jq resolves inside the current Git worktree' "$b/repo/bin:$b/bin:$SYSTEM_PATH"
+unset WORKTREE_TOOL_RAN
+if [[ -e "$b/worktree-tool-ran" ]]; then
+  fail 'a worktree-controlled jq executable is refused' 'the refused jq shim executed'
+fi
+
+# A Git worktree rooted at `/` contains every absolute PATH executable. The
+# containment special case must therefore refuse before invoking even an
+# otherwise external-looking stub.
+b=$(new_fixture)
+git init -q --bare "$b/root-admin"
+snapshot_fixture "$b" "$b/before"
+if (
+  cd "$b/repo" || exit 98
+  GIT_DIR="$b/root-admin" GIT_WORK_TREE=/ \
+    BR_CALLS="$b/br.calls" BR_MUTATION="$b/br.mutation" BR_OUTPUT="$b/where.out" \
+    PATH="$b/bin:$SYSTEM_PATH" "$RESOLVER" >"$b/stdout" 2>"$b/stderr"
+); then rc=0; else rc=$?; fi
+snapshot_fixture "$b" "$b/after"
+t='a root worktree refuses every PATH-selected proof executable'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'resolver accepted a proof executable contained by the root worktree'
+elif [[ -s "$b/stdout" ]]; then
+  fail "$t" 'resolver printed a path while refusing the root worktree'
+elif ! grep -Fq -- 'br resolves inside the current Git worktree' "$b/stderr"; then
+  fail "$t" "missing root-worktree diagnostic: $(<"$b/stderr")"
+elif [[ -e "$b/br.calls" || -e "$b/br.mutation" ]]; then
+  fail "$t" 'resolver invoked br before refusing the root worktree'
+elif ! cmp -s "$b/before" "$b/after"; then
+  fail "$t" 'root-worktree refusal changed the fixture'
+else
+  pass "$t"
+fi
+
+# Canonicalizing only an executable's parent is insufficient: a PATH directory
+# outside the checkout can contain a final symlink back to checkout-controlled
+# bytes. Pin the complete target and refuse before either shim can run.
+b=$(new_fixture)
+mkdir "$b/outside-bin"
+command cat >"$b/repo/evil-br" <<'WORKTREE_BR_TARGET'
+#!/bin/sh
+printf '%s\n' ran >"$WORKTREE_TOOL_RAN"
+cat "$BR_OUTPUT"
+WORKTREE_BR_TARGET
+chmod +x "$b/repo/evil-br"
+ln -s "$b/repo/evil-br" "$b/outside-bin/br"
+WORKTREE_TOOL_RAN="$b/worktree-tool-ran"
+export WORKTREE_TOOL_RAN
+assert_refused 'an outside br symlink into the worktree is refused' "$b" \
+  'br resolves inside the current Git worktree' "$b/outside-bin:$SYSTEM_PATH"
+unset WORKTREE_TOOL_RAN
+if [[ -e "$b/worktree-tool-ran" ]]; then
+  fail 'an outside br symlink into the worktree is refused' 'the refused br target executed'
+fi
+
+# The last target reached by the maximum permitted 40 follows must still pass
+# through canonicalization and containment before it is accepted. An earlier
+# bounded `for` loop read this target on its final iteration, then type-checked it
+# without inspecting where it lived.
+b=$(new_fixture)
+mkdir "$b/outside-bin"
+command cat >"$b/repo/evil-br" <<'WORKTREE_BR_40_TARGET'
+#!/bin/sh
+printf '%s\n' ran >"$WORKTREE_TOOL_RAN"
+cat "$BR_OUTPUT"
+WORKTREE_BR_40_TARGET
+chmod +x "$b/repo/evil-br"
+chain_target="$b/repo/evil-br"
+for ((chain_hop = 39; chain_hop >= 1; chain_hop--)); do
+  ln -s "$chain_target" "$b/outside-bin/br-link-$chain_hop"
+  chain_target="$b/outside-bin/br-link-$chain_hop"
+done
+ln -s "$chain_target" "$b/outside-bin/br"
+WORKTREE_TOOL_RAN="$b/worktree-tool-ran"
+export WORKTREE_TOOL_RAN
+assert_refused 'a 40-hop outside br chain into the worktree is refused' "$b" \
+  'br resolves inside the current Git worktree' "$b/outside-bin:$SYSTEM_PATH"
+unset WORKTREE_TOOL_RAN
+if [[ -e "$b/worktree-tool-ran" ]]; then
+  fail 'a 40-hop outside br chain into the worktree is refused' 'the refused br target executed'
+fi
+
+b=$(new_fixture)
+mkdir "$b/outside-bin"
+trusted_jq=$(command -v jq)
+command cat >"$b/repo/evil-jq" <<WORKTREE_JQ_TARGET
+#!/bin/sh
+printf '%s\n' ran >"\$WORKTREE_TOOL_RAN"
+exec "$trusted_jq" "\$@"
+WORKTREE_JQ_TARGET
+chmod +x "$b/repo/evil-jq"
+ln -s "$b/repo/evil-jq" "$b/outside-bin/jq"
+WORKTREE_TOOL_RAN="$b/worktree-tool-ran"
+export WORKTREE_TOOL_RAN
+assert_refused 'an outside jq symlink into the worktree is refused' "$b" \
+  'jq resolves inside the current Git worktree' "$b/outside-bin:$b/bin:$SYSTEM_PATH"
+unset WORKTREE_TOOL_RAN
+if [[ -e "$b/worktree-tool-ran" ]]; then
+  fail 'an outside jq symlink into the worktree is refused' 'the refused jq target executed'
+fi
+
+b=$(new_fixture)
+old=$(<"$b/jsonl-path")
+tab_path="$b/repo/.beads/issues with"$'\t'"tab.jsonl"
+git -C "$b/repo" mv -- "${old#"$b/repo/"}" "${tab_path#"$b/repo/"}"
+git -C "$b/repo" commit -qm 'tab path'
+printf '%s' "$tab_path" >"$b/jsonl-path"
+set_where_path "$b" "$tab_path"
+assert_success 'NUL-delimited Git records preserve a tab in the path' "$b" "$tab_path"
+
+# `br where` may name any tracked file, including one whose bytes read as Git pathspec
+# magic or a wildmatch pattern. Both lookups must be byte-exact: magic silently resolves a
+# DIFFERENT path, and a wildcard can pull in a sibling and make the entry look ambiguous.
+b=$(new_fixture)
+magic_path="$b/repo/:(literal)graph.beads.jsonl"
+mv -- "$(<"$b/jsonl-path")" "$magic_path"
+git -C "$b/repo" add -A
+git -C "$b/repo" commit -qm 'pathspec-magic path'
+printf '%s' "$magic_path" >"$b/jsonl-path"
+set_where_path "$b" "$magic_path"
+assert_success 'a filename that reads as pathspec magic resolves' "$b" "$magic_path"
+
+b=$(new_fixture)
+glob_path="$b/repo/.beads/is[s]ues.jsonl"
+mv -- "$(<"$b/jsonl-path")" "$glob_path"
+printf '%s\n' '{"id":"sibling"}' >"$b/repo/.beads/issues.jsonl"
+git -C "$b/repo" add -A
+git -C "$b/repo" commit -qm 'wildmatch path'
+printf '%s' "$glob_path" >"$b/jsonl-path"
+set_where_path "$b" "$glob_path"
+assert_success 'a filename holding wildmatch metacharacters resolves' "$b" "$glob_path"
+
+b=$(new_fixture)
+BR_EXIT=9 assert_refused 'br failure after valid JSON is refused' "$b" \
+  'cannot resolve the beads workspace'
+
+while IFS='|' read -r name payload diagnostic; do
+  b=$(new_fixture)
+  printf '%b' "$payload" >"$b/where.out"
+  assert_refused "$name" "$b" "$diagnostic"
+done <<'INVALID_JSON'
+missing jsonl_path|{}\n|cannot resolve exactly one beads JSONL
+null jsonl_path|{"jsonl_path":null}\n|cannot resolve exactly one beads JSONL
+empty jsonl_path|{"jsonl_path":""}\n|cannot resolve exactly one beads JSONL
+non-string jsonl_path|{"jsonl_path":7}\n|cannot resolve exactly one beads JSONL
+zero JSON documents||cannot resolve exactly one beads JSONL
+multiple JSON documents|{"jsonl_path":"one"}\n{"jsonl_path":"two"}\n|cannot resolve exactly one beads JSONL
+malformed JSON|{"jsonl_path":\n|cannot resolve exactly one beads JSONL
+relative jsonl_path|{"jsonl_path":".beads/issues.jsonl"}\n|cannot resolve exactly one beads JSONL
+decoded CR in path|{"jsonl_path":"bad\\rpath"}\n|cannot resolve exactly one beads JSONL
+decoded LF in path|{"jsonl_path":"bad\\npath"}\n|cannot resolve exactly one beads JSONL
+INVALID_JSON
+
+# If the decoded-NUL guard regresses, Bash strips the NUL from command substitution and
+# this payload becomes the fixture's valid tracked path. That makes this a behavior check,
+# not merely an assertion about which diagnostic an independently-invalid path reports.
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+printf '{"jsonl_path":"%s%s%s"}\n' "${jsonl%.jsonl}" '\u0000' '.jsonl' >"$b/where.out"
+assert_refused 'JSON-escaped NUL in path is refused before shell capture' "$b" \
+  'cannot resolve exactly one beads JSONL'
+
+b=$(new_fixture)
+printf '{"jsonl_path":"bad\0path"}\n' >"$b/where.out"
+assert_refused 'raw NUL in workspace JSON is refused before jq' "$b" \
+  'beads workspace JSON contains a raw NUL byte'
+
+b=$(new_fixture)
+command cat >"$b/bin/jq" <<'JQ_FAIL'
+#!/usr/bin/env bash
+exit 23
+JQ_FAIL
+chmod +x "$b/bin/jq"
+assert_refused 'failing jq is refused' "$b" 'cannot resolve exactly one beads JSONL'
+
+b=$(new_fixture)
+mkdir -p "$b/no-jq-bin"
+for utility in bash git od grep cmp mktemp unlink rmdir; do
+  utility_path=$(command -v "$utility")
+  ln -s "$utility_path" "$b/no-jq-bin/$utility"
+done
+ln -s "$b/bin/br" "$b/no-jq-bin/br"
+assert_refused 'missing jq is refused' "$b" 'jq is required to resolve the beads JSONL' \
+  "$b/no-jq-bin"
+
+b=$(new_fixture)
+outside="$b/outside.jsonl"
+printf '%s\n' outside >"$outside"
+set_where_path "$b" "$outside"
+assert_refused 'path outside the current worktree is refused' "$b" \
+  'beads JSONL is outside the current worktree'
+
+b=$(new_fixture)
+printf '%s\n' staged >>"$(<"$b/jsonl-path")"
+git -C "$b/repo" add -- .beads/issues.jsonl
+assert_refused 'staged-only content is refused' "$b" \
+  'beads JSONL differs among HEAD, index, and worktree'
+
+b=$(new_fixture)
+printf '%s\n' unstaged >>"$(<"$b/jsonl-path")"
+assert_refused 'unstaged-only content is refused' "$b" \
+  'beads JSONL differs among HEAD, index, and worktree'
+
+# `cat-file blob <HEAD-oid>` follows replacement refs by default.  Replacing the
+# clean HEAD/index blob with the dirty worktree bytes made the old proof accept
+# an unstaged edit, even though the object stored in HEAD was different.
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+printf '%s\n' replacement-dirty >>"$jsonl"
+head_oid=$(git -C "$b/repo" rev-parse HEAD:.beads/issues.jsonl)
+replacement_oid=$(git -C "$b/repo" hash-object -w "$jsonl")
+if ! git -C "$b/repo" replace "$head_oid" "$replacement_oid"; then
+  fail 'replacement-ref fixture setup' 'git could not create the replacement ref'
+else
+  assert_refused 'replacement refs cannot spoof the HEAD/index/worktree proof' "$b" \
+    'beads JSONL differs among HEAD, index, and worktree'
+fi
+
+b=$(new_fixture)
+printf '%s\n' staged >>"$(<"$b/jsonl-path")"
+git -C "$b/repo" add -- .beads/issues.jsonl
+printf '%s\n' unstaged >>"$(<"$b/jsonl-path")"
+assert_refused 'staged-plus-unstaged content is refused' "$b" \
+  'beads JSONL differs among HEAD, index, and worktree'
+
+# `git add -N` — on its own or after `git rm --cached` — leaves an index record that every
+# structural check accepts: one stage-0 `100644` entry tagged `H`. Its OID is the empty
+# blob rather than the file's content, so an *empty* tracked JSONL also passes byte
+# identity while Git reports the path as `DA`. The index holds no content for it.
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+rel=${jsonl#"$b/repo/"}
+: >"$jsonl"
+git -C "$b/repo" commit -qam 'empty jsonl'
+git -C "$b/repo" rm --cached -q -- "$rel"
+git -C "$b/repo" add -N -- "$rel"
+assert_refused 'intent-to-add JSONL is refused' "$b" \
+  'beads JSONL index entry is intent-to-add'
+
+b=$(new_fixture)
+chmod +x "$(<"$b/jsonl-path")"
+assert_refused 'worktree mode-only change is refused' "$b" \
+  'beads JSONL worktree mode is not 100644'
+
+# The mode a tracked file has is Git's answer, not the invoking user's access rights: Git
+# reads the owner-exec bit and honors `core.filemode`, while an `access(2)` probe such as
+# bash `[[ -x ]]` does neither. Measured on git 2.53.0 with the streams separated by
+# redirection: after `core.filemode=false` and `chmod +x` on the tracked JSONL,
+# `diff-files --raw -z` and `git status --porcelain` each wrote 0 bytes to stdout at exit 0
+# with empty stderr, while bash `[[ -x ]]` was true; with `core.filemode=true` the same
+# chmod wrote `:100644 100755 …`. Every filesystem that carries no executable bit sets
+# exactly that config, so an access probe would refuse forever on a JSONL Git itself
+# reports pristine — and the improvisation that unblocks a dead-ended consumer is the
+# hardcoded `.beads/issues.jsonl` this companion exists to prevent.
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+git -C "$b/repo" config core.filemode false
+chmod +x "$jsonl"
+assert_success 'an exec bit Git is configured to ignore still resolves' "$b" "$jsonl"
+
+b=$(new_fixture)
+git -C "$b/repo" update-index --assume-unchanged -- .beads/issues.jsonl
+assert_refused 'assume-unchanged JSONL is refused' "$b" \
+  'beads JSONL has hidden index flags'
+
+b=$(new_fixture)
+git -C "$b/repo" update-index --skip-worktree -- .beads/issues.jsonl
+assert_refused 'skip-worktree JSONL is refused' "$b" \
+  'beads JSONL has hidden index flags'
+
+b=$(new_fixture)
+git -C "$b/repo" checkout -qb conflict-side
+printf '%s\n' side >"$(<"$b/jsonl-path")"
+git -C "$b/repo" commit -qam side
+git -C "$b/repo" checkout -q "$(<"$b/initial-branch")"
+printf '%s\n' main >"$(<"$b/jsonl-path")"
+git -C "$b/repo" commit -qam main
+git -C "$b/repo" merge conflict-side >/dev/null 2>&1 || :
+assert_refused 'unmerged JSONL is refused' "$b" \
+  'beads JSONL index entry is not one stage-0 regular file'
+
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+printf '%s\n' target >"$b/link-target"
+unlink "$jsonl"
+ln -s "$b/link-target" "$jsonl"
+assert_refused 'symlink JSONL is refused' "$b" \
+  'beads JSONL worktree path is not a non-symlink regular file'
+
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+rel=${jsonl#"$b/repo/"}
+oid=$(git -C "$b/repo" rev-parse HEAD)
+git -C "$b/repo" rm -q -- "$rel"
+mkdir -p "$jsonl"
+git -C "$b/repo" update-index --add --cacheinfo "160000,$oid,$rel"
+git -C "$b/repo" commit -qm gitlink
+assert_refused 'gitlink JSONL is refused' "$b" \
+  'beads JSONL index entry is not one stage-0 regular file'
+
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+rel=${jsonl#"$b/repo/"}
+git -C "$b/repo" rm --cached -q -- "$rel"
+printf '%s\n' "/$rel" >"$b/repo/.gitignore"
+git -C "$b/repo" add -- .gitignore
+git -C "$b/repo" commit -qm 'ignore jsonl'
+assert_refused 'ignored untracked JSONL is refused' "$b" \
+  'beads JSONL index entry is not one stage-0 regular file'
+
+b=$(new_fixture)
+unlink "$(<"$b/jsonl-path")"
+assert_refused 'missing JSONL is refused' "$b" \
+  'beads JSONL worktree path is not a non-symlink regular file'
+
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+unlink "$jsonl"
+mkfifo "$jsonl"
+assert_refused 'nonregular JSONL is refused without reading it' "$b" \
+  'beads JSONL worktree path is not a non-symlink regular file'
+
+b=$(new_fixture)
+git -C "$b/repo" worktree add -qb other "$b/other"
+other_jsonl="$b/other/.beads/issues.jsonl"
+set_where_path "$b" "$other_jsonl"
+assert_refused 'path in a different worktree is refused' "$b" \
+  'beads JSONL is outside the current worktree'
+
+# `--allow-dirty` permits content differences while retaining the structural proof needed
+# before another write: the file is still one normally flagged, tracked stage-0 regular
+# file in both HEAD and the index. Consumers that inspect a flushed-but-uncommitted graph
+# still have to name it through this owner rather than guessing `.beads/issues.jsonl`.
+b=$(new_fixture)
+printf '%s\n' '{"id":"flushed-round"}' >>"$(<"$b/jsonl-path")"
+RESOLVER_ARGS=(--allow-dirty)
+assert_success '--allow-dirty resolves a legitimately dirty JSONL' "$b" "$(<"$b/jsonl-path")"
+
+b=$(new_fixture)
+printf '%s\n' '{"id":"flushed-round"}' >>"$(<"$b/jsonl-path")"
+assert_stdout_failure '--allow-dirty propagates a failed stdout write' "$b"
+
+b=$(new_fixture)
+git -C "$b/repo" update-index --assume-unchanged -- .beads/issues.jsonl
+RESOLVER_ARGS=(--allow-dirty)
+assert_refused '--allow-dirty refuses assume-unchanged JSONL before another write' "$b" \
+  'beads JSONL has hidden index flags'
+
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+rel=${jsonl#"$b/repo/"}
+git -C "$b/repo" rm --cached -q -- "$rel"
+printf '%s\n' "/$rel" >"$b/repo/.gitignore"
+git -C "$b/repo" add -- .gitignore
+git -C "$b/repo" commit -qm 'ignore jsonl'
+RESOLVER_ARGS=(--allow-dirty)
+assert_refused '--allow-dirty refuses ignored untracked JSONL before another write' "$b" \
+  'beads JSONL index entry is not one stage-0 regular file'
+
+b=$(new_fixture)
+unlink "$(<"$b/jsonl-path")"
+RESOLVER_ARGS=(--allow-dirty)
+assert_refused '--allow-dirty refuses a missing JSONL before another write' "$b" \
+  'beads JSONL worktree path is not a non-symlink regular file'
+
+# Byte identity is what catches intent-to-add for a non-empty file, and `--allow-dirty` is
+# exactly the mode that drops it — so the flush it authorizes would write over a path the
+# index does not hold at all.
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+rel=${jsonl#"$b/repo/"}
+git -C "$b/repo" rm --cached -q -- "$rel"
+git -C "$b/repo" add -N -- "$rel"
+printf '%s\n' '{"id":"flushed-round"}' >>"$jsonl"
+RESOLVER_ARGS=(--allow-dirty)
+assert_refused '--allow-dirty refuses intent-to-add JSONL before another write' "$b" \
+  'beads JSONL index entry is intent-to-add'
+
+b=$(new_fixture)
+git -C "$b/repo" update-index --chmod=+x -- .beads/issues.jsonl
+RESOLVER_ARGS=(--allow-dirty)
+assert_refused '--allow-dirty retains the regular index-mode requirement' "$b" \
+  'beads JSONL index entry is not one stage-0 regular file'
+
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+chmod +x "$jsonl"
+git -C "$b/repo" add -- .beads/issues.jsonl
+git -C "$b/repo" commit -qm 'executable head entry'
+chmod -x "$jsonl"
+git -C "$b/repo" add -- .beads/issues.jsonl
+RESOLVER_ARGS=(--allow-dirty)
+assert_refused '--allow-dirty retains the regular HEAD-mode requirement' "$b" \
+  'beads JSONL HEAD entry is not one regular file'
+
+b=$(new_fixture)
+git -C "$b/repo" checkout -qb conflict-side
+printf '%s\n' side >"$(<"$b/jsonl-path")"
+git -C "$b/repo" commit -qam side
+git -C "$b/repo" checkout -q "$(<"$b/initial-branch")"
+printf '%s\n' main >"$(<"$b/jsonl-path")"
+git -C "$b/repo" commit -qam main
+git -C "$b/repo" merge conflict-side >/dev/null 2>&1 || :
+RESOLVER_ARGS=(--allow-dirty)
+assert_refused '--allow-dirty retains the stage-0 index requirement' "$b" \
+  'beads JSONL index entry is not one stage-0 regular file'
+
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+printf '%s\n' target >"$b/link-target"
+unlink "$jsonl"
+ln -s "$b/link-target" "$jsonl"
+RESOLVER_ARGS=(--allow-dirty)
+assert_refused '--allow-dirty retains the non-symlink worktree requirement' "$b" \
+  'beads JSONL worktree path is not a non-symlink regular file'
+
+b=$(new_fixture)
+outside="$b/outside.jsonl"
+printf '%s\n' outside >"$outside"
+set_where_path "$b" "$outside"
+RESOLVER_ARGS=(--allow-dirty)
+assert_refused '--allow-dirty retains worktree containment' "$b" \
+  'beads JSONL is outside the current worktree'
+
+# A file system monitor that misses a write is the one hidden state `ls-files -v` cannot
+# report: the entry keeps its fsmonitor-valid bit, so `-v` prints `H` and Git answers from
+# that bit. Measured on git 2.53.0 with the stub monitor above: after appending to the
+# tracked JSONL, `git status --porcelain` and `git diff --name-only` each printed zero
+# bytes at exit 0, `ls-files -v` printed `H`, and only `ls-files -f` printed `h`. The
+# consumers of this mode read that same status and `git diff HEAD` to decide what the
+# following `br sync --flush-only` may overwrite, so the cache would hand them a
+# clean-looking review of a file whose bead bodies differ.
+b=$(new_fixture)
+t='--allow-dirty refuses a modification the fsmonitor cache hides'
+if ! mark_fsmonitor_valid "$b"; then
+  fail "$t" 'fixture could not mark the JSONL entry fsmonitor-valid'
+else
+  printf '%s\n' '{"id":"hand-edit"}' >>"$(<"$b/jsonl-path")"
+  RESOLVER_ARGS=(--allow-dirty)
+  assert_refused "$t" "$b" 'beads JSONL modification is hidden by the fsmonitor cache'
+fi
+
+# The mode proof must also bypass a stale fsmonitor answer. With core.filemode=true,
+# Git must inspect the filesystem and report the owner-exec change even when the
+# monitor says the path is unchanged.
+b=$(new_fixture)
+t='--allow-dirty refuses a mode change the fsmonitor cache hides'
+if ! mark_fsmonitor_valid "$b"; then
+  fail "$t" 'fixture could not mark the JSONL entry fsmonitor-valid'
+else
+  chmod +x "$(<"$b/jsonl-path")"
+  RESOLVER_ARGS=(--allow-dirty)
+  assert_refused "$t" "$b" 'beads JSONL worktree mode is not 100644'
+fi
+
+# The bit alone is not the fault, and refusing it would be wrong: every entry in a
+# monitored repository carries it whenever Git last saw the file match the index. That
+# includes the staged-but-uncommitted JSONL this mode's consumers explicitly expect,
+# where the cached answer and the bytes agree and the diff they read is truthful.
+b=$(new_fixture)
+t='--allow-dirty accepts an fsmonitor-valid entry that hides nothing'
+jsonl=$(<"$b/jsonl-path")
+printf '%s\n' '{"id":"flushed-round"}' >>"$jsonl"
+git -C "$b/repo" add -- .beads/issues.jsonl
+if ! mark_fsmonitor_valid "$b"; then
+  fail "$t" 'fixture could not mark the JSONL entry fsmonitor-valid'
+else
+  RESOLVER_ARGS=(--allow-dirty)
+  assert_success "$t" "$b" "$jsonl"
+fi
+
+# The default mode needs no cache check of its own: it compares the worktree bytes, which
+# no index bit can answer for. That is why the check above belongs to `--allow-dirty`.
+b=$(new_fixture)
+t='the default mode refuses a modification the fsmonitor cache hides'
+if ! mark_fsmonitor_valid "$b"; then
+  fail "$t" 'fixture could not mark the JSONL entry fsmonitor-valid'
+else
+  printf '%s\n' '{"id":"hand-edit"}' >>"$(<"$b/jsonl-path")"
+  assert_refused "$t" "$b" 'beads JSONL differs among HEAD, index, and worktree'
+fi
+
+# Recovery is the narrower reason to name a path without the tracked/index/HEAD proof:
+# the JSONL may be the deleted artifact that recovery must restore. Resolution,
+# containment, and non-symlink/nonregular refusal still apply, and the mode remains
+# read-only with respect to Beads.
+b=$(new_fixture)
+unlink "$(<"$b/jsonl-path")"
+RESOLVER_ARGS=(--recovery)
+assert_success '--recovery names a destroyed JSONL for restoration' "$b" "$(<"$b/jsonl-path")"
+
+# The deleted-export exception must not extend to Git's own administrative files:
+# recovery consumers copy and later restore the returned name, so accepting HEAD would
+# let that restoration overwrite repository control state. `assert_refused` snapshots
+# both the actual JSONL and this distinct resolved path, and requires the stub's sole
+# read-only `where` call (no flush-shaped invocation).
+b=$(new_fixture)
+set_where_path "$b" "$b/repo/.git/HEAD"
+RESOLVER_ARGS=(--recovery)
+assert_refused '--recovery refuses a Git administrative HEAD path' "$b" \
+  'beads JSONL is inside the Git administrative directory'
+
+# In a linked worktree, `<worktree>/.git` is a regular pointer file rather than
+# the directory returned by `rev-parse --git-dir`. It is administrative state
+# just as surely as the shared/common directory, and a recovery consumer must
+# never copy over it.
+b=$(new_fixture)
+git -C "$b/repo" worktree add -q -b resolver-linked-worktree "$b/linked" HEAD
+set_where_path "$b" "$b/linked/.git"
+RESOLVER_CWD="$b/linked"
+RESOLVER_ARGS=(--recovery)
+assert_refused '--recovery refuses a linked-worktree .git pointer file' "$b" \
+  'beads JSONL is inside the Git administrative directory'
+
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+printf '%s\n' outside >"$b/link-target"
+unlink "$jsonl"
+ln -s "$b/link-target" "$jsonl"
+RESOLVER_ARGS=(--recovery)
+assert_refused '--recovery refuses a symlink JSONL' "$b" \
+  'beads JSONL worktree path is not a non-symlink regular file'
+
+# A dangling symlink is the symlink state real `br` hands this check, and it is the one
+# `--recovery` must not mistake for the absent artifact it exists to name. Measured on
+# br 0.2.19, streams separated by redirection, against a scratch repository whose
+# `.beads/issues.jsonl` was a symlink: `br --no-auto-flush --no-auto-import where --json`
+# printed the canonical *target* when that target existed (a link to `../unrelated.jsonl`
+# resolved to `<repo>/unrelated.jsonl`, one outside the worktree to its outside path, one
+# to a directory to that directory), and printed the symlink pathname itself only when the
+# target did not exist. So a live link is inspected as the file `br` will write through it,
+# containment refuses one that leaves the worktree, and the stub above additionally covers
+# a path replaced by a symlink after `br` answered.
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+unlink "$jsonl"
+ln -s "$b/repo/never-written.jsonl" "$jsonl"
+RESOLVER_ARGS=(--recovery)
+assert_refused '--recovery refuses a dangling symlink rather than calling it absent' "$b" \
+  'beads JSONL worktree path is not a non-symlink regular file'
+
+# Absent is the one non-regular state `--recovery` exists to name. Anything else that
+# occupies the path is not the damaged export: consumers `cp` and diff the resolved name,
+# and a FIFO blocks that read indefinitely rather than failing.
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+unlink "$jsonl"
+mkfifo "$jsonl"
+RESOLVER_ARGS=(--recovery)
+assert_refused '--recovery refuses a FIFO JSONL' "$b" \
+  'beads JSONL worktree path is not a non-symlink regular file'
+
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+unlink "$jsonl"
+mkdir -- "$jsonl"
+RESOLVER_ARGS=(--recovery)
+assert_refused '--recovery refuses a directory at the JSONL path' "$b" \
+  'beads JSONL worktree path is not a non-symlink regular file'
+
+b=$(new_fixture)
+set_where_path "$b" "$b/repo/."
+RESOLVER_ARGS=(--recovery)
+assert_refused '--recovery refuses dot as the final path component' "$b" \
+  'beads JSONL path has an unsafe final component'
+
+b=$(new_fixture)
+set_where_path "$b" "$b/repo/.."
+RESOLVER_ARGS=(--recovery)
+assert_refused '--recovery refuses dot-dot as the final path component' "$b" \
+  'beads JSONL path has an unsafe final component'
+
+b=$(new_fixture)
+outside="$b/outside.jsonl"
+printf '%s\n' outside >"$outside"
+set_where_path "$b" "$outside"
+RESOLVER_ARGS=(--recovery)
+assert_refused '--recovery still refuses a path outside the current worktree' "$b" \
+  'beads JSONL is outside the current worktree'
+
+b=$(new_fixture)
+printf '{}\n' >"$b/where.out"
+RESOLVER_ARGS=(--recovery)
+assert_refused '--recovery still refuses invalid workspace JSON' "$b" \
+  'cannot resolve exactly one beads JSONL'
+
+b=$(new_fixture)
+RESOLVER_ARGS=(--allow-everything)
+assert_refused 'an unknown option is refused' "$b" \
+  'usage: resolve-beads-jsonl [--allow-dirty|--recovery]'
+t='an unknown option refuses before br is invoked'
+if [[ -e "$b/br.calls" ]]; then fail "$t" 'br ran for an unparsed command line'
+else pass "$t"; fi
+
+printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
+[[ $FAIL -eq 0 ]]

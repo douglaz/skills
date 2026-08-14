@@ -160,7 +160,10 @@ recorded acceptance of the reduced review coverage.
 2. Confirm the graph is meaningful and has already had a real polish pass. If it
    is raw, redirect to `bead-polish-loop`; the final gate should not substitute for
    routine cleanup.
-3. Confirm `br`, `bv`, the requested reviewer CLIs, and `jq` as applicable.
+3. Confirm `br`, `bv`, `jq`, the requested reviewer CLIs, and the exact
+   `beads-jsonl-path` companion are available. The audit still runs `jq` itself for
+   the graph snapshot and the Claude JSON result, so the companion owning its own
+   `jq` check does not retire this one.
 4. Define the audit scope explicitly:
    - authoritative plan/spec files, approved deltas, and recorded waivers
    - plan-backed root beads/epics and their child/dependency closure
@@ -184,22 +187,133 @@ recorded acceptance of the reduced review coverage.
    # ../rb-lite-backlog-drain/SKILL.md#backlog-step-11.
    # Companion unavailable: stop, rerun the same installer command once, reload it, and
    # do not improvise this procedure.
-   _bw=$(br where --json) || { echo "cannot resolve the JSONL"; exit 1; }
-   BEADS_JSONL=$(printf '%s' "$_bw" | jq -er .jsonl_path) || { echo "cannot resolve the JSONL"; exit 1; }
-   # INSPECT, do not gate on cleanliness: the normal bead-polish-loop handoff arrives with
-   # the round's intended `br` edits uncommitted, so demanding a clean file would block the
-   # audit after every non-noop round. `git status` cannot tell an intended mutation from a
-   # hand edit — only reading the diff can. Compare against HEAD, not the index: a damaged
-   # JSONL that is staged makes a worktree-vs-index diff empty while HEAD still holds the
-   # good bodies.
-   git diff HEAD -- "$BEADS_JSONL" || { echo "cannot diff the JSONL — do NOT flush"; exit 1; }
-   : "${BEADS_DIFF_REVIEWED:?read the diff above, then set this to how you resolved it}"
+   BEADS_JSONL_RESOLVER=$(
+     (
+       # Resolve the clean interpreter in a subshell. POSIX special-builtin precedence
+       # prevents exported caller functions from redefining this trust path, and the
+       # subshell leaves the caller's shell state untouched.
+       POSIXLY_CORRECT=y
+       export POSIXLY_CORRECT
+       \unset -f command builtin exec unset 2>/dev/null || :
+       _bjp_bash=$(command -p -v bash) || {
+         printf '%s\n' 'cannot locate a trusted Bash for the beads JSONL locator — do NOT write' >&2
+         exit 1
+       }
+       unset BASH_ENV ENV BASH_COMPAT BASH_LOADABLES_PATH BASH_XTRACEFD CDPATH GLOBIGNORE
+       exec "$_bjp_bash" --noprofile --norc -p -s <<'__BJP_TRUSTED_BASH__'
+   # Privileged Bash ignores inherited functions. Clear the other startup controls too,
+   # then perform every candidate, worktree, provenance, and byte-agreement decision here.
+   command unset BASH_ENV ENV BASH_COMPAT BASH_LOADABLES_PATH BASH_XTRACEFD CDPATH GLOBIGNORE || {
+     printf '%s\n' 'cannot sanitize the beads JSONL locator shell environment — do NOT write' >&2
+     exit 1
+   }
+   while command builtin read -r _ _ _bjp_function; do
+     command unset -f -- "$_bjp_function" || {
+       printf '%s\n' 'cannot sanitize the beads JSONL locator shell environment — do NOT write' >&2
+       exit 1
+     }
+   done < <(command builtin declare -F)
+   unset _bjp_function
+   _bjp_git=$(command -p -v git) || {
+     printf '%s\n' 'cannot locate a trusted Git for beads-jsonl-path — do NOT write' >&2
+     exit 1
+   }
+   _bjp_cmp=$(command -p -v cmp) || {
+     printf '%s\n' 'cannot locate a trusted cmp for beads-jsonl-path — do NOT write' >&2
+     exit 1
+   }
+
+   BEADS_JSONL_RESOLVER=
+   for _bjp_dir in "$HOME/.claude/skills/beads-jsonl-path" \
+     "${CODEX_HOME:-$HOME/.codex}/skills/beads-jsonl-path" \
+     "$HOME/.agents/skills/beads-jsonl-path"; do
+     case $_bjp_dir in
+       /*) ;;
+       *) printf '%s\n' 'installed beads-jsonl-path target is not absolute — do NOT write' >&2; exit 1 ;;
+     esac
+     _bjp_candidate="$_bjp_dir/scripts/resolve-beads-jsonl"
+     [ -x "$_bjp_candidate" ] || continue
+     [ ! -L "$_bjp_candidate" ] || {
+       printf '%s\n' 'installed beads-jsonl-path resolver is a symbolic link — do NOT write' >&2
+       exit 1
+     }
+     _bjp_root_raw=$("$_bjp_git" --no-replace-objects rev-parse --show-toplevel 2>/dev/null) || {
+       printf '%s\n' 'cannot resolve the current Git worktree — do NOT write' >&2
+       exit 1
+     }
+     _bjp_root=$(
+       CDPATH=
+       export CDPATH
+       cd -P -- "$_bjp_root_raw" 2>/dev/null && pwd -P
+     ) || {
+       printf '%s\n' 'cannot canonicalize the current Git worktree — do NOT write' >&2
+       exit 1
+     }
+     _bjp_candidate_dir=$(
+       CDPATH=
+       export CDPATH
+       cd -P -- "$_bjp_dir/scripts" 2>/dev/null && pwd -P
+     ) || {
+       printf '%s\n' 'cannot canonicalize installed beads-jsonl-path target — do NOT write' >&2
+       exit 1
+     }
+     _bjp_candidate="$_bjp_candidate_dir/resolve-beads-jsonl"
+     [ ! -L "$_bjp_candidate" ] || {
+       printf '%s\n' 'installed beads-jsonl-path resolver is a symbolic link — do NOT write' >&2
+       exit 1
+     }
+     case $_bjp_root:$_bjp_candidate_dir in
+       /:/*|*:"$_bjp_root"|*:"$_bjp_root"/*)
+         printf '%s\n' 'installed beads-jsonl-path target is inside the current Git worktree — do NOT write' >&2
+         exit 1
+         ;;
+     esac
+     unset _bjp_candidate_dir
+     if [ -z "$BEADS_JSONL_RESOLVER" ]; then
+       BEADS_JSONL_RESOLVER=$_bjp_candidate
+     elif ! "$_bjp_cmp" -s "$BEADS_JSONL_RESOLVER" "$_bjp_candidate"; then
+       printf '%s\n' 'installed beads-jsonl-path companions disagree — do NOT write' >&2
+       exit 1
+     fi
+   done
+   unset _bjp_candidate _bjp_root _bjp_root_raw _bjp_git _bjp_cmp
+   [ -n "$BEADS_JSONL_RESOLVER" ] || {
+     printf '%s\n' 'beads-jsonl-path companion unavailable — do NOT write' >&2
+     exit 1
+   }
+   printf '%s\n' "$BEADS_JSONL_RESOLVER"
+   __BJP_TRUSTED_BASH__
+     )
+   ) || exit 1
+   unset _bjp_candidate
+   # Installed targets only. A relative `skills/beads-jsonl-path/scripts/resolve-beads-jsonl`
+   # is whatever executable the audited repo planted there, and this snippet would run it.
+   # From a checkout, run that checkout's copy by absolute path instead.
+   [ -n "$BEADS_JSONL_RESOLVER" ] || {
+     echo "beads-jsonl-path companion unavailable — do NOT flush" >&2
+     exit 1
+   }
+   # --allow-dirty, and INSPECT rather than gate on cleanliness: the normal
+   # bead-polish-loop handoff arrives with the round's intended `br` edits flushed and
+   # uncommitted, so the owner's default clean-state mode would refuse the audit after
+   # every non-noop round. Nothing tells an intended mutation from a hand edit — only
+   # reading the diff can. Compare against HEAD, not the index: a damaged JSONL that is
+   # staged makes a worktree-vs-index diff empty while HEAD still holds the good bodies.
+   # `--allow-dirty` retains the owner's tracked stage-0, normal-flag, regular-mode proof
+   # and drops byte identity only where the two commands below can still see the
+   # difference — it refuses a write a file system monitor's cache is hiding from them.
+   # The status and diff are both still required: status
+   # distinguishes staged from unstaged intended edits, while the HEAD diff exposes both.
+   BEADS_JSONL=$("$BEADS_JSONL_RESOLVER" --allow-dirty) || exit 1
+   git --no-replace-objects --literal-pathspecs status --porcelain -- "$BEADS_JSONL" || { echo "cannot read the worktree — do NOT flush"; exit 1; }
+   git --no-replace-objects --literal-pathspecs diff HEAD -- "$BEADS_JSONL" || { echo "cannot diff the JSONL — do NOT flush"; exit 1; }
+   : "${BEADS_DIFF_REVIEWED:?read the two commands above, then set this to how you resolved it}"
    br sync --flush-only || { echo "flush failed"; exit 1; }
    # AND AGAIN AFTER. A clean pre-flush diff only means the worktree matched git — it says
    # nothing about the gitignored cache, so a stale DB introduces the damage HERE. Read
    # this before consuming the graph; auditing a truncated one reviews text the reviewers
    # will never see.
-   git diff HEAD -- "$BEADS_JSONL" || { echo "cannot diff the JSONL — do NOT audit"; exit 1; }
+   git --no-replace-objects --literal-pathspecs diff HEAD -- "$BEADS_JSONL" || { echo "cannot diff the JSONL — do NOT audit"; exit 1; }
    : "${BEADS_POSTFLUSH_REVIEWED:?read the post-flush diff above before auditing}"
    br list --limit 0 --json -a
    bv --robot-triage

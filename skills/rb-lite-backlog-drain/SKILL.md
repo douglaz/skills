@@ -351,29 +351,125 @@ implement → review loop for each bead.
     mutation is already in the shared DB, so the sync either writes it out or fails loudly:
 
     ```bash
-    # DIVERGENCE CHECK FIRST — `br update` auto-flushes, so an unstaged hand-edit in the
-    # JSONL is destroyed by this very command, and neither the index nor HEAD holds it.
-        _bw=$(br where --json) || { echo "cannot resolve the beads JSONL path — do NOT write"; exit 1; }
-        BEADS_JSONL=$(printf '%s' "$_bw" | jq -er .jsonl_path) || { echo "cannot resolve the beads JSONL path — do NOT write"; exit 1; }
-    # Capture separately: `[ -z "$(git status ...)" ]` discards git's exit code, so a FAILED
-    # inspection reads as a clean tree and lets the write through — the guard failing open at
-    # exactly the moment it matters. Compare against HEAD, not the index: a damaged JSONL that
-    # is staged leaves a worktree-vs-index diff empty while HEAD holds the good bodies.
-    _st=$(git status --porcelain -- "$BEADS_JSONL") \
-      || { echo "cannot read the worktree — do NOT write"; exit 1; }
-    [ -z "$_st" ] || { git diff HEAD -- "$BEADS_JSONL"
-      echo "JSONL differs from HEAD — read that diff and resolve it BEFORE writing"; exit 1; }
+    # Resolve and prove the JSONL clean FIRST: `br update` auto-flushes the cache over it.
+    BEADS_JSONL_RESOLVER=$(
+      (
+        # Resolve the clean interpreter in a subshell. POSIX special-builtin precedence
+        # prevents exported caller functions from redefining this trust path, and the
+        # subshell leaves the caller's shell state untouched.
+        POSIXLY_CORRECT=y
+        export POSIXLY_CORRECT
+        \unset -f command builtin exec unset 2>/dev/null || :
+        _bjp_bash=$(command -p -v bash) || {
+          printf '%s\n' 'cannot locate a trusted Bash for the beads JSONL locator — do NOT write' >&2
+          exit 1
+        }
+        unset BASH_ENV ENV BASH_COMPAT BASH_LOADABLES_PATH BASH_XTRACEFD CDPATH GLOBIGNORE
+        exec "$_bjp_bash" --noprofile --norc -p -s <<'__BJP_TRUSTED_BASH__'
+    # Privileged Bash ignores inherited functions. Clear the other startup controls too,
+    # then perform every candidate, worktree, provenance, and byte-agreement decision here.
+    command unset BASH_ENV ENV BASH_COMPAT BASH_LOADABLES_PATH BASH_XTRACEFD CDPATH GLOBIGNORE || {
+      printf '%s\n' 'cannot sanitize the beads JSONL locator shell environment — do NOT write' >&2
+      exit 1
+    }
+    while command builtin read -r _ _ _bjp_function; do
+      command unset -f -- "$_bjp_function" || {
+        printf '%s\n' 'cannot sanitize the beads JSONL locator shell environment — do NOT write' >&2
+        exit 1
+      }
+    done < <(command builtin declare -F)
+    unset _bjp_function
+    _bjp_git=$(command -p -v git) || {
+      printf '%s\n' 'cannot locate a trusted Git for beads-jsonl-path — do NOT write' >&2
+      exit 1
+    }
+    _bjp_cmp=$(command -p -v cmp) || {
+      printf '%s\n' 'cannot locate a trusted cmp for beads-jsonl-path — do NOT write' >&2
+      exit 1
+    }
+
+    BEADS_JSONL_RESOLVER=
+    for _bjp_dir in "$HOME/.claude/skills/beads-jsonl-path" \
+      "${CODEX_HOME:-$HOME/.codex}/skills/beads-jsonl-path" \
+      "$HOME/.agents/skills/beads-jsonl-path"; do
+      case $_bjp_dir in
+        /*) ;;
+        *) printf '%s\n' 'installed beads-jsonl-path target is not absolute — do NOT write' >&2; exit 1 ;;
+      esac
+      _bjp_candidate="$_bjp_dir/scripts/resolve-beads-jsonl"
+      [ -x "$_bjp_candidate" ] || continue
+      [ ! -L "$_bjp_candidate" ] || {
+        printf '%s\n' 'installed beads-jsonl-path resolver is a symbolic link — do NOT write' >&2
+        exit 1
+      }
+      _bjp_root_raw=$("$_bjp_git" --no-replace-objects rev-parse --show-toplevel 2>/dev/null) || {
+        printf '%s\n' 'cannot resolve the current Git worktree — do NOT write' >&2
+        exit 1
+      }
+      _bjp_root=$(
+        CDPATH=
+        export CDPATH
+        cd -P -- "$_bjp_root_raw" 2>/dev/null && pwd -P
+      ) || {
+        printf '%s\n' 'cannot canonicalize the current Git worktree — do NOT write' >&2
+        exit 1
+      }
+      _bjp_candidate_dir=$(
+        CDPATH=
+        export CDPATH
+        cd -P -- "$_bjp_dir/scripts" 2>/dev/null && pwd -P
+      ) || {
+        printf '%s\n' 'cannot canonicalize installed beads-jsonl-path target — do NOT write' >&2
+        exit 1
+      }
+      _bjp_candidate="$_bjp_candidate_dir/resolve-beads-jsonl"
+      [ ! -L "$_bjp_candidate" ] || {
+        printf '%s\n' 'installed beads-jsonl-path resolver is a symbolic link — do NOT write' >&2
+        exit 1
+      }
+      case $_bjp_root:$_bjp_candidate_dir in
+        /:/*|*:"$_bjp_root"|*:"$_bjp_root"/*)
+          printf '%s\n' 'installed beads-jsonl-path target is inside the current Git worktree — do NOT write' >&2
+          exit 1
+          ;;
+      esac
+      unset _bjp_candidate_dir
+      if [ -z "$BEADS_JSONL_RESOLVER" ]; then
+        BEADS_JSONL_RESOLVER=$_bjp_candidate
+      elif ! "$_bjp_cmp" -s "$BEADS_JSONL_RESOLVER" "$_bjp_candidate"; then
+        printf '%s\n' 'installed beads-jsonl-path companions disagree — do NOT write' >&2
+        exit 1
+      fi
+    done
+    unset _bjp_candidate _bjp_root _bjp_root_raw _bjp_git _bjp_cmp
+    [ -n "$BEADS_JSONL_RESOLVER" ] || {
+      printf '%s\n' 'beads-jsonl-path companion unavailable — do NOT write' >&2
+      exit 1
+    }
+    printf '%s\n' "$BEADS_JSONL_RESOLVER"
+    __BJP_TRUSTED_BASH__
+      )
+    ) || exit 1
+    unset _bjp_candidate
+    # Installed targets only. A relative `skills/beads-jsonl-path/scripts/resolve-beads-jsonl`
+    # is whatever executable the repo being drained planted there, and this snippet would
+    # run it. From a checkout, run that checkout's copy by absolute path instead.
+    [ -n "$BEADS_JSONL_RESOLVER" ] || {
+      echo "beads-jsonl-path companion unavailable — do NOT write" >&2
+      exit 1
+    }
+    BEADS_JSONL=$("$BEADS_JSONL_RESOLVER") || exit 1
     br update <bead-id> -s closed || { echo "br update failed"; exit 1; }
     br sync --flush-only || { echo "not persisted"; exit 1; }
     ```
 
     **Check for divergence BEFORE the first `br` write.** `br update` auto-flushes, so a
-    hand-edit sitting unstaged in the JSONL is destroyed by the very first mutation — and
+    staged or unstaged divergence in the JSONL is destroyed by the very first mutation — and
     since neither the index nor `HEAD` holds it, every later diff shows only your intended
-    change, which makes the loss *undetectable*, not merely unrecoverable. Resolve the real
-    path (`br where --json | jq -er .jsonl_path`; `.beads/issues.jsonl` is only the default
-    layout, and a hardcoded path diffs nothing on a `.beads.jsonl` repo — a false
-    all-clear) and run `git status --porcelain` on it before any `br` command.
+    change, which makes the loss *undetectable*, not merely unrecoverable. Resolve and
+    prove the real path clean with `beads-jsonl-path/scripts/resolve-beads-jsonl` before
+    any writing `br` command; `.beads/issues.jsonl` is only the default layout, and a
+    hardcoded path gives a false all-clear on a `.beads.jsonl` repo.
 
     **That sync proves the closure reached the file. It says nothing about what else the
     same write overwrote.** Every `br` write flushes the whole gitignored cache over the
@@ -391,7 +487,16 @@ implement → review loop for each bead.
     --help`'s "Stale DB Guard" is an **id**-level check, so same-id-different-body — the
     case that loses text — is unguarded by design.
 
-    So field-diff the resolved path before committing any `br` write. A full-file
+    So field-diff the resolved path before committing any `br` write. Rerun the
+    resolver-locator block above, stopping before its final clean-mode `BEADS_JSONL=` call,
+    and resolve it with
+    `BEADS_JSONL=$("$BEADS_JSONL_RESOLVER" --allow-dirty) || exit 1` here: the write already
+    happened, so the divergence you are inspecting is exactly what the default clean-state
+    mode refuses. In recovery use
+    `BEADS_JSONL=$("$BEADS_JSONL_RESOLVER" --recovery) || exit 1`, which can name a missing
+    artifact without pretending it is still tracked and structurally safe. A fresh
+    recovery session that
+    hardcodes `.beads/issues.jsonl` restores nothing on a `.beads.jsonl` repo. A full-file
     re-serialization with every id on both sides is normal; ids on only one side, or a
     `description` you did not touch, is the tell.
 

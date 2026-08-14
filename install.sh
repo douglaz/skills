@@ -116,10 +116,10 @@ companion_dependencies() {
       printf '%s\n' multi-reviewer-loop
       ;;
     orchestrating-with-rb-lite|bead-polish-loop|plan-to-beads-transfer|second-model-bead-audit)
-      printf '%s\n' rb-lite-backlog-drain
+      printf '%s\n' rb-lite-backlog-drain beads-jsonl-path
       ;;
     rb-lite-backlog-drain)
-      printf '%s\n' orchestrating-with-rb-lite
+      printf '%s\n' orchestrating-with-rb-lite beads-jsonl-path
       ;;
     pr-with-codex-bot-review)
       printf '%s\n' pr-with-codex-bot-review-merge
@@ -128,7 +128,7 @@ companion_dependencies() {
       printf '%s\n' pr-with-codex-bot-review
       ;;
     drive)
-      printf '%s\n' rb-lite-backlog-drain pr-with-codex-bot-review-merge
+      printf '%s\n' rb-lite-backlog-drain pr-with-codex-bot-review-merge beads-jsonl-path
       ;;
   esac
 }

@@ -182,7 +182,10 @@ for PR creation/checks/merge, and **`jq` in the HOST shell**. That last one is n
 covered by the Nix-wrapper exemption above: the wrapper supplies `jq` to rb-lite, not
 to you. Load exact companion skill `rb-lite-backlog-drain` for
 [step 11's collateral-damage check and recovery](../rb-lite-backlog-drain/SKILL.md#backlog-step-11),
-which resolve the graph's real path through `br where --json | jq`. Without host `jq` a drain can run `br update`
+which resolve the graph's real path through exact companion
+`beads-jsonl-path/scripts/resolve-beads-jsonl` — its default clean-state mode before the
+first write, `--allow-dirty` for the structurally tracked post-write field diff, and
+`--recovery` only when naming the damaged artifact. Without that owner a drain can run `br update`
 and flush — silently reverting unrelated bead bodies — and only then fail at the command
 that would have located the damage. Check it before the first bead, not after. Require **`br` ≥ 0.1.45**: older builds corrupt
 their DB after branch resets, so `br update`/`br close` start returning

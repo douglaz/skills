@@ -46,11 +46,9 @@ loop:
 - You know both refs: the *work branch* being hardened and the *review base*
   (usually the default branch). Ask once if either is unclear — the loop runs
   many subcommands and a silent misconfiguration is expensive.
-- **`jq` is on the HOST `PATH`.** Not a backlog-drain-only prerequisite: section 3 runs
-  `br create` and flushes before anything resolves the graph's path, and that resolution
-  is `br where --json | jq` in *your* shell — the Nix wrapper supplies jq to rb-lite, not
-  to you. Without it this loop mutates the graph and only then fails at the command that
-  would have located the damage. Check before section 3, not after.
+- The exact `beads-jsonl-path` companion is available. Run it before section 3; it
+  diagnoses host dependencies such as `jq` and refuses any JSONL state that is not clean,
+  tracked, and owned by this worktree before the first `br create` can flush.
 - `br` is **≥ 0.1.45**. Older versions corrupt their DB after branch resets:
   `br update`/`br close` start returning `ISSUE_NOT_FOUND` while `br show` and
   `br list` keep working, which hides the problem until you have lost bead state.
@@ -254,39 +252,122 @@ it still chooses how far to read, so run the grep yourself. Classes that repeat:
 - scheme/domain/host scoping at every write site of the same cookie
 
 
-**Before the first `br` write, check the JSONL for divergence.** Any `br` mutation
-auto-flushes the cache over the tracked file, so an unstaged hand-edit is erased by your
-first write — and since neither the index nor `HEAD` holds it, every later diff shows only
-your intended changes and the loss becomes *undetectable*. Resolve the path in its own
-checked steps, and check the inspection too — embedded in a `git status` argument the
-resolution's exit code is swallowed, and two of those failures are **silent** rather than
-loud. Measured on git 2.54.0 / jq 1.8.2:
-
-- `br where` exiting non-zero *after* emitting valid JSON. The pipeline reports only its
-  last command's status, so `jq` succeeds and the assignment returns 0.
-- `br where` emitting JSON without the key: `jq -er .jsonl_path` exits 1 **and prints
-  `null`**, so the substitution yields the literal pathspec `null` and
-  `git status --porcelain -- null` exits 0 printing nothing.
-
-(A genuinely empty pathspec is *not* the hazard — `git status --porcelain -- ""` fails
-loudly with `fatal: empty string is not a valid pathspec`, exit 128, on the version stated
-above. Behavior may differ on older git — unmeasured here; if you must support one,
-measure there.)
-
-And `git status` itself can fail — a JSONL resolved outside this worktree exits 128
-(`fatal: … is outside repository`) — printing nothing on **stdout**, so gating on stdout
-emptiness alone reads a failed inspection as a clean tree right before the destructive
-first flush:
+**Before the first `br` write, resolve and prove the JSONL clean through its exact fact
+owner.** Any `br` mutation auto-flushes the cache over the tracked file, so staged,
+unstaged, hidden-index, unmerged, type, mode, or wrong-worktree state must refuse the
+write before the cache can overwrite it:
 
 ```bash
-_bw=$(br where --json) || { echo "cannot resolve the beads JSONL"; exit 1; }
-BEADS_JSONL=$(printf '%s' "$_bw" | jq -er .jsonl_path) || { echo "cannot resolve the beads JSONL"; exit 1; }
-_st=$(git status --porcelain -- "$BEADS_JSONL") \
-  || { echo "cannot read the worktree — do NOT write"; exit 1; }
-printf '%s' "$_st"
+BEADS_JSONL_RESOLVER=$(
+  (
+    # Resolve the clean interpreter in a subshell. POSIX special-builtin precedence
+    # prevents exported caller functions from redefining this trust path, and the
+    # subshell leaves the caller's shell state untouched.
+    POSIXLY_CORRECT=y
+    export POSIXLY_CORRECT
+    \unset -f command builtin exec unset 2>/dev/null || :
+    _bjp_bash=$(command -p -v bash) || {
+      printf '%s\n' 'cannot locate a trusted Bash for the beads JSONL locator — do NOT write' >&2
+      exit 1
+    }
+    unset BASH_ENV ENV BASH_COMPAT BASH_LOADABLES_PATH BASH_XTRACEFD CDPATH GLOBIGNORE
+    exec "$_bjp_bash" --noprofile --norc -p -s <<'__BJP_TRUSTED_BASH__'
+# Privileged Bash ignores inherited functions. Clear the other startup controls too,
+# then perform every candidate, worktree, provenance, and byte-agreement decision here.
+command unset BASH_ENV ENV BASH_COMPAT BASH_LOADABLES_PATH BASH_XTRACEFD CDPATH GLOBIGNORE || {
+  printf '%s\n' 'cannot sanitize the beads JSONL locator shell environment — do NOT write' >&2
+  exit 1
+}
+while command builtin read -r _ _ _bjp_function; do
+  command unset -f -- "$_bjp_function" || {
+    printf '%s\n' 'cannot sanitize the beads JSONL locator shell environment — do NOT write' >&2
+    exit 1
+  }
+done < <(command builtin declare -F)
+unset _bjp_function
+_bjp_git=$(command -p -v git) || {
+  printf '%s\n' 'cannot locate a trusted Git for beads-jsonl-path — do NOT write' >&2
+  exit 1
+}
+_bjp_cmp=$(command -p -v cmp) || {
+  printf '%s\n' 'cannot locate a trusted cmp for beads-jsonl-path — do NOT write' >&2
+  exit 1
+}
+
+BEADS_JSONL_RESOLVER=
+for _bjp_dir in "$HOME/.claude/skills/beads-jsonl-path" \
+  "${CODEX_HOME:-$HOME/.codex}/skills/beads-jsonl-path" \
+  "$HOME/.agents/skills/beads-jsonl-path"; do
+  case $_bjp_dir in
+    /*) ;;
+    *) printf '%s\n' 'installed beads-jsonl-path target is not absolute — do NOT write' >&2; exit 1 ;;
+  esac
+  _bjp_candidate="$_bjp_dir/scripts/resolve-beads-jsonl"
+  [ -x "$_bjp_candidate" ] || continue
+  [ ! -L "$_bjp_candidate" ] || {
+    printf '%s\n' 'installed beads-jsonl-path resolver is a symbolic link — do NOT write' >&2
+    exit 1
+  }
+  _bjp_root_raw=$("$_bjp_git" --no-replace-objects rev-parse --show-toplevel 2>/dev/null) || {
+    printf '%s\n' 'cannot resolve the current Git worktree — do NOT write' >&2
+    exit 1
+  }
+  _bjp_root=$(
+    CDPATH=
+    export CDPATH
+    cd -P -- "$_bjp_root_raw" 2>/dev/null && pwd -P
+  ) || {
+    printf '%s\n' 'cannot canonicalize the current Git worktree — do NOT write' >&2
+    exit 1
+  }
+  _bjp_candidate_dir=$(
+    CDPATH=
+    export CDPATH
+    cd -P -- "$_bjp_dir/scripts" 2>/dev/null && pwd -P
+  ) || {
+    printf '%s\n' 'cannot canonicalize installed beads-jsonl-path target — do NOT write' >&2
+    exit 1
+  }
+  _bjp_candidate="$_bjp_candidate_dir/resolve-beads-jsonl"
+  [ ! -L "$_bjp_candidate" ] || {
+    printf '%s\n' 'installed beads-jsonl-path resolver is a symbolic link — do NOT write' >&2
+    exit 1
+  }
+  case $_bjp_root:$_bjp_candidate_dir in
+    /:/*|*:"$_bjp_root"|*:"$_bjp_root"/*)
+      printf '%s\n' 'installed beads-jsonl-path target is inside the current Git worktree — do NOT write' >&2
+      exit 1
+      ;;
+  esac
+  unset _bjp_candidate_dir
+  if [ -z "$BEADS_JSONL_RESOLVER" ]; then
+    BEADS_JSONL_RESOLVER=$_bjp_candidate
+  elif ! "$_bjp_cmp" -s "$BEADS_JSONL_RESOLVER" "$_bjp_candidate"; then
+    printf '%s\n' 'installed beads-jsonl-path companions disagree — do NOT write' >&2
+    exit 1
+  fi
+done
+unset _bjp_candidate _bjp_root _bjp_root_raw _bjp_git _bjp_cmp
+[ -n "$BEADS_JSONL_RESOLVER" ] || {
+  printf '%s\n' 'beads-jsonl-path companion unavailable — do NOT write' >&2
+  exit 1
+}
+printf '%s\n' "$BEADS_JSONL_RESOLVER"
+__BJP_TRUSTED_BASH__
+  )
+) || exit 1
+unset _bjp_candidate
+# Installed targets only. A relative `skills/beads-jsonl-path/scripts/resolve-beads-jsonl`
+# is whatever executable the repo you are hardening planted there, and this snippet would
+# run it. From a checkout, run that checkout's copy by absolute path instead.
+[ -n "$BEADS_JSONL_RESOLVER" ] || {
+  echo "beads-jsonl-path companion unavailable — do NOT write" >&2
+  exit 1
+}
+BEADS_JSONL=$("$BEADS_JSONL_RESOLVER") || exit 1
 ```
 
-If it is not empty, resolve it first — recovery case (a) in
+If the owner refuses, resolve the reported state first — recovery case (a) in
 [exact companion skill `rb-lite-backlog-drain`, step 11](../../rb-lite-backlog-drain/SKILL.md#backlog-step-11). After the first flush the choice
 is gone.
 
@@ -334,9 +415,14 @@ Then flush and commit — `br` never touches git, that part is yours:
 
 ```bash
 br sync --flush-only || { echo "findings not persisted"; exit 1; }
-_bw=$(br where --json) || { echo "cannot resolve the beads JSONL"; exit 1; }
-BEADS_JSONL=$(printf '%s' "$_bw" | jq -er .jsonl_path) || { echo "cannot resolve the beads JSONL"; exit 1; }
-git diff HEAD -- "$BEADS_JSONL" || { echo "cannot diff the JSONL — do NOT stage"; exit 1; }
+# In a fresh shell, rerun the resolver-locator block from section 2 first,
+# stopping before its final clean-mode `BEADS_JSONL=` call. `--allow-dirty`
+# because the findings you just flushed ARE the divergence the default mode refuses — that
+# mode guards writes, and this diff runs after one.
+BEADS_JSONL=$("$BEADS_JSONL_RESOLVER" --allow-dirty) \
+  || { echo "cannot resolve the beads JSONL"; exit 1; }
+git --no-replace-objects --literal-pathspecs diff HEAD -- "$BEADS_JSONL" \
+  || { echo "cannot diff the JSONL — do NOT stage"; exit 1; }
 ```
 
 **Stop the block here and read that diff.** This is a real split, not a comment: run the
@@ -356,7 +442,7 @@ exists to catch. Prose underneath a `git add` cannot stop a shell.
 unset BEADS_DIFF_REVIEWED
 # ...print and read the diff, then:
 : "${BEADS_DIFF_REVIEWED:?read THIS pass's diff, then set it to \"pass $ITERATION: <what you found>\"}"
-git add -- "$BEADS_JSONL"
+git --no-replace-objects --literal-pathspecs add -- "$BEADS_JSONL"
 git commit -m "chore(beads): record review findings (iteration <N>, codex+claude/<model>)"
 git push
 ```

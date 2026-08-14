@@ -142,13 +142,115 @@ done
 # so an unstaged hand-edit is destroyed HERE — and the diff below then compares the file
 # against an index that already matches it, comes back empty, and the audit snapshots the
 # truncated graph having "checked". The check has to precede the write it guards.
-_bw=$(br where --json) || { echo "cannot resolve the beads JSONL path" >&2; exit 1; }
-BEADS_JSONL=$(printf '%s' "$_bw" | jq -er .jsonl_path) || { echo "cannot resolve the beads JSONL path" >&2; exit 1; }
-# INSPECT before flushing — the next line writes the cache over this file, so anything in
-# the worktree that the cache does not know about is gone afterwards, with no diff left to
-# show it. Do NOT gate on a clean file: the normal `bead-polish-loop` handoff arrives with
-# the round's intended `br` edits uncommitted, so demanding cleanliness would block the
-# audit after every non-noop round.
+BEADS_JSONL_RESOLVER=$(
+  (
+    # Resolve the clean interpreter in a subshell. POSIX special-builtin precedence
+    # prevents exported caller functions from redefining this trust path, and the
+    # subshell leaves the caller's shell state untouched.
+    POSIXLY_CORRECT=y
+    export POSIXLY_CORRECT
+    \unset -f command builtin exec unset 2>/dev/null || :
+    _bjp_bash=$(command -p -v bash) || {
+      printf '%s\n' 'cannot locate a trusted Bash for the beads JSONL locator — do NOT write' >&2
+      exit 1
+    }
+    unset BASH_ENV ENV BASH_COMPAT BASH_LOADABLES_PATH BASH_XTRACEFD CDPATH GLOBIGNORE
+    exec "$_bjp_bash" --noprofile --norc -p -s <<'__BJP_TRUSTED_BASH__'
+# Privileged Bash ignores inherited functions. Clear the other startup controls too,
+# then perform every candidate, worktree, provenance, and byte-agreement decision here.
+command unset BASH_ENV ENV BASH_COMPAT BASH_LOADABLES_PATH BASH_XTRACEFD CDPATH GLOBIGNORE || {
+  printf '%s\n' 'cannot sanitize the beads JSONL locator shell environment — do NOT write' >&2
+  exit 1
+}
+while command builtin read -r _ _ _bjp_function; do
+  command unset -f -- "$_bjp_function" || {
+    printf '%s\n' 'cannot sanitize the beads JSONL locator shell environment — do NOT write' >&2
+    exit 1
+  }
+done < <(command builtin declare -F)
+unset _bjp_function
+_bjp_git=$(command -p -v git) || {
+  printf '%s\n' 'cannot locate a trusted Git for beads-jsonl-path — do NOT write' >&2
+  exit 1
+}
+_bjp_cmp=$(command -p -v cmp) || {
+  printf '%s\n' 'cannot locate a trusted cmp for beads-jsonl-path — do NOT write' >&2
+  exit 1
+}
+
+BEADS_JSONL_RESOLVER=
+for _bjp_dir in "$HOME/.claude/skills/beads-jsonl-path" \
+  "${CODEX_HOME:-$HOME/.codex}/skills/beads-jsonl-path" \
+  "$HOME/.agents/skills/beads-jsonl-path"; do
+  case $_bjp_dir in
+    /*) ;;
+    *) printf '%s\n' 'installed beads-jsonl-path target is not absolute — do NOT write' >&2; exit 1 ;;
+  esac
+  _bjp_candidate="$_bjp_dir/scripts/resolve-beads-jsonl"
+  [ -x "$_bjp_candidate" ] || continue
+  [ ! -L "$_bjp_candidate" ] || {
+    printf '%s\n' 'installed beads-jsonl-path resolver is a symbolic link — do NOT write' >&2
+    exit 1
+  }
+  _bjp_root_raw=$("$_bjp_git" --no-replace-objects rev-parse --show-toplevel 2>/dev/null) || {
+    printf '%s\n' 'cannot resolve the current Git worktree — do NOT write' >&2
+    exit 1
+  }
+  _bjp_root=$(
+    CDPATH=
+    export CDPATH
+    cd -P -- "$_bjp_root_raw" 2>/dev/null && pwd -P
+  ) || {
+    printf '%s\n' 'cannot canonicalize the current Git worktree — do NOT write' >&2
+    exit 1
+  }
+  _bjp_candidate_dir=$(
+    CDPATH=
+    export CDPATH
+    cd -P -- "$_bjp_dir/scripts" 2>/dev/null && pwd -P
+  ) || {
+    printf '%s\n' 'cannot canonicalize installed beads-jsonl-path target — do NOT write' >&2
+    exit 1
+  }
+  _bjp_candidate="$_bjp_candidate_dir/resolve-beads-jsonl"
+  [ ! -L "$_bjp_candidate" ] || {
+    printf '%s\n' 'installed beads-jsonl-path resolver is a symbolic link — do NOT write' >&2
+    exit 1
+  }
+  case $_bjp_root:$_bjp_candidate_dir in
+    /:/*|*:"$_bjp_root"|*:"$_bjp_root"/*)
+      printf '%s\n' 'installed beads-jsonl-path target is inside the current Git worktree — do NOT write' >&2
+      exit 1
+      ;;
+  esac
+  unset _bjp_candidate_dir
+  if [ -z "$BEADS_JSONL_RESOLVER" ]; then
+    BEADS_JSONL_RESOLVER=$_bjp_candidate
+  elif ! "$_bjp_cmp" -s "$BEADS_JSONL_RESOLVER" "$_bjp_candidate"; then
+    printf '%s\n' 'installed beads-jsonl-path companions disagree — do NOT write' >&2
+    exit 1
+  fi
+done
+unset _bjp_candidate _bjp_root _bjp_root_raw _bjp_git _bjp_cmp
+[ -n "$BEADS_JSONL_RESOLVER" ] || {
+  printf '%s\n' 'beads-jsonl-path companion unavailable — do NOT write' >&2
+  exit 1
+}
+printf '%s\n' "$BEADS_JSONL_RESOLVER"
+__BJP_TRUSTED_BASH__
+  )
+) || exit 1
+unset _bjp_candidate
+# Installed targets only. A relative `skills/beads-jsonl-path/scripts/resolve-beads-jsonl`
+# is whatever executable the audited repo planted there, and this snippet would run it.
+# From a checkout, run that checkout's copy by absolute path instead.
+[ -n "$BEADS_JSONL_RESOLVER" ] || {
+  echo "beads-jsonl-path companion unavailable — do NOT flush" >&2
+  exit 1
+}
+# --allow-dirty: do NOT gate on a clean file here. The normal `bead-polish-loop` handoff
+# arrives with the round's intended `br` edits flushed and uncommitted, so the owner's
+# default clean-state mode would block the audit after every non-noop round.
 #
 # The question is not "is it dirty" but "is any of this dirt something the cache will
 # destroy" — i.e. hand-edited bead text, which never advances `updated_at`. Read the diff
@@ -156,8 +258,16 @@ BEADS_JSONL=$(printf '%s' "$_bw" | jq -er .jsonl_path) || { echo "cannot resolve
 # Against HEAD, not the index: a damaged JSONL that is STAGED makes a worktree-vs-index
 # diff empty while HEAD still holds the good bodies, so the operator would acknowledge a
 # clean-looking diff and flush the damage.
-git status --porcelain -- "$BEADS_JSONL" || { echo "cannot read the worktree — do NOT flush" >&2; exit 1; }
-git diff HEAD -- "$BEADS_JSONL"          || { echo "cannot diff the JSONL — do NOT flush" >&2; exit 1; }
+#
+# `--allow-dirty` retains the owner's tracked stage-0, normal-flag, regular-mode proof and
+# drops byte identity only where the two commands below can still see the difference: it
+# refuses a write a file system monitor's cache is hiding from them, because then the diff
+# you are about to read reports a clean file over changed bead bodies.
+# Run both commands anyway: status distinguishes staged from
+# unstaged intended edits, while the HEAD diff exposes both for review before the flush.
+BEADS_JSONL=$("$BEADS_JSONL_RESOLVER" --allow-dirty) || exit 1
+git --no-replace-objects --literal-pathspecs status --porcelain -- "$BEADS_JSONL" || { echo "cannot read the worktree — do NOT flush" >&2; exit 1; }
+git --no-replace-objects --literal-pathspecs diff HEAD -- "$BEADS_JSONL"          || { echo "cannot diff the JSONL — do NOT flush" >&2; exit 1; }
 # Keep a copy of what the worktree held BEFORE the flush. Neither git ref works as the
 # post-flush baseline: if the index holds an earlier damaged export and the worktree holds
 # the good recovery, HEAD-vs-worktree looks fine beforehand, the flush replaces the good
@@ -176,7 +286,7 @@ br sync --flush-only || { echo "flush failed — do not audit an unwritten graph
 # `description` this session did not write, is the tell. Recovery:
 # exact companion skill rb-lite-backlog-drain, step 11:
 # ../../rb-lite-backlog-drain/SKILL.md#backlog-step-11.
-git diff -- "$BEADS_JSONL"
+git --no-replace-objects --literal-pathspecs diff -- "$BEADS_JSONL"
 ```
 
 **Stop the block here.** The line above is a real gate, not a comment: run the snapshot

@@ -986,8 +986,10 @@ Create exact companion owner:
 `resolve-beads-jsonl` runs the following resolution, additionally verifies that
 the result is inside the current Git worktree, and prints only that absolute path
 on success. Sweep every executable block, prose instruction, and comment that
-resolves the Beads JSONL to use the exact installed companion path, falling back
-to the checkout owner only when no installed target resolves. Require:
+resolves the Beads JSONL to use the exact installed companion path. When no
+installed target resolves, the operator may explicitly invoke the checkout owner's
+resolver by its trusted absolute path; do not auto-execute a repository-relative
+fallback. Require:
 
 ```bash
 _bw_file=$(mktemp) ||
@@ -1028,6 +1030,7 @@ BEADS_JSONL=$(
          ((.[0] | type) == "object") and
          ((.[0].jsonl_path | type) == "string") and
          ((.[0].jsonl_path | length) > 0) and
+         (.[0].jsonl_path | startswith("/")) and
          ((.[0].jsonl_path | contains("\u0000")) | not) and
          ((.[0].jsonl_path | test("[\r\n]")) | not)
        then .[0].jsonl_path
@@ -1046,7 +1049,7 @@ or one tested fact owner with equivalent fail-closed behavior.
 The displayed shell captures raw stdout to a private file and rejects a NUL at
 the byte level before JSON parsing or command substitution; only validated jq
 output enters a shell variable. It also pins JSON cardinality and rejects
-NUL/CR/LF in the decoded path before jq emits it. The companion owns
+relative or NUL/CR/LF-bearing decoded paths before jq emits one. The companion owns
 the remaining byte-safe inspection. It canonicalizes the current worktree root
 and resolved parent without following the final path, requires the path to be
 inside that root, and reads raw NUL-delimited `git ls-files --stage -z`,
@@ -1060,6 +1063,20 @@ worktree bytes without filters and requires all three byte strings to be
 identical before printing the path. It therefore refuses staged, unstaged,
 mode-only, hidden-index-flag, unmerged, missing, ignored/untracked, symlink,
 gitlink, and wrong-worktree states rather than trusting porcelain visibility.
+
+The companion also exposes two explicit read-only modes required by existing
+handoffs. `--allow-dirty` relaxes only the three-way byte-identity requirement;
+it retains containment, one normally flagged tracked stage-0 `100644` index
+entry, a matching regular HEAD entry, and a non-symlink regular `100644`
+worktree file before returning a path. Because `git ls-files -v` reports `H`
+for an fsmonitor-valid entry, that mode additionally reads `git ls-files -f -z`
+and, when Git is answering for the path from the monitor's cache, requires the
+index blob and worktree bytes to match: a missed write would otherwise leave the
+consumer's own `git status` and `git diff HEAD` showing a clean file. `--recovery` may name an absent or
+untracked path after byte-safe resolution and containment, but it still refuses
+symlink and nonregular occupants. Recovery mode names an artifact for
+restoration only and never authorizes a subsequent Beads query, mutation, or
+flush.
 
 Likely consumers include Drive, plan transfer, bead polish, rb-lite backlog
 drain, and orchestration guidance. Add this companion to their selective-install
