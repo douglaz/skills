@@ -1,5 +1,7 @@
 #!/bin/sh
 # Run one Git command through a clean, non-repository-controlled environment.
+# The documented caller-shell locator clears loader injection before this
+# shebang starts; repeat the cleanup here so it cannot reach later execs.
 POSIXLY_CORRECT=y
 export POSIXLY_CORRECT
 \unset -f command builtin exec unset 2>/dev/null || :
@@ -7,7 +9,11 @@ _bjg_bash=$(command -p -v bash) || {
   printf '%s\n' 'cannot locate a trusted Bash for clean Git' >&2
   exit 1
 }
-unset BASH_ENV ENV BASH_COMPAT BASH_LOADABLES_PATH BASH_XTRACEFD CDPATH GLOBIGNORE
+unset BASH_ENV ENV BASH_COMPAT BASH_LOADABLES_PATH BASH_XTRACEFD CDPATH GLOBIGNORE \
+  LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT LD_DEBUG LD_DEBUG_OUTPUT LD_PROFILE \
+  LD_ORIGIN_PATH LD_PRELOAD_32 LD_PRELOAD_64 DYLD_INSERT_LIBRARIES \
+  DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH \
+  DYLD_FALLBACK_FRAMEWORK_PATH LIBPATH SHLIB_PATH GCONV_PATH LOCPATH
 \exec 3<&0
 \exec "$_bjg_bash" --noprofile --norc -p -s -- "$@" <<'__BJG_TRUSTED_BASH__'
 command unset BASH_ENV ENV BASH_COMPAT BASH_LOADABLES_PATH BASH_XTRACEFD CDPATH \

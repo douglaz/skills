@@ -26,6 +26,26 @@ set -euo pipefail
 
 : "${PLAN_PATH:?Set PLAN_PATH to an absolute plan/spec path}"
 : "${AUDIT_SCOPE:?Set AUDIT_SCOPE before capture}"
+# Clear loader injection in this already-running shell before the locator starts
+# any new process. The resolver/git-clean script bodies are too late: a shebang
+# interpreter would already have loaded caller-selected libraries.
+_bjp_posixly_was_set=${POSIXLY_CORRECT+x}
+_bjp_posixly_value=${POSIXLY_CORRECT-}
+POSIXLY_CORRECT=y
+export POSIXLY_CORRECT
+\unset LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT LD_DEBUG LD_DEBUG_OUTPUT LD_PROFILE \
+  LD_ORIGIN_PATH LD_PRELOAD_32 LD_PRELOAD_64 DYLD_INSERT_LIBRARIES \
+  DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH \
+  DYLD_FALLBACK_FRAMEWORK_PATH LIBPATH SHLIB_PATH GCONV_PATH LOCPATH || {
+  printf '%s\n' 'cannot clear dynamic-loader injection before beads-jsonl-path — do NOT write' >&2
+  exit 1
+}
+if [ -n "$_bjp_posixly_was_set" ]; then
+  POSIXLY_CORRECT=$_bjp_posixly_value
+  export POSIXLY_CORRECT
+else
+  \unset POSIXLY_CORRECT
+fi
 BEADS_JSONL_RESOLVER=$(
   (
     # Resolve the clean interpreter in a subshell. POSIX special-builtin precedence

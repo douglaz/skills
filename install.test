@@ -632,6 +632,55 @@ else
   pass "$t"
 fi
 
+# Loader variables must be cleared in the already-running caller shell. Clearing
+# them inside a shebang script is too late because its interpreter has already
+# loaded LD_PRELOAD. Exercise the documented locator on Linux when a C compiler
+# is available; the source contract above remains mandatory on every platform.
+t="resolver locator clears loader injection before starting any child"
+if [[ $(uname -s) == Linux ]] && loader_cc=$(command -p -v cc 2>/dev/null); then
+  b=$(mktemp -d "$WORK/locator-loader.XXXXXX")
+  mkdir -p "$b/repo" "$b/home/.claude/skills/beads-jsonl-path/scripts"
+  git init -q "$b/repo"
+  command cat >"$b/home/.claude/skills/beads-jsonl-path/scripts/resolve-beads-jsonl" <<'LOADER_SAFE_RESOLVER'
+#!/bin/sh
+printf '%s\n' safe >"$LOCATOR_EXECUTIONS"
+printf '%s\n' /tmp/safe.jsonl
+LOADER_SAFE_RESOLVER
+  chmod +x "$b/home/.claude/skills/beads-jsonl-path/scripts/resolve-beads-jsonl"
+  add_locator_git_runner "$b/home/.claude/skills/beads-jsonl-path/scripts/resolve-beads-jsonl"
+  command cat >"$b/preload.c" <<'LOADER_PRELOAD_SOURCE'
+#include <fcntl.h>
+#include <stdlib.h>
+#include <unistd.h>
+__attribute__((constructor)) static void loaded(void) {
+  const char *path = getenv("LOADER_MARKER");
+  if (!path) return;
+  int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0600);
+  if (fd >= 0) { (void)write(fd, "loaded\n", 7); (void)close(fd); }
+}
+LOADER_PRELOAD_SOURCE
+  "$loader_cc" -shared -fPIC -o "$b/repo/preload.so" "$b/preload.c"
+  (
+    cd "$b/repo" || exit 98
+    HOME="$b/home" CODEX_HOME="$b/codexhome" \
+      LOCATOR_EXECUTIONS="$b/executions" LOADER_MARKER="$b/loader-ran" \
+      LOADER_LIBRARY="$b/repo/preload.so" LOCATOR_BLOCK="$locator_block" \
+      bash -c 'export LD_PRELOAD=$LOADER_LIBRARY; eval "$LOCATOR_BLOCK"'
+  ) >"$b/stdout" 2>"$b/stderr"
+  rc=$?
+  if [[ $rc -ne 0 ]]; then
+    fail "$t" "loader-clean locator exit $rc: $(<"$b/stderr")"
+  elif [[ -e "$b/loader-ran" ]]; then
+    fail "$t" 'a child loaded the worktree-selected preload library'
+  elif [[ ! -e "$b/executions" || $(<"$b/executions") != safe ]]; then
+    fail "$t" 'loader-clean locator did not execute the validated resolver'
+  else
+    pass "$t"
+  fi
+else
+  pass "$t"
+fi
+
 # CODEX_HOME is caller-controlled. An absolute spelling is not enough: a
 # repository can point it at its own `.codex` tree and plant the resolver there.
 # The locator must reject that candidate before its executable bytes run.
@@ -1027,6 +1076,11 @@ while IFS= read -r consumer; do
   elif ! grep -Fq -- 'BEADS_GIT_RUNNER=${BEADS_JSONL_RESOLVER%/*}/git-clean' \
       "$HERE/$consumer"; then
     resolver_consistency_failures+="$consumer does not expose the validated clean Git runner; "
+  elif ! grep -Fq -- '# Clear loader injection in this already-running shell before the locator starts' \
+      "$HERE/$consumer" \
+      || ! grep -Fq -- '\unset LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT' \
+      "$HERE/$consumer"; then
+    resolver_consistency_failures+="$consumer starts a child before clearing loader injection; "
   elif ! grep -Fq -- '_bjp_git_environment=( "${!GIT@}" )' "$HERE/$consumer"; then
     resolver_consistency_failures+="$consumer does not clear inherited Git repository selectors; "
   elif ! grep -Fq -- 'elif ! "$_bjp_cmp" -s "$BEADS_JSONL_RESOLVER" "$_bjp_candidate"' \
@@ -1093,7 +1147,7 @@ paths = [
 def locator(path):
     lines = path.read_text().splitlines(keepends=True)
     for start, line in enumerate(lines):
-        if line.lstrip(' \t') == 'BEADS_JSONL_RESOLVER=$(\n':
+        if line.lstrip(' \t') == '# Clear loader injection in this already-running shell before the locator starts\n':
             indent = line[:len(line) - len(line.lstrip(' \t'))]
             break
     else:
