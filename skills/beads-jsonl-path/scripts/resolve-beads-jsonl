@@ -11,7 +11,8 @@ _bj_bash=$(command -p -v bash) || {
   exit 1
 }
 unset BASH_ENV ENV BASH_COMPAT BASH_LOADABLES_PATH BASH_XTRACEFD CDPATH GLOBIGNORE
-exec "$_bj_bash" --noprofile --norc -p -s -- "$@" <<'__BJ_TRUSTED_BASH__'
+\exec 3<&0
+\exec "$_bj_bash" --noprofile --norc -p -s -- "$@" <<'__BJ_TRUSTED_BASH__'
 # Privileged Bash ignores BASH_ENV and inherited functions. Clear the remaining
 # startup controls before resolving `br` or Git as a defense in depth.
 command unset BASH_ENV ENV BASH_COMPAT BASH_LOADABLES_PATH BASH_XTRACEFD CDPATH \
@@ -35,17 +36,29 @@ die() {
 }
 
 _bj_mode=clean
-case $# in
-  0) ;;
-  1)
+_bj_run_br_arguments=()
+_bj_run_jq_arguments=()
+if [[ $# -ge 2 && $1 == --run-br ]]; then
+  _bj_mode=run-br
+  shift
+  _bj_run_br_arguments=( "$@" )
+elif [[ $# -ge 2 && $1 == --run-jq ]]; then
+  _bj_mode=run-jq
+  shift
+  _bj_run_jq_arguments=( "$@" )
+else
+  case $# in
+    0) ;;
+    1)
     case $1 in
       --allow-dirty) _bj_mode=allow-dirty ;;
       --recovery) _bj_mode=recovery ;;
-      *) die 'usage: resolve-beads-jsonl [--allow-dirty|--recovery]' ;;
+      *) die 'usage: resolve-beads-jsonl [--allow-dirty|--recovery] | --run-{br|jq} <args...>' ;;
     esac
     ;;
-  *) die 'usage: resolve-beads-jsonl [--allow-dirty|--recovery]' ;;
-esac
+    *) die 'usage: resolve-beads-jsonl [--allow-dirty|--recovery] | --run-{br|jq} <args...>' ;;
+  esac
+fi
 
 _bj_git=$(command -p -v git) ||
   die 'cannot locate a trusted Git for the beads resolver'
@@ -67,6 +80,8 @@ _bj_stat=$(command -p -v stat) ||
   die 'cannot locate a trusted stat for the beads resolver'
 _bj_getconf=$(command -p -v getconf) ||
   die 'cannot locate a trusted getconf for the beads resolver'
+_bj_env=$(command -p -v env) ||
+  die 'cannot locate a trusted env for the beads resolver'
 
 _bj_safe_path=$("$_bj_getconf" PATH 2>/dev/null) ||
   die 'cannot resolve the POSIX utility path for proof tools'
@@ -79,6 +94,27 @@ for _bj_safe_path_entry in "${_bj_safe_path_entries[@]}"; do
     die 'cannot validate the POSIX utility path for proof tools'
 done
 unset _bj_safe_path_entry _bj_safe_path_entries
+
+# Do not let a script-based proof tool import caller-selected language modules,
+# loader shims, or interpreter startup files. `br` retains only the location
+# inputs it needs to discover the same workspace as the caller; jq needs none.
+_bj_br_environment=(
+  -i "PATH=$_bj_safe_path" "LC_ALL=C"
+  "PYTHONNOUSERSITE=1" "PYTHONSAFEPATH=1"
+)
+for _bj_proof_variable in HOME XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME; do
+  if [[ -v $_bj_proof_variable ]]; then
+    _bj_br_environment+=( "$_bj_proof_variable=${!_bj_proof_variable}" )
+  fi
+done
+for _bj_proof_variable in "${!BEADS_@}" "${!BR_@}"; do
+  _bj_br_environment+=( "$_bj_proof_variable=${!_bj_proof_variable}" )
+done
+_bj_jq_environment=(
+  -i "PATH=$_bj_safe_path" "LC_ALL=C"
+  "PYTHONNOUSERSITE=1" "PYTHONSAFEPATH=1"
+)
+unset _bj_proof_variable
 
 _bj_regular_link_count() {
   local path=$1 count
@@ -99,7 +135,7 @@ _bj_regular_link_count() {
 # is about the repository discovered from the current directory, so remove the
 # entire Git environment namespace before its first Git invocation rather than
 # attempting an inevitably incomplete allowlist.
-_bj_git_environment=( "${!GIT_@}" )
+_bj_git_environment=( "${!GIT@}" )
 for _bj_git_variable in "${_bj_git_environment[@]}"; do
   command unset -- "$_bj_git_variable" ||
     die 'cannot sanitize the Git environment for the beads resolver'
@@ -205,12 +241,25 @@ _bj_external_tool() {
   printf '%s\n' "$path"
 }
 
+if [[ $_bj_mode == run-jq ]]; then
+  _bj_jq=$(_bj_external_tool jq 'jq is required to inspect Beads data') ||
+    die 'jq is required to inspect Beads data'
+  "$_bj_env" "${_bj_jq_environment[@]}" "$_bj_jq" "${_bj_run_jq_arguments[@]}" <&3
+  _bj_run_jq_rc=$?
+  exit "$_bj_run_jq_rc"
+fi
 _bj_br=$(_bj_external_tool br 'br is required to resolve the beads JSONL') ||
   die 'br is required to resolve the beads JSONL'
+if [[ $_bj_mode == run-br ]]; then
+  "$_bj_env" "${_bj_br_environment[@]}" "$_bj_br" "${_bj_run_br_arguments[@]}"
+  _bj_run_br_rc=$?
+  exit "$_bj_run_br_rc"
+fi
 _bj_jq=$(_bj_external_tool jq 'jq is required to resolve the beads JSONL') ||
   die 'jq is required to resolve the beads JSONL'
 
-if ! PATH="$_bj_safe_path" "$_bj_br" --no-auto-flush --no-auto-import where --json \
+if ! "$_bj_env" "${_bj_br_environment[@]}" \
+  "$_bj_br" --no-auto-flush --no-auto-import where --json \
   >"${_bj_files[0]}"; then
   die 'cannot resolve the beads workspace'
 fi
@@ -225,7 +274,7 @@ else
 fi
 
 BEADS_JSONL=$(
-  PATH="$_bj_safe_path" "$_bj_jq" -ers '
+  "$_bj_env" "${_bj_jq_environment[@]}" "$_bj_jq" -ers '
     if length == 1 and
       ((.[0] | type) == "object") and
       ((.[0].jsonl_path | type) == "string") and

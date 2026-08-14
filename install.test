@@ -27,6 +27,15 @@ PASS=0; FAIL=0
 pass() { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 fail() { FAIL=$((FAIL+1)); printf '  FAIL %s\n         %s\n' "$1" "$2"; }
 
+add_locator_git_runner() {
+  local resolver=$1 runner=${1%/*}/git-clean
+  command cat >"$runner" <<'LOCATOR_GIT_RUNNER'
+#!/bin/sh
+exit 97
+LOCATOR_GIT_RUNNER
+  chmod +x "$runner"
+}
+
 # A self-contained clone plus two target roots, so no test can see another's state or
 # the real $HOME.
 # mktemp, not a counter: this runs inside `$( )`, so an `N=$((N+1))` here increments a
@@ -525,8 +534,6 @@ skills/plan-to-beads-transfer/SKILL.md|beads-jsonl-path/scripts/resolve-beads-js
 skills/plan-to-beads-transfer/SKILL.md|"$BEADS_JSONL_RESOLVER" --allow-dirty
 skills/second-model-bead-audit/SKILL.md|beads-jsonl-path/scripts/resolve-beads-jsonl
 skills/second-model-bead-audit/references/reviewer-panel.md|beads-jsonl-path/scripts/resolve-beads-jsonl
-skills/second-model-bead-audit/references/reviewer-panel.md|git --no-replace-objects -c core.fsmonitor=false --literal-pathspecs status --porcelain -- "$BEADS_JSONL"
-skills/second-model-bead-audit/SKILL.md|git --no-replace-objects -c core.fsmonitor=false --literal-pathspecs status --porcelain -- "$BEADS_JSONL"
 skills/rb-lite-backlog-drain/SKILL.md|"$BEADS_JSONL_RESOLVER" --allow-dirty
 skills/rb-lite-backlog-drain/SKILL.md|"$BEADS_JSONL_RESOLVER" --recovery
 skills/drive/SKILL.md|"$BEADS_JSONL_RESOLVER" --allow-dirty
@@ -588,6 +595,8 @@ printf '%s\n' /tmp/codex.jsonl
 CODEX_RESOLVER
 chmod +x "$b/home/.claude/skills/beads-jsonl-path/scripts/resolve-beads-jsonl" \
   "$b/codexhome/skills/beads-jsonl-path/scripts/resolve-beads-jsonl"
+add_locator_git_runner "$b/home/.claude/skills/beads-jsonl-path/scripts/resolve-beads-jsonl"
+add_locator_git_runner "$b/codexhome/skills/beads-jsonl-path/scripts/resolve-beads-jsonl"
 locator_block=$(awk '
   $0 == "```bash" && !found { found = 1; next }
   found && $0 == "```" { exit }
@@ -718,6 +727,48 @@ else
   pass "$t"
 fi
 
+# Metadata and shebang reads must never open an executable FIFO/device candidate.
+t="resolver locator refuses an executable nonregular candidate without blocking"
+b=$(mktemp -d "$WORK/locator.XXXXXX")
+mkdir -p "$b/repo" "$b/home/.claude/skills/beads-jsonl-path/scripts"
+git init -q "$b/repo"
+mkfifo "$b/home/.claude/skills/beads-jsonl-path/scripts/resolve-beads-jsonl"
+chmod 700 "$b/home/.claude/skills/beads-jsonl-path/scripts/resolve-beads-jsonl"
+(
+  cd "$b/repo" || exit 98
+  HOME="$b/home" CODEX_HOME="$b/codexhome" TRUSTED_BASH="$trusted_bash" \
+    LOCATOR_BLOCK="$locator_block" LOCATOR_STDOUT="$b/stdout" LOCATOR_STDERR="$b/stderr" \
+    python3 - <<'PY'
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+try:
+    completed = subprocess.run(
+        [os.environ["TRUSTED_BASH"], "-c", os.environ["LOCATOR_BLOCK"]],
+        env=os.environ,
+        capture_output=True,
+        timeout=3,
+    )
+except subprocess.TimeoutExpired:
+    sys.exit(124)
+Path(os.environ["LOCATOR_STDOUT"]).write_bytes(completed.stdout)
+Path(os.environ["LOCATOR_STDERR"]).write_bytes(completed.stderr)
+sys.exit(completed.returncode)
+PY
+)
+rc=$?
+if [[ $rc -eq 0 ]]; then
+  fail "$t" "an executable FIFO resolver was accepted"
+elif [[ $rc -eq 124 || $rc -eq 137 ]]; then
+  fail "$t" "locator blocked while opening the executable FIFO"
+elif ! grep -Fq -- 'installed beads-jsonl-path resolver is not a regular file' "$b/stderr"; then
+  fail "$t" "missing nonregular diagnostic: $(<"$b/stderr")"
+else
+  pass "$t"
+fi
+
 # Hostile functions, PATH executables, and Git repository selectors arrive from
 # the caller at the same time as a repository-controlled absolute CODEX_HOME.
 # The legacy control reports /etc as the worktree, so it executes the planted
@@ -837,6 +888,7 @@ printf '%s\n' /tmp/worktree.jsonl
 SECOND_WORKTREE_RESOLVER
 chmod +x "$b/safe-home/.claude/skills/beads-jsonl-path/scripts/resolve-beads-jsonl" \
   "$b/repo-b/.codex/skills/beads-jsonl-path/scripts/resolve-beads-jsonl"
+add_locator_git_runner "$b/safe-home/.claude/skills/beads-jsonl-path/scripts/resolve-beads-jsonl"
 LOCATOR_BLOCK="$locator_block" LOCATOR_EXECUTIONS="$b/executions" \
   REPO_A="$b/repo-a" REPO_B="$b/repo-b" SAFE_HOME="$b/safe-home" \
   EMPTY_HOME="$b/empty-home" bash -c '
@@ -876,6 +928,7 @@ printf '%s\n' codex >>"$LOCATOR_EXECUTIONS"
 printf '%s\n' /tmp/codex.jsonl
 SIBLING_RESOLVER
 chmod +x "$b/codexhome/skills/beads-jsonl-path/scripts/resolve-beads-jsonl"
+add_locator_git_runner "$b/codexhome/skills/beads-jsonl-path/scripts/resolve-beads-jsonl"
 HOME="$b/home" CODEX_HOME="$b/codexhome" LOCATOR_EXECUTIONS="$b/executions" \
   bash -c "$locator_block" >"$b/stdout" 2>"$b/stderr"; rc=$?
 if [[ $rc -ne 0 ]]; then
@@ -959,14 +1012,29 @@ while IFS= read -r consumer; do
   elif ! grep -Fq -- 'installed beads-jsonl-path resolver has multiple hard links' \
       "$HERE/$consumer"; then
     resolver_consistency_failures+="$consumer accepts a multiply linked resolver candidate; "
+  elif ! grep -Fq -- 'installed beads-jsonl-path resolver is not a regular file' \
+      "$HERE/$consumer"; then
+    resolver_consistency_failures+="$consumer may open a nonregular resolver candidate; "
   elif ! grep -Fq -- 'installed beads-jsonl-path resolver has an unexpected interpreter' \
       "$HERE/$consumer"; then
     resolver_consistency_failures+="$consumer accepts a PATH-resolved resolver interpreter; "
-  elif ! grep -Fq -- '_bjp_git_environment=( "${!GIT_@}" )' "$HERE/$consumer"; then
+  elif ! grep -Fq -- 'installed beads-jsonl-path Git runner has multiple hard links' \
+      "$HERE/$consumer"; then
+    resolver_consistency_failures+="$consumer accepts a multiply linked Git runner; "
+  elif ! grep -Fq -- 'installed beads-jsonl-path Git runner is not a regular file' \
+      "$HERE/$consumer"; then
+    resolver_consistency_failures+="$consumer may open a nonregular Git runner; "
+  elif ! grep -Fq -- 'BEADS_GIT_RUNNER=${BEADS_JSONL_RESOLVER%/*}/git-clean' \
+      "$HERE/$consumer"; then
+    resolver_consistency_failures+="$consumer does not expose the validated clean Git runner; "
+  elif ! grep -Fq -- '_bjp_git_environment=( "${!GIT@}" )' "$HERE/$consumer"; then
     resolver_consistency_failures+="$consumer does not clear inherited Git repository selectors; "
-  elif ! grep -Fq -- 'elif ! "$_bjp_cmp" -s "$BEADS_JSONL_RESOLVER" "$_bjp_candidate"; then' \
+  elif ! grep -Fq -- 'elif ! "$_bjp_cmp" -s "$BEADS_JSONL_RESOLVER" "$_bjp_candidate"' \
     "$HERE/$consumer"; then
     resolver_consistency_failures+="$consumer does not compare installed resolver candidates; "
+  elif ! grep -Fq -- '|| ! "$_bjp_cmp" -s "$BEADS_GIT_RUNNER" "$_bjp_runner"; then' \
+    "$HERE/$consumer"; then
+    resolver_consistency_failures+="$consumer does not compare installed Git runners; "
   elif ! grep -Fq -- 'installed beads-jsonl-path companions disagree' "$HERE/$consumer"; then
     resolver_consistency_failures+="$consumer lacks the divergence refusal; "
   elif ! grep -Fq -- 'installed beads-jsonl-path target is not absolute' "$HERE/$consumer"; then
@@ -1068,15 +1136,21 @@ fi
 # bytes. Every later Git operation must preserve that byte identity and ignore
 # replacement objects: otherwise a pathspec can name a sibling, or a replacement
 # ref can make an unsafe pre-flush diff appear empty.
-t="every Git consumer treats the resolved JSONL literally without replacement objects or fsmonitor hooks"
+t="every Git consumer uses the clean runner and treats the resolved JSONL literally"
 literal_pathspec_failures=""
 while IFS= read -r occurrence; do
   case $occurrence in
-    *'git --no-replace-objects -c core.fsmonitor=false --literal-pathspecs '*) ;;
+    *'"$BEADS_GIT_RUNNER" --literal-pathspecs diff '*)
+      case $occurrence in
+        *' diff --no-ext-diff --no-textconv --text '*) ;;
+        *) literal_pathspec_failures+="$occurrence lacks external-diff refusal; " ;;
+      esac
+      ;;
+    *'"$BEADS_GIT_RUNNER" --literal-pathspecs '*) ;;
     *) literal_pathspec_failures+="$occurrence; " ;;
   esac
 done < <(
-  grep -nHE -- 'git .*(status|diff|add).*\$BEADS_JSONL' \
+  grep -nHE -- '(git |BEADS_GIT_RUNNER).*(status|diff|add)[[:space:]].*\$BEADS_JSONL' \
     "$HERE/skills/beads-jsonl-path/SKILL.md" \
     "$HERE/skills/orchestrating-with-rb-lite/references/harden-until-clean.md" \
     "$HERE/skills/rb-lite-backlog-drain/SKILL.md" \
@@ -1089,6 +1163,358 @@ done < <(
 )
 if [[ -n "$literal_pathspec_failures" ]]; then
   fail "$t" "$literal_pathspec_failures"
+else
+  pass "$t"
+fi
+
+t="resolver and clean Git runner purge the full GIT environment prefix"
+git_environment_failures=""
+for sanitizer in \
+  skills/beads-jsonl-path/scripts/resolve-beads-jsonl \
+  skills/beads-jsonl-path/scripts/git-clean; do
+  if ! grep -Fq -- '"${!GIT@}"' "$HERE/$sanitizer"; then
+    git_environment_failures+="$sanitizer does not include GITPERLLIB-class variables; "
+  fi
+done
+if [[ -n "$git_environment_failures" ]]; then
+  fail "$t" "$git_environment_failures"
+else
+  pass "$t"
+fi
+
+t="every Beads consumer keeps commands inside the validated br runner"
+bare_br_failures=""
+while IFS= read -r consumer; do
+  if grep -nE '^[[:space:]]*br[[:space:]]' "$HERE/$consumer" \
+      >"$WORK/bare-br.$$"; then
+    bare_br_failures+="$consumer:$(tr '\n' ',' <"$WORK/bare-br.$$"); "
+  fi
+done <<'BR_RUNNER_CONSUMERS'
+skills/bead-polish-loop/SKILL.md
+skills/drive/SKILL.md
+skills/drive/references/phases.md
+skills/orchestrating-with-rb-lite/SKILL.md
+skills/orchestrating-with-rb-lite/references/harden-until-clean.md
+skills/plan-to-beads-transfer/SKILL.md
+skills/rb-lite-backlog-drain/SKILL.md
+skills/second-model-bead-audit/SKILL.md
+skills/second-model-bead-audit/references/reviewer-panel.md
+BR_RUNNER_CONSUMERS
+rm -f "$WORK/bare-br.$$"
+if [[ -n "$bare_br_failures" ]]; then
+  fail "$t" "$bare_br_failures"
+else
+  pass "$t"
+fi
+
+t="graph snapshots use clean copy and comparison utilities"
+panel="$HERE/skills/second-model-bead-audit/references/reviewer-panel.md"
+if grep -Eq -- '^[[:space:]]*cp[[:space:]].*\$BEADS_JSONL|^[[:space:]]*diff[[:space:]]+-u' \
+    "$panel"; then
+  fail "$t" 'review panel returns to caller copy/diff utilities'
+elif ! grep -Fq -- '"$BEADS_GIT_RUNNER" copy-file' "$panel"; then
+  fail "$t" 'review panel lacks clean snapshot copies'
+elif ! grep -Fq -- '"$BEADS_GIT_RUNNER" diff-files' "$panel"; then
+  fail "$t" 'review panel lacks clean byte comparison'
+elif ! grep -Fq -- '"$BEADS_GIT_RUNNER" snapshot-files' "$panel" \
+    || ! grep -Fq -- '"$BEADS_GIT_RUNNER" verify-files' "$panel"; then
+  fail "$t" 'review panel does not keep source capture and drift admission clean'
+elif grep -Eq -- '^[[:space:]]*(cp|cmp|tr|sha256sum|shasum)[[:space:]]' "$panel"; then
+  fail "$t" 'review panel returns to caller utilities for audit evidence'
+elif grep -Eq -- '^[[:space:]]*(bv|timeout|gtimeout|codex|claude|cat)[[:space:]]' \
+    "$panel" \
+    || ! grep -Fq -- '"$BEADS_GIT_RUNNER" run-audit-tool bv' "$panel" \
+    || ! grep -Fq -- '"$BEADS_GIT_RUNNER" resolve-tool codex' "$panel" \
+    || ! grep -Fq -- '"$BEADS_GIT_RUNNER" resolve-tool claude' "$panel"; then
+  fail "$t" 'review panel returns to caller-selected audit/model tools'
+elif ! grep -Fq -- 'unset BEADS_DIFF_REVIEWED' "$panel"; then
+  fail "$t" 'review panel can reuse a stale pre-flush acknowledgement'
+elif ! grep -Fq -- 'unset BEADS_POSTFLUSH_REVIEWED' "$panel"; then
+  fail "$t" 'review panel can reuse a stale post-flush acknowledgement'
+elif ! grep -Fq -- '0|1) ;;' "$panel"; then
+  fail "$t" 'review panel does not distinguish content differences from diff errors'
+else
+  pass "$t"
+fi
+
+t="final audit drift check preserves a concurrent JSONL edit before any flush"
+drift_dir="$WORK/audit-drift.$$"
+mkdir -p "$drift_dir"
+printf '%s\n' baseline >"$drift_dir/baseline"
+printf '%s\n' concurrent-edit >"$drift_dir/live"
+cp "$drift_dir/baseline" "$drift_dir/cache"
+cat >"$drift_dir/resolver" <<'AUDIT_DRIFT_RESOLVER'
+#!/bin/sh
+case $1 in
+  --allow-dirty) printf '%s\n' "$AUDIT_DRIFT_LIVE" ;;
+  --run-br)
+    cp "$AUDIT_DRIFT_CACHE" "$AUDIT_DRIFT_LIVE"
+    : >"$AUDIT_DRIFT_SYNC_RAN"
+    ;;
+  *) exit 2 ;;
+esac
+AUDIT_DRIFT_RESOLVER
+cat >"$drift_dir/runner" <<'AUDIT_DRIFT_RUNNER'
+#!/bin/sh
+case $1 in
+  copy-file) cp "$2" "$3" ;;
+  verify-files) exit 0 ;;
+  *) exit 2 ;;
+esac
+AUDIT_DRIFT_RUNNER
+chmod +x "$drift_dir/resolver" "$drift_dir/runner"
+drift_block=$(awk '
+  /^PANEL_INVALID=false$/ { capture=1 }
+  capture && /^```$/ { exit }
+  capture { print }
+' "$panel")
+if (
+  BEADS_JSONL_RESOLVER="$drift_dir/resolver"
+  BEADS_GIT_RUNNER="$drift_dir/runner"
+  BEADS_JSONL="$drift_dir/live"
+  GRAPH_AFTER_JSONL="$drift_dir/after"
+  GRAPH_AFTER_SYNC_JSONL="$drift_dir/after-sync"
+  SOURCE_STATE_BEFORE="$drift_dir/source-before"
+  SOURCE_STATE_AFTER="$drift_dir/source-after"
+  SOURCE_FILES=()
+  GRAPH_FINGERPRINT=$(git hash-object --no-filters "$drift_dir/baseline")
+  fingerprint_file() { git hash-object --no-filters "$1"; }
+  export AUDIT_DRIFT_LIVE="$drift_dir/live" AUDIT_DRIFT_CACHE="$drift_dir/cache"
+  export AUDIT_DRIFT_SYNC_RAN="$drift_dir/sync-ran"
+  eval "$drift_block"
+) >"$drift_dir/stdout" 2>"$drift_dir/stderr"; then
+  drift_rc=0
+else
+  drift_rc=$?
+fi
+rm -f "$drift_dir/sync-ran"
+cp "$drift_dir/baseline" "$drift_dir/alternate"
+if (
+  BEADS_JSONL_RESOLVER="$drift_dir/resolver"
+  BEADS_GIT_RUNNER="$drift_dir/runner"
+  BEADS_JSONL="$drift_dir/baseline"
+  GRAPH_AFTER_JSONL="$drift_dir/switched-after"
+  GRAPH_AFTER_SYNC_JSONL="$drift_dir/switched-after-sync"
+  SOURCE_STATE_BEFORE="$drift_dir/switched-source-before"
+  SOURCE_STATE_AFTER="$drift_dir/switched-source-after"
+  SOURCE_FILES=()
+  GRAPH_FINGERPRINT=$(git hash-object --no-filters "$drift_dir/baseline")
+  fingerprint_file() { git hash-object --no-filters "$1"; }
+  export AUDIT_DRIFT_LIVE="$drift_dir/alternate"
+  export AUDIT_DRIFT_CACHE="$drift_dir/cache"
+  export AUDIT_DRIFT_SYNC_RAN="$drift_dir/sync-ran"
+  eval "$drift_block"
+) >"$drift_dir/switched.stdout" 2>"$drift_dir/switched.stderr"; then
+  switch_rc=0
+else
+  switch_rc=$?
+fi
+if [[ $drift_rc -eq 0 ]]; then
+  fail "$t" 'concurrent edit did not invalidate the panel'
+elif [[ $(<"$drift_dir/live") != concurrent-edit ]]; then
+  fail "$t" 'final drift check overwrote the concurrent edit'
+elif [[ -e "$drift_dir/sync-ran" ]]; then
+  fail "$t" 'final drift check flushed before blocking on live drift'
+elif [[ ! -e "$drift_dir/after" || $(<"$drift_dir/after") != concurrent-edit ]]; then
+  fail "$t" 'final drift check did not preserve the changed live bytes'
+elif [[ $switch_rc -eq 0 ]]; then
+  fail "$t" 'equal-byte JSONL target switch did not invalidate the panel'
+elif [[ -e "$drift_dir/sync-ran" ]]; then
+  fail "$t" 'final drift check flushed after the JSONL target switched'
+else
+  pass "$t"
+fi
+
+t="second-model audit delegates destructive graph capture to one hardened owner"
+audit_owner="$HERE/skills/second-model-bead-audit/SKILL.md"
+if grep -Fq -- 'BEADS_DIFF_REVIEWED' "$audit_owner" \
+    || grep -Fq -- 'BEADS_POSTFLUSH_REVIEWED' "$audit_owner"; then
+  fail "$t" 'owning skill duplicates the panel flush/acknowledgement transaction'
+elif ! grep -Fq -- \
+    '[Shared graph snapshot procedure](references/reviewer-panel.md#shared-graph-snapshot)' \
+    "$audit_owner"; then
+  fail "$t" 'owning skill does not delegate to the hardened snapshot owner'
+else
+  pass "$t"
+fi
+
+t="audit JSON decisions stay inside the validated jq runner"
+if grep -Fq -- 'ISSUE_IDS=$(jq' "$panel" \
+    || grep -Fq -- 'if jq -' "$panel" \
+    || grep -Fq -- 'CLAUDE_DENIALS=$(jq' "$panel" \
+    || grep -Eq -- '^[[:space:]]*jq -r' "$panel"; then
+  fail "$t" 'review panel returns to caller-shell jq for an audit decision'
+elif [[ $(grep -Fc -- '"$BEADS_JSONL_RESOLVER" --run-jq' "$panel") -lt 4 ]]; then
+  fail "$t" 'review panel does not route every audit JSON decision through validated jq'
+elif grep -Fq -- "grep -qE '^(Read|Glob|Grep)$'" "$panel"; then
+  fail "$t" 'review panel hands a denial decision back to caller-shell grep'
+else
+  pass "$t"
+fi
+
+t="Claude model probe stays inside validated audit-tool and jq boundaries"
+probe_dir="$WORK/claude-probe.$$"
+mkdir -p "$probe_dir/path" "$probe_dir/audit"
+probe_jq=$(command -p -v jq)
+cat >"$probe_dir/runner" <<'CLEAN_PROBE_RUNNER'
+#!/bin/sh
+case $1 in
+  resolve-tool)
+    [ "$2" = claude ] || exit 2
+    printf '%s\n' /validated/claude
+    ;;
+  run-audit-tool)
+    shift
+    [ "$1" = timeout ] || exit 2
+    case " $* " in
+      *" /validated/claude "*)
+        _probe_args=" $* "
+        for _probe_required in --no-session-persistence --safe-mode \
+          --strict-mcp-config --mcp-config --tools --allowedTools; do
+          case $_probe_args in
+            *" $_probe_required "*) ;;
+            *) exit 94 ;;
+          esac
+        done
+        printf '%s\n' '{"is_error":false,"result":"PANEL_OK"}'
+        ;;
+      *) exit 0 ;;
+    esac
+    ;;
+  *) exit 2 ;;
+esac
+CLEAN_PROBE_RUNNER
+cat >"$probe_dir/resolver" <<CLEAN_PROBE_RESOLVER
+#!/bin/sh
+[ "\$1" = --run-jq ] || exit 2
+shift
+exec "$probe_jq" "\$@"
+CLEAN_PROBE_RESOLVER
+chmod +x "$probe_dir/runner" "$probe_dir/resolver"
+for probe_tool in timeout gtimeout claude jq command; do
+  cat >"$probe_dir/path/$probe_tool" <<PROBE_PATH_SHIM
+#!/bin/sh
+printf '%s\n' '$probe_tool' >>'$probe_dir/ambient-ran'
+exit 1
+PROBE_PATH_SHIM
+  chmod +x "$probe_dir/path/$probe_tool"
+done
+probe_block=$(awk '
+  /^CLAUDE_MODEL=""$/ { capture=1 }
+  capture { print }
+  /^unset _CLAUDE_PROBE_TIMEOUT _rc$/ { exit }
+' "$panel")
+if (
+  for probe_tool in timeout gtimeout claude jq command; do
+    eval "$probe_tool() { printf '%s\\n' '$probe_tool' >>'$probe_dir/ambient-ran'; return 1; }"
+    export -f "$probe_tool"
+  done
+  PATH="$probe_dir/path:$PATH"
+  BEADS_GIT_RUNNER="$probe_dir/runner"
+  BEADS_JSONL_RESOLVER="$probe_dir/resolver"
+  AUDIT_DIR="$probe_dir/audit"
+  CLAUDE_REVIEWER_MODELS=fable
+  eval "$probe_block"
+  [ "$CLAUDE_MODEL" = fable ]
+) >"$probe_dir/stdout" 2>"$probe_dir/stderr"; then
+  probe_rc=0
+else
+  probe_rc=$?
+fi
+if [[ $probe_rc -ne 0 ]]; then
+  fail "$t" "clean probe exit $probe_rc: $(<"$probe_dir/stderr")"
+elif [[ -e "$probe_dir/ambient-ran" ]]; then
+  fail "$t" 'model probe executed a caller function or PATH shim'
+else
+  pass "$t"
+fi
+
+t="clean Git runner pins pager and textual diff behavior"
+git_runner_diff_arm=$(sed -n '/^  diff)$/,/^  add)$/p' \
+  "$HERE/skills/beads-jsonl-path/scripts/git-clean")
+if [[ "$git_runner_diff_arm" != *'"$_bjg_git" --no-pager --no-replace-objects'* ]]; then
+  fail "$t" 'git-clean does not disable caller-selected pagers'
+elif [[ "$git_runner_diff_arm" != *'diff --no-ext-diff --no-textconv --text'* ]]; then
+  fail "$t" 'git-clean can hide JSON bodies behind attributes or diff drivers'
+else
+  pass "$t"
+fi
+
+t="Beads staging transaction keeps commit and push inside the clean Git runner"
+transaction="$HERE/skills/orchestrating-with-rb-lite/references/harden-until-clean.md"
+transaction_block=$(sed -n '/Then flush and commit/,/Do not stage that file unread/p' \
+  "$transaction")
+if ! grep -Fq -- 'BEADS_COMMIT_OID=$("$BEADS_GIT_RUNNER" commit --only-reviewed "$BEADS_JSONL"' \
+    "$transaction" \
+    || ! grep -Fq -- '--expect-oid "$BEADS_REVIEWED_OID"' "$transaction" \
+    || ! grep -Fq -- '--expect-head "$BEADS_REVIEWED_HEAD"' "$transaction"; then
+  fail "$t" 'Beads transaction returns to caller-shell Git for commit'
+elif ! grep -Fq -- '"$BEADS_GIT_RUNNER" push --remote origin --branch "$WORK_BRANCH"' \
+    "$transaction" \
+    || ! grep -Fq -- '--expect-head "$BEADS_COMMIT_OID"' "$transaction"; then
+  fail "$t" 'Beads transaction returns to caller-shell Git for push'
+elif ! grep -Fq -- 'BEADS_REVIEWED_OID=$("$BEADS_GIT_RUNNER" hash-file "$BEADS_JSONL")' \
+    "$transaction" \
+    || ! grep -Fq -- 'BEADS_REVIEWED_HEAD=$("$BEADS_GIT_RUNNER" head-oid)' \
+    "$transaction" \
+    || ! grep -Fq -- 'BEADS_POSTDIFF_OID=$("$BEADS_GIT_RUNNER" hash-file "$BEADS_JSONL")' \
+    "$transaction" \
+    || ! grep -Fq -- 'BEADS_POSTDIFF_HEAD=$("$BEADS_GIT_RUNNER" head-oid)' \
+    "$transaction" \
+    || ! grep -Fq -- 'add --expect-oid "$BEADS_REVIEWED_OID" -- "$BEADS_JSONL"' \
+    "$transaction"; then
+  fail "$t" 'Beads transaction does not bind staging to the reviewed JSONL bytes'
+elif [[ "$transaction_block" != *$'unset BEADS_DIFF_REVIEWED\n"$BEADS_GIT_RUNNER" --literal-pathspecs diff'* ]]; then
+  fail "$t" 'Beads transaction resets its acknowledgement after rather than before the diff'
+elif ! grep -Fq -- 'cannot stage the reviewed JSONL — do NOT commit' "$transaction"; then
+  fail "$t" 'Beads transaction continues after staging failure'
+elif ! grep -Fq -- 'cannot commit the reviewed JSONL — do NOT push' "$transaction"; then
+  fail "$t" 'Beads transaction continues after commit failure'
+elif ! grep -Fq -- 'cannot push the reviewed JSONL commit' "$transaction"; then
+  fail "$t" 'Beads transaction masks push failure'
+elif ! grep -Fq -- '-c core.hooksPath=/dev/null' \
+    "$HERE/skills/beads-jsonl-path/scripts/git-clean"; then
+  fail "$t" 'clean commit can execute repository hooks'
+elif ! grep -Fq -- 'command unset SSH_ASKPASS SSH_ASKPASS_REQUIRE DISPLAY WAYLAND_DISPLAY' \
+    "$HERE/skills/beads-jsonl-path/scripts/git-clean"; then
+  fail "$t" 'clean push retains caller-selected askpass execution'
+elif ! grep -Fq -- 'ProxyCommand=none -o PermitLocalCommand=no -o BatchMode=yes' \
+    "$HERE/skills/beads-jsonl-path/scripts/git-clean"; then
+  fail "$t" 'clean push retains caller-selected SSH command execution'
+elif ! grep -Fq -- '-c push.gpgSign=false -c core.askPass=' \
+    "$HERE/skills/beads-jsonl-path/scripts/git-clean"; then
+  fail "$t" 'clean push retains repository-selected askpass execution'
+elif ! grep -Fq -- '-c protocol.allow=never \' \
+    "$HERE/skills/beads-jsonl-path/scripts/git-clean" \
+    || ! grep -Fq -- '_bjg_transport_config+=( -c protocol.ssh.allow=always' \
+    "$HERE/skills/beads-jsonl-path/scripts/git-clean" \
+    || ! grep -Fq -- '_bjg_transport_config+=( -c protocol.ssh.allow=never )' \
+    "$HERE/skills/beads-jsonl-path/scripts/git-clean"; then
+  fail "$t" 'clean push permits unreviewed transport helpers'
+elif ! grep -Fq -- '-c protocol.https.allow=always -c protocol.http.allow=never' \
+    "$HERE/skills/beads-jsonl-path/scripts/git-clean"; then
+  fail "$t" 'clean push permits plaintext credential-bearing transport'
+elif ! grep -Fq -- 'configured credential helper is not a simple named helper' \
+    "$HERE/skills/beads-jsonl-path/scripts/git-clean" \
+    || ! grep -Fq -- 'credential helper resolves inside the current Git worktree' \
+    "$HERE/skills/beads-jsonl-path/scripts/git-clean"; then
+  fail "$t" 'clean push trusts an unvalidated credential helper'
+elif ! grep -Fq -- 'credential store requires an explicit --file path' \
+    "$HERE/skills/beads-jsonl-path/scripts/git-clean"; then
+  fail "$t" 'clean push accepts unvalidated default credential-store aliases'
+elif ! grep -Fq -- '_bjg_proof_environment=( "$_bjg_env" -i' \
+    "$HERE/skills/beads-jsonl-path/scripts/git-clean"; then
+  fail "$t" 'clean proof utilities retain caller option/startup environments'
+elif ! grep -Fq -- '-c push.default=nothing -c push.followTags=false' \
+    "$HERE/skills/beads-jsonl-path/scripts/git-clean" \
+    || ! grep -Fq -- 'push "$_bjg_push_remote" "$_bjg_push_head:refs/heads/$_bjg_push_branch"' \
+    "$HERE/skills/beads-jsonl-path/scripts/git-clean"; then
+  fail "$t" 'clean push can expand repository-selected refspecs'
+elif ! grep -Fq -- 'symbolic-ref --quiet --short HEAD' \
+    "$HERE/skills/beads-jsonl-path/scripts/git-clean" \
+    || ! grep -Fq -- 'clean push branch does not match the current branch' \
+    "$HERE/skills/beads-jsonl-path/scripts/git-clean"; then
+  fail "$t" 'clean push does not bind the remote branch to attached HEAD'
 else
   pass "$t"
 fi

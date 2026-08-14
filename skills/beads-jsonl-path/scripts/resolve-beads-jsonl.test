@@ -7,6 +7,7 @@ set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd -P)
 RESOLVER="$HERE/resolve-beads-jsonl"
+GIT_RUNNER="$HERE/git-clean"
 SYSTEM_PATH=$PATH
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
@@ -238,6 +239,791 @@ printf '%s\n' 'resolve-beads-jsonl fixtures'
 b=$(new_fixture)
 assert_success 'clean tracked JSONL resolves' "$b" "$(<"$b/jsonl-path")"
 
+# The same validated br boundary owns later reads and mutations; caller
+# functions/PATH must not reappear after JSONL resolution.
+b=$(new_fixture)
+br() {
+  printf '%s\n' ran >"$HOSTILE_BR_RUNNER_RAN"
+  return 0
+}
+export -f br
+if (
+  cd "$b/repo" || exit 98
+  HOSTILE_BR_RUNNER_RAN="$b/hostile-br-runner-ran" \
+    BR_CALLS="$b/br.calls" BR_MUTATION="$b/br.mutation" BR_OUTPUT="$b/where.out" \
+    PATH="$b/bin:$SYSTEM_PATH" \
+    "$RESOLVER" --run-br sync --flush-only \
+    >"$b/run-br.stdout" 2>"$b/run-br.stderr"
+); then rc=0; else rc=$?; fi
+unset -f br
+t='validated br runner ignores caller functions for mutations'
+if [[ $rc -ne 0 ]]; then
+  fail "$t" "exit $rc: $(<"$b/run-br.stderr")"
+elif [[ -e "$b/hostile-br-runner-ran" ]]; then
+  fail "$t" 'runner invoked the caller br function'
+elif [[ ! -e "$b/br.calls" || $(<"$b/br.calls") != 'sync --flush-only' ]]; then
+  fail "$t" 'runner did not invoke the validated br with exact arguments'
+elif [[ ! -e "$b/br.mutation" ]]; then
+  fail "$t" 'fixture did not observe the mutation-shaped br invocation'
+else
+  pass "$t"
+fi
+
+# Audit decisions use the same trusted-tool boundary for jq; a caller function
+# cannot forge graph IDs, Claude state, or other JSON-derived control flow.
+b=$(new_fixture)
+jq() {
+  printf '%s\n' ran >"$HOSTILE_JQ_RUNNER_RAN"
+  printf '%s\n' forged
+  return 0
+}
+export -f jq
+if (
+  cd "$b/repo" || exit 98
+  HOSTILE_JQ_RUNNER_RAN="$b/hostile-jq-runner-ran" \
+    PATH="$b/bin:$SYSTEM_PATH" \
+    "$RESOLVER" --run-jq -er '.value' \
+    >"$b/run-jq.stdout" 2>"$b/run-jq.stderr" <<<'{"value":"trusted"}'
+); then rc=0; else rc=$?; fi
+unset -f jq
+t='validated jq runner ignores caller functions for audit decisions'
+if [[ $rc -ne 0 ]]; then
+  fail "$t" "exit $rc: $(<"$b/run-jq.stderr")"
+elif [[ -e "$b/hostile-jq-runner-ran" ]]; then
+  fail "$t" 'runner invoked the caller jq function'
+elif [[ $(<"$b/run-jq.stdout") != trusted ]]; then
+  fail "$t" 'runner did not invoke validated jq with the exact arguments'
+else
+  pass "$t"
+fi
+
+# Consumer Git runs through the installed sibling so caller repository/index
+# selectors and PATH shims cannot falsify a post-resolution diff.
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+alternate_index="$b/alternate.index"
+GIT_INDEX_FILE="$alternate_index" git -C "$b/repo" read-tree HEAD
+printf '%s\n' staged-through-real-index >>"$jsonl"
+git -C "$b/repo" add -- .beads/issues.jsonl
+git -C "$b/repo" show HEAD:.beads/issues.jsonl >"$jsonl"
+printf '%s\n' '.beads/issues.jsonl -diff' >"$b/repo/.gitattributes"
+mkdir "$b/repo/runner-path"
+command cat >"$b/repo/runner-path/git" <<'RUNNER_PATH_GIT'
+#!/bin/sh
+printf '%s\n' ran >"$RUNNER_PATH_GIT_RAN"
+exit 0
+RUNNER_PATH_GIT
+chmod +x "$b/repo/runner-path/git"
+snapshot_fixture "$b" "$b/before"
+if (
+  cd "$b/repo" || exit 98
+  GIT_INDEX_FILE="$alternate_index" RUNNER_PATH_GIT_RAN="$b/runner-path-git-ran" \
+    PATH="$b/repo/runner-path:$SYSTEM_PATH" \
+    "$GIT_RUNNER" --literal-pathspecs diff --cached -- .beads/issues.jsonl \
+    >"$b/runner.stdout" 2>"$b/runner.stderr"
+); then rc=0; else rc=$?; fi
+snapshot_fixture "$b" "$b/after"
+t='clean Git runner ignores inherited index and PATH overrides'
+if [[ $rc -ne 0 ]]; then
+  fail "$t" "exit $rc: $(<"$b/runner.stderr")"
+elif [[ ! -s "$b/runner.stdout" ]]; then
+  fail "$t" 'runner let an alternate index hide the staged diff'
+elif ! grep -Fq -- 'staged-through-real-index' "$b/runner.stdout"; then
+  fail "$t" 'runner let binary attributes hide the staged JSON body'
+elif [[ -s "$b/runner.stderr" ]]; then
+  fail "$t" "unexpected stderr: $(<"$b/runner.stderr")"
+elif [[ -e "$b/runner-path-git-ran" ]]; then
+  fail "$t" 'runner executed the worktree PATH shim'
+elif ! cmp -s "$b/before" "$b/after"; then
+  fail "$t" 'runner changed repository state'
+else
+  pass "$t"
+fi
+
+# `git add` normally executes worktree-selected clean filters. The runner stages
+# the exact bytes with hash-object --no-filters plus update-index instead.
+b=$(new_fixture)
+jsonl=$(<"$b/jsonl-path")
+command cat >"$b/repo/filter-clean" <<FILTER_CLEAN
+#!/bin/sh
+printf '%s\n' ran >"$b/filter-ran"
+printf '%s\n' filtered
+FILTER_CLEAN
+chmod +x "$b/repo/filter-clean"
+printf '%s\n' '.beads/issues.jsonl filter=fixture' >"$b/repo/.gitattributes"
+git -C "$b/repo" config filter.fixture.clean "$b/repo/filter-clean"
+printf '%s\n' '{"id":"exact-stage"}' >"$jsonl"
+reviewed_oid=$("$GIT_RUNNER" hash-file "$jsonl")
+if (
+  cd "$b/repo" || exit 98
+  "$GIT_RUNNER" --literal-pathspecs add --expect-oid "$reviewed_oid" -- "$jsonl" \
+    >"$b/runner.stdout" 2>"$b/runner.stderr"
+); then rc=0; else rc=$?; fi
+git -C "$b/repo" show :.beads/issues.jsonl >"$b/staged.jsonl"
+t='clean Git runner stages exact bytes without repository filters'
+if [[ $rc -ne 0 ]]; then
+  fail "$t" "exit $rc: $(<"$b/runner.stderr")"
+elif [[ -e "$b/filter-ran" ]]; then
+  fail "$t" 'runner executed the repository clean filter'
+elif ! cmp -s "$jsonl" "$b/staged.jsonl"; then
+  fail "$t" 'runner did not stage the exact worktree bytes'
+elif [[ -s "$b/runner.stdout" || -s "$b/runner.stderr" ]]; then
+  fail "$t" 'runner leaked output while staging'
+else
+  pass "$t"
+fi
+
+# A later write cannot replace the bytes that produced the reviewed diff. The
+# expected object id is checked against the exact blob before update-index.
+cp "$b/staged.jsonl" "$b/reviewed.jsonl"
+printf '%s\n' '{"id":"changed-after-review"}' >"$jsonl"
+if (
+  cd "$b/repo" || exit 98
+  "$GIT_RUNNER" --literal-pathspecs add --expect-oid "$reviewed_oid" -- "$jsonl" \
+    >"$b/stale-add.stdout" 2>"$b/stale-add.stderr"
+); then rc=0; else rc=$?; fi
+git -C "$b/repo" show :.beads/issues.jsonl >"$b/after-stale-add.jsonl"
+t='clean Git runner refuses bytes changed after the reviewed hash'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'runner staged bytes written after review'
+elif ! grep -Fq 'no longer matches the reviewed object id' "$b/stale-add.stderr"; then
+  fail "$t" "runner did not diagnose the stale review: $(<"$b/stale-add.stderr")"
+elif ! cmp -s "$b/reviewed.jsonl" "$b/after-stale-add.jsonl"; then
+  fail "$t" 'runner changed the index after the reviewed bytes changed'
+else
+  pass "$t"
+fi
+cp "$b/reviewed.jsonl" "$jsonl"
+
+# Commit must consume the real index just staged above, not an inherited
+# repository selector, and must not execute worktree repository hooks.
+mkdir "$b/forged"
+git init -q "$b/forged"
+git -C "$b/forged" config user.name 'Forged Test'
+git -C "$b/forged" config user.email forged@example.invalid
+printf '%s\n' forged >"$b/forged/baseline"
+git -C "$b/forged" add baseline
+git -C "$b/forged" commit -qm baseline
+command cat >"$b/repo/.git/hooks/pre-commit" <<HOOK_PRE_COMMIT
+#!/bin/sh
+printf '%s\n' ran >"$b/commit-hook-ran"
+exit 1
+HOOK_PRE_COMMIT
+chmod +x "$b/repo/.git/hooks/pre-commit"
+printf '%s\n' unrelated >"$b/repo/unrelated"
+git -C "$b/repo" add -- unrelated
+real_before=$(git -C "$b/repo" rev-parse HEAD)
+forged_before=$(git -C "$b/forged" rev-parse HEAD)
+
+# The reviewed parent is part of the proof. A concurrent ref update must make
+# the commit fail without overwriting the intervening HEAD.
+review_tree=$(git -C "$b/repo" rev-parse "$real_before^{tree}")
+intervening=$(printf '%s\n' intervening |
+  git -C "$b/repo" commit-tree "$review_tree" -p "$real_before")
+git -C "$b/repo" update-ref HEAD "$intervening" "$real_before"
+if (
+  cd "$b/repo" || exit 98
+  "$GIT_RUNNER" commit --only-reviewed "$jsonl" \
+    --expect-oid "$reviewed_oid" --expect-head "$real_before" \
+    -m 'must refuse stale HEAD' \
+    >"$b/stale-head.stdout" 2>"$b/stale-head.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner refuses a HEAD changed after review'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'runner committed atop an unreviewed parent'
+elif [[ $(git -C "$b/repo" rev-parse HEAD) != "$intervening" ]]; then
+  fail "$t" 'runner overwrote the intervening HEAD'
+elif ! grep -Fq 'HEAD no longer matches the reviewed commit' \
+    "$b/stale-head.stderr"; then
+  fail "$t" "runner did not diagnose stale HEAD: $(<"$b/stale-head.stderr")"
+else
+  pass "$t"
+fi
+git -C "$b/repo" update-ref HEAD "$real_before" "$intervening"
+
+# Temp-index state lives only in the Git administrative directory, ignores a
+# worktree TMPDIR, and is removed even when commit-tree fails after creation.
+mkdir "$b/repo/hostile-tmp" "$b/identity-home"
+git -C "$b/repo" config --unset user.name
+git -C "$b/repo" config --unset user.email
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/identity-home" TMPDIR="$b/repo/hostile-tmp" \
+    "$GIT_RUNNER" commit --only-reviewed "$jsonl" \
+      --expect-oid "$reviewed_oid" --expect-head "$real_before" \
+      -m 'forced identity failure' \
+      >"$b/failed-commit.stdout" 2>"$b/failed-commit.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner removes its private index after commit failure'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'identity-less commit unexpectedly succeeded'
+elif find "$b/repo/hostile-tmp" -mindepth 1 -print -quit | grep -q .; then
+  fail "$t" 'runner used caller-selected worktree TMPDIR'
+elif compgen -G "$b/repo/.git/beads-jsonl-commit.*" >/dev/null; then
+  fail "$t" 'runner left a private isolated-index directory behind'
+else
+  pass "$t"
+fi
+git -C "$b/repo" config user.name 'Resolver Test'
+git -C "$b/repo" config user.email resolver@example.invalid
+
+# No arbitrary commit CLI reaches commit-tree.
+t='clean Git runner rejects commit flags outside the exact message API'
+unsafe_commit_accepted=false
+for unsafe_commit_arg in -a --all --amend -S unrelated; do
+  if (
+    cd "$b/repo" || exit 98
+    "$GIT_RUNNER" commit --only-reviewed "$jsonl" \
+      --expect-oid "$reviewed_oid" --expect-head "$real_before" \
+      "$unsafe_commit_arg" unsafe >/dev/null 2>&1
+  ); then
+    unsafe_commit_accepted=true
+  fi
+done
+if "$unsafe_commit_accepted"; then
+  fail "$t" 'runner accepted an unreviewed commit mode or path'
+else
+  pass "$t"
+fi
+
+if (
+  cd "$b/repo" || exit 98
+  GIT_DIR="$b/forged/.git" GIT_WORK_TREE="$b/repo" \
+    "$GIT_RUNNER" commit --only-reviewed "$jsonl" \
+      --expect-oid "$reviewed_oid" --expect-head "$real_before" \
+      -m 'stage exact JSONL' \
+    >"$b/commit.stdout" 2>"$b/commit.stderr"
+); then rc=0; else rc=$?; fi
+real_after=$(git -C "$b/repo" rev-parse HEAD)
+forged_after=$(git -C "$b/forged" rev-parse HEAD)
+t='clean Git runner commits the real index without repository hooks'
+if [[ $rc -ne 0 ]]; then
+  fail "$t" "exit $rc: $(<"$b/commit.stderr")"
+elif [[ "$real_before" == "$real_after" ]]; then
+  fail "$t" 'runner did not commit the actual repository'
+elif [[ "$forged_before" != "$forged_after" ]]; then
+  fail "$t" 'runner committed the inherited forged repository'
+elif [[ -e "$b/commit-hook-ran" ]]; then
+  fail "$t" 'runner executed the repository pre-commit hook'
+elif git -C "$b/repo" cat-file -e HEAD:unrelated 2>/dev/null; then
+  fail "$t" 'runner swept an unrelated staged file into the reviewed commit'
+elif git -C "$b/repo" diff --cached --quiet -- unrelated; then
+  fail "$t" 'runner did not preserve the unrelated staged file in the real index'
+elif ! git -C "$b/repo" show HEAD:.beads/issues.jsonl >"$b/committed.jsonl" \
+    || ! cmp -s "$jsonl" "$b/committed.jsonl"; then
+  fail "$t" 'runner committed bytes other than the reviewed JSONL'
+else
+  pass "$t"
+fi
+
+# A push may fail (this fixture points at a closed local port), but it must not
+# execute caller PATH/askpass transport helpers while failing closed.
+push_branch=$(git -C "$b/repo" symbolic-ref --short HEAD)
+push_head=$(git -C "$b/repo" rev-parse HEAD)
+mkdir "$b/repo/runner-path"
+command cat >"$b/repo/runner-path/ssh" <<'RUNNER_PATH_SSH'
+#!/bin/sh
+printf '%s\n' ran >"$RUNNER_PATH_SSH_RAN"
+exit 0
+RUNNER_PATH_SSH
+command cat >"$b/repo/runner-path/askpass" <<'RUNNER_ASKPASS'
+#!/bin/sh
+printf '%s\n' ran >"$RUNNER_ASKPASS_RAN"
+printf '%s\n' secret
+RUNNER_ASKPASS
+chmod +x "$b/repo/runner-path/ssh" "$b/repo/runner-path/askpass"
+git -C "$b/repo" config core.askPass "$b/repo/runner-path/askpass"
+git -C "$b/repo" remote add runner-test ssh://git@127.0.0.1:1/never
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/repo/runner-path:$SYSTEM_PATH" \
+    SSH_ASKPASS="$b/repo/runner-path/askpass" SSH_ASKPASS_REQUIRE=force DISPLAY=:0 \
+    RUNNER_PATH_SSH_RAN="$b/runner-path-ssh-ran" RUNNER_ASKPASS_RAN="$b/runner-askpass-ran" \
+    "$GIT_RUNNER" push --remote runner-test --branch "$push_branch" \
+      --expect-head "$push_head" \
+    >"$b/push.stdout" 2>"$b/push.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner refuses push without PATH or askpass execution'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'push to a closed local port unexpectedly succeeded'
+elif [[ -e "$b/runner-path-ssh-ran" ]]; then
+  fail "$t" 'runner executed the worktree PATH SSH shim'
+elif [[ -e "$b/runner-askpass-ran" ]]; then
+  fail "$t" 'runner executed the worktree askpass helper'
+else
+  pass "$t"
+fi
+
+# A worktree-selected global helper is still untrusted even when HOME itself is
+# outside the repository. Reject shell helpers before Git can invoke them.
+mkdir "$b/helper-home"
+command cat >"$b/repo/runner-path/credential-evil" <<'RUNNER_CREDENTIAL_EVIL'
+#!/bin/sh
+printf '%s\n' ran >"$RUNNER_CREDENTIAL_EVIL_RAN"
+exit 1
+RUNNER_CREDENTIAL_EVIL
+chmod +x "$b/repo/runner-path/credential-evil"
+HOME="$b/helper-home" git config --global credential.helper \
+  "!$b/repo/runner-path/credential-evil"
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/helper-home" \
+    RUNNER_CREDENTIAL_EVIL_RAN="$b/runner-credential-evil-ran" \
+    "$GIT_RUNNER" push --remote runner-test --branch "$push_branch" \
+      --expect-head "$push_head" \
+    >"$b/helper-push.stdout" 2>"$b/helper-push.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner rejects a global helper that names worktree code'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'push with a shell credential helper unexpectedly succeeded'
+elif [[ -e "$b/runner-credential-evil-ran" ]]; then
+  fail "$t" 'runner executed the worktree credential helper'
+elif ! grep -Fq 'configured credential helper is not a simple named helper' \
+    "$b/helper-push.stderr"; then
+  fail "$t" "runner did not diagnose the unsafe helper: $(<"$b/helper-push.stderr")"
+else
+  pass "$t"
+fi
+
+# Simple named helpers from trusted global configuration remain usable even
+# when installed outside Git's POSIX utility path: resolve them once from the
+# caller's PATH, then validate and pass their absolute executable to Git.
+mkdir "$b/named-helper-home" "$b/named-helper-bin"
+command cat >"$b/named-helper-bin/git-credential-fixture" <<'RUNNER_NAMED_HELPER'
+#!/bin/sh
+exit 0
+RUNNER_NAMED_HELPER
+chmod +x "$b/named-helper-bin/git-credential-fixture"
+HOME="$b/named-helper-home" git config --global credential.helper fixture
+HOME="$b/named-helper-home" git config --global --add credential.helper ''
+HOME="$b/named-helper-home" git config --global --add credential.helper \
+  'cache --timeout=3600'
+HOME="$b/named-helper-home" git config --global \
+  credential.https://127.0.0.1.helper 'cache --timeout=60'
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/named-helper-home" PATH="$b/named-helper-bin:$SYSTEM_PATH" \
+    "$GIT_RUNNER" push --remote runner-test --branch "$push_branch" \
+      --expect-head "$push_head" \
+    >"$b/named-helper.stdout" 2>"$b/named-helper.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner validates a named global helper from the caller PATH'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'push to a closed local port unexpectedly succeeded'
+elif grep -Eq 'configured credential helper|credential helper executable' \
+    "$b/named-helper.stderr"; then
+  fail "$t" "runner rejected the outside-worktree named helper: $(<"$b/named-helper.stderr")"
+else
+  pass "$t"
+fi
+
+# A store path outside the worktree is not sufficient if its inode is also
+# reachable through a worktree hard link.
+mkdir "$b/store-helper-home"
+printf '%s\n' 'https://user:secret@example.invalid' >"$b/credential-store"
+ln "$b/credential-store" "$b/repo/credential-store-alias"
+HOME="$b/store-helper-home" git config --global credential.helper \
+  "store --file=$b/credential-store"
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/store-helper-home" \
+    "$GIT_RUNNER" push --remote runner-test --branch "$push_branch" \
+      --expect-head "$push_head" \
+    >"$b/store-helper.stdout" 2>"$b/store-helper.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner rejects a credential store hard-linked into the worktree'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'push with aliased credential storage unexpectedly succeeded'
+elif ! grep -Fq 'credential store has multiple hard links' \
+    "$b/store-helper.stderr"; then
+  fail "$t" "runner did not diagnose the credential-store alias: $(<"$b/store-helper.stderr")"
+else
+  pass "$t"
+fi
+
+# The default store locations are not provenance-safe: require an explicit
+# validated --file path instead of following HOME/XDG aliases implicitly.
+mkdir "$b/default-store-home"
+HOME="$b/default-store-home" git config --global credential.helper store
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/default-store-home" \
+    "$GIT_RUNNER" push --remote runner-test --branch "$push_branch" \
+      --expect-head "$push_head" \
+    >"$b/default-store.stdout" 2>"$b/default-store.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner refuses the unvalidated default credential store'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'push with the default credential store unexpectedly succeeded'
+elif ! grep -Fq 'credential store requires an explicit --file path' \
+    "$b/default-store.stderr"; then
+  fail "$t" "runner did not reject the default store: $(<"$b/default-store.stderr")"
+else
+  pass "$t"
+fi
+
+# An absent XDG config directory is equivalent to no XDG config; its canonical
+# existing ancestor is still checked, and retaining the absent setting prevents
+# Git from falling back to a different HOME-relative XDG file.
+mkdir -p "$b/no-config-home/.config/git"
+command cat >"$b/no-config-home/.config/git/config" <<FALLBACK_XDG_CONFIG
+[credential]
+	helper = !$b/repo/runner-path/credential-evil
+FALLBACK_XDG_CONFIG
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/no-config-home" XDG_CONFIG_HOME="$b/not-created/xdg" \
+    RUNNER_CREDENTIAL_EVIL_RAN="$b/fallback-credential-ran" \
+    "$GIT_RUNNER" push --remote runner-test --branch "$push_branch" \
+      --expect-head "$push_head" \
+    >"$b/absent-xdg.stdout" 2>"$b/absent-xdg.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner accepts an absent outside-worktree XDG config directory'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'push to a closed local port unexpectedly succeeded'
+elif grep -Fq 'cannot canonicalize the Git/SSH config home' "$b/absent-xdg.stderr"; then
+  fail "$t" "runner rejected the absent XDG directory: $(<"$b/absent-xdg.stderr")"
+elif grep -Fq 'configured credential helper' "$b/absent-xdg.stderr"; then
+  fail "$t" 'runner fell back to HOME-relative XDG credential configuration'
+elif [[ -e "$b/fallback-credential-ran" ]]; then
+  fail "$t" 'runner executed HOME-relative fallback credential configuration'
+else
+  pass "$t"
+fi
+
+# Credential-bearing pushes never downgrade to plaintext HTTP.
+git -C "$b/repo" remote add http-test http://127.0.0.1:1/never
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/no-config-home" XDG_CONFIG_HOME="$b/not-created/xdg" \
+    "$GIT_RUNNER" push --remote http-test --branch "$push_branch" \
+      --expect-head "$push_head" \
+    >"$b/http-push.stdout" 2>"$b/http-push.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner refuses plaintext HTTP push transport'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'plaintext HTTP push unexpectedly succeeded'
+elif ! grep -Fq "transport 'http' not allowed" "$b/http-push.stderr"; then
+  fail "$t" "runner did not reject HTTP transport: $(<"$b/http-push.stderr")"
+else
+  pass "$t"
+fi
+
+# Exercise the no-trusted-ssh branch even on development hosts that ship ssh:
+# the temporary copy emulates a POSIX utility path without it. SSH transport
+# must then remain disabled rather than falling back to repository config.
+cp "$GIT_RUNNER" "$b/git-clean-no-ssh"
+sed -i 's/if _bjg_ssh=$(command -p -v ssh); then/if false; then/' \
+  "$b/git-clean-no-ssh"
+chmod +x "$b/git-clean-no-ssh"
+command cat >"$b/repo/runner-path/ssh-from-config" <<'RUNNER_CONFIG_SSH'
+#!/bin/sh
+printf '%s\n' ran >"$RUNNER_CONFIG_SSH_RAN"
+exit 0
+RUNNER_CONFIG_SSH
+chmod +x "$b/repo/runner-path/ssh-from-config"
+git -C "$b/repo" config core.sshCommand "$b/repo/runner-path/ssh-from-config"
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/no-config-home" XDG_CONFIG_HOME="$b/not-created/xdg" \
+    RUNNER_CONFIG_SSH_RAN="$b/runner-config-ssh-ran" \
+    "$b/git-clean-no-ssh" push --remote runner-test --branch "$push_branch" \
+      --expect-head "$push_head" \
+    >"$b/no-ssh.stdout" 2>"$b/no-ssh.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner disables SSH transport when trusted ssh is unavailable'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'push without trusted ssh unexpectedly succeeded'
+elif [[ -e "$b/runner-config-ssh-ran" ]]; then
+  fail "$t" 'runner executed repository-selected core.sshCommand'
+else
+  pass "$t"
+fi
+
+# Even hostile push.default/remote refspec/tag settings cannot widen the single
+# explicit HEAD-to-branch update. A temporary copy enables local file transport
+# solely so the fixture can inspect a bare remote without network services.
+git init -q --bare "$b/scope-remote.git"
+git -C "$b/repo" remote add scope-test "$b/scope-remote.git"
+git -C "$b/repo" branch unrelated-push "$real_before"
+git -C "$b/repo" tag -a unrelated-tag "$real_before" -m unrelated-tag
+git -C "$b/repo" config push.default matching
+git -C "$b/repo" config push.followTags true
+git -C "$b/repo" config remote.scope-test.mirror true
+git -C "$b/repo" config --add remote.scope-test.push \
+  'refs/heads/*:refs/heads/*'
+cp "$GIT_RUNNER" "$b/git-clean-local-push"
+sed -i '/-c protocol.allow=never \\/a\\      -c protocol.file.allow=always \\' \
+  "$b/git-clean-local-push"
+chmod +x "$b/git-clean-local-push"
+
+push_tree=$(git -C "$b/repo" rev-parse "$push_head^{tree}")
+postreview_head=$(printf '%s\n' post-review |
+  git -C "$b/repo" commit-tree "$push_tree" -p "$push_head")
+git -C "$b/repo" update-ref HEAD "$postreview_head" "$push_head"
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/no-config-home" XDG_CONFIG_HOME="$b/not-created/xdg" \
+    "$b/git-clean-local-push" push --remote scope-test --branch "$push_branch" \
+      --expect-head "$push_head" \
+    >"$b/stale-push.stdout" 2>"$b/stale-push.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner refuses a HEAD changed after the reviewed commit'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'runner pushed a post-review commit'
+elif [[ $(git -C "$b/repo" rev-parse HEAD) != "$postreview_head" ]]; then
+  fail "$t" 'runner changed the local post-review HEAD'
+elif ! grep -Fq 'HEAD no longer matches the reviewed commit' \
+    "$b/stale-push.stderr"; then
+  fail "$t" "runner did not diagnose stale push HEAD: $(<"$b/stale-push.stderr")"
+elif git -C "$b/scope-remote.git" show-ref --quiet; then
+  fail "$t" 'runner updated the remote despite stale reviewed HEAD'
+else
+  pass "$t"
+fi
+git -C "$b/repo" update-ref HEAD "$push_head" "$postreview_head"
+
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/no-config-home" XDG_CONFIG_HOME="$b/not-created/xdg" \
+    "$b/git-clean-local-push" push --remote scope-test --branch wrong-branch \
+      --expect-head "$push_head" \
+    >"$b/wrong-branch.stdout" 2>"$b/wrong-branch.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner refuses a push branch other than the attached branch'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'runner pushed HEAD to a mistyped branch'
+elif ! grep -Fq 'does not match the current branch' "$b/wrong-branch.stderr"; then
+  fail "$t" "runner did not diagnose the branch mismatch: $(<"$b/wrong-branch.stderr")"
+else
+  pass "$t"
+fi
+
+git -C "$b/repo" checkout --detach -q
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/no-config-home" XDG_CONFIG_HOME="$b/not-created/xdg" \
+    "$b/git-clean-local-push" push --remote scope-test --branch "$push_branch" \
+      --expect-head "$push_head" \
+    >"$b/detached.stdout" 2>"$b/detached.stderr"
+); then rc=0; else rc=$?; fi
+git -C "$b/repo" checkout -q "$push_branch"
+t='clean Git runner refuses to push a detached HEAD'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'runner pushed detached HEAD'
+elif ! grep -Fq 'requires an attached current branch' "$b/detached.stderr"; then
+  fail "$t" "runner did not diagnose detached HEAD: $(<"$b/detached.stderr")"
+else
+  pass "$t"
+fi
+
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/no-config-home" XDG_CONFIG_HOME="$b/not-created/xdg" \
+    "$b/git-clean-local-push" push --remote scope-test --branch "$push_branch" \
+      --expect-head "$push_head" \
+    >"$b/scope-push.stdout" 2>"$b/scope-push.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner pushes only HEAD to the explicit reviewed branch'
+if [[ $rc -ne 0 ]]; then
+  fail "$t" "exit $rc: $(<"$b/scope-push.stderr")"
+elif [[ $(git -C "$b/scope-remote.git" rev-parse "refs/heads/$push_branch") \
+        != $(git -C "$b/repo" rev-parse HEAD) ]]; then
+  fail "$t" 'runner did not update the exact reviewed branch to HEAD'
+elif git -C "$b/scope-remote.git" show-ref --verify --quiet \
+    refs/heads/unrelated-push \
+    || git -C "$b/scope-remote.git" show-ref --verify --quiet \
+      refs/tags/unrelated-tag; then
+  fail "$t" 'runner widened the push through repository refspec/tag settings'
+elif [[ $(git -C "$b/scope-remote.git" for-each-ref --format='%(refname)' \
+        refs/heads | wc -l) -ne 1 ]]; then
+  fail "$t" 'runner published an extra branch'
+else
+  pass "$t"
+fi
+
+# Snapshot copy/comparison uses the same clean companion rather than caller
+# functions or worktree PATH shims.
+for utility in cp diff; do
+  trusted_utility=$(command -p -v "$utility")
+  command cat >"$b/repo/runner-path/$utility" <<PATH_FILE_UTILITY
+#!/bin/sh
+printf '%s\n' "$utility" >>"\$RUNNER_PATH_FILE_RAN"
+exec "$trusted_utility" "\$@"
+PATH_FILE_UTILITY
+  chmod +x "$b/repo/runner-path/$utility"
+done
+if (
+  cd "$b/repo" || exit 98
+  cp() { printf '%s\n' cp >>"$RUNNER_FUNCTION_FILE_RAN"; }
+  diff() { printf '%s\n' diff >>"$RUNNER_FUNCTION_FILE_RAN"; }
+  export -f cp diff
+  PATH="$b/repo/runner-path:$SYSTEM_PATH" \
+    RUNNER_PATH_FILE_RAN="$b/runner-path-file-ran" \
+    RUNNER_FUNCTION_FILE_RAN="$b/runner-function-file-ran" \
+    "$GIT_RUNNER" copy-file "$jsonl" "$b/copied.jsonl" &&
+  PATH="$b/repo/runner-path:$SYSTEM_PATH" \
+    RUNNER_PATH_FILE_RAN="$b/runner-path-file-ran" \
+    RUNNER_FUNCTION_FILE_RAN="$b/runner-function-file-ran" \
+    "$GIT_RUNNER" diff-files "$b/copied.jsonl" "$jsonl"
+); then rc=0; else rc=$?; fi
+t='clean runner isolates snapshot copy and comparison utilities'
+if [[ $rc -ne 0 ]]; then
+  fail "$t" "copy/comparison exit $rc"
+elif [[ -e "$b/runner-path-file-ran" || -e "$b/runner-function-file-ran" ]]; then
+  fail "$t" 'copy/comparison executed a caller utility'
+elif ! cmp -s "$b/copied.jsonl" "$jsonl"; then
+  fail "$t" 'clean copy changed snapshot bytes'
+else
+  pass "$t"
+fi
+
+# Pure proof utilities run under env -i, so BSD/macOS option variables cannot
+# suppress a diff or invert a grep admission.
+printf '%s\n' before >"$b/env-diff-before"
+printf '%s\n' after >"$b/env-diff-after"
+if DIFF_OPTIONS=-q "$GIT_RUNNER" diff-files \
+    "$b/env-diff-before" "$b/env-diff-after" >"$b/env-diff.out" 2>"$b/env-diff.err"; then
+  diff_rc=0
+else
+  diff_rc=$?
+fi
+if GREP_OPTIONS=-v "$GIT_RUNNER" grep -q before "$b/env-diff-before"; then
+  grep_rc=0
+else
+  grep_rc=$?
+fi
+t='clean proof utilities ignore inherited option environments'
+if [[ $diff_rc -ne 1 || $grep_rc -ne 0 ]]; then
+  fail "$t" "diff rc $diff_rc, grep rc $grep_rc"
+elif ! grep -q '^--- ' "$b/env-diff.out" \
+    || ! grep -q '^+++ ' "$b/env-diff.out"; then
+  fail "$t" 'clean diff output was suppressed by inherited options'
+else
+  pass "$t"
+fi
+
+# The panel's final source-drift admission runs inside the clean companion too.
+# Caller cp/cmp/hash/grep functions and shims cannot forge an unchanged result.
+for utility in cmp grep; do
+  trusted_utility=$(command -p -v "$utility")
+  command cat >"$b/repo/runner-path/$utility" <<PATH_ADMISSION_UTILITY
+#!/bin/sh
+printf '%s\n' "$utility" >>"\$RUNNER_PATH_ADMISSION_RAN"
+exec "$trusted_utility" "\$@"
+PATH_ADMISSION_UTILITY
+  chmod +x "$b/repo/runner-path/$utility"
+done
+if (
+  cd "$b/repo" || exit 98
+  cp() { printf '%s\n' cp >>"$RUNNER_FUNCTION_ADMISSION_RAN"; }
+  cmp() { printf '%s\n' cmp >>"$RUNNER_FUNCTION_ADMISSION_RAN"; return 0; }
+  grep() { printf '%s\n' grep >>"$RUNNER_FUNCTION_ADMISSION_RAN"; return 0; }
+  sha256sum() { printf '%s\n' forged; }
+  shasum() { printf '%s\n' forged; }
+  export -f cp cmp grep sha256sum shasum
+  export RUNNER_PATH_ADMISSION_RAN="$b/runner-path-admission-ran"
+  export RUNNER_FUNCTION_ADMISSION_RAN="$b/runner-function-admission-ran"
+  PATH="$b/repo/runner-path:$SYSTEM_PATH"
+  export PATH
+  "$GIT_RUNNER" make-dir "$b/source-snapshots"
+  "$GIT_RUNNER" snapshot-files "$b/source-manifest" "$b/source-before" \
+    "$b/source-snapshots" -- "$jsonl"
+  printf '%s\n' changed-after-snapshot >>"$jsonl"
+  ! "$GIT_RUNNER" verify-files "$b/source-before" "$b/source-after" -- "$jsonl"
+); then rc=0; else rc=$?; fi
+t='clean runner owns source snapshot and final drift admission'
+if [[ $rc -ne 0 ]]; then
+  fail "$t" 'clean snapshot/drift fixture did not reject changed source'
+elif [[ -e "$b/runner-path-admission-ran" \
+        || -e "$b/runner-function-admission-ran" ]]; then
+  fail "$t" 'source snapshot/drift admission executed a caller utility'
+else
+  pass "$t"
+fi
+
+# Auto-discovered source names cannot follow a repository symlink to outside
+# bytes and copy a user secret into reviewer-visible audit artifacts.
+printf '%s\n' 'outside-user-secret' >"$b/outside-secret"
+ln -s "$b/outside-secret" "$b/repo/README.md"
+"$GIT_RUNNER" make-dir "$b/symlink-source-snapshots"
+if (
+  cd "$b/repo" || exit 98
+  "$GIT_RUNNER" snapshot-files "$b/symlink-manifest" "$b/symlink-state" \
+    "$b/symlink-source-snapshots" -- "$b/repo/README.md" \
+    >"$b/symlink-source.stdout" 2>"$b/symlink-source.stderr"
+); then rc=0; else rc=$?; fi
+t='clean runner refuses a worktree source symlink to outside bytes'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'runner snapshotted a symlinked worktree source'
+elif find "$b/symlink-source-snapshots" -type f -size +0c -print -quit |
+    grep -q .; then
+  fail "$t" 'runner copied outside secret bytes into the audit directory'
+else
+  pass "$t"
+fi
+
+# Audit-side bv/timeout/model commands use the same outside-worktree provenance
+# boundary; a behaviorally plausible PATH shim or exported function is refused.
+b=$(new_fixture)
+mkdir "$b/repo/audit-tool-path"
+for audit_tool in bv timeout codex claude; do
+  command cat >"$b/repo/audit-tool-path/$audit_tool" <<AUDIT_TOOL_SHIM
+#!/bin/sh
+printf '%s\n' '$audit_tool' >>'$b/audit-tool-shim-ran'
+exit 0
+AUDIT_TOOL_SHIM
+  chmod +x "$b/repo/audit-tool-path/$audit_tool"
+  eval "$audit_tool() { printf '%s\\n' '$audit_tool' >>'$b/audit-tool-function-ran'; return 0; }"
+  export -f "$audit_tool"
+done
+audit_tools_refused=true
+for audit_tool in bv timeout codex claude; do
+  if (
+    cd "$b/repo" || exit 98
+    PATH="$b/repo/audit-tool-path:$SYSTEM_PATH" \
+      "$GIT_RUNNER" run-audit-tool "$audit_tool" --version \
+      >"$b/$audit_tool.stdout" 2>"$b/$audit_tool.stderr"
+  ); then
+    audit_tools_refused=false
+  fi
+done
+for audit_tool in bv timeout codex claude; do unset -f "$audit_tool"; done
+t='clean audit-tool runner refuses worktree PATH shims and caller functions'
+if ! "$audit_tools_refused"; then
+  fail "$t" 'runner accepted a worktree-selected audit tool'
+elif [[ -e "$b/audit-tool-shim-ran" || -e "$b/audit-tool-function-ran" ]]; then
+  fail "$t" 'runner executed a caller-selected audit tool'
+else
+  pass "$t"
+fi
+
+# A validated outside tool receives only the explicit audit environment, not
+# interpreter startup/code-injection variables.
+mkdir "$b/outside-audit-bin"
+command cat >"$b/outside-audit-bin/audit-probe" <<AUDIT_PROBE
+#!/bin/sh
+[ -z "\${BASH_ENV-}\${ENV-}\${NODE_OPTIONS-}\${PYTHONPATH-}" ] || exit 91
+case ":\$PATH:" in *":$b/repo/audit-tool-path:"*) exit 92 ;; esac
+[ "\$*" = 'exact argument' ] || exit 93
+printf '%s\n' clean >'$b/audit-probe-ran'
+AUDIT_PROBE
+chmod +x "$b/outside-audit-bin/audit-probe"
+if (
+  cd "$b/repo" || exit 98
+  PATH="$b/outside-audit-bin:$b/repo/audit-tool-path:$SYSTEM_PATH" \
+    BASH_ENV="$b/repo/startup" ENV="$b/repo/startup" \
+    NODE_OPTIONS="--require=$b/repo/module" PYTHONPATH="$b/repo/python" \
+    "$GIT_RUNNER" run-audit-tool audit-probe exact argument \
+    >"$b/audit-probe.stdout" 2>"$b/audit-probe.stderr"
+); then rc=0; else rc=$?; fi
+t='clean audit-tool runner strips startup state from outside tools'
+if [[ $rc -ne 0 || ! -e "$b/audit-probe-ran" ]]; then
+  fail "$t" "outside audit probe exit $rc: $(<"$b/audit-probe.stderr")"
+else
+  pass "$t"
+fi
+
 # Index-reading Git commands must not execute a repository-configured fsmonitor
 # hook. Prime the hook once, erase its marker, then keep the fixture snapshots
 # on their own explicit hook-disabled path so only the resolver is measured.
@@ -250,6 +1036,10 @@ FSMONITOR_EXECUTION_HOOK
 chmod +x "$b/fsmonitor-hook"
 git -C "$b/repo" config core.fsmonitor "$b/fsmonitor-hook"
 git -C "$b/repo" status --porcelain >/dev/null
+if [[ ! -e "$b/fsmonitor-hook-ran" ]]; then
+  fail 'resolver Git inspection disables repository fsmonitor hooks' \
+    'fixture could not prime the fsmonitor hook'
+fi
 rm -f "$b/fsmonitor-hook-ran"
 assert_success 'resolver Git inspection disables repository fsmonitor hooks' \
   "$b" "$(<"$b/jsonl-path")"
@@ -264,7 +1054,7 @@ fi
 # the otherwise hardened implementation ran the `git` and `cmp` sentinels.
 b=$(new_fixture)
 mkdir "$b/repo/evil"
-for utility in bash git cmp od grep mktemp unlink rmdir readlink stat getconf; do
+for utility in bash git cmp od grep mktemp unlink rmdir readlink stat getconf env; do
   trusted_utility=$(command -p -v "$utility") || {
     fail 'hostile startup fixture setup' "cannot locate $utility in the POSIX utility path"
     continue
@@ -288,10 +1078,17 @@ SAFE_BR
 chmod +x "$b/bin/br"
 trusted_jq=$(command -v jq)
 command cat >"$b/bin/jq" <<SAFE_JQ
-#!/usr/bin/env bash
-exec "$trusted_jq" "\$@"
+#!/usr/bin/env python3
+import os
+import sys
+os.execv("$trusted_jq", ["$trusted_jq", *sys.argv[1:]])
 SAFE_JQ
 chmod +x "$b/bin/jq"
+mkdir "$b/repo/py"
+command cat >"$b/repo/py/sitecustomize.py" <<PYTHON_STARTUP
+from pathlib import Path
+Path("$b/python-ran").write_text("ran\\n")
+PYTHON_STARTUP
 printf '%s\n' ': >"$HOSTILE_BASH_ENV_RAN"' >"$b/bash-env"
 snapshot_fixture "$b" "$b/before"
 br() {
@@ -309,6 +1106,7 @@ if (
     HOSTILE_FUNCTION_RAN="$b/function-ran" HOSTILE_GIT_FUNCTION_RAN="$b/git-function-ran" \
     BR_CALLS="$b/br.calls" BR_MUTATION="$b/br.mutation" BR_OUTPUT="$b/where.out" \
     PATH="$b/repo/evil:$b/bin:$SYSTEM_PATH" BASH_ENV="$b/bash-env" \
+    PYTHONPATH="$b/repo/py" \
     "$RESOLVER" >"$b/stdout" 2>"$b/stderr"
 ); then rc=0; else rc=$?; fi
 unset -f br git
@@ -317,9 +1115,9 @@ t='hostile PATH, BASH_ENV, and exported functions cannot alter resolver startup'
 printf '%s\n' "$(<"$b/jsonl-path")" >"$b/expected"
 if [[ $rc -ne 0 ]]; then
   fail "$t" "exit $rc: $(<"$b/stderr")"
-elif [[ -e "$b/path-ran" || -e "$b/bash-env-ran" || -e "$b/function-ran" \
-        || -e "$b/git-function-ran" ]]; then
-  fail "$t" "a hostile startup sentinel ran: path=$(test -e "$b/path-ran" && tr '\n' ',' <"$b/path-ran" || echo no), bash-env=$(test -e "$b/bash-env-ran" && echo yes || echo no), br=$(test -e "$b/function-ran" && echo yes || echo no), git=$(test -e "$b/git-function-ran" && echo yes || echo no)"
+elif [[ -e "$b/path-ran" || -e "$b/python-ran" || -e "$b/bash-env-ran" || -e "$b/function-ran" \
+         || -e "$b/git-function-ran" ]]; then
+  fail "$t" "a hostile startup sentinel ran: path=$(test -e "$b/path-ran" && tr '\n' ',' <"$b/path-ran" || echo no), python=$(test -e "$b/python-ran" && echo yes || echo no), bash-env=$(test -e "$b/bash-env-ran" && echo yes || echo no), br=$(test -e "$b/function-ran" && echo yes || echo no), git=$(test -e "$b/git-function-ran" && echo yes || echo no)"
 elif ! cmp -s "$b/expected" "$b/stdout" || [[ -s "$b/stderr" ]]; then
   fail "$t" 'resolver output changed under hostile startup state'
 elif ! cmp -s "$b/before" "$b/after" || ! safe_br_calls_only "$b/br.calls"; then

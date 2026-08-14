@@ -93,7 +93,7 @@ _bjp_regular_link_count() {
   fi
   printf '%s\n' "$count"
 }
-_bjp_git_environment=( "${!GIT_@}" )
+_bjp_git_environment=( "${!GIT@}" )
 for _bjp_git_variable in "${_bjp_git_environment[@]}"; do
   command unset -- "$_bjp_git_variable" || {
     printf '%s\n' 'cannot sanitize the Git environment for beads-jsonl-path — do NOT write' >&2
@@ -103,6 +103,7 @@ done
 unset _bjp_git_variable _bjp_git_environment
 
 BEADS_JSONL_RESOLVER=
+BEADS_GIT_RUNNER=
 for _bjp_dir in "$HOME/.claude/skills/beads-jsonl-path" \
   "${CODEX_HOME:-$HOME/.codex}/skills/beads-jsonl-path" \
   "$HOME/.agents/skills/beads-jsonl-path"; do
@@ -147,6 +148,10 @@ for _bjp_dir in "$HOME/.claude/skills/beads-jsonl-path" \
       exit 1
       ;;
   esac
+  [ -f "$_bjp_candidate" ] || {
+    printf '%s\n' 'installed beads-jsonl-path resolver is not a regular file — do NOT write' >&2
+    exit 1
+  }
   _bjp_link_count=$(_bjp_regular_link_count "$_bjp_candidate") || {
     printf '%s\n' 'cannot inspect installed beads-jsonl-path resolver hard-link count — do NOT write' >&2
     exit 1
@@ -165,16 +170,50 @@ for _bjp_dir in "$HOME/.claude/skills/beads-jsonl-path" \
     exit 1
   }
   unset _bjp_shebang
+  _bjp_runner="$_bjp_candidate_dir/git-clean"
+  [ -x "$_bjp_runner" ] || {
+    printf '%s\n' 'installed beads-jsonl-path Git runner unavailable — do NOT write' >&2
+    exit 1
+  }
+  [ ! -L "$_bjp_runner" ] || {
+    printf '%s\n' 'installed beads-jsonl-path Git runner is a symbolic link — do NOT write' >&2
+    exit 1
+  }
+  [ -f "$_bjp_runner" ] || {
+    printf '%s\n' 'installed beads-jsonl-path Git runner is not a regular file — do NOT write' >&2
+    exit 1
+  }
+  _bjp_link_count=$(_bjp_regular_link_count "$_bjp_runner") || {
+    printf '%s\n' 'cannot inspect installed beads-jsonl-path Git runner hard-link count — do NOT write' >&2
+    exit 1
+  }
+  [ "$_bjp_link_count" = 1 ] || {
+    printf '%s\n' 'installed beads-jsonl-path Git runner has multiple hard links — do NOT write' >&2
+    exit 1
+  }
+  unset _bjp_link_count
+  if ! IFS= command builtin read -r _bjp_shebang <"$_bjp_runner"; then
+    printf '%s\n' 'cannot inspect installed beads-jsonl-path Git runner interpreter — do NOT write' >&2
+    exit 1
+  fi
+  [ "$_bjp_shebang" = '#!/bin/sh' ] || {
+    printf '%s\n' 'installed beads-jsonl-path Git runner has an unexpected interpreter — do NOT write' >&2
+    exit 1
+  }
+  unset _bjp_shebang
   unset _bjp_candidate_dir
   if [ -z "$BEADS_JSONL_RESOLVER" ]; then
     BEADS_JSONL_RESOLVER=$_bjp_candidate
-  elif ! "$_bjp_cmp" -s "$BEADS_JSONL_RESOLVER" "$_bjp_candidate"; then
+    BEADS_GIT_RUNNER=$_bjp_runner
+  elif ! "$_bjp_cmp" -s "$BEADS_JSONL_RESOLVER" "$_bjp_candidate" \
+      || ! "$_bjp_cmp" -s "$BEADS_GIT_RUNNER" "$_bjp_runner"; then
     printf '%s\n' 'installed beads-jsonl-path companions disagree — do NOT write' >&2
     exit 1
   fi
+  unset _bjp_runner
 done
 unset _bjp_candidate _bjp_root _bjp_root_raw _bjp_git _bjp_cmp _bjp_stat
-[ -n "$BEADS_JSONL_RESOLVER" ] || {
+[ -n "$BEADS_JSONL_RESOLVER" ] && [ -n "$BEADS_GIT_RUNNER" ] || {
   printf '%s\n' 'beads-jsonl-path companion unavailable — do NOT write' >&2
   exit 1
 }
@@ -182,6 +221,7 @@ printf '%s\n' "$BEADS_JSONL_RESOLVER"
 __BJP_TRUSTED_BASH__
   )
 ) || exit 1
+BEADS_GIT_RUNNER=${BEADS_JSONL_RESOLVER%/*}/git-clean
 unset _bjp_candidate
 # Installed targets only. A relative `skills/beads-jsonl-path/scripts/resolve-beads-jsonl`
 # is whatever executable the repo you are polishing planted there, and this snippet would
@@ -231,7 +271,7 @@ run `second-model-bead-audit` by default after the graph meets these gates.
 1. Establish the baseline:
 
    ```bash
-   br list --limit 0 --json -a
+   "$BEADS_JSONL_RESOLVER" --run-br list --limit 0 --json -a
    bv --robot-triage
    bv --robot-plan
    bv --robot-suggest
@@ -290,10 +330,10 @@ run `second-model-bead-audit` by default after the graph meets these gates.
    written after the flush and records decisions, not the commands; recovery discards the
    working JSONL before you could read them back off it. Then apply the changes with `br`.
 
-5. Flush with an **explicit** `br sync --flush-only` and require it to succeed:
+5. Flush with an **explicit** `"$BEADS_JSONL_RESOLVER" --run-br sync --flush-only` and require it to succeed:
 
    ```bash
-   br sync --flush-only || { echo "flush failed — mutations not persisted"; exit 1; }
+   "$BEADS_JSONL_RESOLVER" --run-br sync --flush-only || { echo "flush failed — mutations not persisted"; exit 1; }
    ```
 
    The explicit sync is the whole guard: the hazard is the *automatic* flush after a
@@ -308,14 +348,14 @@ run `second-model-bead-audit` by default after the graph meets these gates.
    the cache stale (a hand edit does not advance `updated_at`, so the two are
    indistinguishable by timestamp), and this skill rewrites long bead bodies for a living,
    which is exactly when opening the file is tempting. Write bead text with
-   `br update -d/--notes`, rerun the resolver-locator block from Preflight,
+   `"$BEADS_JSONL_RESOLVER" --run-br update -d/--notes`, rerun the resolver-locator block from Preflight,
    stopping before its final clean-mode `BEADS_JSONL=` call, and resolve the post-write path
    with
    `BEADS_JSONL=$("$BEADS_JSONL_RESOLVER" --allow-dirty) || exit 1` before field-diffing it
    (your own round is the divergence the default mode refuses; the `.beads/` layout is
    only the default, and a hardcoded path diffs nothing on the others): a full
    re-serialization with every id on both sides is normal, ids on only one side or a
-   `description` you did not touch is the tell. Recovery — and why `br sync --import-only`
+   `description` you did not touch is the tell. Recovery — and why `"$BEADS_JSONL_RESOLVER" --run-br sync --import-only`
    cannot do it — is in
    [exact companion skill `rb-lite-backlog-drain`, step 11](../rb-lite-backlog-drain/SKILL.md#backlog-step-11), with one
    caveat: its replay step assumes a SINGLE mutation, the drain's case. A polish round
@@ -373,7 +413,7 @@ Use these escalations:
 
 After convergence:
 
-1. Flush the final graph with `br sync --flush-only`.
+1. Flush the final graph with `"$BEADS_JSONL_RESOLVER" --run-br sync --flush-only`.
 2. Invoke `second-model-bead-audit` with the source plan/spec path. Its default
    Codex + Claude panel is read-only and must not receive this skill's findings
    ledger or conclusions.
@@ -418,20 +458,20 @@ Do not:
 ## Command palette
 
 ```bash
-br list --limit 0 --json -a
-br show <id> --json
-br update <id> --description "..."
-br close <id> --reason "..."
-br dep add <issue> <depends-on>
-br dep remove <issue> <depends-on>
-br lint
+"$BEADS_JSONL_RESOLVER" --run-br list --limit 0 --json -a
+"$BEADS_JSONL_RESOLVER" --run-br show <id> --json
+"$BEADS_JSONL_RESOLVER" --run-br update <id> --description "..."
+"$BEADS_JSONL_RESOLVER" --run-br close <id> --reason "..."
+"$BEADS_JSONL_RESOLVER" --run-br dep add <issue> <depends-on>
+"$BEADS_JSONL_RESOLVER" --run-br dep remove <issue> <depends-on>
+"$BEADS_JSONL_RESOLVER" --run-br lint
 bv --robot-triage
 bv --robot-plan
 bv --robot-suggest
 bv --robot-insights
 bv --robot-priority
 bv --robot-diff --diff-since <ref>
-br sync --flush-only
+"$BEADS_JSONL_RESOLVER" --run-br sync --flush-only
 ```
 
 ## Pipeline position

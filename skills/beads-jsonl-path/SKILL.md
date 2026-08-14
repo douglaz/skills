@@ -68,7 +68,7 @@ _bjp_regular_link_count() {
   fi
   printf '%s\n' "$count"
 }
-_bjp_git_environment=( "${!GIT_@}" )
+_bjp_git_environment=( "${!GIT@}" )
 for _bjp_git_variable in "${_bjp_git_environment[@]}"; do
   command unset -- "$_bjp_git_variable" || {
     printf '%s\n' 'cannot sanitize the Git environment for beads-jsonl-path — do NOT write' >&2
@@ -78,6 +78,7 @@ done
 unset _bjp_git_variable _bjp_git_environment
 
 BEADS_JSONL_RESOLVER=
+BEADS_GIT_RUNNER=
 for _bjp_dir in "$HOME/.claude/skills/beads-jsonl-path" \
   "${CODEX_HOME:-$HOME/.codex}/skills/beads-jsonl-path" \
   "$HOME/.agents/skills/beads-jsonl-path"; do
@@ -122,6 +123,10 @@ for _bjp_dir in "$HOME/.claude/skills/beads-jsonl-path" \
       exit 1
       ;;
   esac
+  [ -f "$_bjp_candidate" ] || {
+    printf '%s\n' 'installed beads-jsonl-path resolver is not a regular file — do NOT write' >&2
+    exit 1
+  }
   _bjp_link_count=$(_bjp_regular_link_count "$_bjp_candidate") || {
     printf '%s\n' 'cannot inspect installed beads-jsonl-path resolver hard-link count — do NOT write' >&2
     exit 1
@@ -140,16 +145,50 @@ for _bjp_dir in "$HOME/.claude/skills/beads-jsonl-path" \
     exit 1
   }
   unset _bjp_shebang
+  _bjp_runner="$_bjp_candidate_dir/git-clean"
+  [ -x "$_bjp_runner" ] || {
+    printf '%s\n' 'installed beads-jsonl-path Git runner unavailable — do NOT write' >&2
+    exit 1
+  }
+  [ ! -L "$_bjp_runner" ] || {
+    printf '%s\n' 'installed beads-jsonl-path Git runner is a symbolic link — do NOT write' >&2
+    exit 1
+  }
+  [ -f "$_bjp_runner" ] || {
+    printf '%s\n' 'installed beads-jsonl-path Git runner is not a regular file — do NOT write' >&2
+    exit 1
+  }
+  _bjp_link_count=$(_bjp_regular_link_count "$_bjp_runner") || {
+    printf '%s\n' 'cannot inspect installed beads-jsonl-path Git runner hard-link count — do NOT write' >&2
+    exit 1
+  }
+  [ "$_bjp_link_count" = 1 ] || {
+    printf '%s\n' 'installed beads-jsonl-path Git runner has multiple hard links — do NOT write' >&2
+    exit 1
+  }
+  unset _bjp_link_count
+  if ! IFS= command builtin read -r _bjp_shebang <"$_bjp_runner"; then
+    printf '%s\n' 'cannot inspect installed beads-jsonl-path Git runner interpreter — do NOT write' >&2
+    exit 1
+  fi
+  [ "$_bjp_shebang" = '#!/bin/sh' ] || {
+    printf '%s\n' 'installed beads-jsonl-path Git runner has an unexpected interpreter — do NOT write' >&2
+    exit 1
+  }
+  unset _bjp_shebang
   unset _bjp_candidate_dir
   if [ -z "$BEADS_JSONL_RESOLVER" ]; then
     BEADS_JSONL_RESOLVER=$_bjp_candidate
-  elif ! "$_bjp_cmp" -s "$BEADS_JSONL_RESOLVER" "$_bjp_candidate"; then
+    BEADS_GIT_RUNNER=$_bjp_runner
+  elif ! "$_bjp_cmp" -s "$BEADS_JSONL_RESOLVER" "$_bjp_candidate" \
+      || ! "$_bjp_cmp" -s "$BEADS_GIT_RUNNER" "$_bjp_runner"; then
     printf '%s\n' 'installed beads-jsonl-path companions disagree — do NOT write' >&2
     exit 1
   fi
+  unset _bjp_runner
 done
 unset _bjp_candidate _bjp_root _bjp_root_raw _bjp_git _bjp_cmp _bjp_stat
-[ -n "$BEADS_JSONL_RESOLVER" ] || {
+[ -n "$BEADS_JSONL_RESOLVER" ] && [ -n "$BEADS_GIT_RUNNER" ] || {
   printf '%s\n' 'beads-jsonl-path companion unavailable — do NOT write' >&2
   exit 1
 }
@@ -157,6 +196,7 @@ printf '%s\n' "$BEADS_JSONL_RESOLVER"
 __BJP_TRUSTED_BASH__
   )
 ) || exit 1
+BEADS_GIT_RUNNER=${BEADS_JSONL_RESOLVER%/*}/git-clean
 unset _bjp_candidate
 # Installed targets only — do NOT add a fallback to a relative
 # `skills/beads-jsonl-path/scripts/resolve-beads-jsonl`. This snippet runs in the agent's
@@ -178,6 +218,10 @@ entry point. The resolver applies the same single-link rule to PATH-selected
 `br` and `jq` and launches them with the implementation's POSIX utility path, so
 neither an outside inode alias nor an indirect PATH-resolved interpreter can
 execute bytes controlled by the driven worktree.
+Every later Beads command uses
+`"$BEADS_JSONL_RESOLVER" --run-br <args...>`; that mode revalidates the same
+single-link `br` executable and launches it in the clean proof environment.
+Never return to a caller-shell `br`, function, or PATH lookup after resolution.
 
 On success, `BEADS_JSONL` is the only stdout: an absolute path inside the
 current Git worktree whose stage-0 index entry, normal index flags, HEAD entry,
@@ -186,6 +230,18 @@ discard inherited `GIT_*` overrides before repository discovery, so a caller
 cannot redirect that proof to another worktree, index, object store, or config.
 Every Git inspection also forces `core.fsmonitor=false`, so the read-only owner
 does not execute a repository-configured monitor hook.
+`BEADS_GIT_RUNNER` names the validated installed sibling that clears the full
+`GIT*` environment and pins trusted Git, PATH, replacement-object, and fsmonitor
+behavior for every caller-side diff or add below. Do not substitute a
+bare caller-shell `git`; diff calls also disable external diff drivers and
+textconv filters, and add hashes/stages the exact file bytes without repository
+clean filters. Transactions that continue through commit/push keep using the
+runner so inherited repository/index/transport selectors cannot reappear;
+repository hooks and commit/push signing are disabled on that guarded path.
+Push also disables credential helpers, askpass, SSH configuration commands, and
+interactive prompts while retaining the caller's SSH agent. For HTTPS, it
+re-enables only system/global credential helpers after refusing a `HOME` or
+`XDG_CONFIG_HOME` inside the driven worktree.
 
 On failure, stop before any Beads write. Do not replace the owner with
 `git status`, porcelain parsing, or a hardcoded `.beads/issues.jsonl` path.
@@ -196,7 +252,7 @@ The default mode refuses a dirty JSONL, which is exactly right before a write an
 after one. Pass `--allow-dirty` when the file is *supposed* to differ from HEAD and you
 still need its real path:
 
-- the post-write field diff (`git --no-replace-objects -c core.fsmonitor=false --literal-pathspecs diff HEAD -- "$BEADS_JSONL"`) that reads what the
+- the post-write field diff (`"$BEADS_GIT_RUNNER" --literal-pathspecs diff --no-ext-diff --no-textconv --text HEAD -- "$BEADS_JSONL"`) that reads what the
   flush actually wrote;
 - a handoff that arrives flushed but uncommitted, such as `bead-polish-loop` →
   `second-model-bead-audit`, where the audit reads the diff rather than gating on it.
@@ -217,8 +273,8 @@ intent-to-add placeholder, plus a non-symlink regular worktree file. It therefor
 hidden flags, intent-to-add, untracked, unmerged, missing, wrong-mode, and wrong-type
 states before an audit flush.
 The resolver and every documented consumer force `core.fsmonitor=false`, so a
-monitor that missed a write cannot make the `git status` or `git diff HEAD` you
-are about to read report a clean file over changed bead bodies.
+monitor that missed a write cannot make the clean runner's `git diff HEAD` report
+a clean file over changed bead bodies.
 It still performs no Beads mutation or flush.
 
 ## Name a damaged path for recovery

@@ -98,7 +98,7 @@ before launching the panel.
 Panel health and graph independence are different claims. Report both.
 
 Determine who built or substantially polished the graph from session context or
-`br show <id> --json` actor/history fields when practical. Do not delay the audit
+`"$BEADS_JSONL_RESOLVER" --run-br show <id> --json` actor/history fields when practical. Do not delay the audit
 just to establish authorship.
 
 For each reviewer, label independence:
@@ -170,7 +170,7 @@ recorded acceptance of the reduced review coverage.
    - the wider graph only for cross-scope dependencies and frontier health
 
    Do not label unrelated backlog beads as unplanned merely because
-   `br list -a` includes them.
+   `"$BEADS_JSONL_RESOLVER" --run-br list -a` includes them.
 5. Flush once, capture one shared baseline, and fingerprint it before launching
    either reviewer:
 
@@ -237,7 +237,7 @@ recorded acceptance of the reduced review coverage.
      fi
      printf '%s\n' "$count"
    }
-   _bjp_git_environment=( "${!GIT_@}" )
+   _bjp_git_environment=( "${!GIT@}" )
    for _bjp_git_variable in "${_bjp_git_environment[@]}"; do
      command unset -- "$_bjp_git_variable" || {
        printf '%s\n' 'cannot sanitize the Git environment for beads-jsonl-path — do NOT write' >&2
@@ -247,6 +247,7 @@ recorded acceptance of the reduced review coverage.
    unset _bjp_git_variable _bjp_git_environment
 
    BEADS_JSONL_RESOLVER=
+   BEADS_GIT_RUNNER=
    for _bjp_dir in "$HOME/.claude/skills/beads-jsonl-path" \
      "${CODEX_HOME:-$HOME/.codex}/skills/beads-jsonl-path" \
      "$HOME/.agents/skills/beads-jsonl-path"; do
@@ -291,6 +292,10 @@ recorded acceptance of the reduced review coverage.
          exit 1
          ;;
      esac
+     [ -f "$_bjp_candidate" ] || {
+       printf '%s\n' 'installed beads-jsonl-path resolver is not a regular file — do NOT write' >&2
+       exit 1
+     }
      _bjp_link_count=$(_bjp_regular_link_count "$_bjp_candidate") || {
        printf '%s\n' 'cannot inspect installed beads-jsonl-path resolver hard-link count — do NOT write' >&2
        exit 1
@@ -309,16 +314,50 @@ recorded acceptance of the reduced review coverage.
        exit 1
      }
      unset _bjp_shebang
+     _bjp_runner="$_bjp_candidate_dir/git-clean"
+     [ -x "$_bjp_runner" ] || {
+       printf '%s\n' 'installed beads-jsonl-path Git runner unavailable — do NOT write' >&2
+       exit 1
+     }
+     [ ! -L "$_bjp_runner" ] || {
+       printf '%s\n' 'installed beads-jsonl-path Git runner is a symbolic link — do NOT write' >&2
+       exit 1
+     }
+     [ -f "$_bjp_runner" ] || {
+       printf '%s\n' 'installed beads-jsonl-path Git runner is not a regular file — do NOT write' >&2
+       exit 1
+     }
+     _bjp_link_count=$(_bjp_regular_link_count "$_bjp_runner") || {
+       printf '%s\n' 'cannot inspect installed beads-jsonl-path Git runner hard-link count — do NOT write' >&2
+       exit 1
+     }
+     [ "$_bjp_link_count" = 1 ] || {
+       printf '%s\n' 'installed beads-jsonl-path Git runner has multiple hard links — do NOT write' >&2
+       exit 1
+     }
+     unset _bjp_link_count
+     if ! IFS= command builtin read -r _bjp_shebang <"$_bjp_runner"; then
+       printf '%s\n' 'cannot inspect installed beads-jsonl-path Git runner interpreter — do NOT write' >&2
+       exit 1
+     fi
+     [ "$_bjp_shebang" = '#!/bin/sh' ] || {
+       printf '%s\n' 'installed beads-jsonl-path Git runner has an unexpected interpreter — do NOT write' >&2
+       exit 1
+     }
+     unset _bjp_shebang
      unset _bjp_candidate_dir
      if [ -z "$BEADS_JSONL_RESOLVER" ]; then
        BEADS_JSONL_RESOLVER=$_bjp_candidate
-     elif ! "$_bjp_cmp" -s "$BEADS_JSONL_RESOLVER" "$_bjp_candidate"; then
+       BEADS_GIT_RUNNER=$_bjp_runner
+     elif ! "$_bjp_cmp" -s "$BEADS_JSONL_RESOLVER" "$_bjp_candidate" \
+         || ! "$_bjp_cmp" -s "$BEADS_GIT_RUNNER" "$_bjp_runner"; then
        printf '%s\n' 'installed beads-jsonl-path companions disagree — do NOT write' >&2
        exit 1
      fi
+     unset _bjp_runner
    done
    unset _bjp_candidate _bjp_root _bjp_root_raw _bjp_git _bjp_cmp _bjp_stat
-   [ -n "$BEADS_JSONL_RESOLVER" ] || {
+   [ -n "$BEADS_JSONL_RESOLVER" ] && [ -n "$BEADS_GIT_RUNNER" ] || {
      printf '%s\n' 'beads-jsonl-path companion unavailable — do NOT write' >&2
      exit 1
    }
@@ -326,6 +365,7 @@ recorded acceptance of the reduced review coverage.
    __BJP_TRUSTED_BASH__
      )
    ) || exit 1
+   BEADS_GIT_RUNNER=${BEADS_JSONL_RESOLVER%/*}/git-clean
    unset _bjp_candidate
    # Installed targets only. A relative `skills/beads-jsonl-path/scripts/resolve-beads-jsonl`
    # is whatever executable the audited repo planted there, and this snippet would run it.
@@ -334,36 +374,19 @@ recorded acceptance of the reduced review coverage.
      echo "beads-jsonl-path companion unavailable — do NOT flush" >&2
      exit 1
    }
-   # --allow-dirty, and INSPECT rather than gate on cleanliness: the normal
-   # bead-polish-loop handoff arrives with the round's intended `br` edits flushed and
-   # uncommitted, so the owner's default clean-state mode would refuse the audit after
-   # every non-noop round. Nothing tells an intended mutation from a hand edit — only
-   # reading the diff can. Compare against HEAD, not the index: a damaged JSONL that is
-   # staged makes a worktree-vs-index diff empty while HEAD still holds the good bodies.
-   # `--allow-dirty` retains the owner's tracked stage-0, normal-flag, regular-mode proof
-   # and drops byte identity only where the two commands below can still see the
-   # difference — it refuses a write a file system monitor's cache is hiding from them.
-   # The status and diff are both still required: status
-   # distinguishes staged from unstaged intended edits, while the HEAD diff exposes both.
-   BEADS_JSONL=$("$BEADS_JSONL_RESOLVER" --allow-dirty) || exit 1
-   git --no-replace-objects -c core.fsmonitor=false --literal-pathspecs status --porcelain -- "$BEADS_JSONL" || { echo "cannot read the worktree — do NOT flush"; exit 1; }
-   git --no-replace-objects -c core.fsmonitor=false --literal-pathspecs diff HEAD -- "$BEADS_JSONL" || { echo "cannot diff the JSONL — do NOT flush"; exit 1; }
-   : "${BEADS_DIFF_REVIEWED:?read the two commands above, then set this to how you resolved it}"
-   br sync --flush-only || { echo "flush failed"; exit 1; }
-   # AND AGAIN AFTER. A clean pre-flush diff only means the worktree matched git — it says
-   # nothing about the gitignored cache, so a stale DB introduces the damage HERE. Read
-   # this before consuming the graph; auditing a truncated one reviews text the reviewers
-   # will never see.
-   git --no-replace-objects -c core.fsmonitor=false --literal-pathspecs diff HEAD -- "$BEADS_JSONL" || { echo "cannot diff the JSONL — do NOT audit"; exit 1; }
-   : "${BEADS_POSTFLUSH_REVIEWED:?read the post-flush diff above before auditing}"
-   br list --limit 0 --json -a
-   bv --robot-triage
-   bv --robot-plan
-   bv --robot-suggest
    ```
 
-   Add `bv --robot-insights`, `bv --robot-priority`, and targeted
-   `br show <id> --json` when useful.
+   The block above only resolves and validates the installed companions. **Do not
+   flush, diff, or list the graph in a second abbreviated transaction here.** In
+   the same Bash process, execute the complete
+   [Shared graph snapshot procedure](references/reviewer-panel.md#shared-graph-snapshot).
+   That single owner clears both this audit's pre-flush and post-flush
+   acknowledgements, stops after each rendered diff so the current run can bind
+   its acknowledgement, captures stable source/graph snapshots, and only then
+   runs the `br`/`bv` reads. Duplicating those gates here lets the copies drift
+   and lets a prior round's shell variables authorize this round's destructive
+   flush.
+
 6. Create a unique audit directory and one neutral prompt containing the
    snapshotted requirement and graph paths, audit scope, categories, severity
    rules, and output contract. Do not include your conclusions or prior polish
@@ -491,7 +514,7 @@ Normal mode is report-only:
   `bead-polish-loop`'s ledger, fix them there, then rerun the full panel.
 
 If the user explicitly asks this skill to apply fixes, mutate only reconciled,
-clearly justified items with `br`, flush with `br sync --flush-only`, and rerun the
+clearly justified items with `br`, flush with `"$BEADS_JSONL_RESOLVER" --run-br sync --flush-only`, and rerun the
 panel before upgrading the verdict. Never let a reviewer edit the graph directly.
 
 Bound an automatic polish/audit cycle to three panel runs. Stop earlier when the
@@ -513,19 +536,19 @@ in the plan rather than a bead-quality defect.
 ## Command palette
 
 ```bash
-br list --limit 0 --json -a
-br show <id> --json
-br update <id> --description "..."
-br close <id> --reason "..."
-br dep add <issue> <depends-on>
-br dep remove <issue> <depends-on>
-br lint
+"$BEADS_JSONL_RESOLVER" --run-br list --limit 0 --json -a
+"$BEADS_JSONL_RESOLVER" --run-br show <id> --json
+"$BEADS_JSONL_RESOLVER" --run-br update <id> --description "..."
+"$BEADS_JSONL_RESOLVER" --run-br close <id> --reason "..."
+"$BEADS_JSONL_RESOLVER" --run-br dep add <issue> <depends-on>
+"$BEADS_JSONL_RESOLVER" --run-br dep remove <issue> <depends-on>
+"$BEADS_JSONL_RESOLVER" --run-br lint
 bv --robot-triage
 bv --robot-plan
 bv --robot-suggest
 bv --robot-insights
 bv --robot-priority
-br sync --flush-only
+"$BEADS_JSONL_RESOLVER" --run-br sync --flush-only
 ```
 
 ## Failure patterns to avoid

@@ -35,11 +35,11 @@ rb-lite. The beads are the input; do not invent a fresh work list. Codex is
 operating the queue and PR workflow, while rb-lite handles the inner
 implement → review loop for each bead.
 
-1. **Pick.** Run `br ready --limit 10`. Take the top P0 first; if none,
+1. **Pick.** Run `"$BEADS_JSONL_RESOLVER" --run-br ready --limit 10`. Take the top P0 first; if none,
    the lowest-numbered P1; only descend to P2 if the user says so or the
    P1 list is empty / oversized.
 
-2. **Read.** Run `br show <id>` (and `br show <id> --json` if structured
+2. **Read.** Run `"$BEADS_JSONL_RESOLVER" --run-br show <id>` (and `"$BEADS_JSONL_RESOLVER" --run-br show <id> --json` if structured
    fields help). If the acceptance criteria are vague, pause and ask the
    user before writing the task.
 
@@ -325,7 +325,7 @@ implement → review loop for each bead.
 
 <a id="backlog-step-11"></a>
 
-11. **Close the bead, through a reviewed path.** Run `br update <bead-id> -s closed`
+11. **Close the bead, through a reviewed path.** Run `"$BEADS_JSONL_RESOLVER" --run-br update <bead-id> -s closed`
     after the merged code is present on the base branch. That write lands in the
     tracked `.beads/*.jsonl`, so do **not** commit it straight to the default branch —
     it would reach the branch unreviewed. Carry the closure commit into the next bead's
@@ -347,11 +347,11 @@ implement → review loop for each bead.
     discovery depends on telling them apart. The marker is what it filters on.
 
     Verify it landed with a checked *explicit* sync: it propagates a real exit code, which
-    the automatic flush after `br update` does not — that one swallows its error. The
+    the automatic flush after `"$BEADS_JSONL_RESOLVER" --run-br update` does not — that one swallows its error. The
     mutation is already in the shared DB, so the sync either writes it out or fails loudly:
 
     ```bash
-    # Resolve and prove the JSONL clean FIRST: `br update` auto-flushes the cache over it.
+    # Resolve and prove the JSONL clean FIRST: `"$BEADS_JSONL_RESOLVER" --run-br update` auto-flushes the cache over it.
     BEADS_JSONL_RESOLVER=$(
       (
         # Resolve the clean interpreter in a subshell. POSIX special-builtin precedence
@@ -402,7 +402,7 @@ implement → review loop for each bead.
       fi
       printf '%s\n' "$count"
     }
-    _bjp_git_environment=( "${!GIT_@}" )
+    _bjp_git_environment=( "${!GIT@}" )
     for _bjp_git_variable in "${_bjp_git_environment[@]}"; do
       command unset -- "$_bjp_git_variable" || {
         printf '%s\n' 'cannot sanitize the Git environment for beads-jsonl-path — do NOT write' >&2
@@ -412,6 +412,7 @@ implement → review loop for each bead.
     unset _bjp_git_variable _bjp_git_environment
 
     BEADS_JSONL_RESOLVER=
+    BEADS_GIT_RUNNER=
     for _bjp_dir in "$HOME/.claude/skills/beads-jsonl-path" \
       "${CODEX_HOME:-$HOME/.codex}/skills/beads-jsonl-path" \
       "$HOME/.agents/skills/beads-jsonl-path"; do
@@ -456,6 +457,10 @@ implement → review loop for each bead.
           exit 1
           ;;
       esac
+      [ -f "$_bjp_candidate" ] || {
+        printf '%s\n' 'installed beads-jsonl-path resolver is not a regular file — do NOT write' >&2
+        exit 1
+      }
       _bjp_link_count=$(_bjp_regular_link_count "$_bjp_candidate") || {
         printf '%s\n' 'cannot inspect installed beads-jsonl-path resolver hard-link count — do NOT write' >&2
         exit 1
@@ -474,16 +479,50 @@ implement → review loop for each bead.
         exit 1
       }
       unset _bjp_shebang
+      _bjp_runner="$_bjp_candidate_dir/git-clean"
+      [ -x "$_bjp_runner" ] || {
+        printf '%s\n' 'installed beads-jsonl-path Git runner unavailable — do NOT write' >&2
+        exit 1
+      }
+      [ ! -L "$_bjp_runner" ] || {
+        printf '%s\n' 'installed beads-jsonl-path Git runner is a symbolic link — do NOT write' >&2
+        exit 1
+      }
+      [ -f "$_bjp_runner" ] || {
+        printf '%s\n' 'installed beads-jsonl-path Git runner is not a regular file — do NOT write' >&2
+        exit 1
+      }
+      _bjp_link_count=$(_bjp_regular_link_count "$_bjp_runner") || {
+        printf '%s\n' 'cannot inspect installed beads-jsonl-path Git runner hard-link count — do NOT write' >&2
+        exit 1
+      }
+      [ "$_bjp_link_count" = 1 ] || {
+        printf '%s\n' 'installed beads-jsonl-path Git runner has multiple hard links — do NOT write' >&2
+        exit 1
+      }
+      unset _bjp_link_count
+      if ! IFS= command builtin read -r _bjp_shebang <"$_bjp_runner"; then
+        printf '%s\n' 'cannot inspect installed beads-jsonl-path Git runner interpreter — do NOT write' >&2
+        exit 1
+      fi
+      [ "$_bjp_shebang" = '#!/bin/sh' ] || {
+        printf '%s\n' 'installed beads-jsonl-path Git runner has an unexpected interpreter — do NOT write' >&2
+        exit 1
+      }
+      unset _bjp_shebang
       unset _bjp_candidate_dir
       if [ -z "$BEADS_JSONL_RESOLVER" ]; then
         BEADS_JSONL_RESOLVER=$_bjp_candidate
-      elif ! "$_bjp_cmp" -s "$BEADS_JSONL_RESOLVER" "$_bjp_candidate"; then
+        BEADS_GIT_RUNNER=$_bjp_runner
+      elif ! "$_bjp_cmp" -s "$BEADS_JSONL_RESOLVER" "$_bjp_candidate" \
+          || ! "$_bjp_cmp" -s "$BEADS_GIT_RUNNER" "$_bjp_runner"; then
         printf '%s\n' 'installed beads-jsonl-path companions disagree — do NOT write' >&2
         exit 1
       fi
+      unset _bjp_runner
     done
     unset _bjp_candidate _bjp_root _bjp_root_raw _bjp_git _bjp_cmp _bjp_stat
-    [ -n "$BEADS_JSONL_RESOLVER" ] || {
+    [ -n "$BEADS_JSONL_RESOLVER" ] && [ -n "$BEADS_GIT_RUNNER" ] || {
       printf '%s\n' 'beads-jsonl-path companion unavailable — do NOT write' >&2
       exit 1
     }
@@ -491,6 +530,7 @@ implement → review loop for each bead.
     __BJP_TRUSTED_BASH__
       )
     ) || exit 1
+    BEADS_GIT_RUNNER=${BEADS_JSONL_RESOLVER%/*}/git-clean
     unset _bjp_candidate
     # Installed targets only. A relative `skills/beads-jsonl-path/scripts/resolve-beads-jsonl`
     # is whatever executable the repo being drained planted there, and this snippet would
@@ -500,11 +540,11 @@ implement → review loop for each bead.
       exit 1
     }
     BEADS_JSONL=$("$BEADS_JSONL_RESOLVER") || exit 1
-    br update <bead-id> -s closed || { echo "br update failed"; exit 1; }
-    br sync --flush-only || { echo "not persisted"; exit 1; }
+    "$BEADS_JSONL_RESOLVER" --run-br update <bead-id> -s closed || { echo "br update failed"; exit 1; }
+    "$BEADS_JSONL_RESOLVER" --run-br sync --flush-only || { echo "not persisted"; exit 1; }
     ```
 
-    **Check for divergence BEFORE the first `br` write.** `br update` auto-flushes, so a
+    **Check for divergence BEFORE the first `br` write.** `"$BEADS_JSONL_RESOLVER" --run-br update` auto-flushes, so a
     staged or unstaged divergence in the JSONL is destroyed by the very first mutation — and
     since neither the index nor `HEAD` holds it, every later diff shows only your intended
     change, which makes the loss *undetectable*, not merely unrecoverable. Resolve and
@@ -515,16 +555,16 @@ implement → review loop for each bead.
     **That sync proves the closure reached the file. It says nothing about what else the
     same write overwrote.** Every `br` write flushes the whole gitignored cache over the
     tracked JSONL, so a write to **one** bead rewrites **all** of them, and any body the
-    cache holds a stale copy of is reverted. Observed on `br 0.2.19`: closing a single bead
+    cache holds a stale copy of is reverted. Observed on `"$BEADS_JSONL_RESOLVER" --run-br 0.2.19`: closing a single bead
     silently reverted ~40 KB of specification text across three *other* beads and deleted a
     fourth. Exit 0, success message, nothing failed. This step is the last write of every
     bead, which is how the drain routes you into it every time.
 
     Hand-editing the JSONL is what makes the cache stale — a hand edit does not advance
     `updated_at`, so cache and file hold different bodies under identical timestamps and
-    nothing can tell them apart. **Write bead text through `br update -d/--notes`, never
+    nothing can tell them apart. **Write bead text through `"$BEADS_JSONL_RESOLVER" --run-br update -d/--notes`, never
     the file.** The task template's ".beads/ is orchestration state" line is a *reviewing*
-    scope rule, not an editing licence. And the advertised guard does not help: `br sync
+    scope rule, not an editing licence. And the advertised guard does not help: `"$BEADS_JSONL_RESOLVER" --run-br sync
     --help`'s "Stale DB Guard" is an **id**-level check, so same-id-different-body — the
     case that loses text — is unguarded by design.
 
@@ -544,16 +584,16 @@ implement → review loop for each bead.
     **Recovery depends on which side holds the good text, and guessing cements the loss.**
 
     - **(a) cache stale, file still good** — rebuild the cache from the file.
-      `br sync --import-only` alone cannot do it: it compares `updated_at`, so equal
+      `"$BEADS_JSONL_RESOLVER" --run-br sync --import-only` alone cannot do it: it compares `updated_at`, so equal
       timestamps with different bodies report `Skipped: N (up-to-date)` forever. The stale
       DB has to go first.
     - **(b) the flush already ran and the diff shows damage** — the working copy *is* the
       damaged artifact. Restore it from the good side, **rebuild the cache**, and only then
       replay: replaying first lets the still-stale cache auto-flush over what you just
       restored. Read
-      `git --no-replace-objects -c core.fsmonitor=false --literal-pathspecs diff --cached -- "$BEADS_JSONL"`
+      `"$BEADS_GIT_RUNNER" --literal-pathspecs diff --no-ext-diff --no-textconv --text --cached -- "$BEADS_JSONL"`
       and
-      `git --no-replace-objects -c core.fsmonitor=false --literal-pathspecs diff -- "$BEADS_JSONL"`,
+      `"$BEADS_GIT_RUNNER" --literal-pathspecs diff --no-ext-diff --no-textconv --text -- "$BEADS_JSONL"`,
       then decide explicitly which of the index, worktree, or `HEAD` holds the good
       bodies; a staged copy only proves a choice exists, and an earlier flush may
       have been staged before anyone noticed.
@@ -594,7 +634,7 @@ implement → review loop for each bead.
 
 <a id="backlog-step-12"></a>
 
-12. **Loop.** Return to `br ready --limit 10` — but **on a resumed drain, look for an
+12. **Loop.** Return to `"$BEADS_JSONL_RESOLVER" --run-br ready --limit 10` — but **on a resumed drain, look for an
     in-flight closure PR before selecting work.** A closure lives on its metadata branch
     until it merges, so a fresh clone of the default branch sees the old JSONL with the
     bead still open and will happily rebuild and re-merge work that is already done. The
@@ -641,7 +681,7 @@ implement → review loop for each bead.
     ```
 
     `BEAD_ID` is the bead you are about to take — loop this query over each open bead from
-    `br ready`/`br list` rather than assuming a variable survived the clone. Empty, the
+    `"$BEADS_JSONL_RESOLVER" --run-br ready`/`"$BEADS_JSONL_RESOLVER" --run-br list` rather than assuming a variable survived the clone. Empty, the
     filter rejects everything and the closure PR this exists to find is missed.
 
     Keyed on the **`bead-closure:` marker plus the bead id**, not on the id alone: step 8

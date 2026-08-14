@@ -995,6 +995,22 @@ worktree so an external pathname cannot alias worktree-controlled proof code.
 Installed candidates retain the canonical `#!/bin/sh` entry point, while
 `br`/`jq` run with the implementation's POSIX utility path so a script cannot
 resolve its interpreter or child utilities from the driven worktree.
+Every later Beads command runs as
+`"$BEADS_JSONL_RESOLVER" --run-br <args...>`, which revalidates and launches
+the same `br` through that clean environment rather than returning to a
+caller-shell function or PATH lookup.
+The installed companion also owns a validated `git-clean` sibling: caller-side
+diff/add commands run through it so inherited `GIT*` selectors cannot
+reappear after the resolver child exits; the runner pins trusted Git, disables
+replacement objects and fsmonitor, and uses the POSIX utility path. Diff
+consumers additionally disable external diff drivers and textconv filters, and
+add consumers hash/stage the exact file bytes without repository clean filters.
+When the documented transaction immediately commits and pushes that staged
+JSONL, it stays inside the runner, with inherited transport selectors,
+repository hooks, and signing disabled. Push additionally disables credential
+helpers, askpass, SSH config commands, and interactive prompts while retaining
+the caller's SSH agent. HTTPS re-enables only system/global credential helpers
+after refusing a `HOME` or `XDG_CONFIG_HOME` inside the driven worktree.
 Require:
 
 ```bash
