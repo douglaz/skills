@@ -220,8 +220,10 @@ take.
 
 Run the repository gate and independent review on this exclusive E1 metadata
 branch, then merge it before any further scoped Beads query or mutation. Refresh
-and import clean `master` after merge, retain the `executor-skills` reservation,
-and dispatch newly ready E3 (`skills-dhm`) through rb-lite.
+and import clean `master` after merge, verify and release E1's
+`skills-iog`/`feat/skills-iog-beads-jsonl-path` reservation, atomically create a
+new exact `skills-dhm`/E3 `executor-skills` reservation, and only then dispatch
+E3 through rb-lite.
 
 ## Next
 
