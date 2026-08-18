@@ -1,10 +1,13 @@
 # DRIVE — execute the open skills safety and correctness backlog
 
-**Scope:** E3 (`skills-dhm`) KISS redesign and implementation on the reviewed backlog.
+**Scope:** the 29-issue reviewed skills backlog in
+`docs/specs/backlog-execution-plan.md`; current focus is E3 (`skills-dhm`).
 **Phase:** SHAPE · **Bead:** `skills-dhm`
 · **Branch:** `feat/skills-dhm-native-br-close`
-**Pending:** exact Codex and Opus review of the native `br v0.3.2` replacement spec
-**Gate:** `./check.sh`
+**Pending:** disposition and rerun of exact Codex and Opus review on the native
+`br v0.3.2` replacement spec
+**Gate:** `./check.sh` · last green 2026-08-18 on the current remediation tree (139 resolver,
+53 installer, 124 bot-gate, and 70 drive-status fixtures; exit 0).
 
 ## Done
 
@@ -17,6 +20,13 @@
   equal-timestamp conflict detection, and the remaining best-effort auto-flush split.
 - Started this replacement branch directly from that latest skills master and moved
   the existing `skills-dhm` executor reservation to it.
+- The first exact Codex/Opus pass confirmed the native primitive but found the
+  linked-worktree redirect, stale Drive state, unowned version pin, runner bypasses,
+  and three smaller KISS contradictions. The remediation now requires a standalone
+  clone and E1 runners, pins the embedded release commit, records an executable
+  one-time probe, removes live reconciliation from the closure path, and maps
+  authority-release evidence without inventing a work PR. A focused read-only
+  re-review returned PASS with no P0–P2 findings.
 - Queried all 29 open GitHub issues and confirmed that this repository has no
   initialized Beads store.
 - Reconciled umbrellas, overlaps, priorities, dependencies, and parallel work
@@ -224,19 +234,18 @@
 
 ## Now
 
-Run the repository gate and independent review on this exclusive E1 metadata
-branch, then merge it before any further scoped Beads query or mutation. Refresh
-and import clean `master` after merge, verify and release E1's
-`skills-iog`/`feat/skills-iog-beads-jsonl-path` reservation, atomically create a
-new exact `skills-dhm`/E3 `executor-skills` reservation, and only then dispatch
-E3 through rb-lite.
+Close the current Codex/Opus SHAPE findings on this replacement branch, rerun the
+exact reviewers and `./check.sh`, then open the replacement spec PR from latest
+`master`. Once that PR is visible, mark the preserved 40-commit wrapper PR #71 as
+superseded rather than merging it. Keep the existing `skills-dhm` reservation on
+this branch throughout.
 
 ## Next
 
-Bootstrap E3 exactly as plan global rule 8 requires, including its exclusive
-reviewed closure-metadata PR. Only then start A1, GitHub issue #42, through
-rb-lite and continue the highest-priority unblocked lane while respecting the
-two human-authority checkpoints.
+Build the reviewed medium E3 delta: pin native `br v0.3.2` identity, migrate the
+three consumers, and add the two bounded deterministic tests while retaining the one-time
+real-release probe evidence. Land its work PR, then close E3 through the standalone-clone native
+metadata procedure before resuming the highest-priority ready lane.
 
 ## Open questions for the human
 
