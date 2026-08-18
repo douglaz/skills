@@ -344,7 +344,9 @@ import; (2) captures exactly one `br where --json` object in the caller's
 supported original location context and requires each of `.path`,
 `.database_path`, and `.jsonl_path` to be a nonempty absolute string without
 CR/LF, retaining `.path` as `BEADS_STORE_DIR`; (3) requires
-`.database_path == "$BEADS_STORE_DIR/beads.db"`; (4) runs E1's normal resolver
+`.database_path == "$BEADS_STORE_DIR/beads.db"` and requires `.jsonl_path` to be
+a strict descendant of `BEADS_STORE_DIR` (external JSONL paths are unsupported
+by the pinned closure commands and refuse before status/import); (4) runs E1's normal resolver
 in that same original context to prove the clean tracked JSONL and requires its
 returned path to equal the captured `.jsonl_path` byte-for-byte; (5) establishes
 one selector-clean context containing only `BEADS_DIR="$BEADS_STORE_DIR"` and
@@ -1375,7 +1377,9 @@ selector-clean environment and requires status 0, exact stdout bytes
 `where`, status, or mutation. It then requires both the caller's `BEADS_DIR` and
 `BEADS_JSONL` contexts to be nonempty absolute paths without CR/LF, retains them
 as the expected store and JSONL paths, and defines the expected database as
-`<expected-store>/beads.db`. It launches every later private E1 child with
+`<expected-store>/beads.db`. The expected JSONL must be a strict descendant of
+the expected store; an external path refuses before `where`, status, or
+mutation. It launches every later private E1 child with
 only `BEADS_DIR=<expected-store>` and `BEADS_JSONL=<expected-path>`, discarding
 every other inherited `BEADS_*` and `BR_*` selector and exporting neither
 derived sibling path. Before any status or mutation it captures exactly one
@@ -1384,8 +1388,8 @@ derived sibling path. Before any status or mutation it captures exactly one
 equal the expected path, all byte-for-byte; then its first private E1 resolution
 must also return that expected path. Merely observing an echoed `jsonl_path` is
 not store-identity proof. Thus a nested/default same-ID decoy cannot receive the
-mutation, while a caller with an export below or outside its supported
-in-worktree `BEADS_DIR` remains bound to the original validated database and
+mutation, while a caller with a nested export below its supported in-worktree
+`BEADS_DIR` remains bound to the original validated database and
 exact E1-validated JSONL.
 Before any mutation it requires the reason and optional notes
 payloads to be valid UTF-8 and rejects every raw NUL byte; a POSIX shell/argv
@@ -1458,7 +1462,8 @@ degraded state, pre-import dirty/DB-newer/other-anomaly refusal, the second E1
 proof immediately before flush, post-flush `--allow-dirty` path revalidation,
 custom-location binding where retained `BEADS_DIR` differs from the JSONL parent,
 with a same-ID nested/default-store decoy plus mutations of each `where` identity
-field, and locate-only version mismatch before the locator's final normal proof
+field, pre-status refusal of a JSONL outside `BEADS_DIR`, and locate-only version
+mismatch before the locator's final normal proof
 or any caller/helper normal E1 proof, `where`, status, or import (with
 per-command launch counters);
 tests also cover pre- and post-mutation failures, slurped

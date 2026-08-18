@@ -283,6 +283,13 @@ aligned Beads bodies
   helper receive that exact `BEADS_DIR`/`BEADS_JSONL` pair, recapture
   `.path`/`.database_path`/`.jsonl_path`, and require byte identity before any
   status/import or closure mutation.
+- The final location review measured that `br 0.2.19` cannot close an export
+  outside its retained `BEADS_DIR`. In a disposable clone with both selectors
+  explicit, `sync --status --json`, `show skills-dhm --json`, and
+  `close skills-dhm --reason probe` each exited 7; their separated stdout/stderr
+  byte counts were respectively 316/0, 303/0, and 0/181. E3 therefore supports
+  nested exports only when the JSONL is a strict descendant of the retained
+  store and refuses an external path before status/import or closure.
 - Released the completed `skills-iog`/`feat/skills-iog-beads-jsonl-path`
   `executor-skills` reservation and atomically handed it to
   `skills-dhm`/E3 on `feat/skills-dhm-beads-close-transaction`; that exact E3
