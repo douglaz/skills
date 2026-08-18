@@ -1,13 +1,16 @@
 # DRIVE — execute the open skills safety and correctness backlog
 
-**Scope:** the 29-issue reviewed skills backlog in
-`docs/specs/backlog-execution-plan.md`; current focus is E3 (`skills-dhm`).
+**Scope:** exactly the 29 GitHub issues in the #30–#66 set enumerated by
+`docs/specs/backlog-execution-plan.md`; the Beads graph is the only work. Current focus is
+E3 (`skills-dhm`).
 **Phase:** SHAPE · **Bead:** `skills-dhm`
 · **Branch:** `feat/skills-dhm-native-br-close`
 **Pending:** disposition and rerun of exact Codex and Opus review on the native
 `br v0.3.2` replacement spec
-**Gate:** `./check.sh` · last green 2026-08-18 on the current remediation tree (139 resolver,
-53 installer, 124 bot-gate, and 70 drive-status fixtures; exit 0).
+**Gate:** `./check.sh` · repository-gate environment: GNU Bash 5.3.15 (non-POSIX),
+Git 2.55.0, installed `br` 0.2.19; last green 2026-08-18 on the current remediation tree
+(139 resolver, 53 installer, 124 bot-gate, and 70 drive-status fixtures; exit 0). The
+separate exact-`v0.3.2` Linux probe is one-time evidence, not this gate.
 
 ## Done
 
@@ -15,9 +18,20 @@
   deleting its preserved branch or PR history. Freshly fetched
   `douglaz/skills@master` is exactly `00b6bf0`.
 - Checked current upstream `Dicklesworthstone/beads_rust`: release `v0.3.2` is the
-  latest release and main `eea5d591` still reports 0.3.2. Disposable probes confirm
-  native atomic close+transition-comment, strict explicit flush, additive
-  equal-timestamp conflict detection, and the remaining best-effort auto-flush split.
+  exact required release. The separate disposable Linux probe measures the externally
+  all-or-one close+transition-comment outcome, strict explicit flush, and additive
+  equal-timestamp conflict detection; the internal transaction/lock boundary and default
+  best-effort auto-flush split are source-verified, not inferred from the probe.
+  Exact invocation:
+  `bash docs/specs/e3-native-br-v0.3.2-probe.sh /tmp/br-v0.3.2-bin/br
+  /tmp/br-v0.3.2-bin/br-0.3.2-linux_x86_64.tar.gz`; exit 0, 1,376 stdout bytes, zero
+  stderr bytes. Internal lock/transaction boundaries were separately reviewed in the
+  pinned upstream source.
+- Re-fetched both upstreams immediately before finalization: skills `origin/master` remains
+  `00b6bf0dbf5d1575396510923399e87f77539c0c`; beads-rust `origin/main` remains
+  `eea5d591e88e7f26add480ef94c9c849cf1763f7`, and `v0.3.2` remains the latest release at
+  `4104c31e79bf806f53e2eba0a4cd2ba6c594f8b9`. Post-tag main changes workspace discovery
+  and inherited-context display, not the pinned native close/strict-flush primitive.
 - Started this replacement branch directly from that latest skills master and moved
   the existing `skills-dhm` executor reservation to it.
 - The first exact Codex/Opus pass confirmed the native primitive but found the
@@ -232,6 +246,12 @@
   fixtures on the exclusive two-file closure tree under that same recorded
   Bash/Git/`br`/uid environment.
 
+- This coordinator-owned SHAPE graph amendment changes exactly `skills-dhm`,
+  `skills-dta` (A4b), and `skills-xfd` (B0). E3 now requires four closure consumers,
+  retained-clone no-double-close resume, a retained pre-close structural proof, corrected
+  worktree topology, and ADR delivery; A4b/B0 now link their no-change/decision closures to
+  the native fact owner. Exact field diff on each row: `description` and `updated_at` only.
+
 ## Now
 
 Close the current Codex/Opus SHAPE findings on this replacement branch, rerun the
@@ -242,10 +262,10 @@ this branch throughout.
 
 ## Next
 
-Build the reviewed medium E3 delta: pin native `br v0.3.2` identity, migrate the
-three consumers, and add the two bounded deterministic tests while retaining the one-time
-real-release probe evidence. Land its work PR, then close E3 through the standalone-clone native
-metadata procedure before resuming the highest-priority ready lane.
+Build the reviewed medium E3 delta: pin native `br v0.3.2` identity, migrate the four
+live consumers and ADR 0003, and add the two bounded deterministic tests while retaining
+the one-time real-release probe evidence. Land its work PR, then close E3 through the
+standalone-clone native metadata procedure before resuming the highest-priority ready lane.
 
 ## Open questions for the human
 

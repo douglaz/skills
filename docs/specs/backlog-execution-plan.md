@@ -262,19 +262,27 @@ The E3 native-close behavior and exact release provenance are recorded in
    ready rows share installer, reviewer-panel, and skill files in ways that are not
    faithfully representable as semantic dependency edges.
 8. Bootstrap the P0 Beads safety owners before normal scheduling. GRAPH may perform
-   its reviewed in-place update as one coordinator-owned transaction. E1 lands and
-   closes first. E3 then starts from the latest clean `master` and replaces the
-   repository-side closure wrapper design with the pinned native `br` workflow below.
-   After E3's work PR merges, close E3 on one dedicated metadata branch with that same
-   native workflow, merge the metadata PR, and refresh clean `master` before normal
-   scheduling. Until then, make no other live skills-store Beads query or mutation.
-   Thereafter scheduler reads use E1's validated runner in `--no-db` mode against the
-   clean tracked JSONL; closure mutations use E3's standalone-clone procedure.
+   its reviewed in-place graph update only as one coordinator-owned, fail-closed
+   transaction: use E1 to resolve the exact clean tracked JSONL path; save its exact
+   bytes and hash in E1's private trusted location; make the no-auto mutation; explicitly
+   flush; re-resolve; structurally compare every ID and every field against the saved
+   graph, allowing only the reviewed intended changes; and render a literal Git diff for
+   human review. A path, hash, flush, re-resolution, structural-diff, or literal-diff
+   failure stops the transaction. E1 lands and closes first. E3 then starts from the
+   latest clean `master` and replaces the repository-side closure-wrapper design with the
+   pinned native `br` workflow below. After E3's work PR merges, close E3 on one dedicated
+   metadata branch with that same native workflow, merge the metadata PR, and refresh
+   clean `master` before normal scheduling. Until then, make no other live skills-store
+   Beads query or mutation. Thereafter scheduler reads use E1's validated runner in
+   `--no-db` mode against the clean tracked JSONL. Outside GRAPH's reviewed graph
+   transaction, every later execution, accepted-decision/no-change, and
+   authority-publication closure uses E3's standalone-clone procedure.
 9. Permit at most one outstanding Beads closure metadata branch/PR. It starts from
    latest clean `master`, owns exactly one bead's closure evidence/status plus the
    matching `DRIVE.md` transition, and remains exclusive through merge, abandonment,
-   or explicit human repair. This is coordinator serialization, not a second process
-   lock or recovery protocol; native `br` owns its database and export locks.
+   or explicit human repair. This is coordinator serialization across separate standalone
+   clones, not a second process lock or recovery protocol: native `br` locks
+   only participants in one clone/workspace for its database and export operations.
 
 ## Workstream A — merge and admission integrity
 
@@ -388,8 +396,9 @@ The current file already places its shell examples in fenced blocks, so do not
 churn those blocks merely to satisfy stale wording. If the linked finding
 identifies a remaining indented example, own only that block plus its exact
 new extraction check added to `install.test`; convert only block style and require
-byte-identical command text before/after. Otherwise close this bead with the
-thread URL, inspected ranges, and no-change evidence. Do not execute the examples
+byte-identical command text before/after. Otherwise close this bead through E3's
+standalone native procedure with the thread URL, inspected ranges, and no-change evidence.
+Do not execute the examples
 or add the G2 harness here. If any file changes, run `./install.test` and
 `./check.sh`.
 
@@ -404,7 +413,9 @@ refuse unsupported dirty delegated paths and use a disposable worktree. B1d
 stays blocked until this bead records the answer; the bead never treats silence
 as approval.
 
-B0 may close only if the human accepts the planned fail-closed refusal boundary.
+B0 may close only if the human accepts the planned fail-closed refusal boundary, and then
+only through E3's standalone native procedure with the immutable decision-thread identity
+and accepted decision in its reason/evidence.
 If the human chooses full dirty in-scope preservation, leave B0 open, return the
 drive to SHAPE, specify and review that larger preservation mechanism, then amend
 the scope of B1d and re-audit the graph. The choice never makes B1d or B1 ready
@@ -1162,37 +1173,54 @@ with #47's fact-ownership policy.
 
 **Priority:** P0. **Effort:** medium.
 
-Delete the repository-side `beads-close-transaction` design. Current upstream already
-provides the native primitive, so no `br` fork or replacement wrapper is required.
-The verified release is `Dicklesworthstone/beads_rust` `v0.3.2`, commit
-`4104c31e79bf806f53e2eba0a4cd2ba6c594f8b9`; upstream main
-`eea5d591e88e7f26add480ef94c9c849cf1763f7` still reports 0.3.2 and contains no
-later close/sync semantic change.
+Delete the repository-side `beads-close-transaction` design. The required primitive is
+native `br v0.3.2`: one full-ID `close --reason --transition-comment`, followed by one
+strict `sync --flush-only`; E3 must not add a closure wrapper, recovery marker/API,
+rollback, SQLite parser, or read wrapper. The exact release is
+`Dicklesworthstone/beads_rust` `v0.3.2`, commit
+`4104c31e79bf806f53e2eba0a4cd2ba6c594f8b9`. The native close+strict-flush primitive is
+unchanged on later upstream main, but workspace discovery is not: post-tag main commit
+`44c7a6f0` redirects a linked checkout to its primary checkout. The pinned v0.3.2 does
+**not** redirect; it uses a worktree-local/private cache, so state can split. A standalone
+clone is consequently the stable topology across the release/current-main divergence;
+the exact release remains mandatory.
 
-The canonical owner is `skills/rb-lite-backlog-drain/SKILL.md` step 11. Drive LAND and
-`orchestrating-with-rb-lite` link to that step rather than copying its procedure. No
-new skill, process lock, recovery directory, rollback engine, SQLite parser, scheduler
-wrapper, or new E1 command is in scope.
+The canonical closure fact owner is `skills/rb-lite-backlog-drain/SKILL.md` step 11.
+The four live consumers E3 must migrate to that fact and test are the root
+`skills/drive/SKILL.md`, Drive LAND
+`skills/drive/references/phases.md`, rb-lite step 11, and the harden handoff
+`skills/orchestrating-with-rb-lite/references/harden-until-clean.md`. E3 also owns the
+BUILD amendment to `docs/adr/0003-bead-closure-stays-post-merge.md`: replace its
+carry-closure-into-next-work-branch rule with standalone post-merge metadata closure.
+This coordinator-owned SHAPE graph amendment also replaces the open A4b/B0 Beads-body
+close sentences with concise references to the native procedure; they do not copy commands.
+E3 BUILD retains and tests those links rather than performing another graph mutation.
 
 #### Verified native boundary
 
-The executable probe `docs/specs/e3-native-br-v0.3.2-probe.sh` runs only in disposable
-standalone clones. On 2026-08-18 it verified the published Linux x86-64 archive SHA-256
-`e67c560e77e912490e44a65e3e9c13205210d171e729c5d801072ee508207288`, binary
-SHA-256 `590aebae292bca9d36bf90d3219dcb27a3536f402864841b2a11d5c07c4c6c63`, and
-this embedded identity:
+The executable one-time Linux evidence is
+`docs/specs/e3-native-br-v0.3.2-probe.sh`, which runs only in disposable standalone
+clones. It verifies the authoritative release asset
+`https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.3.2/br-0.3.2-linux_x86_64.tar.gz`
+and its authoritative checksum listing
+`https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.3.2/SHA256SUMS`.
+On 2026-08-18 it recorded archive SHA-256
+`e67c560e77e912490e44a65e3e9c13205210d171e729c5d801072ee508207288`, binary SHA-256
+`590aebae292bca9d36bf90d3219dcb27a3536f402864841b2a11d5c07c4c6c63`, and this identity:
 
 ```json
 {"version":"0.3.2","build":"release","commit":"4104c31e79bf806f53e2eba0a4cd2ba6c594f8b9","branch":"HEAD","rust_version":"1.99.0-nightly","target":"x86_64-unknown-linux-gnu","features":["self_update"]}
 ```
 
-The same run captured streams separately and returned:
+The recorded invocation was
+`bash docs/specs/e3-native-br-v0.3.2-probe.sh /tmp/br-v0.3.2-bin/br
+/tmp/br-v0.3.2-bin/br-0.3.2-linux_x86_64.tar.gz`; it exited 0 with 1,376 stdout bytes
+and zero stderr bytes. Its retained projection is:
 
 ```text
 FRESH_DB_BEFORE=absent
 IMPORT_RC=0 IMPORT_STDOUT_BYTES=90 IMPORT_STDERR_BYTES=0
 RECONCILE_RC=0 RECONCILE_STDERR_BYTES=0
-RECONCILE_PROJECTION={"conflict_occurrences":0,"conflicted":0,"db_only_preserved":0,"postcommit_failures":[],"schema":"br.sync.additive-reconciliation.v2","status":"no_changes","tool_version":"0.3.2"}
 BLOCKED_CLOSE_RC=3 STATUS=open COMMENTS=0
 SUCCESS_CLOSE_RC=0 FLUSH_RC=0 CLOSE_STDERR_BYTES=0 FLUSH_STDERR_BYTES=0
 SUCCESS_CHANGED_FIELDS=["close_reason","closed_at","comments","status","updated_at"]
@@ -1201,40 +1229,61 @@ EXPLICIT_FLUSH_FAILURE_RC=7 DB_STATUS=closed STDOUT_BYTES=0 STDERR_BYTES=109
 FLUSH_RETRY_RC=0 JSONL_STATUS=closed STDERR_BYTES=0
 ```
 
-Thus native `close --reason --transition-comment` checks blockers before mutation and
-commits status, reason, timestamp, transition comment, events, and dirty marker in one
-SQLite transaction. Explicit `sync --flush-only` is a separately locked strict export
-with atomic JSONL publication and nonzero failure. Default auto-flush remains
-best-effort, so it is never the success gate. `sync --reconcile-additive` detects the
-measured equal-timestamp scalar conflict and returns exit 6.
+The scenarios directly measure fresh-cache import, blocker refusal, externally observed
+close/comment atomicity, strict-flush success/failure/retry, additive equal-timestamp
+conflict, unchanged ID sets, and order-independent preservation of existing comments with
+exactly one addition.
+The internal transaction/lock claims come from source review at that tag in
+`src/cli/commands/close.rs`, `src/storage/sqlite.rs`, `src/cli/commands/sync.rs`, and
+`src/sync/mod.rs`, not inference from the probe. The default best-effort auto-flush claim
+is likewise source-verified, not probe-measured, and is never a success gate.
 
 #### Native closure procedure
 
-Run only in a **standalone clone**, never a linked `git worktree`: `br 0.3.2` deliberately
-redirects a linked worktree without a local database to the primary checkout's
-`.beads`. Create the closure clone from latest clean `master`; require `.git` to be a
-directory, clear Beads location overrides, and refuse any pre-existing `beads.db` or
-database sidecar instead of deleting it. Run E1's clean locator first and require the
-resolved JSONL to be the clone's clean tracked `.beads/issues.jsonl`.
+Use a fresh **standalone clone** from latest clean `master`, never a linked Git worktree.
+On every entry require `.git` to be a directory, clear all Beads location overrides, and
+select/validate E1's installed companion
+scripts through its privileged trust block but stop before that block's final default-locator
+call: the locator itself executes `br where`, so it must not precede executable admission.
+For a first entry only, refuse an existing `beads.db` or sidecar.
+That E1 companion-selection bootstrap is the sole pre-runner Git exception. After companion
+validation, all closure-procedure `br`, `jq`, and Git operations use E1's validated
+`BEADS_JSONL_RESOLVER` and `BEADS_GIT_RUNNER`; bare caller-shell tools are forbidden.
 
-All `br` and Git operations below go through E1's validated
-`BEADS_JSONL_RESOLVER`/`BEADS_GIT_RUNNER`; bare caller-shell `br`, `jq`, or `git` is
-forbidden.
-
-1. Capture `--run-br version --json` and use `--run-jq` to require exactly version
-   `0.3.2`, build `release`, and commit
-   `4104c31e79bf806f53e2eba0a4cd2ba6c594f8b9`. The target/feature fields are
-   informational so supported release platforms remain valid. Obtain the external
-   binary from the upstream `v0.3.2` release or a build of that exact commit and verify
-   its published platform checksum before it enters the trusted PATH.
-2. Run `--run-br sync --import-only` once to initialize the absent cache from the
-   reviewed JSONL; require exit 0 and empty stderr. Because the standalone clone had no
-   DB and no intervening writer is permitted, do not add a second reconciliation
-   lifecycle or parse `sync --status`/`--reconcile-additive` receipts in production.
-3. Capture one exact target through `--run-br --no-db show ID --json`; require exactly
-   one open issue carrying the expected executor label. Use a single full ID. Batch
-   close and `--force` are forbidden.
-4. Execute the native SQLite transaction and strict export in order:
+1. Establish executable provenance before admitting the binary to the trusted PATH. For a
+   published release artifact, verify its platform-archive entry in upstream `SHA256SUMS`
+   and extract with trusted tooling. For the evidenced Linux x86-64 asset, also require the
+   extracted executable to match the listing's standalone `br` digest; for another published
+   platform, record the digest of the trusted extraction instead.
+   for a local exact-commit release build, record the clean source commit, release-build
+   command, and resulting binary digest. In either mode, require the exact executable
+   selected for trusted PATH to match that recorded digest before first execution and again
+   on resume. Then capture
+   `--run-br --no-auto-import --no-auto-flush version --json` and use `--run-jq` to
+   require exactly version
+   `0.3.2`, build `release`, and commit `4104c31e79bf806f53e2eba0a4cd2ba6c594f8b9`.
+   Target/features are informational.
+2. Only now run E1's default clean locator and require the resolved path to be this clone's
+   clean tracked `.beads/issues.jsonl`. Immediately before initialization or close, use
+   E1's trusted git-clean
+   `make-temp-dir`, `copy-file`, and `hash-file` to preserve the exact clean JSONL in a
+   private file. Require source and copied hashes to agree immediately; record the hash and
+   require the private copy still has that hash before final comparison. Retain the private
+   directory until final proof succeeds, including across an incomplete/interrupted attempt;
+   it is a proof input, not a mutable state/recovery marker. Run
+   `--run-br --no-auto-import --no-auto-flush sync --import-only` once to initialize the
+   absent cache; require exit 0 and empty stderr. No production reconcile/status lifecycle
+   is permitted.
+3. With `--run-br --no-db --no-auto-import --no-auto-flush show ID --json`, require exactly
+   one open target with exactly its expected lane label: `executor-skills`,
+   `executor-rb-lite`, or `authority-human`. Use one full ID; batch close and `--force`
+   are forbidden. `CLOSE_REASON` is one nonempty line carrying the durable
+   outcome identity: normally merged work-PR URL plus 40-lowercase-hex merge SHA;
+   immutable decision/review-thread URL plus accepted comment/range/no-change identity for
+   a decision/no-change closure; or immutable release URL/tag/commit for an authority
+   publication. `CLOSE_EVIDENCE` is the nonempty reviewed note with neither NUL nor outer
+   whitespace.
+4. Run exactly the native sequence, with no preceding notes/status mutation:
 
    ```bash
    "$BEADS_JSONL_RESOLVER" --run-br --no-auto-import --no-auto-flush \
@@ -1244,61 +1293,75 @@ forbidden.
      sync --flush-only
    ```
 
-   `CLOSE_REASON` is one nonempty line carrying the bead-appropriate durable identity:
-   normally the merged work PR URL and 40-lowercase-hex merge SHA; for an authority
-   publication bead, the immutable release URL/tag/commit. `CLOSE_EVIDENCE` is the
-   nonempty reviewed closure note; leading or trailing whitespace and NUL are forbidden
-   because native transition comments trim outer whitespace. Do not perform a preceding
-   notes update or status mutation.
-5. After flush, resolve the intentionally dirty JSONL with E1 `--allow-dirty`, inspect
-   it using `--run-br --no-db show ID --json`, and render the literal textual diff with
-   `"$BEADS_GIT_RUNNER" --literal-pathspecs diff --no-ext-diff --no-textconv --text
-   HEAD -- "$BEADS_JSONL"`. Require exactly the target to be closed with the exact
-   reason and one newly added matching comment. Only its `status`, `closed_at`,
-   `close_reason`, `updated_at`, and `comments` plus the planned `DRIVE.md` transition
-   may differ. Then run `./check.sh`, independent review, and the metadata-PR flow.
+5. After flush, resolve the intentionally dirty JSONL with E1 `--allow-dirty`. Compare
+   strictly parsed pre/post rows: both inputs must have unique nonempty string IDs, equal
+   row counts, and identical ID sets before maps are constructed. Every bystander record
+   and every non-allowed target field must preserve both key presence and JSON value. The
+   target changed-field set must be exactly `status`, `closed_at`, `close_reason`,
+   `updated_at`, and `comments`; the post-close timestamps must be present nonempty strings and
+   `updated_at` must differ from the pre-close value. The post-close
+   comments must preserve the exact multiset of complete pre-close comment objects and add
+   exactly one new comment whose text is `CLOSE_EVIDENCE`; losing, rewriting, or adding any
+   other comment refuses. Compare this order-independently because v0.3.2 canonically sorts
+   comments during export.
+   Require the exact closed target and reason through
+   `"$BEADS_JSONL_RESOLVER" --run-br --no-db --no-auto-import --no-auto-flush
+   show "$BEAD_ID" --json`.
+   Render `"$BEADS_GIT_RUNNER" --literal-pathspecs diff --no-ext-diff --no-textconv --text
+   HEAD -- "$BEADS_JSONL"` for human review; a literal Git diff never substitutes for the
+   structural proof. Then run `./check.sh`, independent review, and metadata-PR flow.
 
-A close refusal must leave status and transition comment unchanged. If close succeeds
-but explicit flush fails, report `CLOSURE_INCOMPLETE`, stop automated work, and retain
-the standalone clone. The SQLite close is already committed and dirty: after a human
-fixes the export cause, rerun only the validated `sync --flush-only` and final proof.
-Never retry close, reopen, compensate, or claim cross-filesystem rollback.
+A refusal leaves status/comment unchanged. On interruption, retain the standalone clone and
+private pre-close copy/hash; there is no state marker, recovery API, or rollback. Before any
+resumed operation, revalidate that exact clone and repeat the binary provenance/digest
+admission **before** executing it; repeat the exact no-auto version identity check; recover
+the JSONL through E1 `--allow-dirty` and require
+the exact path, recheck the retained snapshot hash, then inspect both DB-mode and `--no-db`
+`show ID --json` with
+`--no-auto-import --no-auto-flush` against the snapshot and intended reason/comment:
 
-After E3's work PR merges, the coordinator closes E3 through this procedure on one
-exclusive standalone metadata clone/branch/PR and merges it before any normal lane
-read. This closure barrier is part of E3's deliverable, not a later scheduler guess.
+- both exact-open with no intended evidence: close may run once, then flush;
+- DB exact-closed with intended reason/comment while JSONL is exact-open: flush only;
+- both exact-closed with intended reason/comment: proof only;
+- anything else: stop for human repair.
+
+The first-entry absent-DB/sidecar rule does not apply to this retained-clone resume.
+Never close twice, reopen, compensate, or claim rollback.
+
+After E3's work PR merges, the coordinator applies this procedure to E3 itself on one
+exclusive standalone metadata clone/branch/PR and merges it before normal lane reads.
 
 #### Delivery and tests
 
-E3 owns the external-tool compatibility move: update the three consumers to fail
-closed unless `version --json` reports the exact release identity above; rerun E1's
-real `where`/symlink measurements with 0.3.2 and update only their measured-version
-annotations if behavior is unchanged. The repository does not install `br`; setup
-continues to treat it as a host dependency. The committed Linux x86-64 probe/transcript is one-time SHAPE evidence, not a recurring
-cross-platform gate; deterministic fixture binaries keep `./check.sh` offline.
+E3 migrates all four consumers and updates ADR 0003 as above. It remeasures and retains
+only behavior-preserving annotations for E1's `where`/symlink facts, E2b's measured
+`br agents --update --force` fact, and rb-lite-backlog-drain's measured whole-cache
+reversion fact; a changed behavior changes the contract and deterministic tests instead.
+The repository does not install `br`. The Linux probe is one-time evidence, not a
+recurring platform gate; exact-release or exact-commit builds remain supported
+cross-platform.
 
-Migrate the three live consumers away from pre-close notes/status updates and bare
-best-effort close. Scheduler lane reads use E1-runner `br --no-db ready`, but every
-snapshot first reruns E1's clean locator; coordinator rules 7 and 9 exclude concurrent
-skills-store mutation. E3 does not wrap reads.
-
-Create exactly:
-
-- `skills/rb-lite-backlog-drain/scripts/native-close.test` for native version identity,
-  fresh-cache import, close/flush ordering, and failure contracts using deterministic
-  fixture binaries;
-- `skills/rb-lite-backlog-drain/scripts/closure-consumers.test` to extract the Drive
-  LAND, backlog-drain step 11, and harden handoff paths;
-- the already-landed `docs/specs/e3-native-br-v0.3.2-probe.sh` retained as the exact
-  one-time Linux release evidence.
-
-Wire the two deterministic tests into `./check.sh`; run `./install.test` and
-`./check.sh`. Tests cover absent-cache import; blocked close with no comment;
-successful close/comment/strict-flush/JSONL proof; explicit-flush failure with no
-second close; wrong version/build/commit; and all three
-consumers' stop conditions. Keep E3-owned consumer changes and new deterministic test
-code under 250 and 500 lines respectively; the probe is evidence and excluded from
-those budgets. Crossing a limit returns to SHAPE instead of recreating the wrapper.
+Create exactly `skills/rb-lite-backlog-drain/scripts/native-close.test` and
+`skills/rb-lite-backlog-drain/scripts/closure-consumers.test`, wire both into
+`./check.sh`, and retain the probe. The first test covers exact identity, absent-cache
+import, blocked close, close/flush order, snapshot/hash tampering, exact existing-comment
+multiset preservation plus exactly one addition (including canonical reordering),
+duplicate/empty/non-string IDs, row-count and
+key-presence changes including absent-versus-null, missing/empty/stale close/update timestamps,
+and full final structural proof. It also
+accepts each of the three exact lane labels and refuses missing/multiple/wrong lane labels;
+it
+uses a hostile pre-admission PATH `br` to prove the fresh locator executes nothing before
+provenance; refuses an exact-identity liar and a verified archive paired with a different
+binary; proves the no-auto identity call changes no DB/JSONL bytes; swaps the admitted
+binary before resume, injects retained-resume location overrides to prove they are cleared
+or refused before inspection, and simulates death after close and after
+flush-before-proof; both resume fixtures prove no second close and no inspection-time
+mutation. The second extracts all four consumer paths, proves their stop conditions, and
+proves that the open A4b/B0 rows link to the fact owner without copying commands. Run
+`./install.test` and `./check.sh`. Keep E3-owned consumer changes under 250 lines and new
+deterministic test code under 500; the evidence probe is excluded. Crossing either limit
+returns to SHAPE.
 
 ## Workstream F — Drive/rb-lite controller and convergence
 
