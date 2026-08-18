@@ -257,11 +257,21 @@ aligned Beads bodies
   `br 0.2.19`, `br --no-auto-flush --no-auto-import sync --status --json`
   exited 0 with 792 stdout bytes and zero stderr bytes for that state: `dirty_count=0`,
   `jsonl_newer=true`, `db_newer=false`, and exactly one degraded
-  `jsonl_newer` anomaly. The final predicate admits that transcript only before
-  import, refuses it in synced mode, and refuses a `db_newer=true` mutation;
-  all three jq-runner probes had the expected status. The helper skill now owns
+  `jsonl_newer` anomaly. Each predicate probe used
+  `resolve-beads-jsonl --run-jq -se --arg hash HASH --argjson require_synced MODE -f PREDICATE`
+  with its status transcript on stdin and separated output files: synced/`true`
+  exited 0 with 5 stdout/0 stderr bytes; JSONL-newer/`false` exited 0 with
+  5/0; JSONL-newer/`true` exited 1 with 6/0; and the
+  `db_newer=true` mutation/`false` exited 1 with 6/0. The helper skill now owns
   one canonical locator block, and all four consumers point to that owner rather
   than copying its trust logic.
+- The next Codex pass found that discarding E1 location context could select a
+  same-ID default-store decoy and that caller import preceded the pinned-version
+  check. Every call now passes only the caller's retained E1-validated
+  `BEADS_JSONL`; the helper binds all private proofs and the final
+  `--allow-dirty` proof to that exact path while discarding other selectors.
+  Caller preflight requires exact `br 0.2.19` bytes and status before status or
+  import, with a mismatch required to launch neither.
 - Released the completed `skills-iog`/`feat/skills-iog-beads-jsonl-path`
   `executor-skills` reservation and atomically handed it to
   `skills-dhm`/E3 on `feat/skills-dhm-beads-close-transaction`; that exact E3

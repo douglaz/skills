@@ -332,18 +332,21 @@ and this measured `0.2.19` status schema; neither exposes it as an E3 API.
 **Caller-owned coordinator status equality (fixture-owned; not an E3 API).**
 After each clean-`master` refresh, before any lane read and before the F2 or F2r
 closure path, the coordinator: (1) runs E1's normal resolver to prove and retain
-the clean tracked JSONL path; (2) before any import, captures the output of
+the clean tracked JSONL path; (2) before status or import, captures
+`"$BEADS_JSONL_RESOLVER" --run-br --no-auto-flush --no-auto-import --version`
+with separated streams and requires exact stdout bytes `br 0.2.19\n`, empty
+stderr, and status 0; a mismatch launches no status or import; (3) captures the output of
 `"$BEADS_JSONL_RESOLVER" --run-br --no-auto-flush --no-auto-import sync --status --json`,
 calculates that JSONL's plain SHA-256 as below, and runs the exact predicate below
-with `--argjson require_synced false`; (3) only after that predicate has refused
+with `--argjson require_synced false`; (4) only after that predicate has refused
 dirty or DB-newer state, immediately runs
 `"$BEADS_JSONL_RESOLVER" --run-br --no-auto-flush --no-auto-import sync --import-only`;
-(4) immediately repeats E1's normal clean-tracked-JSONL proof and retains that
-path before any status or lane read; (5) captures the output of
+(5) immediately repeats E1's normal clean-tracked-JSONL proof and retains that
+path before any status or lane read; (6) captures the output of
 `"$BEADS_JSONL_RESOLVER" --run-br --no-auto-flush --no-auto-import sync --status --json`;
-(6) uses the already validated existing
+(7) uses the already validated existing
 `"$BEADS_GIT_RUNNER" run-audit-tool python3 -I` and only stdlib
-`hashlib` to calculate the plain SHA-256 of that exact JSONL; and (7) passes the
+`hashlib` to calculate the plain SHA-256 of that exact JSONL; and (8) passes the
 captured status transcript and hash to E1's
 `"$BEADS_JSONL_RESOLVER" --run-jq -se --arg hash "$hash" --argjson require_synced true`
 predicate. Both jq calls use `-s` to slurp the transcript, require exactly one
@@ -1298,6 +1301,14 @@ Its only command is:
 "$BEADS_CLOSE_TRANSACTION" --id ID --reason-file PATH [--notes-file PATH]
 ```
 
+That is the only argument API. At every call site, the caller passes its
+already E1-validated retained path only as invocation context:
+
+```text
+BEADS_JSONL="$BEADS_JSONL" "$BEADS_CLOSE_TRANSACTION" --id ID \
+  --reason-file PATH [--notes-file PATH]
+```
+
 `skills/beads-close-transaction/SKILL.md` owns one canonical locator block. Each
 of the four migrated completion consumers points to and invokes that owner
 rather than embedding an independently maintained copy. The canonical block
@@ -1339,8 +1350,14 @@ and derives its private E1 resolver and `git-clean` sibling paths from that
 path. It validates both derived siblings as the caller validates this helper:
 executable, regular, non-symlink, `nlink == 1`, canonical `#!/bin/sh` shebang,
 outside the driven worktree, and cross-root consistent with its own installed
-root. It ignores inherited `BEADS_*` and `BR_*` variables and exports neither
-derived path. Before any mutation it requires the reason and optional notes
+root. It requires the caller's `BEADS_JSONL` context to be a nonempty absolute
+path without CR/LF, retains it as the expected path, and launches its private E1
+children with only that location selector; it discards every other inherited
+`BEADS_*` and `BR_*` selector and exports neither derived sibling path. Its first
+private E1 resolution must return the expected path byte-for-byte before any
+status or mutation. Thus a caller originally using `BEADS_DIR` or another
+supported E1 location selector is bound to the exact path E1 already validated
+rather than falling back to a default store. Before any mutation it requires the reason and optional notes
 payloads to be valid UTF-8 and rejects every raw NUL byte; a POSIX shell/argv
 cannot preserve NUL, so such input is unsupported rather than silently altered.
 The reason must be nonempty. With only those private derived siblings, it has E1's default
@@ -1367,7 +1384,7 @@ prefixes, but this helper does not. It then optionally updates notes and closes
 that exact target. It immediately reruns E1's default resolver as the second E1
 proof immediately before its one explicit runner-mediated flush. After the
 flush it reruns E1's existing resolver in `--allow-dirty` mode, requires the
-same returned JSONL path, and uses that newly validated regular tracked path
+same expected returned JSONL path, and uses that newly validated regular tracked path
 for its post-show and final comparison. The final ID set is exact; every
 non-target row is byte- and field-identical; and the target differs only in
 `status`, `closed_at`, `close_reason`, `updated_at`, and optional `notes`.
@@ -1410,8 +1427,10 @@ raw-NUL refusal, exact-ID/prefix refusal, complete target delta and bystander
 preservation, successful import from the exact measured single-`jsonl_newer`
 degraded state, pre-import dirty/DB-newer/other-anomaly refusal, the second E1
 proof immediately before flush, post-flush `--allow-dirty` path revalidation,
-pre- and post-mutation failures, slurped single-document status parsing, all
-four consumer boundaries, and selective install. In BUILD, red-mutate each
+custom-location binding with a same-ID default-store decoy, version mismatch
+before any status/import, pre- and post-mutation failures, slurped
+single-document status parsing, all four consumer boundaries, and selective
+install. In BUILD, red-mutate each
 claimed property before its passing run. Keep helper production near 350 lines,
 excluding the one canonical locator block at roughly 40 lines, and fixtures near
 700; exceeding either budget returns E3 to SHAPE.
@@ -1549,7 +1568,7 @@ Here `F2` means the resolved generated bead ID, not the plan alias. At the
 serialized clean-`master` closure boundary, the terminal mutation is one E3 call:
 
 ```text
-"$BEADS_CLOSE_TRANSACTION" --id <F2-bead-id> \
+BEADS_JSONL="$BEADS_JSONL" "$BEADS_CLOSE_TRANSACTION" --id <F2-bead-id> \
   --reason-file <merge-evidence-file> --notes-file <upstream-evidence-file>
 ```
 
@@ -1687,7 +1706,7 @@ existing Drive LAND pointer to E3's canonical locator owner rather than creating
 another locator, then invokes exactly:
 
 ```text
-"$BEADS_CLOSE_TRANSACTION" --id <F2r-bead-id> \
+BEADS_JSONL="$BEADS_JSONL" "$BEADS_CLOSE_TRANSACTION" --id <F2r-bead-id> \
   --reason-file <publication-evidence-file> --notes-file <release-evidence-file>
 ```
 
