@@ -290,6 +290,13 @@ aligned Beads bodies
   byte counts were respectively 316/0, 303/0, and 0/181. E3 therefore supports
   nested exports only when the JSONL is a strict descendant of the retained
   store and refuses an external path before status/import or closure.
+- The next Codex pass found two executable-prose omissions: the locate-only flow
+  had not explicitly assigned the clean resolver result to `BEADS_JSONL`, and a
+  valid JSON prefix could be parsed after its producer exited nonzero. The caller
+  now assigns and byte-checks that sole path before constructing selectors.
+  Every caller/helper resolver, `where`, status, and show capture requires status
+  0 and empty stderr before parsing; valid JSON plus nonzero status or stderr is
+  a required refusal fixture.
 - Released the completed `skills-iog`/`feat/skills-iog-beads-jsonl-path`
   `executor-skills` reservation and atomically handed it to
   `skills-dhm`/E3 on `feat/skills-dhm-beads-close-transaction`; that exact E3

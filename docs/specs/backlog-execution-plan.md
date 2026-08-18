@@ -341,31 +341,37 @@ in a selector-clean environment
 with separated streams and requires exact stdout bytes `br 0.2.19\n`, empty
 stderr, and status 0; a mismatch launches no normal E1 proof, `where`, status, or
 import; (2) captures exactly one `br where --json` object in the caller's
-supported original location context and requires each of `.path`,
+supported original location context, first requires command status 0 and empty
+stderr, and then requires each of `.path`,
 `.database_path`, and `.jsonl_path` to be a nonempty absolute string without
 CR/LF, retaining `.path` as `BEADS_STORE_DIR`; (3) requires
 `.database_path == "$BEADS_STORE_DIR/beads.db"` and requires `.jsonl_path` to be
 a strict descendant of `BEADS_STORE_DIR` (external JSONL paths are unsupported
-by the pinned closure commands and refuse before status/import); (4) runs E1's normal resolver
-in that same original context to prove the clean tracked JSONL and requires its
-returned path to equal the captured `.jsonl_path` byte-for-byte; (5) establishes
+by the pinned closure commands and refuse before status/import); (4) runs E1's
+normal resolver in that same original context with separated streams, requires
+status 0 and empty stderr, assigns its sole proven clean tracked stdout path to
+`BEADS_JSONL`, and requires that value to equal the captured
+`.jsonl_path` byte-for-byte; (5) establishes
 one selector-clean context containing only `BEADS_DIR="$BEADS_STORE_DIR"` and
 `BEADS_JSONL="$BEADS_JSONL"` for every remaining caller Beads operation; (6)
-recaptures one `br where --json` object in that context and requires the entire
+recaptures one `br where --json` object in that context, requires command status
+0 and empty stderr, and requires the entire
 `.path`/`.database_path`/`.jsonl_path` triple to equal the retained triple
 byte-for-byte; (7) captures the output of
 `"$BEADS_JSONL_RESOLVER" --run-br --no-auto-flush --no-auto-import sync --status --json`,
-calculates that JSONL's plain SHA-256 as below, and runs the exact predicate below
+requires command status 0 and empty stderr before parsing, calculates that
+JSONL's plain SHA-256 as below, and runs the exact predicate below
 with `--argjson require_synced false`; (8) only after that predicate has refused
 dirty or DB-newer state, immediately runs
 `"$BEADS_JSONL_RESOLVER" --run-br --no-auto-flush --no-auto-import sync --import-only`;
 (9) immediately repeats E1's normal clean-tracked-JSONL proof in the same
-selector-clean context and requires the same retained path before any status or
-lane read; (10) captures the output of
+selector-clean context, requires status 0, empty stderr, and the same retained
+path before any status or lane read; (10) captures the output of
 `"$BEADS_JSONL_RESOLVER" --run-br --no-auto-flush --no-auto-import sync --status --json`;
-(11) uses the already validated existing
+(11) requires that command also return status 0 with empty stderr before parsing;
+(12) uses the already validated existing
 `"$BEADS_GIT_RUNNER" run-audit-tool python3 -I` and only stdlib
-`hashlib` to calculate the plain SHA-256 of that exact JSONL; and (12) passes the
+`hashlib` to calculate the plain SHA-256 of that exact JSONL; and (13) passes the
 captured status transcript and hash to E1's
 `"$BEADS_JSONL_RESOLVER" --run-jq -se --arg hash "$hash" --argjson require_synced true`
 predicate. Both jq calls use `-s` to slurp the transcript, require exactly one
@@ -1386,7 +1392,7 @@ derived sibling path. Before any status or mutation it captures exactly one
 `br where --json` object and requires `.path` to equal the expected store,
 `.database_path` to equal `<expected-store>/beads.db`, and `.jsonl_path` to
 equal the expected path, all byte-for-byte; then its first private E1 resolution
-must also return that expected path. Merely observing an echoed `jsonl_path` is
+must return status 0, empty stderr, and that expected path. Merely observing an echoed `jsonl_path` is
 not store-identity proof. Thus a nested/default same-ID decoy cannot receive the
 mutation, while a caller with a nested export below its supported in-worktree
 `BEADS_DIR` remains bound to the original validated database and
@@ -1400,6 +1406,8 @@ runs the status preflight. Every helper `br` invocation uses its private resolve
 `--run-br --no-auto-flush --no-auto-import` form, including `--version`,
 `where --json`, `sync --status --json`, the target `show`, optional notes `update`, `close`,
 the one explicit `sync --flush-only`, and the final `show`.
+Every captured `where`, status, or show transcript requires command status 0 and
+empty stderr before parsing; valid JSON never overrides a failed command.
 Using the same trusted derived `git-clean` sibling to run `python3 -I` and stdlib
 `hashlib`, it calculates the plain SHA-256 of its own snapshot (Python 3 is
 required). Through that resolver's jq runner with
@@ -1417,7 +1425,7 @@ prefixes, but this helper does not. It then optionally updates notes and closes
 that exact target. It immediately reruns E1's default resolver as the second E1
 proof immediately before its one explicit runner-mediated flush. After the
 flush it reruns E1's existing resolver in `--allow-dirty` mode, requires the
-same expected returned JSONL path, and uses that newly validated regular tracked path
+same expected returned JSONL path with status 0 and empty stderr, and uses that newly validated regular tracked path
 for its post-show and final comparison. The final ID set is exact; every
 non-target row is byte- and field-identical; and the target differs only in
 `status`, `closed_at`, `close_reason`, `updated_at`, and optional `notes`.
@@ -1467,7 +1475,9 @@ mismatch before the locator's final normal proof
 or any caller/helper normal E1 proof, `where`, status, or import (with
 per-command launch counters);
 tests also cover pre- and post-mutation failures, slurped
-single-document status parsing, all four consumer boundaries, and selective
+single-document status parsing, valid JSON followed by nonzero status or
+nonempty stderr for each `where`/status/show capture class, all four consumer
+boundaries, and selective
 install. In BUILD, red-mutate each
 claimed property before its passing run. Keep helper production near 350 lines,
 excluding the one canonical locator block at roughly 40 lines, and fixtures near
