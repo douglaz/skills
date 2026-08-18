@@ -229,6 +229,17 @@ aligned Beads bodies
   the caller-owned import left those bytes unchanged, and the final comparison
   proves the 33-ID set unchanged with only `description` and `updated_at`
   differing on those three rows.
+- The first combined-tree review required the bodies to carry the exact status
+  predicate, restored E3's umbrella guardrail, required pre-mutation raw-NUL
+  refusal, and removed the completed bootstrap instruction. The corrected body
+  rerun used installed `br 0.2.19` through
+  `resolve-beads-jsonl --run-br --no-auto-flush --no-auto-import`: each of the
+  three `update ID --description PAYLOAD` commands exited 0 with respectively
+  54/57/57 stdout bytes and zero stderr bytes, and `sync --flush-only` exited 0
+  with 97 stdout bytes (`33 issues`, `37 dependencies`, `66 labels`, `0 comments`,
+  `3 issues` cleared) and zero stderr bytes. A Python-3 exact-field comparison
+  against the saved initial JSONL then exited 0: all 33 IDs remained, and only
+  `description` and `updated_at` differed on those three IDs.
 - Released the completed `skills-iog`/`feat/skills-iog-beads-jsonl-path`
   `executor-skills` reservation and atomically handed it to
   `skills-dhm`/E3 on `feat/skills-dhm-beads-close-transaction`; that exact E3

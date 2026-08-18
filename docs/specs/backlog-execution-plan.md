@@ -1311,7 +1311,10 @@ path. It validates both derived siblings as the caller validates this helper:
 executable, regular, non-symlink, `nlink == 1`, canonical `#!/bin/sh` shebang,
 outside the driven worktree, and cross-root consistent with its own installed
 root. It ignores inherited `BEADS_*` and `BR_*` variables and exports neither
-derived path. With only those private derived siblings, it has E1's default
+derived path. Before any mutation it requires the reason and optional notes
+payloads to be valid UTF-8 and rejects every raw NUL byte; a POSIX shell/argv
+cannot preserve NUL, so such input is unsupported rather than silently altered.
+The reason must be nonempty. With only those private derived siblings, it has E1's default
 resolver prove and return the clean tracked JSONL path, snapshots it, and before
 any DB mutation requires exact installed `br 0.2.19`, then runs the status
 preflight. Every helper `br` invocation uses its private resolver's
@@ -1368,18 +1371,19 @@ to those files in this amendment.
 
 The helper tests wired into `check.sh` are stub-only. A disposable real-`0.2.19`
 happy-path and refusal run is BUILD/PR evidence outside the mandatory gate.
-Tests cover stubbed helper faults, exact input/newline fidelity, complete target
-delta and bystander preservation, the second E1 proof immediately before flush,
+Tests cover stubbed helper faults, exact input/newline fidelity plus pre-mutation
+raw-NUL refusal, complete target delta and bystander preservation, the second E1 proof immediately before flush,
 pre- and post-mutation failures, slurped single-document status parsing, all
 four consumer boundaries, and selective install. In BUILD, red-mutate each
 claimed property before its passing run. Keep helper production near 350 lines,
 excluding the four locator blocks at roughly 40 lines each, and fixtures near
 700; exceeding either budget returns E3 to SHAPE.
 
-After this specification is clean, amend exactly `skills-dhm`, `skills-qmi`, and
-`skills-rrk` through the saved-bytes/flush/diff bootstrap, but do not
-perform that bootstrap in this amendment. E3 self-closure uses the merged
-installed helper from the coordinator's outside-worktree skills clone.
+The saved-bytes/flush/diff bootstrap has amended exactly `skills-dhm`,
+`skills-qmi`, and `skills-rrk`; `DRIVE.md` records its evidence. The next step is
+exact-tree review and merge of this SHAPE/body amendment, not another bootstrap.
+Start E3 BUILD only from refreshed clean `master`. E3 self-closure uses the
+merged installed helper from the coordinator's outside-worktree skills clone.
 
 ## Workstream F — Drive/rb-lite controller and convergence
 
