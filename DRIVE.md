@@ -18,15 +18,17 @@ separate exact-`v0.3.2` Linux probe is one-time evidence, not this gate.
   deleting its preserved branch or PR history. Freshly fetched
   `douglaz/skills@master` is exactly `00b6bf0`.
 - Checked current upstream `Dicklesworthstone/beads_rust`: release `v0.3.2` is the
-  exact required release. The separate disposable Linux probe measures the externally
-  all-or-one close+transition-comment outcome, strict explicit flush, and additive
-  equal-timestamp conflict detection; the internal transaction/lock boundary and default
-  best-effort auto-flush split are source-verified, not inferred from the probe.
+  exact required release. The separate disposable Linux probe observes blocked-close
+  non-mutation, successful reason+transition-comment, and strict explicit flush/retry; the
+  internal atomic transaction/lock boundary and default best-effort auto-flush split are
+  source-verified, not inferred from the probe.
   Exact invocation:
-  `bash docs/specs/e3-native-br-v0.3.2-probe.sh /tmp/br-v0.3.2-bin/br
-  /tmp/br-v0.3.2-bin/br-0.3.2-linux_x86_64.tar.gz`; exit 0, 1,376 stdout bytes, zero
-  stderr bytes. Internal lock/transaction boundaries were separately reviewed in the
-  pinned upstream source.
+  `env -i PATH=/run/current-system/sw/bin:/bin:/usr/bin:/nix/var/nix/profiles/default/bin
+  LC_ALL=C TZ=UTC /run/current-system/sw/bin/bash --noprofile --norc
+  docs/specs/e3-native-br-v0.3.2-probe.sh /tmp/br-v0.3.2-bin/br
+  /tmp/br-v0.3.2-bin/br-0.3.2-linux_x86_64.tar.gz`; exit 0, 1,132 stdout bytes, zero
+  stderr bytes under Bash 5.3.15, Git 2.55.0, Python 3.14.6, Linux 7.1.6 x86_64.
+  Internal lock/transaction boundaries were separately reviewed in pinned upstream source.
 - Re-fetched both upstreams immediately before finalization: skills `origin/master` remains
   `00b6bf0dbf5d1575396510923399e87f77539c0c`; beads-rust `origin/main` remains
   `eea5d591e88e7f26add480ef94c9c849cf1763f7`, and `v0.3.2` remains the latest release at
@@ -246,11 +248,11 @@ separate exact-`v0.3.2` Linux probe is one-time evidence, not this gate.
   fixtures on the exclusive two-file closure tree under that same recorded
   Bash/Git/`br`/uid environment.
 
-- This coordinator-owned SHAPE graph amendment changes exactly `skills-dhm`,
-  `skills-dta` (A4b), and `skills-xfd` (B0). E3 now requires four closure consumers,
-  retained-clone no-double-close resume, a retained pre-close structural proof, corrected
-  worktree topology, and ADR delivery; A4b/B0 now link their no-change/decision closures to
-  the native fact owner. Exact field diff on each row: `description` and `updated_at` only.
+- The complete replacement branch changes exactly five Beads rows. `skills-dhm` changes
+  `title`, `description`, and `updated_at`; `skills-qmi`/`skills-rrk` synchronize F2/F2r's
+  native post-merge closure handoff through `description`/`updated_at`; `skills-dta`
+  (A4b) and `skills-xfd` (B0) link no-change/decision closure to the canonical Step 11
+  owner through `description`/`updated_at`. No other row or field differs from master.
 
 ## Now
 

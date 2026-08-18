@@ -2,7 +2,11 @@
 
 ## Status
 
-SHAPE cleared again on 2026-08-12 after the first post-amendment GRAPH polish.
+**Current:** E3 returned to SHAPE on 2026-08-18 for the native `br v0.3.2`
+replacement; `DRIVE.md` is the live phase/review record. The clearance narrative below is
+historical evidence for the earlier plan revision, not clearance of the current E3 tip.
+
+SHAPE had cleared on 2026-08-12 after the first post-amendment GRAPH polish.
 The first pinned Codex xhigh
 review at `bceb919` reported no P0/P1 findings, but translation exposed missing
 API, failure, recovery, and fixture detail in later rows. After those amendments,
@@ -396,8 +400,9 @@ The current file already places its shell examples in fenced blocks, so do not
 churn those blocks merely to satisfy stale wording. If the linked finding
 identifies a remaining indented example, own only that block plus its exact
 new extraction check added to `install.test`; convert only block style and require
-byte-identical command text before/after. Otherwise close this bead through E3's
-standalone native procedure with the thread URL, inspected ranges, and no-change evidence.
+byte-identical command text before/after. Otherwise close this bead through
+`skills/rb-lite-backlog-drain/SKILL.md` Step 11 (“Close the bead, through a reviewed path”)
+with the thread URL, inspected ranges, and no-change evidence.
 Do not execute the examples
 or add the G2 harness here. If any file changes, run `./install.test` and
 `./check.sh`.
@@ -414,8 +419,9 @@ stays blocked until this bead records the answer; the bead never treats silence
 as approval.
 
 B0 may close only if the human accepts the planned fail-closed refusal boundary, and then
-only through E3's standalone native procedure with the immutable decision-thread identity
-and accepted decision in its reason/evidence.
+only through `skills/rb-lite-backlog-drain/SKILL.md` Step 11 (“Close the bead, through a
+reviewed path”) with the immutable decision-thread identity and accepted decision in its
+reason/evidence.
 If the human chooses full dirty in-scope preservation, leave B0 open, return the
 drive to SHAPE, specify and review that larger preservation mechanism, then amend
 the scope of B1d and re-audit the graph. The choice never makes B1d or B1 ready
@@ -1200,10 +1206,13 @@ E3 BUILD retains and tests those links rather than performing another graph muta
 
 The executable one-time Linux evidence is
 `docs/specs/e3-native-br-v0.3.2-probe.sh`, which runs only in disposable standalone
-clones. It verifies the authoritative release asset
+clones. It compares caller-supplied archive and extracted-binary paths to the immutable
+hash values recorded from the authoritative release asset
 `https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.3.2/br-0.3.2-linux_x86_64.tar.gz`
-and its authoritative checksum listing
+and checksum listing
 `https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.3.2/SHA256SUMS`.
+The script does not download the listing or perform extraction; those were separate trusted
+evidence-capture steps.
 On 2026-08-18 it recorded archive SHA-256
 `e67c560e77e912490e44a65e3e9c13205210d171e729c5d801072ee508207288`, binary SHA-256
 `590aebae292bca9d36bf90d3219dcb27a3536f402864841b2a11d5c07c4c6c63`, and this identity:
@@ -1213,26 +1222,27 @@ On 2026-08-18 it recorded archive SHA-256
 ```
 
 The recorded invocation was
-`bash docs/specs/e3-native-br-v0.3.2-probe.sh /tmp/br-v0.3.2-bin/br
-/tmp/br-v0.3.2-bin/br-0.3.2-linux_x86_64.tar.gz`; it exited 0 with 1,376 stdout bytes
+`env -i PATH=/run/current-system/sw/bin:/bin:/usr/bin:/nix/var/nix/profiles/default/bin
+LC_ALL=C TZ=UTC /run/current-system/sw/bin/bash --noprofile --norc
+docs/specs/e3-native-br-v0.3.2-probe.sh /tmp/br-v0.3.2-bin/br
+/tmp/br-v0.3.2-bin/br-0.3.2-linux_x86_64.tar.gz`; it exited 0 with 1,132 stdout bytes
 and zero stderr bytes. Its retained projection is:
 
 ```text
+PROBE_ENV=Bash=5.3.15(1)-release Git=git version 2.55.0 Python=Python 3.14.6 Kernel=Linux 7.1.6 x86_64
 FRESH_DB_BEFORE=absent
 IMPORT_RC=0 IMPORT_STDOUT_BYTES=90 IMPORT_STDERR_BYTES=0
-RECONCILE_RC=0 RECONCILE_STDERR_BYTES=0
 BLOCKED_CLOSE_RC=3 STATUS=open COMMENTS=0
 SUCCESS_CLOSE_RC=0 FLUSH_RC=0 CLOSE_STDERR_BYTES=0 FLUSH_STDERR_BYTES=0
 SUCCESS_CHANGED_FIELDS=["close_reason","closed_at","comments","status","updated_at"]
-CONFLICT_RC=6 CONFLICT_STDERR_BYTES=0 STATUS=conflicted REASONS={"equal_timestamp_shared_scalar_drift":1}
 EXPLICIT_FLUSH_FAILURE_RC=7 DB_STATUS=closed STDOUT_BYTES=0 STDERR_BYTES=109
 FLUSH_RETRY_RC=0 JSONL_STATUS=closed STDERR_BYTES=0
 ```
 
-The scenarios directly measure fresh-cache import, blocker refusal, externally observed
-close/comment atomicity, strict-flush success/failure/retry, additive equal-timestamp
-conflict, unchanged ID sets, and order-independent preservation of existing comments with
-exactly one addition.
+The scenarios directly measure fresh-cache import, a blocked close with unchanged
+status/comment count, a successful close with both reason and one transition comment,
+strict-flush success/failure/retry, unchanged ID sets, and order-independent preservation
+of existing comments with exactly one addition.
 The internal transaction/lock claims come from source review at that tag in
 `src/cli/commands/close.rs`, `src/storage/sqlite.rs`, `src/cli/commands/sync.rs`, and
 `src/sync/mod.rs`, not inference from the probe. The default best-effort auto-flush claim
@@ -1250,15 +1260,16 @@ That E1 companion-selection bootstrap is the sole pre-runner Git exception. Afte
 validation, all closure-procedure `br`, `jq`, and Git operations use E1's validated
 `BEADS_JSONL_RESOLVER` and `BEADS_GIT_RUNNER`; bare caller-shell tools are forbidden.
 
-1. Establish executable provenance before admitting the binary to the trusted PATH. For a
-   published release artifact, verify its platform-archive entry in upstream `SHA256SUMS`
-   and extract with trusted tooling. For the evidenced Linux x86-64 asset, also require the
-   extracted executable to match the listing's standalone `br` digest; for another published
-   platform, record the digest of the trusted extraction instead.
-   for a local exact-commit release build, record the clean source commit, release-build
-   command, and resulting binary digest. In either mode, require the exact executable
-   selected for trusted PATH to match that recorded digest before first execution and again
-   on resume. Then capture
+1. Establish executable provenance before admitting the binary to the trusted PATH. The only
+   accepted prebuilt asset is the evidenced Linux x86-64 archive with the two pinned digests
+   above. Other platforms build the exact clean commit locally in release mode and record
+   the source commit, build command, and resulting digest.
+   In either mode, use E1's trusted `make-temp-dir`/`copy-file` to place exactly that
+   executable as `br` in a private outside-worktree tool directory, record its E1
+   `hash-file` object ID plus canonical path, and put only that directory ahead of the
+   trusted system PATH. Before **every** `--run-br` invocation, require the same private
+   path, regular executable identity, and object ID; never search or fall back to a caller
+   PATH `br`. Then capture
    `--run-br --no-auto-import --no-auto-flush version --json` and use `--run-jq` to
    require exactly version
    `0.3.2`, build `release`, and commit `4104c31e79bf806f53e2eba0a4cd2ba6c594f8b9`.
@@ -1311,18 +1322,22 @@ validation, all closure-procedure `br`, `jq`, and Git operations use E1's valida
    HEAD -- "$BEADS_JSONL"` for human review; a literal Git diff never substitutes for the
    structural proof. Then run `./check.sh`, independent review, and metadata-PR flow.
 
-A refusal leaves status/comment unchanged. On interruption, retain the standalone clone and
-private pre-close copy/hash; there is no state marker, recovery API, or rollback. Before any
-resumed operation, revalidate that exact clone and repeat the binary provenance/digest
-admission **before** executing it; repeat the exact no-auto version identity check; recover
-the JSONL through E1 `--allow-dirty` and require
+Any **pre-mutation close refusal** leaves status/comment unchanged. A later failure follows
+the retained-clone matrix; it does not promise rollback. On interruption, retain the
+standalone clone and private pre-close copy/hash; there is no state marker, recovery API, or
+rollback. Before any resumed operation, revalidate that exact clone and repeat the private
+tool path/identity/digest admission **before every execution**; repeat the exact no-auto
+version identity check; recover the JSONL through E1 `--allow-dirty` and require
 the exact path, recheck the retained snapshot hash, then inspect both DB-mode and `--no-db`
 `show ID --json` with
 `--no-auto-import --no-auto-flush` against the snapshot and intended reason/comment:
 
+- DB absent and JSONL exactly matches the retained open snapshot: abandon this untouched
+  clone and restart from a new fresh clone; do not initialize in place;
 - both exact-open with no intended evidence: close may run once, then flush;
 - DB exact-closed with intended reason/comment while JSONL is exact-open: flush only;
-- both exact-closed with intended reason/comment: proof only;
+- both exact-closed with intended reason/comment: rerun the strict idempotent flush once,
+  then perform final proof (publication may have preceded anchor/metadata finalization);
 - anything else: stop for human repair.
 
 The first-entry absent-DB/sidecar rule does not apply to this retained-clone resume.
@@ -1338,8 +1353,8 @@ only behavior-preserving annotations for E1's `where`/symlink facts, E2b's measu
 `br agents --update --force` fact, and rb-lite-backlog-drain's measured whole-cache
 reversion fact; a changed behavior changes the contract and deterministic tests instead.
 The repository does not install `br`. The Linux probe is one-time evidence, not a
-recurring platform gate; exact-release or exact-commit builds remain supported
-cross-platform.
+recurring platform gate; the pinned Linux x86-64 release binary or a local release build
+from the exact commit is supported.
 
 Create exactly `skills/rb-lite-backlog-drain/scripts/native-close.test` and
 `skills/rb-lite-backlog-drain/scripts/closure-consumers.test`, wire both into
@@ -1353,15 +1368,18 @@ accepts each of the three exact lane labels and refuses missing/multiple/wrong l
 it
 uses a hostile pre-admission PATH `br` to prove the fresh locator executes nothing before
 provenance; refuses an exact-identity liar and a verified archive paired with a different
-binary; proves the no-auto identity call changes no DB/JSONL bytes; swaps the admitted
+binary; proves the no-auto identity call changes no DB/JSONL bytes; swaps the private tool
+between identity and import/close/flush and requires the next per-invocation check to refuse;
+swaps the admitted
 binary before resume, injects retained-resume location overrides to prove they are cleared
 or refused before inspection, and simulates death after close and after
 flush-before-proof; both resume fixtures prove no second close and no inspection-time
 mutation. The second extracts all four consumer paths, proves their stop conditions, and
 proves that the open A4b/B0 rows link to the fact owner without copying commands. Run
-`./install.test` and `./check.sh`. Keep E3-owned consumer changes under 250 lines and new
-deterministic test code under 500; the evidence probe is excluded. Crossing either limit
-returns to SHAPE.
+`./install.test` and `./check.sh`. Target at most 250 lines of E3-owned consumer change and
+500 lines of new deterministic test code; the evidence probe is excluded. Crossing a target
+triggers an explicit SHAPE/KISS scope review rather than forcing dense tests or automatically
+rejecting otherwise clear code.
 
 ## Workstream F — Drive/rb-lite controller and convergence
 

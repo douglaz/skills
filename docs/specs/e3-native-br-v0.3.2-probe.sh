@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# This retained evidence is run by the exact env -i / absolute-Bash invocation recorded in
+# the plan. It is not a hostile-shell wrapper.
 BR=${1:?usage: probe /absolute/path/to/br-v0.3.2}
 ASSET=${2:?usage: probe br tarball}
 PATH=$(command -p getconf PATH)
@@ -14,7 +16,9 @@ export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
 export XDG_CONFIG_HOME="$ROOT/xdg-config" XDG_CACHE_HOME="$ROOT/xdg-cache"
 export PYTHONNOUSERSITE=1 PYTHONSAFEPATH=1
 mkdir "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME"
-export NO_COLOR=1
+export NO_COLOR=1 LC_ALL=C TZ=UTC
+printf 'PROBE_ENV=Bash=%s Git=%s Python=%s Kernel=%s\n' \
+  "$BASH_VERSION" "$(git --version)" "$(python3 --version 2>&1)" "$(uname -srm)"
 # Authoritative release asset and checksum listing:
 # https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.3.2/br-0.3.2-linux_x86_64.tar.gz
 # https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.3.2/SHA256SUMS
@@ -65,16 +69,6 @@ printf 'FRESH_DB_BEFORE=%s\n' "$FRESH_DB_BEFORE"
 set +e; "$BR" sync --import-only >import.out 2>import.err; irc=$?; set -e
 printf 'IMPORT_RC=%s IMPORT_STDOUT_BYTES=%s IMPORT_STDERR_BYTES=%s\n' "$irc" "$(wc -c <import.out)" "$(wc -c <import.err)"
 [[ $irc -eq 0 && ! -s import.err ]]
-set +e; "$BR" --no-auto-import --no-auto-flush sync --reconcile-additive --json >rec.json 2>rec.err; rrc=$?; set -e
-python3 -I - "$rrc" <<'PY'
-import json,sys
-x=json.load(open('rec.json'))
-print('RECONCILE_RC='+sys.argv[1]+' RECONCILE_STDERR_BYTES='+str(len(open('rec.err','rb').read())))
-projection = {k:x.get(k) for k in ('schema','tool_version','status','conflicted','conflict_occurrences','db_only_preserved','postcommit_failures')}
-print('RECONCILE_PROJECTION='+json.dumps(projection,sort_keys=True,separators=(',',':')))
-expected = {'schema':'br.sync.additive-reconciliation.v2','tool_version':'0.3.2','status':'no_changes','conflicted':0,'conflict_occurrences':0,'db_only_preserved':0,'postcommit_failures':[]}
-if sys.argv[1] != '0' or projection != expected or open('rec.err','rb').read(): raise SystemExit('unexpected reconciliation result')
-PY
 
 "$BR" dep add "$B" "$A" --quiet
 set +e; "$BR" --no-auto-import --no-auto-flush close "$B" --reason blocked --transition-comment must-not-land >/dev/null 2>blocked.err; brc=$?; set -e
@@ -123,22 +117,6 @@ if len(after_comments) != len(before_comments)+1 or len(remaining) != 1: raise S
 if list(changed) != [id] or changed[id] != ['close_reason','closed_at','comments','status','updated_at']: raise SystemExit('unexpected JSONL delta')
 PY
 
-# Equal timestamp drift is rejected by additive reconciliation.
-python3 -I - .beads/issues.jsonl "$A" <<'PY'
-import json,sys
-p,id=sys.argv[1:]; rows=[json.loads(l) for l in open(p)]
-for x in rows:
- if x['id']==id: x['description']='same timestamp conflict'
-open(p,'w').writelines(json.dumps(x,separators=(',',':'))+'\n' for x in rows)
-PY
-set +e; "$BR" --no-auto-import --no-auto-flush sync --reconcile-additive --json >conflict.json 2>conflict.err; xrc=$?; set -e
-python3 -I - "$xrc" <<'PY'
-import json,sys
-x=json.load(open('conflict.json'))
-stderr=open('conflict.err','rb').read()
-print('CONFLICT_RC='+sys.argv[1]+' CONFLICT_STDERR_BYTES='+str(len(stderr))+' STATUS='+str(x.get('status'))+' REASONS='+json.dumps(x.get('conflict_reasons'),sort_keys=True,separators=(',',':')))
-if sys.argv[1] != '6' or stderr or x.get('status') != 'conflicted' or x.get('conflict_reasons') != {'equal_timestamp_shared_scalar_drift':1}: raise SystemExit('equal-time conflict was not refused')
-PY
 # Restore reviewed bytes and recover DB, then demonstrate explicit flush failure.
 git checkout -q -- .beads/issues.jsonl
 "$BR" sync --import-only --rebuild --quiet
