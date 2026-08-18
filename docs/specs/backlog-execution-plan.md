@@ -1351,13 +1351,19 @@ path. It validates both derived siblings as the caller validates this helper:
 executable, regular, non-symlink, `nlink == 1`, canonical `#!/bin/sh` shebang,
 outside the driven worktree, and cross-root consistent with its own installed
 root. It requires the caller's `BEADS_JSONL` context to be a nonempty absolute
-path without CR/LF, retains it as the expected path, and launches its private E1
-children with only that location selector; it discards every other inherited
-`BEADS_*` and `BR_*` selector and exports neither derived sibling path. Its first
-private E1 resolution must return the expected path byte-for-byte before any
-status or mutation. Thus a caller originally using `BEADS_DIR` or another
-supported E1 location selector is bound to the exact path E1 already validated
-rather than falling back to a default store. Before any mutation it requires the reason and optional notes
+path without CR/LF, retains it as the expected path, and derives the expected
+store directory as that path's parent. It launches every private E1 child with
+only `BEADS_DIR=<expected-parent>` and `BEADS_JSONL=<expected-path>`, discarding
+every other inherited `BEADS_*` and `BR_*` selector and exporting neither
+derived sibling path. Before any status or mutation it captures exactly one
+`br where --json` object and requires `.path` to equal the expected parent,
+`.database_path` to equal `<expected-parent>/beads.db`, and `.jsonl_path` to
+equal the expected path, all byte-for-byte; then its first private E1 resolution
+must also return that expected path. Merely observing an echoed `jsonl_path` is
+not store-identity proof. Thus a nested/default same-ID decoy cannot receive the
+mutation, while a caller that originally used a supported in-worktree
+`BEADS_DIR` remains bound to the store containing the exact E1-validated JSONL.
+Before any mutation it requires the reason and optional notes
 payloads to be valid UTF-8 and rejects every raw NUL byte; a POSIX shell/argv
 cannot preserve NUL, so such input is unsupported rather than silently altered.
 The reason must be nonempty. With only those private derived siblings, it has E1's default
@@ -1365,7 +1371,7 @@ resolver prove and return the clean tracked JSONL path, snapshots it, and before
 any DB mutation requires exact installed `br 0.2.19`, then runs the status
 preflight. Every helper `br` invocation uses its private resolver's
 `--run-br --no-auto-flush --no-auto-import` form, including `--version`,
-`sync --status --json`, the target `show`, optional notes `update`, `close`,
+`where --json`, `sync --status --json`, the target `show`, optional notes `update`, `close`,
 the one explicit `sync --flush-only`, and the final `show`.
 Using the same trusted derived `git-clean` sibling to run `python3 -I` and stdlib
 `hashlib`, it calculates the plain SHA-256 of its own snapshot (Python 3 is
@@ -1410,7 +1416,7 @@ owns the caller import/status procedure; do not migrate scheduler reads, copy
 the locator validation, or add `check`.
 Wire selective install and `check.sh` for the companion. E3 and all four routed
 completion consumers require exact installed `br 0.2.19` and use only the
-advertised `--version`, `close`, `update`, `show`, and `sync` surface through
+advertised `--version`, `where`, `close`, `update`, `show`, and `sync` surface through
 the E1 runner.
 BUILD records `closure path exact br 0.2.19` at its real end-state sites:
 the `skills/orchestrating-with-rb-lite/SKILL.md` declarations,
@@ -1427,8 +1433,9 @@ raw-NUL refusal, exact-ID/prefix refusal, complete target delta and bystander
 preservation, successful import from the exact measured single-`jsonl_newer`
 degraded state, pre-import dirty/DB-newer/other-anomaly refusal, the second E1
 proof immediately before flush, post-flush `--allow-dirty` path revalidation,
-custom-location binding with a same-ID default-store decoy, version mismatch
-before any status/import, pre- and post-mutation failures, slurped
+custom-location binding with a same-ID nested/default-store decoy plus mutations
+of each `where` identity field, version mismatch before any status/import, pre-
+and post-mutation failures, slurped
 single-document status parsing, all four consumer boundaries, and selective
 install. In BUILD, red-mutate each
 claimed property before its passing run. Keep helper production near 350 lines,

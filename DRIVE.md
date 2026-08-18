@@ -267,11 +267,17 @@ aligned Beads bodies
   than copying its trust logic.
 - The next Codex pass found that discarding E1 location context could select a
   same-ID default-store decoy and that caller import preceded the pinned-version
-  check. Every call now passes only the caller's retained E1-validated
-  `BEADS_JSONL`; the helper binds all private proofs and the final
-  `--allow-dirty` proof to that exact path while discarding other selectors.
-  Caller preflight requires exact `br 0.2.19` bytes and status before status or
-  import, with a mismatch required to launch neither.
+  check. Caller preflight now requires exact `br 0.2.19` bytes and status before
+  status or import, with a mismatch required to launch neither.
+- Codex and Opus then independently found that `BEADS_JSONL` alone relabels the
+  export path but does not bind the database store. In a disposable directory,
+  `BEADS_JSONL=PATH br --no-auto-flush --no-auto-import where --json` exited 0
+  with 146 stdout/0 stderr bytes and reported `/tmp/.beads/beads.db`; adding
+  `BEADS_DIR=${PATH%/*}` exited 0 with 210/0 and reported that parent's
+  `beads.db` plus the exact JSONL. The helper therefore derives that parent,
+  supplies both selectors to every private E1 child, and before mutation requires
+  one `where` object whose `.path`, `.database_path`, and `.jsonl_path`
+  byte-match the derived store identity and caller-retained E1 path.
 - Released the completed `skills-iog`/`feat/skills-iog-beads-jsonl-path`
   `executor-skills` reservation and atomically handed it to
   `skills-dhm`/E3 on `feat/skills-dhm-beads-close-transaction`; that exact E3
