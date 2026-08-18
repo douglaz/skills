@@ -331,22 +331,32 @@ and this measured `0.2.19` status schema; neither exposes it as an E3 API.
 
 **Caller-owned coordinator status equality (fixture-owned; not an E3 API).**
 After each clean-`master` refresh, before any lane read and before the F2 or F2r
-closure path, the coordinator: (1) runs E1's normal resolver to prove and retain
-the clean tracked JSONL path; (2) before status or import, captures
+closure path, the coordinator already has the validated E1 resolver from its
+canonical locator. It: (1) before any store-touching resolver/status/import
+operation, captures
 `"$BEADS_JSONL_RESOLVER" --run-br --no-auto-flush --no-auto-import --version`
+in a selector-clean environment
 with separated streams and requires exact stdout bytes `br 0.2.19\n`, empty
-stderr, and status 0; a mismatch launches no status or import; (3) captures the output of
+stderr, and status 0; a mismatch launches no normal E1 proof, `where`, status, or
+import; (2) runs E1's normal resolver with the caller's supported location
+context to prove and retain the clean tracked JSONL path; (3) derives the store
+directory as that path's parent and establishes one selector-clean context
+containing only `BEADS_DIR=<parent>` and `BEADS_JSONL=<path>` for every remaining
+caller Beads operation; (4) captures exactly one `br where --json` object in
+that context and requires `.path == <parent>`, `.database_path ==
+<parent>/beads.db`, and `.jsonl_path == <path>` byte-for-byte; (5) captures the output of
 `"$BEADS_JSONL_RESOLVER" --run-br --no-auto-flush --no-auto-import sync --status --json`,
 calculates that JSONL's plain SHA-256 as below, and runs the exact predicate below
-with `--argjson require_synced false`; (4) only after that predicate has refused
+with `--argjson require_synced false`; (6) only after that predicate has refused
 dirty or DB-newer state, immediately runs
 `"$BEADS_JSONL_RESOLVER" --run-br --no-auto-flush --no-auto-import sync --import-only`;
-(5) immediately repeats E1's normal clean-tracked-JSONL proof and retains that
-path before any status or lane read; (6) captures the output of
+(7) immediately repeats E1's normal clean-tracked-JSONL proof in the same
+selector-clean context and requires the same retained path before any status or
+lane read; (8) captures the output of
 `"$BEADS_JSONL_RESOLVER" --run-br --no-auto-flush --no-auto-import sync --status --json`;
-(7) uses the already validated existing
+(9) uses the already validated existing
 `"$BEADS_GIT_RUNNER" run-audit-tool python3 -I` and only stdlib
-`hashlib` to calculate the plain SHA-256 of that exact JSONL; and (8) passes the
+`hashlib` to calculate the plain SHA-256 of that exact JSONL; and (10) passes the
 captured status transcript and hash to E1's
 `"$BEADS_JSONL_RESOLVER" --run-jq -se --arg hash "$hash" --argjson require_synced true`
 predicate. Both jq calls use `-s` to slurp the transcript, require exactly one
@@ -1350,9 +1360,13 @@ and derives its private E1 resolver and `git-clean` sibling paths from that
 path. It validates both derived siblings as the caller validates this helper:
 executable, regular, non-symlink, `nlink == 1`, canonical `#!/bin/sh` shebang,
 outside the driven worktree, and cross-root consistent with its own installed
-root. It requires the caller's `BEADS_JSONL` context to be a nonempty absolute
+root. Before any store-touching private E1 operation, it runs its private
+resolver's `--run-br --no-auto-flush --no-auto-import --version` in a
+selector-clean environment and requires status 0, exact stdout bytes
+`br 0.2.19\n`, and empty stderr; a mismatch launches no normal E1 proof,
+`where`, status, or mutation. It then requires the caller's `BEADS_JSONL` context to be a nonempty absolute
 path without CR/LF, retains it as the expected path, and derives the expected
-store directory as that path's parent. It launches every private E1 child with
+store directory as that path's parent. It launches every later private E1 child with
 only `BEADS_DIR=<expected-parent>` and `BEADS_JSONL=<expected-path>`, discarding
 every other inherited `BEADS_*` and `BR_*` selector and exporting neither
 derived sibling path. Before any status or mutation it captures exactly one
@@ -1367,9 +1381,8 @@ Before any mutation it requires the reason and optional notes
 payloads to be valid UTF-8 and rejects every raw NUL byte; a POSIX shell/argv
 cannot preserve NUL, so such input is unsupported rather than silently altered.
 The reason must be nonempty. With only those private derived siblings, it has E1's default
-resolver prove and return the clean tracked JSONL path, snapshots it, and before
-any DB mutation requires exact installed `br 0.2.19`, then runs the status
-preflight. Every helper `br` invocation uses its private resolver's
+resolver prove and return the clean tracked JSONL path, snapshots it, and then
+runs the status preflight. Every helper `br` invocation uses its private resolver's
 `--run-br --no-auto-flush --no-auto-import` form, including `--version`,
 `where --json`, `sync --status --json`, the target `show`, optional notes `update`, `close`,
 the one explicit `sync --flush-only`, and the final `show`.
@@ -1434,8 +1447,9 @@ preservation, successful import from the exact measured single-`jsonl_newer`
 degraded state, pre-import dirty/DB-newer/other-anomaly refusal, the second E1
 proof immediately before flush, post-flush `--allow-dirty` path revalidation,
 custom-location binding with a same-ID nested/default-store decoy plus mutations
-of each `where` identity field, version mismatch before any status/import, pre-
-and post-mutation failures, slurped
+of each `where` identity field, and version mismatch before any caller/helper
+normal E1 proof, `where`, status, or import (with per-command launch counters);
+tests also cover pre- and post-mutation failures, slurped
 single-document status parsing, all four consumer boundaries, and selective
 install. In BUILD, red-mutate each
 claimed property before its passing run. Keep helper production near 350 lines,
