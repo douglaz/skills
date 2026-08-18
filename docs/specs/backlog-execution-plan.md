@@ -1431,15 +1431,42 @@ that row's `.id` to equal the supplied `--id` byte-for-byte; `br` accepts unique
 prefixes, but this helper does not. It then optionally updates notes and closes
 that exact target. It immediately reruns E1's default resolver as the second E1
 proof, requires status 0, empty stderr, and the expected JSONL path, and only
-then performs its one explicit runner-mediated flush. After the
-flush it reruns E1's existing resolver in `--allow-dirty` mode, requires the
-same expected returned JSONL path with status 0 and empty stderr, and uses that newly validated regular tracked path
-for its post-show and final comparison. The final ID set is exact; every
-non-target row is byte- and field-identical; and the target differs only in
-`status`, `closed_at`, `close_reason`, `updated_at`, and optional `notes`.
-Reason and notes must preserve their exact UTF-8 bytes. It returns zero only
-after that complete proof. Required commands and options must be present or the
-build fails closed.
+then performs its one explicit runner-mediated flush, requiring status 0 and
+empty stderr. After the flush it reruns E1's existing resolver in
+`--allow-dirty` mode, requires the same expected returned JSONL path with status
+0 and empty stderr, and uses that newly validated regular tracked path for its
+post-show and final comparison. It calculates the final JSONL's plain SHA-256
+and captures one more `sync --status --json`; through the private jq runner with
+`-se --arg hash "$final_hash"`, it requires exactly:
+
+```jq
+length == 1 and
+(.[0] |
+  type == "object" and
+  (.dirty_count | type == "number" and . == 0) and
+  (.jsonl_newer | type == "boolean" and . == false) and
+  (.db_newer | type == "boolean" and . == false) and
+  (.workspace_health | type == "string" and . == "healthy") and
+  (.reliability_audit | type == "object" and
+    (.health | type == "string" and . == "healthy") and
+    (.anomaly_count | type == "number" and . == 0)) and
+  (.git_export | type == "object" and
+    (.available | type == "boolean" and . == true) and
+    (.tracked | type == "boolean" and . == true) and
+    (.worktree_clean | type == "boolean" and . == true) and
+    (.index_clean | type == "boolean" and . == false)) and
+  (.jsonl_content_hash | type == "string" and . == $hash))
+```
+
+The final show and final JSONL must each contain exactly the requested full ID
+with `status == "closed"`, `close_reason` byte-equal to the reason payload,
+nonempty string `closed_at` and `updated_at` values equal across both records,
+and notes byte-equal to the supplied notes payload or, when notes were omitted,
+unchanged from the initial show. The final ID set is exact; every non-target row
+is byte- and field-identical; and the target differs only in `status`,
+`closed_at`, `close_reason`, `updated_at`, and optional `notes`. It returns zero
+only after that complete proof. Required commands and options must be present
+or the build fails closed.
 
 Any failure returns nonzero and the coordinator stops. Before the first DB
 mutation it uses an ordinary nonzero diagnostic. From the first DB mutation,
@@ -1486,7 +1513,8 @@ tests also cover pre- and post-mutation failures, slurped
 single-document status parsing, valid JSON followed by nonzero status or
 nonempty stderr for each `where`/status/show capture class, all four consumer
 boundaries pointing to the one preflight owner, import nonzero/nonempty-stderr
-refusal before the repeated proof, and selective
+refusal before the repeated proof, zero-status close/flush no-ops, open/wrong
+reason/wrong notes final rows, dirty or unsynchronized post-flush status, and selective
 install. In BUILD, red-mutate each
 claimed property before its passing run. Keep helper production near 350 lines,
 excluding the one canonical locator block at roughly 40 lines, and fixtures near

@@ -305,6 +305,16 @@ aligned Beads bodies
   canonical locator block and one canonical caller-preflight block; all four
   consumers point to those owners, and the plan/bead mirrors are byte-pinned
   self-contained scheduler records rather than executable copies.
+- The next Codex pass found that the final proof only whitelisted changed fields
+  and did not require a closed row or synchronized post-flush DB. E3 now requires
+  the final show and JSONL row to agree on the full ID, `status=closed`, exact
+  reason/notes, and nonempty matching timestamps; a post-flush status predicate
+  requires dirty count 0, no DB/JSONL skew, healthy audit, the final plain hash,
+  and the measured tracked-but-unstaged JSONL state (`worktree_clean=true`,
+  `index_clean=false`). On the final body bytes, `sync --status --json` exited 0
+  with 713 stdout/0 stderr bytes and the exact post-flush jq predicate exited 0
+  with 5/0. The final E3-only body update exited 0 with 54 stdout/0 stderr bytes;
+  its one explicit flush exited 0 with 96/0.
 - Released the completed `skills-iog`/`feat/skills-iog-beads-jsonl-path`
   `executor-skills` reservation and atomically handed it to
   `skills-dhm`/E3 on `feat/skills-dhm-beads-close-transaction`; that exact E3
