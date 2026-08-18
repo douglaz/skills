@@ -1,19 +1,22 @@
 # DRIVE — execute the open skills safety and correctness backlog
 
-**Scope:** the 29 GitHub issues enumerated in
-`docs/specs/backlog-execution-plan.md` (#30–#66, exact set in that plan); the
-Beads graph created from the reviewed plan will be the ONLY work this drive may
-take.
-**Phase:** HARDEN · **Bead:** `skills-iog` (E1 closure metadata)
-· **Branch:** `chore/skills-iog-closure`
-**Pending:** current-tip bot gate and merge of the exclusive E1 closure PR
+**Scope:** E3 (`skills-dhm`) KISS redesign and implementation on the reviewed backlog.
+**Phase:** SHAPE · **Bead:** `skills-dhm`
+· **Branch:** `feat/skills-dhm-native-br-close`
+**Pending:** exact Codex and Opus review of the native `br v0.3.2` replacement spec
 **Gate:** `./check.sh`
-· last green 2026-08-14 on the E1 closure tree (exit 0; 139 resolver,
-53 installer, 124 bot-gate, and 70 drive-status fixtures passed under GNU Bash
-5.3.15, non-POSIX mode, Git 2.55.0, `br` 0.2.19, and uid 1000).
 
 ## Done
 
+- Pivoted away from the 40-commit repository-side closure wrapper without
+  deleting its preserved branch or PR history. Freshly fetched
+  `douglaz/skills@master` is exactly `00b6bf0`.
+- Checked current upstream `Dicklesworthstone/beads_rust`: release `v0.3.2` is the
+  latest release and main `eea5d591` still reports 0.3.2. Disposable probes confirm
+  native atomic close+transition-comment, strict explicit flush, additive
+  equal-timestamp conflict detection, and the remaining best-effort auto-flush split.
+- Started this replacement branch directly from that latest skills master and moved
+  the existing `skills-dhm` executor reservation to it.
 - Queried all 29 open GitHub issues and confirmed that this repository has no
   initialized Beads store.
 - Reconciled umbrellas, overlaps, priorities, dependencies, and parallel work

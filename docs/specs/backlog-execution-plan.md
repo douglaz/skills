@@ -296,28 +296,19 @@ field is absent, mistyped, or ambiguous.
    ready rows share installer, reviewer-panel, and skill files in ways that are not
    faithfully representable as semantic dependency edges.
 8. Bootstrap the P0 Beads safety owners before normal scheduling. GRAPH may perform
-   its reviewed in-place update as one coordinator-owned, serialized transaction:
-   save the exact clean JSONL, require the pinned `sync --status --json` fields and
-   SHA-256 to agree, use only `br --no-auto-flush --no-auto-import` mutations,
-   explicitly flush once, and field-diff every ID against the saved bytes allowing
-   only the reviewed graph changes. The graph encodes this barrier: E1 is the sole
-   initial root, E3 depends on E1, and every otherwise dependency-free row depends
-   on E3. After that update, dispatch E1 first. Once its work PR merges, close E1
-   through the saved-bytes/status/explicit-flush procedure on a dedicated metadata
-   branch, commit only that JSONL closure plus `DRIVE.md`, run the repository gate
-   and independent review, and merge the metadata PR before refreshing/importing
-   clean `master` and dispatching E3. Make no other scoped Beads query or mutation
-   before that merge. After E3's work PR merges, repeat the dedicated metadata
-   transaction using E3's newly landed helper; merge E3's closure PR and refresh
-   clean `master` before normal scheduling. Thereafter every scheduler query and
-   mutation uses E3. Any unexpected ID/field/body difference restores the saved
-   bytes, rebuilds the DB from them, and blocks scheduling for recovery.
+   its reviewed in-place update as one coordinator-owned transaction. E1 lands and
+   closes first. E3 then starts from the latest clean `master` and replaces the
+   repository-side closure wrapper design with the pinned native `br` workflow below.
+   After E3's work PR merges, close E3 on one dedicated metadata branch with that same
+   native workflow, merge the metadata PR, and refresh clean `master` before normal
+   scheduling. Until then, make no other live skills-store Beads query or mutation.
+   Thereafter scheduler reads use E1's validated runner in `--no-db` mode against the
+   clean tracked JSONL; closure mutations use E3's fresh-worktree procedure.
 9. Permit at most one outstanding Beads closure metadata branch/PR. It starts from
-   latest clean `master`, owns exactly one bead's evidence/status plus the matching
-   `DRIVE.md` transition, and remains exclusive through merge, abandonment, or
-   explicit recovery. The E3 operation lock protects DB/JSONL mutation; this
-   longer-lived coordinator rule protects the tracked JSONL while a closure PR is
-   under review and across worktrees.
+   latest clean `master`, owns exactly one bead's closure evidence/status plus the
+   matching `DRIVE.md` transition, and remains exclusive through merge, abandonment,
+   or explicit human repair. This is coordinator serialization, not a second process
+   lock or recovery protocol; native `br` owns its database and export locks.
 
 ## Workstream A — merge and admission integrity
 
@@ -1201,142 +1192,88 @@ rather than treating either command's zero status as sufficient.
 The skeptic-convergence observation is not a fourth E2 bead; F1 owns it together
 with #47's fact-ownership policy.
 
-### E3. Exact closure command — issue #65
+### E3. Native close evidence and strict flush — issue #65
 
-**Priority:** P0. **Effort:** extra large.
+**Priority:** P0. **Effort:** medium.
 
-Align every live scoped closure consumer with the canonical fail-closed closure
-command and explicit flush behavior. Ownership includes
-`skills/orchestrating-with-rb-lite/references/harden-until-clean.md`,
-`skills/drive/references/phases.md` § LAND, and
-`skills/rb-lite-backlog-drain/SKILL.md` step 11; migrate all three away from raw
-`br close`/`br update -s closed` plus separate flushes. Create exact companion
-owner:
+Delete the repository-side `beads-close-transaction` design. Do not fork or wrap `br`
+unless the pinned native behavior below regresses. The current upstream check found:
 
-- `skills/beads-close-transaction/SKILL.md`;
-- `skills/beads-close-transaction/scripts/beads-close-transaction`; and
-- `skills/beads-close-transaction/scripts/beads-close-transaction.test`.
+- latest `Dicklesworthstone/beads_rust` release: `v0.3.2` (`4104c31e`), with
+  default-branch HEAD `eea5d591e88e7f26add480ef94c9c849cf1763f7` still reporting
+  `0.3.2`;
+- `close --reason --transition-comment` checks close blockers before mutation and
+  commits status, reason, timestamp, transition comment, events, and dirty marker in
+  one SQLite transaction;
+- `sync --flush-only` is a separately locked strict export with atomic JSONL
+  publication and nonzero failure;
+- default auto-flush is deliberately best-effort and may warn while returning zero;
+- `sync --reconcile-additive` detects equal-timestamp scalar conflicts and returns
+  exit 6 instead of silently choosing one side.
 
-Its API is:
+The canonical owner is `skills/rb-lite-backlog-drain/SKILL.md` step 11. Drive LAND and
+`orchestrating-with-rb-lite` link to that step rather than copying a shell
+implementation. No new skill, lock, recovery directory, rollback engine, SQLite
+parser, scheduler wrapper, or E1 extension is in scope.
 
-```text
-beads-close-transaction with-lock -- <br query-or-mutation> [args...]
-beads-close-transaction close --id ID --reason-file PATH [--notes-file PATH]
-```
+#### Native closure procedure
 
-Every scoped scheduler invokes each `br ready`, `br list`, and mutation through
-`with-lock`; a separate check followed by an unlocked command is forbidden.
-`with-lock` atomically acquires one exclusive recovery/transaction lock under
-the resolved Beads directory, checks for retained recovery state while holding
-it, and runs E1 against the clean tracked JSONL. Before any query or mutation it
-runs `br --no-auto-flush --no-auto-import sync --status --json` and requires the
-pinned typed fields above, healthy audit output, zero dirty issues, and no
-DB-newer state. If the JSONL is newer, it performs an explicit
-`br --no-auto-flush --no-auto-import sync --import-only`, then re-runs status and
-requires DB/JSONL freshness
-to agree; specifically, `dirty_count` is zero, both `jsonl_newer`
-and `db_newer` are false, health/audit is healthy, and the reported JSONL hash
-equals E1's still-current saved bytes. Import/status failure retains the lock
-and changes nothing further. An equal status proceeds. Any DB-newer, dirty, ambiguous,
-external-JSONL, hash-mismatch, or unhealthy state is
-`BEADS_RECOVERY_REQUIRED`, never permission to flush the cache over the tracked
-graph.
+Run only on a dedicated metadata worktree created from latest clean `master`. E1 must
+first prove that `.beads/issues.jsonl` is the clean tracked file for that worktree.
+The worktree must begin without `beads.db` or any database sidecars; their presence
+refuses rather than being deleted. Require exact `br 0.3.2`, then:
 
-Only after that reconciliation does `with-lock` run the one requested command
-with auto-import/auto-flush disabled, perform any required explicit flush and
-verification, and release after the operation is quiescent. Thus no scheduler
-can pass a check and then observe or mutate the DB while close compensation is
-in flight, and no old ignored SQLite cache can schedule or overwrite work newly
-merged into the tracked JSONL.
+1. Run `br sync --import-only` once to initialize the absent cache from the reviewed
+   JSONL. Run `br --no-auto-import --no-auto-flush sync --reconcile-additive --json`
+   immediately afterwards. It must exit 0 with empty stderr and report schema
+   `br.sync.additive-reconciliation.v2`, tool version `0.3.2`, status `no_changes`,
+   zero conflicts, zero DB-only rows, and an empty `postcommit_failures` array.
+   Any other result stops before close; do not apply or resolve a reconciliation in
+   the closure workflow.
+2. Capture one exact target with `br --no-db show ID --json`; require one open issue
+   carrying the expected executor label. Use a single full ID. Batch close and
+   `--force` are forbidden.
+3. Execute the native SQLite transaction and the strict export in order:
 
-`close` acquires that same lock directly and is not nested under `with-lock`. It
-runs E1 before its first mutation, saves a private pre-transaction JSONL plus
-material `br show` state, opens each reason/optional-notes input once with
-`O_NOFOLLOW`, requires a regular file owned by the effective UID, copies its exact
-bytes into a mode-0600 helper-private snapshot while holding the lock, closes the
-caller-provided descriptor, and never rereads the caller path. The helper-private
-paths are named `_reason_snapshot` and `_notes_snapshot` below. It validates and
-submits only those immutable snapshot bytes, then updates notes (when supplied),
-closes, and explicitly flushes as one helper-owned transaction:
+   ```bash
+   "$BEADS_JSONL_RESOLVER" --run-br --no-auto-import --no-auto-flush \
+     close "$BEAD_ID" --reason "$CLOSE_REASON" \
+     --transition-comment "$CLOSE_EVIDENCE" &&
+   "$BEADS_JSONL_RESOLVER" --run-br --no-auto-import --no-auto-flush \
+     sync --flush-only
+   ```
 
-```bash
-_reason_payload=$(
-  command cat -- "$_reason_snapshot" || exit
-  printf '.'
-) ||
-  compensate_to_saved_open_state_or_retain_lock
-_reason_payload=${_reason_payload%.}
-if [ -n "${notes_file:-}" ]; then
-  _notes_payload=$(
-    command cat -- "$_notes_snapshot" || exit
-    printf '.'
-  ) ||
-    compensate_to_saved_open_state_or_retain_lock
-  _notes_payload=${_notes_payload%.}
-  br --no-auto-flush --no-auto-import \
-    update "$bead_id" --notes "$_notes_payload" ||
-    compensate_to_saved_open_state_or_retain_lock
-fi
-br --no-auto-flush --no-auto-import \
-  close "$bead_id" --reason "$_reason_payload" ||
-  compensate_to_saved_open_state_or_retain_lock
-if br --no-auto-flush --no-auto-import sync --flush-only; then
-  verify_db_and_jsonl_closed_or_retain_lock
-else
-  compensate_to_saved_open_state_or_retain_lock
-fi
-```
+   `CLOSE_REASON` is one nonempty line naming the merged work PR URL and 40-lowercase-
+   hex merge SHA. `CLOSE_EVIDENCE` is the nonempty reviewed closure note; leading or
+   trailing whitespace and NUL are forbidden because native transition comments trim
+   outer whitespace. Do not perform a preceding notes update or status mutation.
+4. After a successful flush, use `br --no-db show ID --json` and the Git diff to prove
+   exactly that target is closed with the exact reason and one newly added matching
+   comment. Only the target's closure fields/comment plus the planned `DRIVE.md`
+   transition may differ. Then run `./check.sh`, independent review, and the ordinary
+   metadata-PR merge flow.
 
-Validation rejects raw NUL in both immutable snapshots before command
-substitution. Appending and then removing the sentinel preserves every trailing
-newline; success and compensation compare against those exact submitted
-payloads, not shell-trimmed variants. Snapshot/read/validation failure performs
-no Beads mutation, and caller-path replacement after the snapshot cannot change
-the transaction.
+A close refusal must leave both status and transition comment unchanged. If close
+succeeds but explicit flush fails, report `CLOSURE_INCOMPLETE`, stop automated work,
+and retain the worktree. The SQLite close is already committed and dirty: after a
+human fixes the export cause, rerun only `br sync --flush-only` and the final proof.
+Never retry close, reopen, compensate, or claim cross-filesystem rollback.
 
-`bead_id` must be the exact claimed finding ID and the `--reason-file` payload
-must contain the reviewed work-PR URL and merge SHA. Do not use
-`br update ... -s closed`,
-continue after either failure, or report closure before the explicit flush.
+#### Delivery and tests
 
-The helper cannot make SQLite plus JSONL one filesystem transaction, so it owns
-verified compensation for every failure after the optional notes update. Restore
-the original notes and other helper-changed material fields, reopen if close
-landed, explicitly flush, and verify the bead is open, its priority, labels,
-dependencies, description, and notes match the saved state, and no dependent
-remains newly ready. Audit timestamps/comments may record the failed transaction
-and compensation, but cannot alter readiness or material executor state. A
-successful compensation returns nonzero but releases the scheduler lock only
-after that proof. If restore, reopen, re-flush, or verification fails, retain the
-lock and private recovery bundle, emit `BEADS_RECOVERY_REQUIRED` plus its path,
-and make every `with-lock`/`close` operation refuse until explicit recovery. On
-success, verify both DB and JSONL contain the requested notes and closed state
-before removing the lock.
+Migrate the three live consumers away from `br update ... -s closed`, helper-wrapper
+calls, and bare best-effort close. Scheduler lane reads become E1-runner `br --no-db
+ready` calls over the clean tracked JSONL; E3 does not wrap reads.
 
-Add the companion to every scheduler/closure consumer's selective dependencies
-and wire its test into `check.sh`.
-`skills/orchestrating-with-rb-lite/scripts/harden-closure.test` is the focused
-hardening consumer fixture. A companion-owned
-`skills/beads-close-transaction/scripts/closure-consumers.test` extracts the
-Drive LAND and backlog-drain step-11 procedures and proves both call only the
-helper API, so no live instruction retains a raw closure path. Direct and
-consumer fixtures cover a competing
-scheduler blocked across the entire query/mutation, notes-update failure, close
-failure, disabled auto-flush plus forced flush failure and successful
-compensation, restore/reopen/re-flush failure retaining the recovery lock,
-exact-ID selection, dependents never escaping during compensation, successful
-notes-plus-close, a clean newer JSONL explicitly imported before `br ready`, and
-dirty/DB-newer/hash-mismatch status refusing without export. Run all three direct
-and consumer tests,
-`./install.test`, and `./check.sh`.
-
-Implement E3 in three reviewed internal stages without closing the bead between
-them: (1) lock plus read-only resolver/status reconciliation, (2) immutable
-evidence plus close/flush/compensation/recovery, and (3) migrate all three
-consumers and wire aggregate/selective-install tests. Use hard stops of 1,600
-production lines and 3,000 fixture lines across the new owner and migrations.
-Crossing either budget, adding another lifecycle owner, or needing a fourth stage
-returns to SHAPE for an explicit split that preserves E3 as the bootstrap barrier.
+Add one small disposable-repository behavior test against exact release `v0.3.2` and
+stubbed consumer extraction tests. They cover: absent-cache import followed by a
+`no_changes` additive receipt; equal-timestamp drift returning conflict/exit 6;
+blocked close adding no transition comment; successful close/comment/explicit-flush
+round trip visible through `--no-db show`; induced explicit-flush failure stopping
+without a second close; and all three consumers preserving close-before-flush order
+and failure stops. Wire the tests into `./check.sh`. Keep the full implementation
+under 250 production/documentation lines and 500 fixture lines; crossing either limit
+returns to SHAPE instead of recreating the wrapper.
 
 ## Workstream F — Drive/rb-lite controller and convergence
 
@@ -1461,18 +1398,11 @@ remain.
 Do not mutate the skills Beads store from the rb-lite checkout, on an active
 unrelated skills branch, or directly on skills `master`.
 
-Here `F2` means the resolved generated bead ID, not the plan alias. The terminal
-mutation is one E3 call:
-
-```text
-beads-close-transaction close --id <F2-bead-id> \
-  --reason-file <merge-evidence-file> --notes-file <upstream-evidence-file>
-```
-
-Do not run a preceding raw `br update`, raw `br close`, or separate explicit
-sync: the helper validates the initially clean JSONL, owns evidence update plus
-closure under one lock, performs the flush, and compensates both notes and status
-on failure.
+Here `F2` means the resolved generated bead ID, not the plan alias. Close it only
+through E3's native single-ID procedure: the merged PR URL and merge SHA are the
+close reason, the upstream checkpoint evidence is the transition comment, and the
+explicit strict flush and `--no-db` proof must both succeed. Do not run a preceding
+notes/status update or rely on best-effort auto-flush.
 
 Publishing the required upstream release is a separate human-authority
 checkpoint recorded in `DRIVE.md`; local controller BUILD remains blocked until
@@ -1595,14 +1525,8 @@ After publication and the supervised probe succeed, record F2r through a dedicat
 reviewed skills metadata transaction. Create `metadata/close-f2r-release` from
 current `master`; use E1 to prove the JSONL clean; make only the F2r
 authorization/release evidence and closure JSONL change plus the `DRIVE.md`
-Done/Now/Next update; and invoke exactly:
-
-```text
-beads-close-transaction close --id <F2r-bead-id> \
-  --reason-file <publication-evidence-file> --notes-file <release-evidence-file>
-```
-
-Push and open a PR whose body contains `bead-closure: <F2r-bead-id>`; once GitHub
+Done/Now/Next update; and follow E3's native single-ID close, transition-comment,
+explicit-flush, and `--no-db` proof procedure. Push and open a PR whose body contains `bead-closure: <F2r-bead-id>`; once GitHub
 assigns `N`, amend `DRIVE.md` to `Pending: metadata PR douglaz/skills#N`; rerun
 `./check.sh` and the independent panel on the amended tree; force-push with lease;
 then merge. Do not mutate directly on `master`, combine this metadata with F3, or
@@ -1866,21 +1790,20 @@ Constraints:
   AND semantics:
 
   ```bash
-  beads-close-transaction with-lock -- \
-    br ready --limit 0 -l drive-open-issues -l executor-skills
-  beads-close-transaction with-lock -- \
-    br ready --limit 0 -l drive-open-issues -l executor-rb-lite
-  beads-close-transaction with-lock -- \
-    br ready --limit 0 -l drive-open-issues -l authority-human
+  "$BEADS_JSONL_RESOLVER" --run-br --no-db --no-auto-import --no-auto-flush \
+    ready --limit 0 -l drive-open-issues -l executor-skills
+  "$BEADS_JSONL_RESOLVER" --run-br --no-db --no-auto-import --no-auto-flush \
+    ready --limit 0 -l drive-open-issues -l executor-rb-lite
+  "$BEADS_JSONL_RESOLVER" --run-br --no-db --no-auto-import --no-auto-flush \
+    ready --limit 0 -l drive-open-issues -l authority-human
   ```
 
   The first lane runs in this repository, the second routes to the
   cross-repository procedure above, and the third is reported for human action
-  but never sent to an implementer. These helper-wrapped spellings apply after
+  but never sent to an implementer. These read-only JSONL spellings apply after
   the E1/E3 bootstrap sequence in global rule 8; before then, normal lane
-  scheduling is forbidden. `with-lock` injects `--no-auto-flush` and
-  `--no-auto-import` into the requested `br` invocation before launch rather than
-  trusting each displayed caller to repeat those safety flags.
+  scheduling is forbidden. E1 proves and launches the binary; `--no-db` prevents
+  an old local cache from influencing lane selection.
 
 ## Beads graph to update
 
