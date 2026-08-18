@@ -332,25 +332,30 @@ and this measured `0.2.19` status schema; neither exposes it as an E3 API.
 **Caller-owned coordinator status equality (fixture-owned; not an E3 API).**
 After each clean-`master` refresh, before any lane read and before the F2 or F2r
 closure path, the coordinator: (1) runs E1's normal resolver to prove and retain
-the clean tracked JSONL path; (2) immediately runs
+the clean tracked JSONL path; (2) before any import, captures the output of
+`"$BEADS_JSONL_RESOLVER" --run-br --no-auto-flush --no-auto-import sync --status --json`,
+calculates that JSONL's plain SHA-256 as below, and runs the exact predicate below
+with `--argjson require_synced false`; (3) only after that predicate has refused
+dirty or DB-newer state, immediately runs
 `"$BEADS_JSONL_RESOLVER" --run-br --no-auto-flush --no-auto-import sync --import-only`;
-(3) immediately repeats E1's normal clean-tracked-JSONL proof and retains that
-path before any status or lane read; (4) captures the output of
+(4) immediately repeats E1's normal clean-tracked-JSONL proof and retains that
+path before any status or lane read; (5) captures the output of
 `"$BEADS_JSONL_RESOLVER" --run-br --no-auto-flush --no-auto-import sync --status --json`;
-(5) uses the already validated existing
+(6) uses the already validated existing
 `"$BEADS_GIT_RUNNER" run-audit-tool python3 -I` and only stdlib
-`hashlib` to calculate the plain SHA-256 of that exact JSONL; and (6) passes the
+`hashlib` to calculate the plain SHA-256 of that exact JSONL; and (7) passes the
 captured status transcript and hash to E1's
-`"$BEADS_JSONL_RESOLVER" --run-jq -se --arg hash "$hash"` predicate. `-s`
-slurps the transcript, requires exactly one JSON document, and applies the
-predicate to `.[0]`:
+`"$BEADS_JSONL_RESOLVER" --run-jq -se --arg hash "$hash" --argjson require_synced true`
+predicate. Both jq calls use `-s` to slurp the transcript, require exactly one
+JSON document, and apply the predicate to `.[0]`:
 
 ```jq
 length == 1 and
 (.[0] |
   type == "object" and
   (.dirty_count | type == "number" and . == 0) and
-  (.jsonl_newer | type == "boolean" and . == false) and
+  (.jsonl_newer | type == "boolean") and
+  (if $require_synced then .jsonl_newer == false else true end) and
   (.db_newer | type == "boolean" and . == false) and
   (.workspace_health | type == "string" and . == "healthy") and
   (.reliability_audit | type == "object" and
@@ -366,8 +371,11 @@ length == 1 and
 
 Missing, additional/ambiguous JSON values, or a type/value mismatch refuses the
 path. Python 3 is required. The fixture owns this procedure and its strict
-predicate, including the measured `git_export` cleanliness fields. The helper
-performs the same slurped predicate privately before its mutation; this
+predicate, including the measured `git_export` cleanliness fields. Thus the
+pre-import status may report either boolean `jsonl_newer` value but can never
+authorize import over dirty or DB-newer state; post-import status must report
+`jsonl_newer == false`. The helper performs the same slurped predicate privately
+with `require_synced == true` before its mutation; this
 coordinator procedure is neither a public E3 check nor a public
 status/fingerprint interface.
 
@@ -1323,23 +1331,28 @@ preflight. Every helper `br` invocation uses its private resolver's
 the one explicit `sync --flush-only`, and the final `show`.
 Using the same trusted derived `git-clean` sibling to run `python3 -I` and stdlib
 `hashlib`, it calculates the plain SHA-256 of its own snapshot (Python 3 is
-required). Through that resolver's jq runner with `-se`, it slurps the status
-transcript, requires exactly one JSON document, and applies the exact
-caller-owned predicate above to `.[0]`, including a string `jsonl_content_hash`
-equal to that helper-calculated hash and the measured `git_export` cleanliness
-fields. It rejects absent, mistyped, or ambiguous transcript fields. E1 does
+required). Through that resolver's jq runner with
+`-se --argjson require_synced true`, it slurps the status transcript, requires
+exactly one JSON document, and applies the exact caller-owned predicate above
+to `.[0]`, including a string `jsonl_content_hash` equal to that
+helper-calculated hash and the measured `git_export` cleanliness fields. It
+rejects absent, mistyped, or ambiguous transcript fields. E1 does
 not emit a plain SHA-256 content hash: `git hash-file` is a Git blob OID, not
 that hash. This minimal private preflight directly refuses stale or DB-newer
 caches before mutation; it adds no fingerprint, sidecar, recovery, import, or
-public E3 mode. The helper shows exactly one nonclosed target row, optionally
-updates notes, and closes the target. It
-immediately reruns E1's default resolver as the second E1 proof immediately
-before its one explicit runner-mediated flush, then post-shows the target.
-It compares the snapshot to final JSONL: the ID set is exact; every non-target
-row is byte- and field-identical; and the target differs only in `status`,
-`closed_at`, `close_reason`, `updated_at`, and optional `notes`. Reason and notes
-must preserve their exact UTF-8 bytes. It returns zero only after that complete
-proof. Required commands and options must be present or the build fails closed.
+public E3 mode. The helper shows exactly one nonclosed target row and requires
+that row's `.id` to equal the supplied `--id` byte-for-byte; `br` accepts unique
+prefixes, but this helper does not. It then optionally updates notes and closes
+that exact target. It immediately reruns E1's default resolver as the second E1
+proof immediately before its one explicit runner-mediated flush. After the
+flush it reruns E1's existing resolver in `--allow-dirty` mode, requires the
+same returned JSONL path, and uses that newly validated regular tracked path
+for its post-show and final comparison. The final ID set is exact; every
+non-target row is byte- and field-identical; and the target differs only in
+`status`, `closed_at`, `close_reason`, `updated_at`, and optional `notes`.
+Reason and notes must preserve their exact UTF-8 bytes. It returns zero only
+after that complete proof. Required commands and options must be present or the
+build fails closed.
 
 Any failure returns nonzero and the coordinator stops. Before the first DB
 mutation it uses an ordinary nonzero diagnostic. From the first DB mutation,
@@ -1372,9 +1385,11 @@ to those files in this amendment.
 The helper tests wired into `check.sh` are stub-only. A disposable real-`0.2.19`
 happy-path and refusal run is BUILD/PR evidence outside the mandatory gate.
 Tests cover stubbed helper faults, exact input/newline fidelity plus pre-mutation
-raw-NUL refusal, complete target delta and bystander preservation, the second E1 proof immediately before flush,
-pre- and post-mutation failures, slurped single-document status parsing, all
-four consumer boundaries, and selective install. In BUILD, red-mutate each
+raw-NUL refusal, exact-ID/prefix refusal, complete target delta and bystander
+preservation, pre-import dirty/DB-newer refusal, the second E1 proof immediately
+before flush, post-flush `--allow-dirty` path revalidation, pre- and
+post-mutation failures, slurped single-document status parsing, all four
+consumer boundaries, and selective install. In BUILD, red-mutate each
 claimed property before its passing run. Keep helper production near 350 lines,
 excluding the four locator blocks at roughly 40 lines each, and fixtures near
 700; exceeding either budget returns E3 to SHAPE.

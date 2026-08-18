@@ -240,6 +240,15 @@ aligned Beads bodies
   `3 issues` cleared) and zero stderr bytes. A Python-3 exact-field comparison
   against the saved initial JSONL then exited 0: all 33 IDs remained, and only
   `description` and `updated_at` differed on those three IDs.
+- The next exact-tree Codex pass reproduced three remaining bounded failures:
+  import could precede dirty/DB-newer refusal, `br 0.2.19` accepts unique ID
+  prefixes, and the final comparison retained a pre-flush path. The contract and
+  all three bodies now run the typed status predicate before import, require the
+  shown row's full ID byte-for-byte, and revalidate the post-flush JSONL through
+  E1 `--allow-dirty`. The final body rerun again recorded 0 for all three updates
+  and the one flush with stderr empty, and the saved-initial-to-final comparator
+  again reported exactly 33 IDs and only the same three
+  `description`/`updated_at` pairs.
 - Released the completed `skills-iog`/`feat/skills-iog-beads-jsonl-path`
   `executor-skills` reservation and atomically handed it to
   `skills-dhm`/E3 on `feat/skills-dhm-beads-close-transaction`; that exact E3
