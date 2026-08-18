@@ -218,10 +218,12 @@ aligned Beads bodies
   status preflight. `./check.sh` then passed all 386 fixtures on the exclusive
   two-file closure tree under the recorded Bash/Git/`br`/uid environment.
 - After the failed E3 implementation and reviews, the user chose the KISS
-  close–flush–prove amendment. Exact-current pinned Codex xhigh and Claude Opus
-  max reviews passed the reset one-helper specification with no P0–P2 findings;
-  `./check.sh` passed all 386 fixtures, and commit `0615222` records that reviewed
-  two-document SHAPE boundary.
+  close–flush–prove amendment. Pinned Codex xhigh and Claude Opus max were used
+  as advisory reviewers while resetting the one-helper specification, but those
+  early invocations did not retain separated streams and are not admission
+  evidence. Commit `0615222` records that two-document reset; only the final
+  combined-tree commands recorded below determine whether this SHAPE boundary
+  may land.
 - Completed the required saved-bytes/import/flush/diff bootstrap for exactly
   `skills-dhm`, `skills-qmi`, and `skills-rrk` using merged E1 and installed
   `br 0.2.19`. The initial tracked JSONL SHA-256 was
@@ -249,6 +251,17 @@ aligned Beads bodies
   and the one flush with stderr empty, and the saved-initial-to-final comparator
   again reported exactly 33 IDs and only the same three
   `description`/`updated_at` pairs.
+- The following Codex pass found that safe pre-import reconciliation also needs
+  to admit the one expected `jsonl_newer` degraded state and that locator trust
+  logic needed one fact owner. In a disposable clean Git clone using exact
+  `br 0.2.19`, `br --no-auto-flush --no-auto-import sync --status --json`
+  exited 0 with 792 stdout bytes and zero stderr bytes for that state: `dirty_count=0`,
+  `jsonl_newer=true`, `db_newer=false`, and exactly one degraded
+  `jsonl_newer` anomaly. The final predicate admits that transcript only before
+  import, refuses it in synced mode, and refuses a `db_newer=true` mutation;
+  all three jq-runner probes had the expected status. The helper skill now owns
+  one canonical locator block, and all four consumers point to that owner rather
+  than copying its trust logic.
 - Released the completed `skills-iog`/`feat/skills-iog-beads-jsonl-path`
   `executor-skills` reservation and atomically handed it to
   `skills-dhm`/E3 on `feat/skills-dhm-beads-close-transaction`; that exact E3

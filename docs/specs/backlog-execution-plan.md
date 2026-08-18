@@ -350,32 +350,49 @@ predicate. Both jq calls use `-s` to slurp the transcript, require exactly one
 JSON document, and apply the predicate to `.[0]`:
 
 ```jq
+def clean_git:
+  (.git_export | type == "object" and
+    (.available | type == "boolean" and . == true) and
+    (.tracked | type == "boolean" and . == true) and
+    (.worktree_clean | type == "boolean" and . == true) and
+    (.index_clean | type == "boolean" and . == true));
+def synced:
+  (.jsonl_newer == false) and
+  (.workspace_health | type == "string" and . == "healthy") and
+  (.reliability_audit | type == "object" and
+    (.health | type == "string" and . == "healthy") and
+    (.anomaly_count | type == "number" and . == 0)) and
+  (.jsonl_content_hash | type == "string" and . == $hash);
+def importable_jsonl_newer:
+  (.jsonl_newer == true) and
+  (.workspace_health | type == "string" and . == "degraded") and
+  (.reliability_audit | type == "object" and
+    (.health | type == "string" and . == "degraded") and
+    (.anomaly_count | type == "number" and . == 1) and
+    (.anomalies | type == "array" and length == 1 and
+      .[0].code == "jsonl_newer" and
+      .[0].severity == "degraded" and
+      (.[0].message | type == "string"))) and
+  (.jsonl_content_hash | type == "string");
 length == 1 and
 (.[0] |
   type == "object" and
   (.dirty_count | type == "number" and . == 0) and
   (.jsonl_newer | type == "boolean") and
-  (if $require_synced then .jsonl_newer == false else true end) and
   (.db_newer | type == "boolean" and . == false) and
-  (.workspace_health | type == "string" and . == "healthy") and
-  (.reliability_audit | type == "object" and
-    (.health | type == "string" and . == "healthy") and
-    (.anomaly_count | type == "number" and . == 0)) and
-  (.git_export | type == "object" and
-    (.available | type == "boolean" and . == true) and
-    (.tracked | type == "boolean" and . == true) and
-    (.worktree_clean | type == "boolean" and . == true) and
-    (.index_clean | type == "boolean" and . == true)) and
-  (.jsonl_content_hash | type == "string" and . == $hash))
+  clean_git and
+  (if $require_synced then synced else (synced or importable_jsonl_newer) end))
 ```
 
 Missing, additional/ambiguous JSON values, or a type/value mismatch refuses the
 path. Python 3 is required. The fixture owns this procedure and its strict
 predicate, including the measured `git_export` cleanliness fields. Thus the
-pre-import status may report either boolean `jsonl_newer` value but can never
-authorize import over dirty or DB-newer state; post-import status must report
-`jsonl_newer == false`. The helper performs the same slurped predicate privately
-with `require_synced == true` before its mutation; this
+pre-import status either already satisfies the strict synced state or reports
+exactly the one measured `jsonl_newer` degraded anomaly; it can never authorize
+import over dirty or DB-newer state or another anomaly. Post-import status must
+satisfy the strict synced state, including current JSONL hash equality. The
+helper performs the same slurped predicate privately with
+`require_synced == true` before its mutation; this
 coordinator procedure is neither a public E3 check nor a public
 status/fingerprint interface.
 
@@ -1281,8 +1298,10 @@ Its only command is:
 "$BEADS_CLOSE_TRANSACTION" --id ID --reason-file PATH [--notes-file PATH]
 ```
 
-Each of the four migrated caller locator blocks—not closed E1—first verifies
-that its already validated resolver path matches
+`skills/beads-close-transaction/SKILL.md` owns one canonical locator block. Each
+of the four migrated completion consumers points to and invokes that owner
+rather than embedding an independently maintained copy. The canonical block
+first verifies that the caller's already validated resolver path matches
 `*/beads-jsonl-path/scripts/*`, then derives the target exactly as:
 
 ```bash
@@ -1293,12 +1312,14 @@ esac
 BEADS_CLOSE_TRANSACTION=${BEADS_JSONL_RESOLVER%/beads-jsonl-path/scripts/*}/beads-close-transaction/scripts/beads-close-transaction
 ```
 
-The caller validates that derived target exactly as the existing `git-clean`
+The canonical locator validates that derived target exactly as the existing `git-clean`
 sibling: it is executable, regular, non-symlink, has `nlink == 1`, and has
 the canonical `#!/bin/sh` shebang; its canonical location is outside the driven
 worktree; and its installed root is cross-root consistent with the validated E1
 resolver. A failed strip match or any target validation failure stops with no
-PATH or repository-relative fallback.
+PATH or repository-relative fallback. `install.test` extracts and exercises that
+single owner at all four boundaries and rejects any consumer that copies or
+reimplements its trust logic; locator fixes therefore have one fact owner.
 There is no public `check`, status schema or fingerprint, E1 workspace-paths or
 Git-clean verb, helper-owned import, global lock, sidecar/recovery validation,
 or automatic rollback, compensation, evidence copy, or recovery. The installed
@@ -1367,9 +1388,9 @@ state.
 
 Migrate only four completion/delegation boundaries to this command: Drive LAND,
 `rb-lite-backlog-drain` step 11, harden-until-clean's closure delegation, and
-the Drive Guard 1 pointer. Each block owns the locator validation above and the
-caller-owned import/status procedure; do not migrate scheduler reads and do not
-add `check`.
+the Drive Guard 1 pointer. Each boundary invokes the canonical locator owner and
+owns the caller import/status procedure; do not migrate scheduler reads, copy
+the locator validation, or add `check`.
 Wire selective install and `check.sh` for the companion. E3 and all four routed
 completion consumers require exact installed `br 0.2.19` and use only the
 advertised `--version`, `close`, `update`, `show`, and `sync` surface through
@@ -1386,12 +1407,13 @@ The helper tests wired into `check.sh` are stub-only. A disposable real-`0.2.19`
 happy-path and refusal run is BUILD/PR evidence outside the mandatory gate.
 Tests cover stubbed helper faults, exact input/newline fidelity plus pre-mutation
 raw-NUL refusal, exact-ID/prefix refusal, complete target delta and bystander
-preservation, pre-import dirty/DB-newer refusal, the second E1 proof immediately
-before flush, post-flush `--allow-dirty` path revalidation, pre- and
-post-mutation failures, slurped single-document status parsing, all four
-consumer boundaries, and selective install. In BUILD, red-mutate each
+preservation, successful import from the exact measured single-`jsonl_newer`
+degraded state, pre-import dirty/DB-newer/other-anomaly refusal, the second E1
+proof immediately before flush, post-flush `--allow-dirty` path revalidation,
+pre- and post-mutation failures, slurped single-document status parsing, all
+four consumer boundaries, and selective install. In BUILD, red-mutate each
 claimed property before its passing run. Keep helper production near 350 lines,
-excluding the four locator blocks at roughly 40 lines each, and fixtures near
+excluding the one canonical locator block at roughly 40 lines, and fixtures near
 700; exceeding either budget returns E3 to SHAPE.
 
 The saved-bytes/flush/diff bootstrap has amended exactly `skills-dhm`,
@@ -1531,9 +1553,10 @@ serialized clean-`master` closure boundary, the terminal mutation is one E3 call
   --reason-file <merge-evidence-file> --notes-file <upstream-evidence-file>
 ```
 
-Before it, F2 reuses the existing Drive LAND locator block rather than creating a
-fifth locator block. E1 proves the tracked JSONL clean and the coordinator
-completes the fixture-owned caller status-equality procedure above. A helper
+Before it, F2 follows the existing Drive LAND pointer to E3's canonical locator
+owner rather than creating another locator. E1 proves the tracked JSONL clean,
+and the coordinator completes the fixture-owned caller status-equality procedure
+above. A helper
 refusal stops and reports; do not retry. Do not run a raw `br update`, raw `br
 close`, or separate flush after the helper.
 
@@ -1660,8 +1683,8 @@ current `master`; use E1 to prove the JSONL clean; make only the F2r
 authorization/release evidence and closure JSONL change plus the `DRIVE.md`
 Done/Now/Next update; successfully run
 the fixture-owned caller status-equality procedure above. F2r reuses the
-existing Drive LAND locator block rather than creating a sixth locator block;
-then invoke exactly:
+existing Drive LAND pointer to E3's canonical locator owner rather than creating
+another locator, then invokes exactly:
 
 ```text
 "$BEADS_CLOSE_TRANSACTION" --id <F2r-bead-id> \
