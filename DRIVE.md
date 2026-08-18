@@ -269,17 +269,20 @@ aligned Beads bodies
   same-ID default-store decoy and that caller import preceded the pinned-version
   check. Caller and helper preflights now require exact `br 0.2.19` bytes and
   status in a selector-clean environment before any normal E1 proof, `where`,
-  status, import, or mutation, with per-command launch-counter fixtures.
+  status, import, or mutation. The caller uses E1's already documented
+  locate-only truncation before its final clean-mode resolver call; per-command
+  launch-counter fixtures pin that ordering.
 - Codex and Opus then independently found that `BEADS_JSONL` alone relabels the
   export path but does not bind the database store. In a disposable directory,
   `BEADS_JSONL=PATH br --no-auto-flush --no-auto-import where --json` exited 0
   with 146 stdout/0 stderr bytes and reported `/tmp/.beads/beads.db`; adding
   `BEADS_DIR=${PATH%/*}` exited 0 with 210/0 and reported that parent's
-  `beads.db` plus the exact JSONL. The helper therefore derives that parent,
-  and both the caller's status/import sequence and the helper's private E1
-  sequence supply the same two selectors. Each sequence requires one `where`
-  object whose `.path`, `.database_path`, and `.jsonl_path` byte-match the
-  derived store identity and caller-retained E1 path before it can mutate.
+  `beads.db` plus the exact JSONL. Because a supported export may sit below its
+  database directory, the caller now retains the original validated `where`
+  triple instead of inferring the store from the JSONL parent. Both caller and
+  helper receive that exact `BEADS_DIR`/`BEADS_JSONL` pair, recapture
+  `.path`/`.database_path`/`.jsonl_path`, and require byte identity before any
+  status/import or closure mutation.
 - Released the completed `skills-iog`/`feat/skills-iog-beads-jsonl-path`
   `executor-skills` reservation and atomically handed it to
   `skills-dhm`/E3 on `feat/skills-dhm-beads-close-transaction`; that exact E3
