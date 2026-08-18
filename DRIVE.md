@@ -6,7 +6,8 @@ Beads graph created from the reviewed plan will be the ONLY work this drive may
 take.
 **Phase:** SHAPE · **Bead:** `skills-dhm` (E3)
 · **Branch:** `feat/skills-dhm-beads-close-transaction`
-**Pending:** review the KISS E3 amendment
+**Pending:** exact-tree review and PR for the KISS E3 amendment plus its three
+aligned Beads bodies
 **Gate:** `./check.sh`
 · last green 2026-08-14 on the E1 closure tree (exit 0; 139 resolver,
 53 installer, 124 bot-gate, and 70 drive-status fixtures passed under GNU Bash
@@ -217,9 +218,17 @@ take.
   status preflight. `./check.sh` then passed all 386 fixtures on the exclusive
   two-file closure tree under the recorded Bash/Git/`br`/uid environment.
 - After the failed E3 implementation and reviews, the user chose the KISS
-  close–flush–prove amendment now in SHAPE. The prior clean reviews did not
-  cover this amendment. Fable's old unattested-status-schema finding is
-  incorporated and measured above; only this amendment remains unreviewed.
+  close–flush–prove amendment. Exact-current pinned Codex xhigh and Claude Opus
+  max reviews passed the reset one-helper specification with no P0–P2 findings;
+  `./check.sh` passed all 386 fixtures, and commit `0615222` records that reviewed
+  two-document SHAPE boundary.
+- Completed the required saved-bytes/import/flush/diff bootstrap for exactly
+  `skills-dhm`, `skills-qmi`, and `skills-rrk` using merged E1 and installed
+  `br 0.2.19`. The initial tracked JSONL SHA-256 was
+  `d4b37bc7de43067c2a700c27286cd6ea380d35c6be27357637c489c4d1b2471d`;
+  the caller-owned import left those bytes unchanged, and the final comparison
+  proves the 33-ID set unchanged with only `description` and `updated_at`
+  differing on those three rows.
 - Released the completed `skills-iog`/`feat/skills-iog-beads-jsonl-path`
   `executor-skills` reservation and atomically handed it to
   `skills-dhm`/E3 on `feat/skills-dhm-beads-close-transaction`; that exact E3
@@ -227,18 +236,17 @@ take.
 
 ## Now
 
-E1 is merged and E3 is back in SHAPE: replace the overgrown transaction design
-with the one close–flush–prove helper specified in the plan. Do not query or
-mutate the live Beads store during this amendment. BUILD must declare the
-`closure path exact br 0.2.19` compatibility requirement; unrelated
-non-closure/GRAPH paths retain their existing `br >=0.1.45` floor.
+The KISS E3 SHAPE specification and its three aligned Beads bodies are complete.
+Run one exact-tree pinned Codex xhigh plus Claude Opus max review, rerun
+`./check.sh`, and land the bounded amendment PR without beginning BUILD.
 
 ## Next
 
-After clean review, build E3. Only E3's own and later closures use the merged
-installed helper from the coordinator's outside-worktree skills clone; do not
-require an E3 preflight before dispatching E3. Continue with A1 only after E3
-lands.
+After the amendment PR lands, refresh clean `master`, verify the installed
+revision and bytes, and start E3 BUILD as a separate branch/lifecycle. Only E3's
+own and later closures use the merged installed helper from the coordinator's
+outside-worktree skills clone; do not require an E3 preflight before dispatching
+E3. Continue with A1 only after E3 lands.
 
 ## Open questions for the human
 
