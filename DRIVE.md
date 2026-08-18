@@ -4,9 +4,9 @@
 `docs/specs/backlog-execution-plan.md` (#30–#66, exact set in that plan); the
 Beads graph created from the reviewed plan will be the ONLY work this drive may
 take.
-**Phase:** HARDEN · **Bead:** `skills-iog` (E1 closure metadata)
-· **Branch:** `chore/skills-iog-closure`
-**Pending:** current-tip bot gate and merge of the exclusive E1 closure PR
+**Phase:** SHAPE · **Bead:** `skills-dhm` (E3)
+· **Branch:** `feat/skills-dhm-beads-close-transaction`
+**Pending:** review the KISS E3 amendment
 **Gate:** `./check.sh`
 · last green 2026-08-14 on the E1 closure tree (exit 0; 139 resolver,
 53 installer, 124 bot-gate, and 70 drive-status fixtures passed under GNU Bash
@@ -209,31 +209,36 @@ take.
   resolver, 53 installer, 124 bot-gate, and 70 drive-status fixtures passed.
   The generic `nix build` placeholder is not this repository's gate and
   correctly reported that the checkout has no `flake.nix`.
-- Started E1's exclusive closure transaction from merged `master`: saved exact
-  clean JSONL hash
-  `276f9a16e6bc62aa49e1ae5faf494d152b5b32a55d32b81ae6447c5ee99c1ff6`,
-  required the pinned typed sync-status fields and matching hash, closed only
-  `skills-iog` with auto import/flush disabled, explicitly flushed once, and
-  proved the ID set unchanged with only E1 `status`, `closed_at`,
-  `close_reason`, and `updated_at` differing. `./check.sh` then passed all 386
-  fixtures on the exclusive two-file closure tree under that same recorded
-  Bash/Git/`br`/uid environment.
+- Completed E1's exclusive closure transaction from merged `master` through the
+  pre-E3 manual saved-bytes/explicit-flush/diff path: it closed only
+  `skills-iog` with auto import/flush disabled and proved the ID set unchanged
+  with only E1 `status`, `closed_at`, `close_reason`, and `updated_at`
+  differing. That already-completed bootstrap required neither E3 nor an E3
+  status preflight. `./check.sh` then passed all 386 fixtures on the exclusive
+  two-file closure tree under the recorded Bash/Git/`br`/uid environment.
+- After the failed E3 implementation and reviews, the user chose the KISS
+  close–flush–prove amendment now in SHAPE. The prior clean reviews did not
+  cover this amendment. Fable's old unattested-status-schema finding is
+  incorporated and measured above; only this amendment remains unreviewed.
+- Released the completed `skills-iog`/`feat/skills-iog-beads-jsonl-path`
+  `executor-skills` reservation and atomically handed it to
+  `skills-dhm`/E3 on `feat/skills-dhm-beads-close-transaction`; that exact E3
+  reservation is current.
 
 ## Now
 
-Run the repository gate and independent review on this exclusive E1 metadata
-branch, then merge it before any further scoped Beads query or mutation. Refresh
-and import clean `master` after merge, verify and release E1's
-`skills-iog`/`feat/skills-iog-beads-jsonl-path` reservation, atomically create a
-new exact `skills-dhm`/E3 `executor-skills` reservation, and only then dispatch
-E3 through rb-lite.
+E1 is merged and E3 is back in SHAPE: replace the overgrown transaction design
+with the one close–flush–prove helper specified in the plan. Do not query or
+mutate the live Beads store during this amendment. BUILD must declare the
+`closure path exact br 0.2.19` compatibility requirement; unrelated
+non-closure/GRAPH paths retain their existing `br >=0.1.45` floor.
 
 ## Next
 
-Bootstrap E3 exactly as plan global rule 8 requires, including its exclusive
-reviewed closure-metadata PR. Only then start A1, GitHub issue #42, through
-rb-lite and continue the highest-priority unblocked lane while respecting the
-two human-authority checkpoints.
+After clean review, build E3. Only E3's own and later closures use the merged
+installed helper from the coordinator's outside-worktree skills clone; do not
+require an E3 preflight before dispatching E3. Continue with A1 only after E3
+lands.
 
 ## Open questions for the human
 
