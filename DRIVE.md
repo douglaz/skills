@@ -297,6 +297,14 @@ aligned Beads bodies
   Every caller/helper resolver, `where`, status, and show capture requires status
   0 and empty stderr before parsing; valid JSON plus nonzero status or stderr is
   a required refusal fixture.
+- Opus then found the helper's second E1 proof lacked the same explicit
+  status/stderr/path acceptance, while Codex found the import command itself
+  lacked a success gate and the caller preflight still had four prospective
+  owners. The second proof and import now require status 0 and empty stderr
+  before flush/continuation. `beads-close-transaction/SKILL.md` owns one
+  canonical locator block and one canonical caller-preflight block; all four
+  consumers point to those owners, and the plan/bead mirrors are byte-pinned
+  self-contained scheduler records rather than executable copies.
 - Released the completed `skills-iog`/`feat/skills-iog-beads-jsonl-path`
   `executor-skills` reservation and atomically handed it to
   `skills-dhm`/E3 on `feat/skills-dhm-beads-close-transaction`; that exact E3

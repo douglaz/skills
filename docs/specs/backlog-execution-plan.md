@@ -364,14 +364,15 @@ JSONL's plain SHA-256 as below, and runs the exact predicate below
 with `--argjson require_synced false`; (8) only after that predicate has refused
 dirty or DB-newer state, immediately runs
 `"$BEADS_JSONL_RESOLVER" --run-br --no-auto-flush --no-auto-import sync --import-only`;
-(9) immediately repeats E1's normal clean-tracked-JSONL proof in the same
+(9) requires that import command to return status 0 with empty stderr before
+continuing; (10) immediately repeats E1's normal clean-tracked-JSONL proof in the same
 selector-clean context, requires status 0, empty stderr, and the same retained
-path before any status or lane read; (10) captures the output of
+path before any status or lane read; (11) captures the output of
 `"$BEADS_JSONL_RESOLVER" --run-br --no-auto-flush --no-auto-import sync --status --json`;
-(11) requires that command also return status 0 with empty stderr before parsing;
-(12) uses the already validated existing
+(12) requires that command also return status 0 with empty stderr before parsing;
+(13) uses the already validated existing
 `"$BEADS_GIT_RUNNER" run-audit-tool python3 -I` and only stdlib
-`hashlib` to calculate the plain SHA-256 of that exact JSONL; and (13) passes the
+`hashlib` to calculate the plain SHA-256 of that exact JSONL; and (14) passes the
 captured status transcript and hash to E1's
 `"$BEADS_JSONL_RESOLVER" --run-jq -se --arg hash "$hash" --argjson require_synced true`
 predicate. Both jq calls use `-s` to slurp the transcript, require exactly one
@@ -422,7 +423,10 @@ satisfy the strict synced state, including current JSONL hash equality. The
 helper performs the same slurped predicate privately with
 `require_synced == true` before its mutation; this
 coordinator procedure is neither a public E3 check nor a public
-status/fingerprint interface.
+status/fingerprint interface. The plan and three scheduler-facing bead bodies
+mirror this contract for self-containment, but BUILD gives the executable caller
+workflow one canonical owner in `skills/beads-close-transaction/SKILL.md` and
+byte-pins those mirrors; the four consumers do not own copies.
 
 ## Workstream A — merge and admission integrity
 
@@ -1335,9 +1339,11 @@ BEADS_DIR="$BEADS_STORE_DIR" BEADS_JSONL="$BEADS_JSONL" \
   --reason-file PATH [--notes-file PATH]
 ```
 
-`skills/beads-close-transaction/SKILL.md` owns one canonical locator block. Each
-of the four migrated completion consumers points to and invokes that owner
-rather than embedding an independently maintained copy. The canonical block
+`skills/beads-close-transaction/SKILL.md` owns one canonical locator block and
+one canonical caller-preflight block implementing the procedure above. These
+are documented workflow blocks, not additional helper commands or public APIs.
+Each of the four migrated completion consumers points to and invokes those
+owners rather than embedding an independently maintained copy. The locator block
 first verifies that the caller's already validated resolver path matches
 `*/beads-jsonl-path/scripts/*`, then derives the target exactly as:
 
@@ -1354,9 +1360,10 @@ sibling: it is executable, regular, non-symlink, has `nlink == 1`, and has
 the canonical `#!/bin/sh` shebang; its canonical location is outside the driven
 worktree; and its installed root is cross-root consistent with the validated E1
 resolver. A failed strip match or any target validation failure stops with no
-PATH or repository-relative fallback. `install.test` extracts and exercises that
-single owner at all four boundaries and rejects any consumer that copies or
-reimplements its trust logic; locator fixes therefore have one fact owner.
+PATH or repository-relative fallback. `install.test` extracts and exercises
+both single owners at all four boundaries and rejects any consumer that copies
+or reimplements either trust sequence; locator and preflight fixes therefore
+each have one fact owner.
 There is no public `check`, status schema or fingerprint, E1 workspace-paths or
 Git-clean verb, helper-owned import, global lock, sidecar/recovery validation,
 or automatic rollback, compensation, evidence copy, or recovery. The installed
@@ -1423,7 +1430,8 @@ public E3 mode. The helper shows exactly one nonclosed target row and requires
 that row's `.id` to equal the supplied `--id` byte-for-byte; `br` accepts unique
 prefixes, but this helper does not. It then optionally updates notes and closes
 that exact target. It immediately reruns E1's default resolver as the second E1
-proof immediately before its one explicit runner-mediated flush. After the
+proof, requires status 0, empty stderr, and the expected JSONL path, and only
+then performs its one explicit runner-mediated flush. After the
 flush it reruns E1's existing resolver in `--allow-dirty` mode, requires the
 same expected returned JSONL path with status 0 and empty stderr, and uses that newly validated regular tracked path
 for its post-show and final comparison. The final ID set is exact; every
@@ -1446,9 +1454,9 @@ state.
 
 Migrate only four completion/delegation boundaries to this command: Drive LAND,
 `rb-lite-backlog-drain` step 11, harden-until-clean's closure delegation, and
-the Drive Guard 1 pointer. Each boundary invokes the canonical locator owner and
-owns the caller import/status procedure; do not migrate scheduler reads, copy
-the locator validation, or add `check`.
+the Drive Guard 1 pointer. Each boundary invokes the canonical locator and
+caller-preflight owners; do not migrate scheduler reads, copy either block, or
+add `check`.
 Wire selective install and `check.sh` for the companion. E3 and all four routed
 completion consumers require exact installed `br 0.2.19` and use only the
 advertised `--version`, `where`, `close`, `update`, `show`, and `sync` surface through
@@ -1477,7 +1485,8 @@ per-command launch counters);
 tests also cover pre- and post-mutation failures, slurped
 single-document status parsing, valid JSON followed by nonzero status or
 nonempty stderr for each `where`/status/show capture class, all four consumer
-boundaries, and selective
+boundaries pointing to the one preflight owner, import nonzero/nonempty-stderr
+refusal before the repeated proof, and selective
 install. In BUILD, red-mutate each
 claimed property before its passing run. Keep helper production near 350 lines,
 excluding the one canonical locator block at roughly 40 lines, and fixtures near
