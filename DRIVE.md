@@ -3,6 +3,7 @@
 **Scope:** exactly the 29 GitHub issues in the #30–#66 set enumerated by
 `docs/specs/backlog-execution-plan.md`; the Beads graph is the only work. Current focus is
 E3 (`skills-dhm`).
+**Scope-Label:** `drive-open-issues`
 **Phase:** SHAPE · **Bead:** `skills-dhm`
 · **Branch:** `feat/skills-dhm-native-br-close`
 **Pending:** disposition and rerun of exact Codex and Opus review on the native
@@ -26,7 +27,8 @@ separate exact-`v0.3.2` Linux probe is one-time evidence, not this gate.
   `env -i PATH=/run/current-system/sw/bin:/bin:/usr/bin:/nix/var/nix/profiles/default/bin
   LC_ALL=C TZ=UTC /run/current-system/sw/bin/bash --noprofile --norc
   docs/specs/e3-native-br-v0.3.2-probe.sh /tmp/br-v0.3.2-bin/br
-  /tmp/br-v0.3.2-bin/br-0.3.2-linux_x86_64.tar.gz`; exit 0, 1,132 stdout bytes, zero
+  /tmp/br-v0.3.2-bin/br-0.3.2-linux_x86_64.tar.gz
+  /tmp/br-v0.3.2-bin/master-00b6bf0-issues.jsonl`; exit 0, 1,549 stdout bytes, zero
   stderr bytes under Bash 5.3.15, Git 2.55.0, Python 3.14.6, Linux 7.1.6 x86_64.
   Internal lock/transaction boundaries were separately reviewed in pinned upstream source.
 - Re-fetched both upstreams immediately before finalization: skills `origin/master` remains
@@ -72,8 +74,8 @@ separate exact-`v0.3.2` Linux probe is one-time evidence, not this gate.
 - Called Fable at high effort to review the complete `docs/specs` inventory. It
   read all 33 rows and found two blocking plan gaps: B2d lacked its B2c
   serialization/artifact edge, and E3 relied on an unattested `br sync --status
-  --json` schema. The plan now adds that edge, pins the measured `br 0.2.19`
-  schema/hash, and incorporates the valid lower-severity corrections.
+  --json` schema. That historical plan revision added the edge and then-current
+  `br 0.2.19` measurement; the present E3 SHAPE replacement supersedes its closure design.
 - Cleared the repeated SHAPE hard stop on `9965c24`: pinned
   `gpt-5.6-sol`/xhigh Codex reported no P0/P1 findings (one non-blocking P2 about
   the pre-supervisor ignored-signal startup window), Fable/high reported
