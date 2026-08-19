@@ -9,7 +9,7 @@ E3 (`skills-dhm`).
 **Pending:** disposition and rerun of exact Codex and Opus review on the native
 `br v0.3.2` replacement spec
 **Gate:** `./check.sh` · repository-gate environment: GNU Bash 5.3.15 (non-POSIX),
-Git 2.55.0, installed `br` 0.2.19; last green 2026-08-18 on the current remediation tree
+Git 2.55.0, installed `br` 0.2.19; last green 2026-08-19 on the current remediation tree
 (139 resolver, 53 installer, 124 bot-gate, and 70 drive-status fixtures; exit 0). The
 separate exact-`v0.3.2` Linux probe is one-time evidence, not this gate.
 
@@ -28,9 +28,17 @@ separate exact-`v0.3.2` Linux probe is one-time evidence, not this gate.
   LC_ALL=C TZ=UTC /run/current-system/sw/bin/bash --noprofile --norc
   docs/specs/e3-native-br-v0.3.2-probe.sh /tmp/br-v0.3.2-bin/br
   /tmp/br-v0.3.2-bin/br-0.3.2-linux_x86_64.tar.gz
-  /tmp/br-v0.3.2-bin/master-00b6bf0-issues.jsonl`; exit 0, 1,549 stdout bytes, zero
+  /home/master/p/skills-e3-native-br/.beads/issues.jsonl`; exit 0, 1,574 stdout bytes, zero
   stderr bytes under Bash 5.3.15, Git 2.55.0, Python 3.14.6, Linux 7.1.6 x86_64.
   Internal lock/transaction boundaries were separately reviewed in pinned upstream source.
+- Generated this reviewed graph amendment in disposable standalone clone
+  `/tmp/e3-shape-graph.fgOHwe/repo` from exact `00b6bf0` using the exact v0.3.2 binary:
+  import-only, five no-auto description updates (plus the E3 title), and strict flush all
+  exited 0 with empty stderr. Base SHA-256 was
+  `d4b37bc7de43067c2a700c27286cd6ea380d35c6be27357637c489c4d1b2471d`; generated candidate
+  SHA-256 is `7269d4e17a3be4b19f957b4084001e0f529db7453cf667fef84b6e89a85a98eb`.
+  Machine comparison proved no added/removed IDs and exactly `skills-dhm`
+  title/description/updated_at plus descriptions/updated_at for dta/qmi/rrk/xfd.
 - Re-fetched both upstreams immediately before finalization: skills `origin/master` remains
   `00b6bf0dbf5d1575396510923399e87f77539c0c`; beads-rust `origin/main` remains
   `eea5d591e88e7f26add480ef94c9c849cf1763f7`, and `v0.3.2` remains the latest release at

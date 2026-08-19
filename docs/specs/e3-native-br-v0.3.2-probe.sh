@@ -4,7 +4,7 @@ set -euo pipefail
 # the plan. It is not a hostile-shell wrapper.
 BR=${1:?usage: probe /absolute/path/to/br-v0.3.2}
 ASSET=${2:?usage: probe br tarball}
-MASTER_JSONL=${3:?usage: probe br tarball master-00b6bf0-issues.jsonl}
+CANDIDATE_JSONL=${3:?usage: probe br tarball candidate-issues.jsonl}
 SAFE_PATH=$(command -p getconf PATH)
 [[ $PATH == "$SAFE_PATH" ]]
 ROOT=$(mktemp -d /tmp/e3-native-br.XXXXXX)
@@ -36,16 +36,16 @@ printf 'PROBE_ENV=Bash=%s Git=%s Python=%s Kernel=%s\n' \
 # Authoritative release asset and checksum listing:
 # https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.3.2/br-0.3.2-linux_x86_64.tar.gz
 # https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.3.2/SHA256SUMS
-python3 -I - "$ASSET" "$BR" "$MASTER_JSONL" <<'PYHASH'
+python3 -I - "$ASSET" "$BR" "$CANDIDATE_JSONL" <<'PYHASH'
 import hashlib, sys
 expected = {
     "ARCHIVE": "e67c560e77e912490e44a65e3e9c13205210d171e729c5d801072ee508207288",
     "BINARY": "590aebae292bca9d36bf90d3219dcb27a3536f402864841b2a11d5c07c4c6c63",
-    "MASTER_JSONL": "d4b37bc7de43067c2a700c27286cd6ea380d35c6be27357637c489c4d1b2471d",
+    "CANDIDATE_JSONL": "7269d4e17a3be4b19f957b4084001e0f529db7453cf667fef84b6e89a85a98eb",
 }
 if len(sys.argv) != 4:
-    raise SystemExit("expected archive, binary, and master JSONL")
-for label, path in zip(("ARCHIVE", "BINARY", "MASTER_JSONL"), sys.argv[1:]):
+    raise SystemExit("expected archive, binary, and candidate JSONL")
+for label, path in zip(("ARCHIVE", "BINARY", "CANDIDATE_JSONL"), sys.argv[1:]):
     digestor = hashlib.sha256()
     with open(path, "rb") as stream:
         while True:
@@ -75,10 +75,20 @@ PYVERSION
 # Reproduce the installed-0.2.19-export -> v0.3.2 byte-identity measurement.
 compat=$ROOT/compat; mkdir -p "$compat/.beads"; cd "$compat"
 git init -q; git config user.email probe@example.invalid; git config user.name Probe
-cp "$MASTER_JSONL" .beads/issues.jsonl
+cp "$CANDIDATE_JSONL" .beads/issues.jsonl
 cp .beads/issues.jsonl compat-before.jsonl
 printf '%s\n' '{"database":"beads.db","jsonl_export":"issues.jsonl"}' >.beads/metadata.json
 printf '%s\n' '# issue_prefix: skills' >.beads/config.yaml
+set +e; "$BR" --no-auto-import --no-auto-flush where --json >compat-where.out 2>compat-where.err; compat_wrc=$?; set -e
+python3 -I - "$compat/compat-where.out" "$compat/.beads/issues.jsonl" <<'PYWHERE'
+import json, os, sys
+value = json.load(open(sys.argv[1]))
+if value.get("jsonl_path") != os.path.realpath(sys.argv[2]):
+    raise SystemExit("where did not select the candidate JSONL")
+PYWHERE
+printf 'WHERE_NO_DB_RC=%s STDERR_BYTES=%s DB=%s\n' "$compat_wrc" \
+  "$(wc -c <compat-where.err)" "$([[ -e .beads/beads.db ]] && echo present || echo absent)"
+[[ $compat_wrc -eq 0 && ! -s compat-where.err && ! -e .beads/beads.db ]]
 set +e; "$BR" --no-auto-import --no-auto-flush sync --import-only >compat-import.out 2>compat-import.err; compat_irc=$?; set -e
 set +e; "$BR" --no-auto-import --no-auto-flush sync --flush-only >compat-flush.out 2>compat-flush.err; compat_frc=$?; set -e
 set +e; cmp -s compat-before.jsonl .beads/issues.jsonl; compat_cmp=$?; set -e
@@ -214,7 +224,7 @@ for existing in before_comments:
     except ValueError:
         raise SystemExit('existing comment was not preserved')
 print(f'SUCCESS_CLOSE_RC={crc} FLUSH_RC={frc} CLOSE_STDERR_BYTES={len(open("close.err","rb").read())} FLUSH_STDERR_BYTES={len(open("flush.err","rb").read())}')
-projection={'status':x['status'],'close_reason':x['close_reason'],'comment':remaining[0].get('text') if len(remaining)==1 else None,'changed':changed}
+projection={'status':x['status'],'close_reason':x['close_reason'],'comment':remaining[0].get('text') if len(remaining)==1 else None}
 print('SUCCESS_PROJECTION='+json.dumps(projection,sort_keys=True,separators=(',',':')))
 print('SUCCESS_CHANGED_FIELDS='+json.dumps(changed[id],separators=(',',':')))
 if crc != '0' or frc != '0' or open('close.err','rb').read() or open('flush.err','rb').read(): raise SystemExit('close or flush failed')
@@ -240,3 +250,9 @@ set +e; "$BR" --no-auto-import --no-auto-flush sync --flush-only >/dev/null 2>re
 jst=$("$BR" --no-db --no-auto-import --no-auto-flush show "$D" --json | python3 -I -c 'import json,sys; print(json.load(sys.stdin)[0]["status"])')
 printf 'FLUSH_RETRY_RC=%s JSONL_STATUS=%s STDERR_BYTES=%s\n' "$retry" "$jst" "$(wc -c <retry.err)"
 [[ $retry -eq 0 && $jst == closed && ! -s retry.err ]]
+cp .beads/issues.jsonl idempotent-before.jsonl
+set +e; "$BR" --no-auto-import --no-auto-flush sync --flush-only >idempotent.out 2>idempotent.err; idempotent_rc=$?; set -e
+set +e; cmp -s idempotent-before.jsonl .beads/issues.jsonl; idempotent_cmp=$?; set -e
+printf 'IDEMPOTENT_FLUSH_RC=%s STDOUT_BYTES=%s STDERR_BYTES=%s CMP_RC=%s\n' \
+  "$idempotent_rc" "$(wc -c <idempotent.out)" "$(wc -c <idempotent.err)" "$idempotent_cmp"
+[[ $idempotent_rc -eq 0 && $idempotent_cmp -eq 0 && ! -s idempotent.err ]]
