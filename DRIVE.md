@@ -41,9 +41,10 @@ separate exact-`v0.3.2` Linux probe is one-time evidence, not this gate.
   title/description/updated_at plus descriptions/updated_at for dta/qmi/rrk/xfd.
 - Re-fetched both upstreams immediately before finalization: skills `origin/master` remains
   `00b6bf0dbf5d1575396510923399e87f77539c0c`; beads-rust `origin/main` remains
-  `eea5d591e88e7f26add480ef94c9c849cf1763f7`, and `v0.3.2` remains the latest release at
-  `4104c31e79bf806f53e2eba0a4cd2ba6c594f8b9`. Post-tag main changes workspace discovery
-  and inherited-context display, not the pinned native close/strict-flush primitive.
+  `bba322dafba04f713c72627ac8515cb4c285226c`, and `v0.3.2` remains the latest release at
+  `4104c31e79bf806f53e2eba0a4cd2ba6c594f8b9`. Post-tag main changes workspace discovery,
+  inherited-context/search display, doctor checks, dependency pins, and CI metadata—not the
+  pinned native close/strict-flush primitive.
 - Started this replacement branch directly from that latest skills master and moved
   the existing `skills-dhm` executor reservation to it.
 - The first exact Codex/Opus pass confirmed the native primitive but found the
