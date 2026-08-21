@@ -1,19 +1,59 @@
 # DRIVE — execute the open skills safety and correctness backlog
 
-**Scope:** the 29 GitHub issues enumerated in
-`docs/specs/backlog-execution-plan.md` (#30–#66, exact set in that plan); the
-Beads graph created from the reviewed plan will be the ONLY work this drive may
-take.
-**Phase:** HARDEN · **Bead:** `skills-iog` (E1 closure metadata)
-· **Branch:** `chore/skills-iog-closure`
-**Pending:** current-tip bot gate and merge of the exclusive E1 closure PR
-**Gate:** `./check.sh`
-· last green 2026-08-14 on the E1 closure tree (exit 0; 139 resolver,
-53 installer, 124 bot-gate, and 70 drive-status fixtures passed under GNU Bash
-5.3.15, non-POSIX mode, Git 2.55.0, `br` 0.2.19, and uid 1000).
+**Scope:** exactly the 29 GitHub issues in the #30–#66 set enumerated by
+`docs/specs/backlog-execution-plan.md`; the Beads graph is the only work. Current focus is
+E3 (`skills-dhm`).
+**Scope-Label:** `drive-open-issues`
+**Phase:** SHAPE · **Bead:** `skills-dhm`
+· **Branch:** `feat/skills-dhm-native-br-close`
+**Pending:** disposition and rerun of exact Codex and Opus review on the native
+`br v0.3.2` replacement spec
+**Gate:** `./check.sh` · repository-gate environment: GNU Bash 5.3.15 (non-POSIX),
+Git 2.55.0, installed `br` 0.2.19; last green 2026-08-19 on the current remediation tree
+(139 resolver, 53 installer, 124 bot-gate, and 70 drive-status fixtures; exit 0). The
+separate exact-`v0.3.2` Linux probe is one-time evidence, not this gate.
 
 ## Done
 
+- Pivoted away from the 40-commit repository-side closure wrapper without
+  deleting its preserved branch or PR history. Freshly fetched
+  `douglaz/skills@master` is exactly `00b6bf0`.
+- Checked current upstream `Dicklesworthstone/beads_rust`: release `v0.3.2` is the
+  exact required release. The separate disposable Linux probe observes blocked-close
+  non-mutation, successful reason+transition-comment, and strict explicit flush/retry; the
+  internal atomic transaction/lock boundary and default best-effort auto-flush split are
+  source-verified, not inferred from the probe.
+  Exact invocation:
+  `env -i PATH=/run/current-system/sw/bin:/bin:/usr/bin:/nix/var/nix/profiles/default/bin
+  LC_ALL=C TZ=UTC /run/current-system/sw/bin/bash --noprofile --norc
+  docs/specs/e3-native-br-v0.3.2-probe.sh /tmp/br-v0.3.2-bin/br
+  /tmp/br-v0.3.2-bin/br-0.3.2-linux_x86_64.tar.gz
+  /home/master/p/skills-e3-native-br/.beads/issues.jsonl`; exit 0, 1,574 stdout bytes, zero
+  stderr bytes under Bash 5.3.15, Git 2.55.0, Python 3.14.6, Linux 7.1.6 x86_64.
+  Internal lock/transaction boundaries were separately reviewed in pinned upstream source.
+- Generated this reviewed graph amendment in disposable standalone clone
+  `/tmp/e3-shape-graph.fgOHwe/repo` from exact `00b6bf0` using the exact v0.3.2 binary:
+  import-only, five no-auto description updates (plus the E3 title), and strict flush all
+  exited 0 with empty stderr. Base SHA-256 was
+  `d4b37bc7de43067c2a700c27286cd6ea380d35c6be27357637c489c4d1b2471d`; generated candidate
+  SHA-256 is `7269d4e17a3be4b19f957b4084001e0f529db7453cf667fef84b6e89a85a98eb`.
+  Machine comparison proved no added/removed IDs and exactly `skills-dhm`
+  title/description/updated_at plus descriptions/updated_at for dta/qmi/rrk/xfd.
+- Re-fetched both upstreams immediately before finalization: skills `origin/master` remains
+  `00b6bf0dbf5d1575396510923399e87f77539c0c`; beads-rust `origin/main` remains
+  `bba322dafba04f713c72627ac8515cb4c285226c`, and `v0.3.2` remains the latest release at
+  `4104c31e79bf806f53e2eba0a4cd2ba6c594f8b9`. Post-tag main changes workspace discovery,
+  inherited-context/search display, doctor checks, dependency pins, and CI metadata—not the
+  pinned native close/strict-flush primitive.
+- Started this replacement branch directly from that latest skills master and moved
+  the existing `skills-dhm` executor reservation to it.
+- The first exact Codex/Opus pass confirmed the native primitive but found the
+  linked-worktree redirect, stale Drive state, unowned version pin, runner bypasses,
+  and three smaller KISS contradictions. The remediation now requires a standalone
+  clone and E1 runners, pins the embedded release commit, records an executable
+  one-time probe, removes live reconciliation from the closure path, and maps
+  authority-release evidence without inventing a work PR. A focused read-only
+  re-review returned PASS with no P0–P2 findings.
 - Queried all 29 open GitHub issues and confirmed that this repository has no
   initialized Beads store.
 - Reconciled umbrellas, overlaps, priorities, dependencies, and parallel work
@@ -43,8 +83,8 @@ take.
 - Called Fable at high effort to review the complete `docs/specs` inventory. It
   read all 33 rows and found two blocking plan gaps: B2d lacked its B2c
   serialization/artifact edge, and E3 relied on an unattested `br sync --status
-  --json` schema. The plan now adds that edge, pins the measured `br 0.2.19`
-  schema/hash, and incorporates the valid lower-severity corrections.
+  --json` schema. That historical plan revision added the edge and then-current
+  `br 0.2.19` measurement; the present E3 SHAPE replacement supersedes its closure design.
 - Cleared the repeated SHAPE hard stop on `9965c24`: pinned
   `gpt-5.6-sol`/xhigh Codex reported no P0/P1 findings (one non-blocking P2 about
   the pre-supervisor ignored-signal startup window), Fable/high reported
@@ -219,21 +259,26 @@ take.
   fixtures on the exclusive two-file closure tree under that same recorded
   Bash/Git/`br`/uid environment.
 
+- The complete replacement branch changes exactly five Beads rows. `skills-dhm` changes
+  `title`, `description`, and `updated_at`; `skills-qmi`/`skills-rrk` synchronize F2/F2r's
+  native post-merge closure handoff through `description`/`updated_at`; `skills-dta`
+  (A4b) and `skills-xfd` (B0) link no-change/decision closure to the canonical Step 11
+  owner through `description`/`updated_at`. No other row or field differs from master.
+
 ## Now
 
-Run the repository gate and independent review on this exclusive E1 metadata
-branch, then merge it before any further scoped Beads query or mutation. Refresh
-and import clean `master` after merge, verify and release E1's
-`skills-iog`/`feat/skills-iog-beads-jsonl-path` reservation, atomically create a
-new exact `skills-dhm`/E3 `executor-skills` reservation, and only then dispatch
-E3 through rb-lite.
+Close the current Codex/Opus SHAPE findings on this replacement branch, rerun the
+exact reviewers and `./check.sh`, then open the replacement spec PR from latest
+`master`. Once that PR is visible, mark the preserved 40-commit wrapper PR #71 as
+superseded rather than merging it. Keep the existing `skills-dhm` reservation on
+this branch throughout.
 
 ## Next
 
-Bootstrap E3 exactly as plan global rule 8 requires, including its exclusive
-reviewed closure-metadata PR. Only then start A1, GitHub issue #42, through
-rb-lite and continue the highest-priority unblocked lane while respecting the
-two human-authority checkpoints.
+Build the reviewed medium E3 delta: pin native `br v0.3.2` identity, migrate the four
+live consumers and ADR 0003, and add the two bounded deterministic tests while retaining
+the one-time real-release probe evidence. Land its work PR, then close E3 through the
+standalone-clone native metadata procedure before resuming the highest-priority ready lane.
 
 ## Open questions for the human
 
