@@ -2,9 +2,10 @@
 
 ## Status
 
-**Current:** E3 returned to SHAPE on 2026-08-18 for the native `br v0.3.2`
-replacement; `DRIVE.md` is the live phase/review record. The clearance narrative below is
-historical evidence for the earlier plan revision, not clearance of the current E3 tip.
+**Current:** the native `br v0.3.2` SHAPE/graph amendment merged as PR #72 at `93c5155`;
+E3 entered BUILD on `feat/skills-dhm-native-close-implementation`. `DRIVE.md` is the live
+phase/review record. The clearance narrative below is historical evidence for earlier plan
+revisions, not clearance of the current E3 implementation tip.
 
 SHAPE had cleared on 2026-08-12 after the first post-amendment GRAPH polish.
 The first pinned Codex xhigh

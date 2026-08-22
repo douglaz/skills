@@ -4,10 +4,10 @@
 `docs/specs/backlog-execution-plan.md`; the Beads graph is the only work. Current focus is
 E3 (`skills-dhm`).
 **Scope-Label:** `drive-open-issues`
-**Phase:** SHAPE · **Bead:** `skills-dhm`
-· **Branch:** `feat/skills-dhm-native-br-close`
-**Pending:** disposition and rerun of exact Codex and Opus review on the native
-`br v0.3.2` replacement spec
+**Phase:** BUILD · **Bead:** `skills-dhm`
+· **Branch:** `feat/skills-dhm-native-close-implementation`
+**Pending:** E3 implementation through one bounded rb-lite run, then the repository gate and
+HARDEN on the resulting tip
 **Gate:** `./check.sh` · repository-gate environment: GNU Bash 5.3.15 (non-POSIX),
 Git 2.55.0, installed `br` 0.2.19; last green 2026-08-19 on the current remediation tree
 (139 resolver, 53 installer, 124 bot-gate, and 70 drive-status fixtures; exit 0). The
@@ -15,6 +15,10 @@ separate exact-`v0.3.2` Linux probe is one-time evidence, not this gate.
 
 ## Done
 
+- Merged the reviewed native-`br` SHAPE/graph amendment as PR #72 at `93c5155`;
+  closed superseded wrapper PR #71. Current-tip Codex, Opus, CodeRabbit, bot-gate, the exact
+  v0.3.2 probe, and post-merge `./check.sh` all passed. Repointed the durable `skills-dhm`
+  reservation to `feat/skills-dhm-native-close-implementation` from clean merged master.
 - Pivoted away from the 40-commit repository-side closure wrapper without
   deleting its preserved branch or PR history. Freshly fetched
   `douglaz/skills@master` is exactly `00b6bf0`.
@@ -267,18 +271,16 @@ separate exact-`v0.3.2` Linux probe is one-time evidence, not this gate.
 
 ## Now
 
-Close the current Codex/Opus SHAPE findings on this replacement branch, rerun the
-exact reviewers and `./check.sh`, then open the replacement spec PR from latest
-`master`. Once that PR is visible, mark the preserved 40-commit wrapper PR #71 as
-superseded rather than merging it. Keep the existing `skills-dhm` reservation on
-this branch throughout.
+Build the reviewed medium E3 delta through rb-lite: pin native `br v0.3.2` identity, migrate
+the four live consumers and ADR 0003, add the bounded E1 pinned prefix and shared selector,
+and add the two deterministic tests while retaining the one-time exact-release evidence.
+Keep the `skills-dhm` reservation on this branch through the work PR and closure metadata PR.
 
 ## Next
 
-Build the reviewed medium E3 delta: pin native `br v0.3.2` identity, migrate the four
-live consumers and ADR 0003, and add the two bounded deterministic tests while retaining
-the one-time real-release probe evidence. Land its work PR, then close E3 through the
-standalone-clone native metadata procedure before resuming the highest-priority ready lane.
+Land the E3 work PR, then close E3 through the standalone-clone native metadata procedure.
+Merge that closure PR and refresh clean master before any normal scheduler read; surface the
+newly ready B0 authority decision before automated routing resumes.
 
 ## Open questions for the human
 
