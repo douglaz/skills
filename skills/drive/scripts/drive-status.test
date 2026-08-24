@@ -627,6 +627,32 @@ record '**Phase:** SHAPE'
 # SHAPE has nothing to spend yet; only BUILD is gated on the budget existing.
 check_field "an unarmed non-BUILD phase is still ready" build_ready true
 
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 0 lines
+**Do-NOT-build:** rollback'
+# 0 parses but bounds nothing: the derived budget is 0, which rb-lite rejects as a usage
+# error, so an "armed" lane would abort BUILD instead of running it bounded.
+check_field "a zero baseline does not arm the guard" guard2_armed false
+check_field "and derives no budget" budget_lines null
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 15 lines
+**Do-NOT-build:** NONE'
+# Case-insensitive, and via tr rather than ${VAR,,} so macOS /bin/bash 3.2 does not abort.
+check_field "do-NOT-build: NONE is rejected case-insensitively" guard2_armed false
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** ~15 lines — br close plus strict flush
+**Do-NOT-build:** **rollback**, recovery state machine'
+# The docs' own examples write "~15 lines" and authors bold list items. A parser that
+# rejects the forms its documentation teaches leaves the guard unarmed with no hint why.
+check_field "a tilde baseline still arms the guard" guard2_armed true
+check_field "and still parses the number" baseline_lines 15
+check_field "bold inside the value survives" do_not_build "**rollback**, recovery state machine"
+
 echo
 echo "passed $PASS, failed $FAIL"
 [[ "$FAIL" -eq 0 ]]

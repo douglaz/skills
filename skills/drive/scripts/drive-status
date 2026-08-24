@@ -629,13 +629,21 @@ if [[ -f DRIVE.md ]]; then
   # at all: a brake the driver can silently skip writing is not a brake.
   # The baseline must carry a NUMBER of lines — "small" is not a baseline, and a budget is
   # derived from it as 3x. A bare label would parse and then bound nothing.
-  DRIVE_BASELINE=$(grep -m1 -oiE '\*\*Baseline:\*\*[[:space:]]*[0-9]+[[:space:]]*lines?\b' DRIVE.md 2>/dev/null \
+  # `~` is accepted because the docs' own examples write "~15 lines"; a parser that
+  # rejects the form its documentation teaches leaves the guard unarmed with no hint why.
+  DRIVE_BASELINE=$(grep -m1 -oiE '\*\*Baseline:\*\*[[:space:]]*~?[0-9]+[[:space:]]*lines?\b' DRIVE.md 2>/dev/null \
     | grep -oE '[0-9]+' || echo "")
+  # Zero parses but bounds nothing: the derived budget would be 0, which rb-lite rejects
+  # as a usage error, so BUILD would abort rather than run bounded. Treat it as unarmed.
+  [[ "$DRIVE_BASELINE" == "0" ]] && DRIVE_BASELINE=""
   # Any non-empty list, but `none` is rejected: "we will not decline to build anything" is
   # the state this field exists to make someone type out deliberately.
   DRIVE_DO_NOT_BUILD=$(grep -m1 -oiE '\*\*Do-NOT-build:\*\*[[:space:]]*[^[:space:]].*' DRIVE.md 2>/dev/null \
-    | sed -E 's/.*\*\*[[:space:]]*//' | sed -E 's/[[:space:]]+$//' || echo "")
-  if [[ "${DRIVE_DO_NOT_BUILD,,}" == "none" || "${DRIVE_DO_NOT_BUILD,,}" == "-" ]]; then
+    | sed -E 's/^\*\*[Dd]o-[Nn][Oo][Tt]-[Bb]uild:\*\*[[:space:]]*//' | sed -E 's/[[:space:]]+$//' || echo "")
+  # `tr`, not ${VAR,,}: case conversion is a bash 4.0 feature and macOS ships /bin/bash
+  # 3.2, where it is a syntax error that aborts the whole detector.
+  _DNB_LOWER=$(printf '%s' "$DRIVE_DO_NOT_BUILD" | tr '[:upper:]' '[:lower:]')
+  if [[ "$_DNB_LOWER" == "none" || "$_DNB_LOWER" == "-" ]]; then
     DRIVE_DO_NOT_BUILD=""
   fi
 fi
@@ -1042,8 +1050,10 @@ printf 'cleared    %s\n' "${DRIVE_CLEARED:-<none — no panel has cleared this c
 if $GUARD2_ARMED; then
   printf 'budget     baseline %s lines, budget %s lines (3x); do NOT build: %s\n' \
     "$DRIVE_BASELINE" "$((DRIVE_BASELINE * 3))" "$DRIVE_DO_NOT_BUILD"
-else
-  printf 'budget     <unarmed — Guard 2 needs **Baseline:** <n> lines and **Do-NOT-build:** <list>>\n'
+elif [[ "$PHASE" == "BUILD" ]]; then
+  # Only BUILD spends the budget. Nagging in SHAPE, or in a repo that does not drive at
+  # all, is noise where the absence is correct — JSON still reports build_ready for tools.
+  printf 'budget     <unarmed — BUILD needs **Baseline:** <n> lines and **Do-NOT-build:** <list> in DRIVE.md>\n'
 fi
 printf '\nphase: %s   (source: %s)\n' "$PHASE" "$PHASE_SOURCE"
 # LAND is derived, so a RECORDED LAND is a stale or hand-edited file. Say so rather than

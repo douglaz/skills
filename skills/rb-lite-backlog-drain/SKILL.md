@@ -63,14 +63,18 @@ implement → review loop for each bead.
      --task-file .rb-lite/tasks/bead-<id>.md \
      --base origin/main \
      --branch feat/<bead-id>-<short-slug> \
-     --max-production-lines <3x the bead's baseline> \
+     --max-production-lines <budget_lines from drive-status --json> \
      --run-dir /tmp/rb-lite-<bead-id>-run
    ```
 
-   Derive the budget from the bead's baseline — the smallest implementation that
-   satisfies its outcome — never from a number picked in advance. Do not pass
-   `--reviewers-file`: rb-lite's built-in panel carries the skeptic, and a supplied
-   file replaces the panel wholesale.
+   Take the budget from `drive-status --json` (`budget_lines`, already 3x the
+   `Baseline:` recorded in `DRIVE.md`); do not invent a number per bead. If the lane
+   reports `build_ready: false`, Guard 2 is unarmed — go write the baseline rather
+   than running unbounded. Outside a Drive lane, derive it the same way: state the
+   smallest implementation that satisfies the bead's outcome, then take 3x.
+   Do not pass `--reviewers-file`: rb-lite's built-in panel carries the skeptic, and
+   a supplied file replaces the panel wholesale. Check the repo root for a leftover
+   `.rb-lite-reviewers` first — rb-lite loads it automatically.
 
    If using the nix fallback, prefix the same `run ...` arguments with
    `nix run --refresh github:douglaz/rb-lite --`.

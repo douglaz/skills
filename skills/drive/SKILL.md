@@ -530,7 +530,8 @@ Declare before entering BUILD, in the task file:
 - done-definition tied to named tests
 
 Both the baseline and the do-NOT-build list are **machine-checked header fields** in
-`DRIVE.md`, alongside `Scope-Label:` — see "The DRIVE.md contract". `drive-status`
+`DRIVE.md` — the first fields `drive-status` validates rather than merely reads; see
+"The DRIVE.md contract". `drive-status`
 refuses to report a lane BUILD-ready when either is missing or unparseable, because a
 guard the driver can silently skip writing is a guard that does not exist. During the
 2026-08-18 ratchet both fields were absent and no phase objected.
@@ -546,8 +547,10 @@ when BUILD passes `--max-production-lines`: it exits `14` and names the largest
 contributors. Exit 14 is a stop-and-report — re-shape the work or re-derive the
 baseline. Never relaunch with a larger number.
 
-Keep `--min-findings-severity` open at first — P2/P3 are often genuine polish. Raise the
-floor to P1 only once that stream has turned into gold-plating. `--max-rounds` is a
+Keep `--min-findings-severity` at its P2 default — P2/P3 are often genuine polish, and a
+P1 floor also filters out rb-lite's skeptical reviewer, which tags every finding `P2`.
+Raising it to curb gold-plating removes the one reviewer arguing to cut. Stop the loop and
+merge instead. `--max-rounds` is a
 checkpoint to assess and relaunch, not a finish line. (See
 `references/autonomy-contract.md` § 4.)
 
@@ -647,11 +650,11 @@ ordering.
 
 **`Baseline:` and `Do-NOT-build:` arm Guard 2, and `drive-status` checks both.** The
 baseline is the smallest implementation that satisfies the outcome, stated as a line count
-with a one-line justification; the budget is derived from it as 3x and is never written
-down as an independent number. `drive-status --json` reports `baseline_lines`,
+with a one-line justification (a `~` prefix is fine); the budget is derived from it as 3x
+and is never written down as an independent number. `drive-status --json` reports `baseline_lines`,
 `budget_lines`, `do_not_build`, `guard2_armed`, and `build_ready`; a BUILD lane with either
-field missing, with a baseline carrying no number, or with `Do-NOT-build: none` is
-`build_ready: false`. Do not enter BUILD to go and derive them — derive them first, in
+field missing, with a baseline of `0` or carrying no number, or with `Do-NOT-build: none`
+is `build_ready: false`. Do not enter BUILD to go and derive them — derive them first, in
 SHAPE, where the outcome is still being decided. Guard 2 was unarmed for the whole of the
 2026-08-18 ratchet precisely because nothing ever asked.
 

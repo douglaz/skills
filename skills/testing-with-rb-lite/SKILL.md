@@ -20,7 +20,7 @@ description: >-
 ## What this skill is, in one paragraph
 
 `rb-lite` can write a good test, but it cannot certify that the test passes. Its
-reviewer panel (codex + Claude, per `.rb-lite-reviewers`) reads the test's **code** — it does not
+reviewer panel (codex, a Claude defect reviewer, and a Claude skeptic) reads the test's **code** — it does not
 run a live gate, boot a database, stand up a federation, or execute the smoke
 against real infrastructure. So a `clean` rb-lite run means "no reviewer
 objected to the test's source," not "the test runs and passes." This skill
