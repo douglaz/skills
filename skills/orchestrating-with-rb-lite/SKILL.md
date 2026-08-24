@@ -10,7 +10,7 @@ description: >-
   into beads". Use `testing-with-rb-lite` instead when the deliverable is a test or
   live verification gate that must be independently executed. Do not use for
   cross-project orchestration, open-ended planning, or tiny one-shot edits.
-compatibility: Requires `rb-lite` on `PATH` or `nix run --refresh github:douglaz/rb-lite -- ...` (use `--refresh` at least once per session so Nix does not reuse an hour-stale cached revision). rb-lite itself has no default implementer, so pass `--implementer` with one preset or a comma-separated cycle, or use `--implement-cmd`; this skill defaults to `--implementer claude,codex` unless the user pins another choice. `codex` and `claude` must be installed and authenticated; the default Claude reviewer needs `jq`, and normal timeout-enabled runs need a compatible `timeout`, either from the host shell for source installs or from the Nix wrapper for Nix installs. This skill's reviewer panel is codex + claude only, set by writing `.rb-lite-reviewers` before the run; rb-lite's built-in default additionally runs Gemini through `npx`, which this skill does not use. Backlog-drain mode also requires `br` (>= 0.1.45), `gh`, and the repo's normal local verification tools; harden-until-clean mode additionally needs `codex` and `claude` for the outer review panel.
+compatibility: Requires `rb-lite` on `PATH` or `nix run --refresh github:douglaz/rb-lite -- ...` (use `--refresh` at least once per session so Nix does not reuse an hour-stale cached revision). rb-lite itself has no default implementer, so pass `--implementer` with one preset or a comma-separated cycle, or use `--implement-cmd`; this skill defaults to `--implementer claude,codex` unless the user pins another choice. `codex` and `claude` must be installed and authenticated; the default Claude reviewer needs `jq`, and normal timeout-enabled runs need a compatible `timeout`, either from the host shell for source installs or from the Nix wrapper for Nix installs. This skill uses rb-lite's built-in panel (codex + a claude defect reviewer + a claude skeptic) and does NOT write `.rb-lite-reviewers`; requires rb-lite >= 0.3.0 for the skeptic, the per-round disposition counts, and `--max-production-lines`. Backlog-drain mode also requires `br` (>= 0.1.45), `gh`, and the repo's normal local verification tools; harden-until-clean mode additionally needs `codex` and `claude` for the outer review panel.
 ---
 
 Use `rb-lite` as the default lightweight implement → review loop for
@@ -25,8 +25,8 @@ generates it from a review panel and feeds the same drain.
 `rb-lite` is a Bash CLI that loops a chosen implementer preset
 (`--implementer claude,codex`, a comma-separated cycle, or a single
 `codex`/`claude`; there is no default) until the git diff stabilizes, then
-runs the reviewer panel in parallel (codex and claude+`jq`, set via
-`.rb-lite-reviewers`), feeds P0/P1/P2 findings back to the implementer for
+runs the reviewer panel in parallel (codex, a claude defect reviewer, and a
+claude skeptic — all built in), feeds P0/P1/P2 findings back to the implementer for
 another round, and stops when reviewers go clean, the implementer refuses to
 keep changing things, or iteration limits (`--max-rounds` / `--max-iters`) are
 hit. With a comma-separated list, round N uses
@@ -85,29 +85,53 @@ session can drop the flag.
 If neither path works, stop and tell the user to install `rb-lite` (e.g.
 `nix profile install github:douglaz/rb-lite`) or expose it on PATH.
 
-**This skill's panel is two reviewers: `codex` and `claude`.** rb-lite's own built-in
-default is three — it adds a Gemini reviewer invoked through `npx -y @google/gemini-cli`
-— and that command lives inside the rb-lite binary, so the only way to change it is to
-point rb-lite at a two-reviewer file. Write it to a TEMP path and pass
-`--reviewers-file`, rather than `cat >.rb-lite-reviewers` in the repo root: that
-redirection destroys an existing custom panel if the repo has one, and creates an
-untracked file if it does not — which then trips the clean-tree gate LAND derives from, or
-gets committed outside the task's scope.
+**Preflight, once per run:** `rb-lite --version` must be >= 0.3.0 (older builds have no
+skeptic and reject `--max-production-lines` as an unknown flag — with the Nix fallback, pass
+`--refresh`). And check for an existing `.rb-lite-reviewers` in the repo root: rb-lite loads
+it automatically, so a file left over from before the skeptic silently replaces the panel.
+Rename it aside for the run, or add a skeptic to it.
 
-```bash
-RB_REVIEWERS=$(mktemp)
-cat >"$RB_REVIEWERS" <<'RBEOF'
-codex review --base "$BASE" -c 'model="gpt-5.6-sol"'
-set -o pipefail; claude -p "Read AGENTS.md if present, then review the diff vs $BASE. Before asserting the diff violates or overstates an invariant, or any claim about behavior in code the diff does not show, verify it by reading that code and cite file:line, else mark it a QUESTION not a finding. Tag findings P0/P1/P2/P3. Output 'No findings.' if clean. Do not modify, create, or delete any file." --model claude-opus-5 --permission-mode plan --output-format json --allowedTools "Bash,Read,Glob,Grep" --disallowedTools "Edit,Write,NotebookEdit" | jq -er 'if .is_error then error(.result // "claude reviewer returned is_error") else (.result // empty) end'
-RBEOF
-# ...then add --reviewers-file "$RB_REVIEWERS" to the rb-lite run, and rm it afterwards.
-```
+**Use rb-lite's built-in panel. Do not write a reviewers file.** As of rb-lite 0.3.0 the
+default panel is `codex review`, a `claude` defect reviewer, and a `claude` **skeptic** that
+hunts over-specification and tags findings `CUT` / `SIMPLIFY` / `DEFER`. The skeptic is the
+only panel member that can argue for removing something; the other two structurally can only
+argue for adding. A `--reviewers-file` **replaces** the panel wholesale — rb-lite never
+injects the skeptic into a panel you supplied — so overriding it silently returns the loop to
+a configuration that can only ratchet.
 
-The Claude reviewer is READ-ONLY on purpose: `Edit`/`Write` plus `acceptEdits` would let it
-mutate the worktree while the codex reviewer is reading it, so the two would review
-different trees — and any edit it made would bypass the implementer loop entirely. It is
-also told to read `AGENTS.md`, which is how a repo's own invariants reach the panel when
-this runs under `drive`; without it half the panel reviews without them.
+To override deliberately, take both commands from § Customizing the panel (the single
+copy), carry a skeptic among them, and write them to a `mktemp` path passed via
+`--reviewers-file` — never `cat >.rb-lite-reviewers` in the repo root, which destroys an
+existing panel or leaves an untracked file that trips LAND's clean-tree gate.
+
+Every reviewer must be READ-ONLY: `Edit`/`Write` plus `acceptEdits` would let one panel
+member mutate the worktree while another reads it, so the two review different trees, and
+any edit made that way bypasses the implementer loop entirely. Each must also read
+`AGENTS.md`, which is how a repo's own invariants reach the panel when this runs under
+`drive`; without it that reviewer reviews without them.
+
+### Convergence guards (rb-lite >= 0.3.0)
+
+Three things now happen mechanically that this skill previously asked you to notice:
+
+- **Decisions are counted.** The implementer records one line per finding in
+  `challenges-round-$ROUND.md` (`ACCEPTED` / `DECLINED` / `DEFERRED`); rb-lite reports the
+  per-round totals in the log and the summary (`rejections_total`, `rejections_by_round`).
+- **Zero rejections warns by itself.** After three consecutive rounds declining nothing while
+  the panel keeps reporting, the log carries a one-time warning. You no longer have to watch
+  for it — you have to *act* on it. It is a signal, not a stop.
+- **The budget is enforced.** Pass `--max-production-lines N`, 3x the `Baseline:` in
+  `DRIVE.md` (Guard 2). Exit `14` names the largest contributors; test and fixture paths are
+  excluded, since a budget counting tests is met by deleting coverage. It is a **stop, not a
+  retry target** — re-shape the work, never relaunch with a bigger number.
+
+### Do not hand-roll this loop
+
+One review round on a change is fine. The second is rb-lite's job: if you would feed a
+reviewer's findings back to an implementer, run rb-lite rather than spawning your own agents
+and relaying between them. A hand-rolled loop has no round cap, no rejection accounting, no
+skeptic, no budget, and no `consensus_failure` stop — it produced 96 agents and 38
+consecutive `fix:` commits on 2026-08-18, on a design replaced three days later.
 
 **The same prohibition binds you.** An edit made to a tracked file while `codex review`
 is running is silently destroyed, and rb-lite runs `codex review` inside every review
@@ -156,14 +180,6 @@ skeptical third reviewer and a `my-linter --json | wrap-as-p-tags` placeholder �
 illustrative, not prerequisites. Pasting that block wholesale puts a command-not-found
 reviewer in the panel and every round carries its failure.
 
-Dropping Gemini is the point, not a side effect. `npx -y` installs and executes whatever
-the registry serves at that moment, in a checkout with credentials present and (in
-rb-lite's default line) `--approval-mode yolo`. Pinning a version narrows that door;
-removing the reviewer closes it, and removes the `npx` dependency altogether. Two
-reviewers with different failure modes is also what the outer `multi-reviewer-loop` runs,
-and the reason is the same — a third opportunistic voice that fails open when credentials
-are missing was never carrying much of the panel's weight.
-
 `codex` and `claude` must be on PATH and authenticated. The Claude reviewer needs `jq`,
 and normal rb-lite runs need a `timeout` binary supporting `--kill-after` because both
 implementer and reviewer timeouts are enabled by default. If rb-lite is resolved through
@@ -171,8 +187,9 @@ implementer and reviewer timeouts are enabled by default. If rb-lite is resolved
 setup just because the host shell cannot find `jq` or GNU `timeout`; the upstream wrapper
 supplies those to the rb-lite process. For source/path installs, check the host shell.
 
-If you skip the file, you get rb-lite's built-in three-reviewer default, unpinned Gemini
-included. That is a choice, not a default this skill endorses — make it deliberately.
+Skipping the file is now the recommended path: you get codex, the claude defect reviewer,
+and the skeptic, all pinned, with no `npx`. Writing a file is the deliberate choice, and it
+costs the skeptic unless you carry one in yourself.
 
 **Companion unavailable: stop, rerun the same installer command once, reload it, and do
 not improvise this procedure.** This applies to every exact companion handoff below.
@@ -386,21 +403,11 @@ ready bead if the queue is not empty, and the exact reason the loop stopped.
     line; match on the JSON `status` and `exit_code`. The mapping is
     fixed (see the table below).
 
-10.5 **Verify the landed diff yourself (do not skip).** rb-lite's `clean` is
-    the reviewer panel's verdict, not ground truth — and the panel is often
-    degraded in practice. Before trusting a run: (a) `git status` / `git diff`
-    — the accepted diff sits **uncommitted in the working tree**, so confirm
-    what actually changed and that no throwaway/debug files snuck in, then
-    commit it yourself; (b) check `log.txt` for `K of M reviewers succeeded` —
-    a `clean` resting on 1-of-3 (e.g. a dead/unauthenticated reviewer) is one
-    opinion, not a panel consensus; (c) re-run the repo's own gates on the
-    landed diff (tests, goldens/digests, fmt/clippy); (d) invert **each**
-    load-bearing behavior the diff introduces — one at a time — and confirm the
-    assertion that pins *that* behavior goes red, since re-running an
-    already-green suite cannot tell you whether any of them is pinned at all;
-    (e) for high-stakes work, add a separate
-    adversarial result-review (e.g. `codex exec` over the committed diff). See
-    "Verify the landed diff" below.
+10.5 **Verify the landed diff yourself (do not skip).** rb-lite's `clean` is the
+    panel's verdict, not ground truth, and the panel is often degraded. The diff is
+    left **uncommitted**; commit it yourself only after checking it. Work through
+    "Verify the landed diff" below in full — five specific checks, and the mutation
+    one is what a green suite cannot substitute for.
 
     **A mutation that stays green stops this workflow too**, exactly as it stops the
     backlog drain. Standalone use continues to **11. Report concisely** immediately
@@ -689,18 +696,16 @@ actively. This is a primary failure mode, not a nicety.
   floor to chase nits. The judgment call is *when low-severity polish turns into
   gold-plating* (hardening past the goal, edge cases beyond the threat model): at
   that point stop feeding it and merge. A verified minimal bead beats an ever-deeper
-  one. (Raising `--min-findings-severity P1` makes the loop itself ignore P2 nits —
-  reach for it once the P2 stream has gone gold-plating, not from the start.)
-- **Detecting it takes sharp eyes — proxies flag, analysis confirms.** Two cheap
-  proxies raise the alarm: a high **review-round count** (the loop keeps finding
-  ever-deeper edges) and a large **line count** versus comparable beads (a "simple"
-  module returning at thousands of lines). But proxies only flag, and can mislead —
-  a genuinely hard bead earns its rounds; a necessarily-verbose module earns its
-  lines. The only way to be SURE is to **read the prompt's GOAL, then compare it to
-  the COMPLEXITY of what was actually built**: do the modules, abstractions,
-  edge-case handling, and config surface match what the goal truly requires, or has
-  the implementation grown past it? When they diverge, cut back to the goal — and
-  treat the proxies as the cue to run that comparison, not as the verdict itself.
+  one. **Do not reach for `--min-findings-severity P1` to stop gold-plating**: the skeptic
+  tags every finding `P2`, so a P1 floor filters out the one reviewer arguing to cut, right
+  when you need it. rb-lite warns when a floor silences it. Stop feeding the loop and merge
+  instead, or use `--no-skeptic` if you truly want no counter-pressure.
+- **Proxies flag, analysis confirms.** A climbing **round count** and a **line count**
+  far past comparable beads raise the alarm, but both mislead — a hard bead earns its
+  rounds, a verbose module earns its lines. Treat them as the cue to **re-read the GOAL
+  and compare it to what was actually built**: do the modules, abstractions, edge cases,
+  and config surface match what the goal requires? When they diverge, cut back to the
+  goal. The proxy is never the verdict.
 
 ## The fractal tail, and challenging the panel
 
@@ -725,11 +730,11 @@ been clean for several rounds.
 - **Zero rejections across many rounds is a red flag.** If the implementer has
   accepted every finding for several rounds, it's probably being too credulous
   and the change is over-built. That's the cue to run a skeptical pass.
-- **Add a skeptical reviewer for counter-pressure.** Every default reviewer hunts
-  *what's wrong*, which is to say *what to add*. None hunt *what's over-built*. For
-  anything past a small bead, add a third reviewer to `.rb-lite-reviewers` that
-  runs the inverted lens, so the panel pushes back against scope creep instead of
-  only feeding it (see "Customizing the panel").
+- **Keep the skeptic in the panel.** Defect reviewers hunt *what's wrong*, which is
+  to say *what to add*; the skeptic hunts *what's over-built*. It ships in rb-lite's
+  built-in panel, so the way to have it is to not pass `--reviewers-file` — a supplied
+  file replaces the panel wholesale. Drop it with `--no-skeptic` only for a small,
+  already-bounded bead.
 - **Periodic skeptical audit.** When the fractal tail shows up, or before merging
   a large run, stop relaying and run one inverted audit yourself: walk what the run
   added and label each mechanism *required-for-correctness* versus
@@ -770,10 +775,9 @@ discarded wholesale. Bound these from the **first** run, not after they blow up:
 - **Don't pre-cap finding severity.** Leave the default (`P2`) so genuine P2 polish
   lands — those are often real improvements worth keeping. P3-only findings are not
   relayed by default; inspect them manually, or lower the floor to P3 only when the
-  user explicitly wants to chase nits. Raise `--min-findings-severity P1` only
-  *later*, once you've judged that the remaining P2 stream has crossed from useful
-  polish into harmful gold-plating (hardening the code past the goal). Cutting it
-  off from round 1 throws away good work.
+  user explicitly wants to chase nits. `--min-findings-severity P1` is not the tool for
+  gold-plating — it also filters out the skeptic, which tags every finding `P2`. Stop
+  feeding the loop and merge instead.
 - **Re-scope before re-running.** If a bead is too big to bound, it's too big — split
   the secondary concern into its own bead and run only the core. (One reconcile bead
   shed its "downtime credit" half into a separate bead; the core then fit a single
@@ -794,18 +798,17 @@ failure.
 
 ## Customizing the panel
 
-rb-lite's built-in panel is `codex review` + `claude -p ... | jq ...` + Gemini via `npx`.
-This skill runs **two** reviewers instead. The canonical file is the two-line one in
-§ Tool dependencies; the block below shows those same two lines plus OPTIONAL extras, so
-read it as a menu rather than a file to paste — the last two entries are a third reviewer
-and a placeholder that does not exist on any PATH:
+rb-lite's built-in panel is `codex review` + a `claude` defect reviewer + a `claude`
+skeptic, and this skill uses it as-is. Override only for a reason you can name. The block
+below is a **menu**, not a file to paste — the last entry is a placeholder that exists on no
+PATH, and a pasted panel that omits a skeptic returns the loop to add-only pressure:
 
 ```bash
 # .rb-lite-reviewers
 codex review --base "$BASE" -c 'model="gpt-5.6-sol"'
-set -o pipefail; claude -p "Review the diff vs $BASE. Before asserting the diff violates or overstates an invariant, or any claim about behavior in code the diff does not show, verify it by reading that code and cite file:line, else mark it a QUESTION not a finding. Tag findings P0/P1/P2/P3. Output 'No findings.' if clean." --model opus --permission-mode acceptEdits --output-format json --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch,Task,TaskOutput,TaskStop,Monitor" | jq -er 'if .is_error then error(.result // "claude reviewer returned is_error") else (.result // empty) end'
+set -o pipefail; claude -p "Review the diff vs $BASE. Before asserting the diff violates or overstates an invariant, or any claim about behavior in code the diff does not show, verify it by reading that code and cite file:line, else mark it a QUESTION not a finding. Tag findings P0/P1/P2/P3. Output 'No findings.' if clean." --model claude-opus-5 --output-format json --allowedTools "Read,Glob,Grep" --disallowedTools "Edit,Write,NotebookEdit,Bash" | jq -er 'if .is_error then error(.result // "claude reviewer returned is_error") else (.result // empty) end'
 # Skeptical reviewer: hunts over-specification instead of bugs, so the panel has counter-pressure against scope creep
-set -o pipefail; claude -p "Review the diff vs $BASE for OVER-SPECIFICATION, not bugs. Flag any mechanism, handling, config, or abstraction that is NOT required for correctness, security, or data-safety and could be cut, simplified, or deferred. For each, give: what it is, why it isn't strictly required (what already covers the case), and a recommendation. Tag each finding 'P2: CUT', 'P2: SIMPLIFY', or 'P2: DEFER'. Do not flag missing behavior or bugs; another reviewer owns that. Output 'No findings.' if the diff is already minimal for its goal." --model opus --permission-mode acceptEdits --output-format json --allowedTools "Bash,Read,Glob,Grep" | jq -er 'if .is_error then error(.result // "skeptic reviewer returned is_error") else (.result // empty) end'
+set -o pipefail; claude -p "Review the diff vs $BASE for OVER-SPECIFICATION, not bugs. Flag any mechanism, handling, config, or abstraction that is NOT required for correctness, security, or data-safety and could be cut, simplified, or deferred. For each, give: what it is, why it isn't strictly required (what already covers the case), and a recommendation. Tag each finding 'P2: CUT', 'P2: SIMPLIFY', or 'P2: DEFER'. Do not flag missing behavior or bugs; another reviewer owns that. Output 'No findings.' if the diff is already minimal for its goal." --model claude-opus-5 --output-format json --allowedTools "Read,Glob,Grep" --disallowedTools "Edit,Write,NotebookEdit,Bash" | jq -er 'if .is_error then error(.result // "skeptic reviewer returned is_error") else (.result // empty) end'
 (my-linter --json || true) | wrap-as-p-tags
 ```
 
@@ -854,9 +857,10 @@ The reviewer contract is strict:
 | `2` | `usage_error` | Bad CLI args, incl. no implementer selected (`--implementer` and `--implement-cmd` both absent) | Fix the invocation; the JSON line is still emitted with `run_dir: null` |
 | `3` | `env_error` | Not in a git repo, missing tool, unsupported `timeout`, branch creation failure, run-dir setup failure | Fix the env; rerun |
 | `10` | `implementer_failed` | Implementer subprocess returned non-zero (incl. timeout 124/137) or hit max-iters before stabilizing | Look at `implementer-round-N-iter-K.stderr` for the most recent iter |
-| `11` | `review_panel_failed` | Zero reviewers exited 0 | Check `reviewer-round-N-K.stderr` for all reviewers; usually missing CLI/auth or `jq` failure |
-| `12` | `max_rounds_hit` | Burned all `--max-rounds` without convergence | Inspect the latest review files; either bump `--max-rounds`, raise `--min-findings-severity` to skip nits, or address the remaining findings manually |
+| `11` | `review_panel_failed` | No **defect** reviewer exited 0 — either none succeeded, or only the skeptic did (it cannot report defects, so its lone vote is not a review) | Check `reviewer-round-N-K.stderr` for all reviewers; usually missing CLI/auth or `jq` failure |
+| `12` | `max_rounds_hit` | Burned all `--max-rounds` without convergence | Inspect the latest review files; either bump `--max-rounds` or address the remaining findings manually. Do **not** raise `--min-findings-severity` to skip nits — it filters out the skeptic, which tags every finding `P2` |
 | `13` | `consensus_failure` | Implementer kept declining to act on findings for `--max-noop-rounds` consecutive rounds | Read the latest review **and the implementer's recorded reasons** — it's signaling it disagrees. If its rejections are evidence-backed (false positives or over-specification), this is a legitimate stop, not a failure. Apply the fix manually if you side with reviewers, or accept the run if you side with the implementer |
+| `14` | `budget_exceeded` | Added production lines passed `--max-production-lines` | Stop and re-shape the change, or re-derive the baseline with the user. Never relaunch with a bigger number — the run has told you the change is wrong-shaped |
 | `70` | `internal_error` | Internal invariant violation or unhandled shell failure | Read `log.txt` and the most recent stderr files; this is rare |
 
 The JSON schema (every exit, last stdout line):
@@ -865,15 +869,22 @@ The JSON schema (every exit, last stdout line):
 {
   "run_dir": "string | null",
   "exit_code": "integer",
-  "status": "clean | usage_error | env_error | implementer_failed | review_panel_failed | max_rounds_hit | consensus_failure | internal_error",
+  "status": "clean | usage_error | env_error | implementer_failed | review_panel_failed | max_rounds_hit | consensus_failure | budget_exceeded | internal_error",
   "rounds": "integer",
   "implementer_iterations": "integer",
   "noop_rounds_streak": "integer",
+  "findings_accepted": "integer",
+  "findings_declined": "integer",
+  "findings_deferred": "integer",
+  "rejections_total": "integer",
+  "rejections_by_round": "array of integer",
+  "production_lines_added": "integer",
   "duration_secs": "integer",
   "config": {
     "max_rounds": "integer",
     "max_iters": "integer",
     "max_noop_rounds": "integer",
+    "max_production_lines": "integer | null",
     "min_findings_severity": "string",
     "implement_timeout_secs": "integer | null",
     "reviewer_timeout_secs": "integer | null"
@@ -886,8 +897,8 @@ The JSON schema (every exit, last stdout line):
 - **Reviewers keep finding nits past round 5.** That's reviewer ratchet.
   Check the latest review file: if findings are P3-only, something is
   wrong with the severity floor (it should have stopped). Otherwise,
-  consider raising `--min-findings-severity P1` to ignore P2s, or stop
-  manually and apply the remaining items.
+  stop manually and apply the remaining items. Raising the floor to P1 would
+  also silence the skeptic, so it is not the fix here.
 - **Implementer "stabilized at iteration 1" repeatedly.** The implementer is
   declining to act. The consensus-failure stop catches it after
   `--max-noop-rounds` (default 2) — exit 13. Before overriding, read *why* it
@@ -959,9 +970,10 @@ Inside `<run-dir>/`:
 - `review-round-N-K.md` — per-reviewer markdown the implementer reads
   on the next round (with status header and stderr-tail for failed
   reviewers).
-- `gemini-policy.toml` — only appears if you ran rb-lite's built-in default panel
-  rather than the two-reviewer `.rb-lite-reviewers` above; it is that panel's Gemini
-  policy file.
+- `challenges-round-N.md` — the round's decision record: one line per finding, each
+  starting `ACCEPTED`, `DECLINED`, or `DEFERRED`. rb-lite counts these; read them when the
+  summary shows rejections, and when it shows none for several rounds.
+- `skeptic-diff-round-N.patch` — the diff handed to the skeptical reviewer.
 
 When something looks off, read these in order: `log.txt` → the latest
 `review-round-*.md` files → the relevant `*.stderr`.
@@ -1008,8 +1020,8 @@ rb-lite run \
 # forbids all others (see "Bounding a high-blast-radius bead"). --max-rounds is a
 # CHECKPOINT to assess and (if the code is sound) relaunch — not a finish. Leave the
 # default severity so real P2 polish lands; P3 is manual/inspection-only unless you
-# deliberately lower the floor. Add --min-findings-severity P1 only later, once the
-# remaining P2 stream turns into gold-plating. Watch each round as it lands.
+# deliberately lower the floor. Do NOT add --min-findings-severity P1 to curb
+# gold-plating: it filters out the skeptic too. Watch each round as it lands.
 rb-lite run \
   --implementer claude,codex \
   --task-file .rb-lite/tasks/bead-<id>.md \
@@ -1022,13 +1034,17 @@ rb-lite run \
 **Run with a custom panel that disables the codex reviewer:**
 
 ```bash
-cat >.rb-lite-reviewers <<'EOF'
-set -o pipefail; claude -p "<...>" --permission-mode acceptEdits --output-format json --allowedTools "Bash,Read,Grep,Glob,Edit,Task,TaskOutput,TaskStop" | jq -er 'if .is_error then error(.result // "claude reviewer returned is_error") else (.result // empty) end'
+RB_REVIEWERS=$(mktemp)   # never `cat >.rb-lite-reviewers` in the repo root
+# Paste BOTH claude lines from § Customizing the panel into it. An EMPTY file is treated
+# as no file at all, so rb-lite falls back to the built-in panel and codex is NOT
+# disabled; a file without a skeptic leaves the run with no counter-pressure.
+cat >"$RB_REVIEWERS" <<'EOF'
+<defect reviewer line>
+<skeptic line>
 EOF
-rb-lite run --implementer claude,codex --task "..." --base origin/main
+rb-lite run --implementer claude,codex --task "..." --base origin/main --reviewers-file "$RB_REVIEWERS"
+rm -f "$RB_REVIEWERS"
 ```
-
-(remove the file when done)
 
 **Pin a single implementer (no cycling):**
 

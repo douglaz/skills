@@ -63,14 +63,30 @@ implement → review loop for each bead.
      --task-file .rb-lite/tasks/bead-<id>.md \
      --base origin/main \
      --branch feat/<bead-id>-<short-slug> \
+     --max-production-lines <budget_lines from drive-status --json> \
      --run-dir /tmp/rb-lite-<bead-id>-run
    ```
+
+   Take the budget from `drive-status --json` (`budget_lines`, already 3x the
+   `Baseline:` recorded in `DRIVE.md`); do not invent a number per bead. Reject a
+   `null` `budget_lines` or `do_not_build` — those name the missing field, and rb-lite
+   rejects a non-positive budget as a usage error. Repair the `DRIVE.md` field first
+   rather than running unbounded. Outside a Drive lane, derive it the same way: state the
+   smallest implementation that satisfies the bead's outcome, then take 3x.
+   Do not pass `--reviewers-file`: rb-lite's built-in panel carries the skeptic, and
+   a supplied file replaces the panel wholesale. Check the repo root for a leftover
+   `.rb-lite-reviewers` first — rb-lite loads it automatically.
 
    If using the nix fallback, prefix the same `run ...` arguments with
    `nix run --refresh github:douglaz/rb-lite --`.
 
 6. **Read the JSON summary.** Exit `0` with status `clean` means the panel
-   had no P0/P1/P2 findings. For exit `10`, `11`, `12`, `13`, or `70`, use
+   had no P0/P1/P2 findings. Exit `14` (`budget_exceeded`) means the change
+   outgrew its budget: stop and re-shape the bead, or re-derive its baseline
+   with the user. Never relaunch with a larger number. Check
+   `rejections_total` on every run — several rounds at zero while the panel
+   keeps reporting is the ratchet signature, and rb-lite warns in the log.
+   For exit `10`, `11`, `12`, `13`, or `70`, use
    the [already-loaded owning skill's exit-code diagnosis table](../orchestrating-with-rb-lite/SKILL.md#exit-codes-and-json-schema) and
    inspect the run artifacts before
    deciding whether to rerun, fix manually, or file a dogfood bead.

@@ -512,21 +512,51 @@ Declare before entering BUILD, in the task file:
   bookkeeping this skill requires. Exempt them; do not spend budget on them. The exemption
   is from the **budget**, not from review — they ride the same branch, the same panel and
   the same bots as everything else (`references/phases.md` § LAND).
-- rough LOC budget
+- a **baseline**, then a budget derived from it. The baseline is the smallest
+  implementation that satisfies the outcome, stated concretely in lines before any
+  design exists — "`br close` plus `br sync --flush-only` plus argument validation:
+  ~15 lines". The budget is **3 × baseline**. Derive it in that order and never the
+  other way round: a number picked in advance is a target, and a findings-driven loop
+  will deliver exactly it. A 350-line ceiling produced a 338-line closure block on
+  2026-08-18 for work whose baseline was under 20.
+  If the design cannot fit 3 × baseline, the outcome is wrong, not the budget —
+  stop and re-shape rather than re-deriving a larger baseline to fit what was built.
+- LOC budgets cover **production implementation only**. Tests and fixtures are excluded,
+  because a budget that counts them is met by deleting coverage. Excluded from the
+  budget is not excluded from review.
 - an explicit **do NOT build** list: defensive edges, abstractions, and config knobs
-  beyond this milestone
+  beyond this milestone. Name the threat model too — a guard against a caller the
+  threat model does not include is over-specification even when the guard is correct.
 - done-definition tied to named tests
+
+Both the baseline and the do-NOT-build list are **machine-checked header fields** in
+`DRIVE.md` — the first fields `drive-status` validates rather than merely reads; see
+"The DRIVE.md contract". `drive-status`
+refuses to report a lane BUILD-ready when either is missing or unparseable, because a
+guard the driver can silently skip writing is a guard that does not exist. During the
+2026-08-18 ratchet both fields were absent and no phase objected.
 
 Then watch each round. Two proxies raise the alarm — **round count climbing** and **LOC
 far past comparable work**. Proxies only flag; confirm by re-reading the goal and asking
 whether what got built matches what the goal actually requires. When they diverge, cut
 back to the goal.
 
-Hard brake: **at 2× the LOC budget or round 4, stop and report** rather than feeding
-another round. That is a stop-list item.
+Hard brake: **at the budget itself, or round 4, stop and report** rather than feeding
+another round. That is a stop-list item. rb-lite enforces the first half mechanically —
+BUILD passes the derived budget as `--max-production-lines`, so it exits `14` at the
+budget and names the largest contributors. There is no 2× grace above it: the number
+BUILD passes is the stop.
 
-Keep `--min-findings-severity` open at first — P2/P3 are often genuine polish. Raise the
-floor to P1 only once that stream has turned into gold-plating. `--max-rounds` is a
+Exit 14 is a stop-and-report. The only two answers are to **reduce or split the work**, or
+to return to SHAPE because the outcome itself was wrong and derive a new baseline there,
+before BUILD. Re-deriving a larger baseline against the implementation that just
+overran is raising the ceiling to fit what was built — the exact move this guard exists
+to prevent. Never relaunch with a larger number.
+
+Keep `--min-findings-severity` at its P2 default — P2/P3 are often genuine polish, and a
+P1 floor also filters out rb-lite's skeptical reviewer, which tags every finding `P2`.
+Raising it to curb gold-plating removes the one reviewer arguing to cut. Stop the loop and
+merge instead. `--max-rounds` is a
 checkpoint to assess and relaunch, not a finish line. (See
 `references/autonomy-contract.md` § 4.)
 
@@ -558,6 +588,8 @@ and so "status?" is already answered.
 # DRIVE — <goal, one line>
 
 **Scope:** epic acme-M2 (beads acme-40..acme-49) — the ONLY beads this drive may take
+**Baseline:** 40 lines — read the budget from config, clamp, and count attempts
+**Do-NOT-build:** retry policy config, pluggable backends, per-call overrides
 **Phase:** BUILD · **Bead:** acme-42 · **Branch:** acme-42-retry-budget
 **Pending:** —
 **Gate:** `nix develop -c ./check.sh` · last green 2026-08-01 (exit 0)
@@ -567,8 +599,7 @@ and so "status?" is already answered.
 - acme-41 encode request-id in the audit log — merged #119
 
 ## Now
-acme-42: wire the retry budget into prod. Budget: 3 files, ~250 LOC. Round 2 of max 4.
-Do NOT build: retry policy config, pluggable backends.
+acme-42: wire the retry budget into prod. 3 files, budget 120 LOC (3 x 40). Round 2 of max 4.
 
 ## Next
 acme-43 (blocked on 42) → acme-44 → re-audit graph
@@ -622,6 +653,16 @@ reading `DONE` with a `Pending:` PR means "DONE once that PR merges" — query i
 with the repository: a bare `#N` is ambiguous on a fork, where the same number names a
 different PR in the parent and in the fork. `references/phases.md` § LAND covers the
 ordering.
+
+**`Baseline:` and `Do-NOT-build:` arm Guard 2, and `drive-status` checks both.** The
+baseline is the smallest implementation that satisfies the outcome, stated as a line count
+with a one-line justification (a `~` prefix is fine); the budget is derived from it as 3x
+and is never written down as an independent number. `drive-status --json` reports `baseline_lines`,
+`budget_lines`, `do_not_build`, `guard2_armed`, and `build_ready`; a BUILD lane with either
+field missing, with a baseline of `0` or carrying no number, or with `Do-NOT-build: none`
+is `build_ready: false`. Do not enter BUILD to go and derive them — derive them first, in
+SHAPE, where the outcome is still being decided. Guard 2 was unarmed for the whole of the
+2026-08-18 ratchet precisely because nothing ever asked.
 
 **`Scope:` is the one canonical definition and every phase reads it.** `drive-status`
 counts the whole repository — it cannot know your scope — so its bead numbers and its

@@ -586,6 +586,111 @@ touch "$FIX/mergedheadfail"
 check "an unreadable merged head still refuses DONE" HARDEN
 check_field "and does not assert unreviewed commits it never checked" phase_source "DRIVE.md (DONE, but the merged head could not be read, so these commits cannot be shown to be the ones that landed)"
 
+# --- Guard 2 must be armed in the record, not merely intended ---
+# The 2026-08-18 ratchet ran with no budget and no do-NOT-build list anywhere in DRIVE.md,
+# and every phase proceeded. These fixtures make the absence visible instead of silent.
+
+new_repo; add_code; record '**Phase:** BUILD'
+check_field "no budget fields leaves Guard 2 unarmed" guard2_armed false
+check_field "and BUILD is not ready without them" build_ready false
+check_field "with no baseline to report" baseline_lines null
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 15 lines — br close plus strict flush plus argument validation
+**Do-NOT-build:** recovery state machine, rollback, lock'
+check_field "both fields present arms Guard 2" guard2_armed true
+check_field "and BUILD becomes ready" build_ready true
+check_field "baseline parses as a number" baseline_lines 15
+# Derived, never chosen: the budget is a function of the baseline so it cannot be set
+# independently of the smallest thing that would work.
+check_field "budget derives as 3x the baseline" budget_lines 45
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** small
+**Do-NOT-build:** rollback'
+# "small" would parse as a present field and then bound nothing, which is worse than
+# absent: it reads as armed on inspection.
+check_field "a baseline without a line count is not a baseline" guard2_armed false
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 15 lines
+**Do-NOT-build:** none'
+# `none` is the state this field exists to make someone type deliberately, so it does not
+# count as filled in.
+check_field "do-NOT-build: none does not arm the guard" guard2_armed false
+
+new_repo; add_code
+record '**Phase:** SHAPE'
+# SHAPE has nothing to spend yet; only BUILD is gated on the budget existing.
+check_field "an unarmed non-BUILD phase is still ready" build_ready true
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 0 lines
+**Do-NOT-build:** rollback'
+# 0 parses but bounds nothing: the derived budget is 0, which rb-lite rejects as a usage
+# error, so an "armed" lane would abort BUILD instead of running it bounded.
+check_field "a zero baseline does not arm the guard" guard2_armed false
+check_field "and derives no budget" budget_lines null
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 15 lines
+**Do-NOT-build:** NONE'
+# Case-insensitive, and via tr rather than ${VAR,,} so macOS /bin/bash 3.2 does not abort.
+check_field "do-NOT-build: NONE is rejected case-insensitively" guard2_armed false
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** ~15 lines — br close plus strict flush
+**Do-NOT-build:** **rollback**, recovery state machine'
+# The docs' own examples write "~15 lines" and authors bold list items. A parser that
+# rejects the forms its documentation teaches leaves the guard unarmed with no hint why.
+check_field "a tilde baseline still arms the guard" guard2_armed true
+check_field "and still parses the number" baseline_lines 15
+check_field "bold inside the value survives" do_not_build "**rollback**, recovery state machine"
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 15 lines
+**DO-NOT-BUILD:** none'
+# The grep matches the label case-insensitively, so the strip must too — otherwise the
+# `none` comparison sees the label instead and arms the guard on the one value it exists
+# to reject.
+check_field "an all-caps label still gets stripped and rejected" guard2_armed false
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 15 lines
+**DO-NOT-BUILD:** rollback, lock'
+check_field "an all-caps label with a real value arms" guard2_armed true
+check_field "and does not leak the label into the value" do_not_build "rollback, lock"
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 15 lines
+**Do-NOT-build:** —'
+# The DRIVE.md template teaches the em-dash as the empty-field marker, so house style
+# would otherwise arm Guard 2 on an empty list.
+check_field "an em-dash placeholder does not arm the guard" guard2_armed false
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 00 lines
+**Do-NOT-build:** rollback'
+check_field "a zero-padded zero baseline does not arm" guard2_armed false
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 08 lines
+**Do-NOT-build:** rollback'
+# Leading zeros would make the human-readable $((BASELINE * 3)) an octal parse error.
+check_field "a zero-padded baseline normalizes" baseline_lines 8
+check_field "and derives its budget" budget_lines 24
+
 echo
 echo "passed $PASS, failed $FAIL"
 [[ "$FAIL" -eq 0 ]]
