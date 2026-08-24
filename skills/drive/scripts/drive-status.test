@@ -586,6 +586,47 @@ touch "$FIX/mergedheadfail"
 check "an unreadable merged head still refuses DONE" HARDEN
 check_field "and does not assert unreviewed commits it never checked" phase_source "DRIVE.md (DONE, but the merged head could not be read, so these commits cannot be shown to be the ones that landed)"
 
+# --- Guard 2 must be armed in the record, not merely intended ---
+# The 2026-08-18 ratchet ran with no budget and no do-NOT-build list anywhere in DRIVE.md,
+# and every phase proceeded. These fixtures make the absence visible instead of silent.
+
+new_repo; add_code; record '**Phase:** BUILD'
+check_field "no budget fields leaves Guard 2 unarmed" guard2_armed false
+check_field "and BUILD is not ready without them" build_ready false
+check_field "with no baseline to report" baseline_lines null
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 15 lines — br close plus strict flush plus argument validation
+**Do-NOT-build:** recovery state machine, rollback, lock'
+check_field "both fields present arms Guard 2" guard2_armed true
+check_field "and BUILD becomes ready" build_ready true
+check_field "baseline parses as a number" baseline_lines 15
+# Derived, never chosen: the budget is a function of the baseline so it cannot be set
+# independently of the smallest thing that would work.
+check_field "budget derives as 3x the baseline" budget_lines 45
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** small
+**Do-NOT-build:** rollback'
+# "small" would parse as a present field and then bound nothing, which is worse than
+# absent: it reads as armed on inspection.
+check_field "a baseline without a line count is not a baseline" guard2_armed false
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 15 lines
+**Do-NOT-build:** none'
+# `none` is the state this field exists to make someone type deliberately, so it does not
+# count as filled in.
+check_field "do-NOT-build: none does not arm the guard" guard2_armed false
+
+new_repo; add_code
+record '**Phase:** SHAPE'
+# SHAPE has nothing to spend yet; only BUILD is gated on the budget existing.
+check_field "an unarmed non-BUILD phase is still ready" build_ready true
+
 echo
 echo "passed $PASS, failed $FAIL"
 [[ "$FAIL" -eq 0 ]]

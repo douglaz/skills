@@ -603,6 +603,7 @@ fi
 # case — the common one, and every first run — into a hard crash instead of an empty value.
 DRIVE_MD="absent"; DRIVE_PHASE=""; DRIVE_CLEARED=""; DRIVE_PENDING=""; DRIVE_CLEARED_BASE=""
 DRIVE_PENDING_REPO=""
+DRIVE_BASELINE=""; DRIVE_DO_NOT_BUILD=""
 if [[ -f DRIVE.md ]]; then
   DRIVE_MD="present"
   # Case-insensitive and non-alpha-tolerant on purpose: `**Phase:** build` is a plausible
@@ -623,7 +624,27 @@ if [[ -f DRIVE.md ]]; then
   # and it resolves against base_repo with the usual fork caveat.
   DRIVE_PENDING_REPO=$(printf '%s' "$_PENDING_RAW" \
     | grep -oE '[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#[0-9]+$' | sed 's/#.*//' || echo "")
+  # Guard 2's two halves, as record fields rather than prose. Both were absent for the whole
+  # of the 2026-08-18 ratchet and no phase objected, which is the reason they are parsed here
+  # at all: a brake the driver can silently skip writing is not a brake.
+  # The baseline must carry a NUMBER of lines — "small" is not a baseline, and a budget is
+  # derived from it as 3x. A bare label would parse and then bound nothing.
+  DRIVE_BASELINE=$(grep -m1 -oiE '\*\*Baseline:\*\*[[:space:]]*[0-9]+[[:space:]]*lines?\b' DRIVE.md 2>/dev/null \
+    | grep -oE '[0-9]+' || echo "")
+  # Any non-empty list, but `none` is rejected: "we will not decline to build anything" is
+  # the state this field exists to make someone type out deliberately.
+  DRIVE_DO_NOT_BUILD=$(grep -m1 -oiE '\*\*Do-NOT-build:\*\*[[:space:]]*[^[:space:]].*' DRIVE.md 2>/dev/null \
+    | sed -E 's/.*\*\*[[:space:]]*//' | sed -E 's/[[:space:]]+$//' || echo "")
+  if [[ "${DRIVE_DO_NOT_BUILD,,}" == "none" || "${DRIVE_DO_NOT_BUILD,,}" == "-" ]]; then
+    DRIVE_DO_NOT_BUILD=""
+  fi
 fi
+
+# BUILD spends the budget, so BUILD is where the budget has to already exist. Reported as a
+# blocker rather than enforced by exit status: drive-status is a detector, and the phase
+# skills decide what to refuse.
+GUARD2_ARMED=false
+[[ -n "$DRIVE_BASELINE" && -n "$DRIVE_DO_NOT_BUILD" ]] && GUARD2_ARMED=true
 
 # --- volatile per-checkout state (ADR 0001 sites it, ADR 0002 derives LAND from it) ---
 # Clearance is a claim about a panel run in THIS checkout against THIS tree, so it is never
@@ -966,6 +987,8 @@ if $JSON; then
     --arg state_file "$STATE_FILE" --arg base_fresh "$BASE_FRESH" \
     --arg pr_repo "$_UP" --arg base_repo "${_RREPO:-}" --arg base_origin "$BASE_ORIGIN" --arg cleared_base "$DRIVE_CLEARED_BASE" --arg cleared_base_matches "$CLEARED_BASE_MATCHES" \
     --arg pr_ambiguous "$_PR_AMBIGUOUS" --arg tree_known "$_TREE_KNOWN" \
+    --arg baseline "$DRIVE_BASELINE" --arg do_not_build "$DRIVE_DO_NOT_BUILD" \
+    --arg guard2_armed "$GUARD2_ARMED" \
     --argjson dirty "${DIRTY_COUNT:-0}" --argjson untracked "${UNTRACKED:-0}" \
     --argjson branch_commits "${BRANCH_COMMITS:-0}" \
     '{root:$root,branch:$branch,default_branch:$default_branch,dirty:$dirty,
@@ -988,6 +1011,11 @@ if $JSON; then
       pr_ambiguous:($pr_ambiguous=="true"),tree_known:($tree_known=="true"),
       land_blocked_dirty:($land_blocked_dirty=="true"),
       done_on_branch:($done_on_branch=="true"),
+      baseline_lines:(if $baseline=="" then null else ($baseline|tonumber) end),
+      budget_lines:(if $baseline=="" then null else (($baseline|tonumber)*3) end),
+      do_not_build:(if $do_not_build=="" then null else $do_not_build end),
+      guard2_armed:($guard2_armed=="true"),
+      build_ready:(($guard2_armed=="true") or $phase!="BUILD"),
       phase_disagreement:(($record_valid=="true") and $drive_phase!=$tree_phase
                           and $phase==$drive_phase)}' 2>/dev/null \
   || {
@@ -1011,6 +1039,12 @@ printf 'pr         %s%s\n' "$PR_STATE" "${PR_NUM:+ (#$PR_NUM)}"
 printf 'DRIVE.md   %s%s%s\n' "$DRIVE_MD" "${DRIVE_PHASE:+ (says $DRIVE_PHASE)}" \
   "${DRIVE_PENDING:+, pending ${DRIVE_PENDING_REPO}#$DRIVE_PENDING}"
 printf 'cleared    %s\n' "${DRIVE_CLEARED:-<none — no panel has cleared this checkout>}"
+if $GUARD2_ARMED; then
+  printf 'budget     baseline %s lines, budget %s lines (3x); do NOT build: %s\n' \
+    "$DRIVE_BASELINE" "$((DRIVE_BASELINE * 3))" "$DRIVE_DO_NOT_BUILD"
+else
+  printf 'budget     <unarmed — Guard 2 needs **Baseline:** <n> lines and **Do-NOT-build:** <list>>\n'
+fi
 printf '\nphase: %s   (source: %s)\n' "$PHASE" "$PHASE_SOURCE"
 # LAND is derived, so a RECORDED LAND is a stale or hand-edited file. Say so rather than
 # silently ignoring the line — an unexplained discard is the failure this warns about.

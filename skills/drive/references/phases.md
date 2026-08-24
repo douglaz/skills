@@ -130,14 +130,12 @@ explicit **do NOT build** list, done-definition naming the tests.
 Resolve `rb-lite` the way `orchestrating-with-rb-lite` does — PATH first, then the Nix
 wrapper. Do not hardcode a local checkout path; most installs will not have one.
 
-Write `.rb-lite-reviewers` before the run — the panel is codex + claude, both models
-pinned, and the file is the only way to set it: rb-lite's built-in default lives inside
-the binary and additionally runs Gemini through `npx -y`, which this stack does not use.
-Take the two-reviewer file from `orchestrating-with-rb-lite` § Tool dependencies — write
-it to a temp path and pass `--reviewers-file`, never `cat >` into the repo root (that
-clobbers an existing panel, or leaves an untracked file the clean-tree LAND gate then
-trips on). NOT the block under § Customizing the panel: it shows the same two commands
-beside optional extras and a `my-linter` placeholder that runs as command-not-found.
+**Do not write `.rb-lite-reviewers`.** rb-lite >= 0.3.0 defaults to codex + claude + a
+claude **skeptic** that hunts over-specification; a reviewers file replaces that panel
+wholesale and costs you the only member that can argue for cutting something. The old
+instruction to override existed because the default once included a Gemini reviewer run
+through `npx -y`; that reviewer is gone, so the reason is too. See
+`orchestrating-with-rb-lite` § Tool dependencies.
 
 ```bash
 if command -v rb-lite >/dev/null 2>&1; then RB=(rb-lite)
@@ -148,14 +146,24 @@ else RB=(nix run --refresh github:douglaz/rb-lite --); fi
   --task-file <task> \
   --base <default-branch> \
   --branch <bead-id>-<slug> \
+  --max-production-lines <3x the DRIVE.md Baseline> \
   --run-dir <scratchpad>/<bead-id>
 ```
+
+`--max-production-lines` is Guard 2's mechanical half: read `Baseline:` from `DRIVE.md`
+(`drive-status --json` reports `budget_lines`, already multiplied) and pass it. A BUILD lane
+whose `drive-status` says `build_ready: false` has no baseline to derive from — go back and
+write one rather than running unbounded.
 
 Launch it **as the `run_in_background` command with no trailing `&`** — a trailing `&`
 detaches it from the tracked wrapper and you lose the completion notification.
 
 Watch each round. Two proxies flag overengineering (round count climbing, LOC far past
 comparable beads); confirm by re-reading the goal. Hard brake at 2× budget or round 4.
+rb-lite reports the round's `ACCEPTED`/`DECLINED`/`DEFERRED` counts and warns after three
+consecutive rounds that declined nothing — treat that warning as the cue to re-read the
+goal, not as noise. Exit `14` means the budget tripped: stop and re-shape, never relaunch
+with a larger number.
 
 **Known traps:**
 - rb-lite leaves changes **uncommitted**. It also runs `cargo fmt` — a focused fix can

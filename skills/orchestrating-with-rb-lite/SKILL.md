@@ -10,7 +10,7 @@ description: >-
   into beads". Use `testing-with-rb-lite` instead when the deliverable is a test or
   live verification gate that must be independently executed. Do not use for
   cross-project orchestration, open-ended planning, or tiny one-shot edits.
-compatibility: Requires `rb-lite` on `PATH` or `nix run --refresh github:douglaz/rb-lite -- ...` (use `--refresh` at least once per session so Nix does not reuse an hour-stale cached revision). rb-lite itself has no default implementer, so pass `--implementer` with one preset or a comma-separated cycle, or use `--implement-cmd`; this skill defaults to `--implementer claude,codex` unless the user pins another choice. `codex` and `claude` must be installed and authenticated; the default Claude reviewer needs `jq`, and normal timeout-enabled runs need a compatible `timeout`, either from the host shell for source installs or from the Nix wrapper for Nix installs. This skill's reviewer panel is codex + claude only, set by writing `.rb-lite-reviewers` before the run; rb-lite's built-in default additionally runs Gemini through `npx`, which this skill does not use. Backlog-drain mode also requires `br` (>= 0.1.45), `gh`, and the repo's normal local verification tools; harden-until-clean mode additionally needs `codex` and `claude` for the outer review panel.
+compatibility: Requires `rb-lite` on `PATH` or `nix run --refresh github:douglaz/rb-lite -- ...` (use `--refresh` at least once per session so Nix does not reuse an hour-stale cached revision). rb-lite itself has no default implementer, so pass `--implementer` with one preset or a comma-separated cycle, or use `--implement-cmd`; this skill defaults to `--implementer claude,codex` unless the user pins another choice. `codex` and `claude` must be installed and authenticated; the default Claude reviewer needs `jq`, and normal timeout-enabled runs need a compatible `timeout`, either from the host shell for source installs or from the Nix wrapper for Nix installs. This skill uses rb-lite's built-in panel (codex + a claude defect reviewer + a claude skeptic) and does NOT write `.rb-lite-reviewers`; requires rb-lite >= 0.3.0 for the skeptic, the per-round disposition counts, and `--max-production-lines`. Backlog-drain mode also requires `br` (>= 0.1.45), `gh`, and the repo's normal local verification tools; harden-until-clean mode additionally needs `codex` and `claude` for the outer review panel.
 ---
 
 Use `rb-lite` as the default lightweight implement → review loop for
@@ -85,29 +85,54 @@ session can drop the flag.
 If neither path works, stop and tell the user to install `rb-lite` (e.g.
 `nix profile install github:douglaz/rb-lite`) or expose it on PATH.
 
-**This skill's panel is two reviewers: `codex` and `claude`.** rb-lite's own built-in
-default is three — it adds a Gemini reviewer invoked through `npx -y @google/gemini-cli`
-— and that command lives inside the rb-lite binary, so the only way to change it is to
-point rb-lite at a two-reviewer file. Write it to a TEMP path and pass
-`--reviewers-file`, rather than `cat >.rb-lite-reviewers` in the repo root: that
-redirection destroys an existing custom panel if the repo has one, and creates an
-untracked file if it does not — which then trips the clean-tree gate LAND derives from, or
-gets committed outside the task's scope.
+**Use rb-lite's built-in panel. Do not write a reviewers file.** As of rb-lite 0.3.0 the
+default panel is `codex review`, a `claude` defect reviewer, and a `claude` **skeptic** that
+hunts over-specification and tags findings `CUT` / `SIMPLIFY` / `DEFER`. The skeptic is the
+only panel member that can argue for removing something; the other two structurally can only
+argue for adding. A `--reviewers-file` **replaces** the panel wholesale — rb-lite never
+injects the skeptic into a panel you supplied — so overriding it silently returns the loop to
+a configuration that can only ratchet.
 
-```bash
-RB_REVIEWERS=$(mktemp)
-cat >"$RB_REVIEWERS" <<'RBEOF'
-codex review --base "$BASE" -c 'model="gpt-5.6-sol"'
-set -o pipefail; claude -p "Read AGENTS.md if present, then review the diff vs $BASE. Before asserting the diff violates or overstates an invariant, or any claim about behavior in code the diff does not show, verify it by reading that code and cite file:line, else mark it a QUESTION not a finding. Tag findings P0/P1/P2/P3. Output 'No findings.' if clean. Do not modify, create, or delete any file." --model claude-opus-5 --permission-mode plan --output-format json --allowedTools "Bash,Read,Glob,Grep" --disallowedTools "Edit,Write,NotebookEdit" | jq -er 'if .is_error then error(.result // "claude reviewer returned is_error") else (.result // empty) end'
-RBEOF
-# ...then add --reviewers-file "$RB_REVIEWERS" to the rb-lite run, and rm it afterwards.
-```
+This skill used to write a two-reviewer file to drop an `npx`-invoked Gemini reviewer from
+rb-lite's default. That reviewer is gone upstream, so the override now costs the skeptic for
+nothing. If you do override, carry a skeptic in your file, and write it to a TEMP path passed
+via `--reviewers-file` — never `cat >.rb-lite-reviewers` in the repo root, which destroys an
+existing custom panel or leaves an untracked file that trips LAND's clean-tree gate.
 
-The Claude reviewer is READ-ONLY on purpose: `Edit`/`Write` plus `acceptEdits` would let it
-mutate the worktree while the codex reviewer is reading it, so the two would review
-different trees — and any edit it made would bypass the implementer loop entirely. It is
-also told to read `AGENTS.md`, which is how a repo's own invariants reach the panel when
-this runs under `drive`; without it half the panel reviews without them.
+If you are deliberately overriding, take the commands from § Customizing the panel — that
+menu is now the single copy — write them to a `mktemp` path, and pass `--reviewers-file`.
+
+Every reviewer must be READ-ONLY: `Edit`/`Write` plus `acceptEdits` would let one panel
+member mutate the worktree while another reads it, so the two review different trees, and
+any edit made that way bypasses the implementer loop entirely. Each must also read
+`AGENTS.md`, which is how a repo's own invariants reach the panel when this runs under
+`drive`; without it that reviewer reviews without them.
+
+### Convergence guards (rb-lite >= 0.3.0)
+
+Three things now happen mechanically that this skill previously asked you to notice:
+
+- **Decisions are counted.** The implementer records one line per finding in
+  `challenges-round-$ROUND.md` (`ACCEPTED` / `DECLINED` / `DEFERRED`); rb-lite reports the
+  per-round totals in the log and the summary (`rejections_total`, `rejections_by_round`).
+- **Zero rejections warns by itself.** After three consecutive rounds declining nothing while
+  the panel keeps reporting, the log carries a one-time warning. You no longer have to watch
+  for it — you have to *act* on it. It is a signal, not a stop.
+- **The budget is enforced.** Pass `--max-production-lines N`, 3x the `Baseline:` in
+  `DRIVE.md` (Guard 2). rb-lite exits `14` naming the largest contributing files. Test and
+  fixture paths are excluded: a budget counting tests is met by deleting coverage.
+
+**Exit 14 is a stop, not a retry target.** Re-shape the work or re-derive the baseline; do
+not relaunch with a larger number. A run that trips 14 has told you the change is
+wrong-shaped, which is cheaper to learn at line 350 than at round 38.
+
+### Do not hand-roll this loop
+
+One review round on a change is fine. The second is rb-lite's job: if you would feed a
+reviewer's findings back to an implementer, run rb-lite rather than spawning your own agents
+and relaying between them. A hand-rolled loop has no round cap, no rejection accounting, no
+skeptic, no budget, and no `consensus_failure` stop — it produced 96 agents and 38
+consecutive `fix:` commits on 2026-08-18, on a design replaced three days later.
 
 **The same prohibition binds you.** An edit made to a tracked file while `codex review`
 is running is silently destroyed, and rb-lite runs `codex review` inside every review
@@ -156,14 +181,6 @@ skeptical third reviewer and a `my-linter --json | wrap-as-p-tags` placeholder �
 illustrative, not prerequisites. Pasting that block wholesale puts a command-not-found
 reviewer in the panel and every round carries its failure.
 
-Dropping Gemini is the point, not a side effect. `npx -y` installs and executes whatever
-the registry serves at that moment, in a checkout with credentials present and (in
-rb-lite's default line) `--approval-mode yolo`. Pinning a version narrows that door;
-removing the reviewer closes it, and removes the `npx` dependency altogether. Two
-reviewers with different failure modes is also what the outer `multi-reviewer-loop` runs,
-and the reason is the same — a third opportunistic voice that fails open when credentials
-are missing was never carrying much of the panel's weight.
-
 `codex` and `claude` must be on PATH and authenticated. The Claude reviewer needs `jq`,
 and normal rb-lite runs need a `timeout` binary supporting `--kill-after` because both
 implementer and reviewer timeouts are enabled by default. If rb-lite is resolved through
@@ -171,8 +188,9 @@ implementer and reviewer timeouts are enabled by default. If rb-lite is resolved
 setup just because the host shell cannot find `jq` or GNU `timeout`; the upstream wrapper
 supplies those to the rb-lite process. For source/path installs, check the host shell.
 
-If you skip the file, you get rb-lite's built-in three-reviewer default, unpinned Gemini
-included. That is a choice, not a default this skill endorses — make it deliberately.
+Skipping the file is now the recommended path: you get codex, the claude defect reviewer,
+and the skeptic, all pinned, with no `npx`. Writing a file is the deliberate choice, and it
+costs the skeptic unless you carry one in yourself.
 
 **Companion unavailable: stop, rerun the same installer command once, reload it, and do
 not improvise this procedure.** This applies to every exact companion handoff below.
@@ -794,11 +812,10 @@ failure.
 
 ## Customizing the panel
 
-rb-lite's built-in panel is `codex review` + `claude -p ... | jq ...` + Gemini via `npx`.
-This skill runs **two** reviewers instead. The canonical file is the two-line one in
-§ Tool dependencies; the block below shows those same two lines plus OPTIONAL extras, so
-read it as a menu rather than a file to paste — the last two entries are a third reviewer
-and a placeholder that does not exist on any PATH:
+rb-lite's built-in panel is `codex review` + a `claude` defect reviewer + a `claude`
+skeptic, and this skill uses it as-is. Override only for a reason you can name. The block
+below is a **menu**, not a file to paste — the last entry is a placeholder that exists on no
+PATH, and a pasted panel that omits a skeptic returns the loop to add-only pressure:
 
 ```bash
 # .rb-lite-reviewers
@@ -959,9 +976,10 @@ Inside `<run-dir>/`:
 - `review-round-N-K.md` — per-reviewer markdown the implementer reads
   on the next round (with status header and stderr-tail for failed
   reviewers).
-- `gemini-policy.toml` — only appears if you ran rb-lite's built-in default panel
-  rather than the two-reviewer `.rb-lite-reviewers` above; it is that panel's Gemini
-  policy file.
+- `challenges-round-N.md` — the round's decision record: one line per finding, each
+  starting `ACCEPTED`, `DECLINED`, or `DEFERRED`. rb-lite counts these; read them when the
+  summary shows rejections, and when it shows none for several rounds.
+- `skeptic-diff-round-N.patch` — the diff handed to the skeptical reviewer.
 
 When something looks off, read these in order: `log.txt` → the latest
 `review-round-*.md` files → the relevant `*.stderr`.
