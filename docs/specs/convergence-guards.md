@@ -41,8 +41,8 @@ is 338 lines against a 350-line stop; `select-bead-lanes` is 450 lines against a
   as a snippet a human must paste into `.rb-lite-reviewers`.
 - **RC4 — A ceiling is a target.** Guard 2 budgets are numbers chosen in advance, and nothing
   asks whether the correct size for `br close && br sync --flush-only` is 5 lines rather than 350.
-- **RC5 — Guard 2 can be silently unarmed.** `Scope-Label:` is machine-checked; `Budget:` and the
-  do-NOT-build list are prose a driver can simply not write, and no phase refuses to proceed.
+- **RC5 — Guard 2 can be silently unarmed.** `Budget:` and the do-NOT-build list are prose a
+  driver can simply not write, and no phase refuses to proceed.
 
 ## Non-goals (do NOT build)
 
@@ -139,9 +139,10 @@ from the diff.
   outcome is wrong, not that the budget is too small — stop and re-shape.
 - `DRIVE.md` gains two machine-checked header fields alongside `Scope-Label:`:
   `**Baseline:** <n> lines — <one-line justification>` and `**Do-NOT-build:** <comma list>`.
-- `drive-status` treats a missing or unparseable `Baseline:` or `Do-NOT-build:` the same way
-  it treats a missing `Scope-Label:` — the lane is not BUILD-ready. This is the only
-  `drive-status` change in this spec.
+- `drive-status` reports a lane with a missing or unparseable `Baseline:` or `Do-NOT-build:`
+  as not BUILD-ready. (`drive-status` does not read `Scope-Label:` at all — that field is
+  checked by the bead-lanes selector in `docs/specs/backlog-execution-plan.md`, not here.)
+  This is the only `drive-status` change in this spec.
 
 **S2. Document the instrumented path as mandatory.** In
 `skills/orchestrating-with-rb-lite/SKILL.md`:

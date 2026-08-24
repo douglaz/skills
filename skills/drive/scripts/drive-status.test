@@ -653,6 +653,44 @@ check_field "a tilde baseline still arms the guard" guard2_armed true
 check_field "and still parses the number" baseline_lines 15
 check_field "bold inside the value survives" do_not_build "**rollback**, recovery state machine"
 
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 15 lines
+**DO-NOT-BUILD:** none'
+# The grep matches the label case-insensitively, so the strip must too — otherwise the
+# `none` comparison sees the label instead and arms the guard on the one value it exists
+# to reject.
+check_field "an all-caps label still gets stripped and rejected" guard2_armed false
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 15 lines
+**DO-NOT-BUILD:** rollback, lock'
+check_field "an all-caps label with a real value arms" guard2_armed true
+check_field "and does not leak the label into the value" do_not_build "rollback, lock"
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 15 lines
+**Do-NOT-build:** —'
+# The DRIVE.md template teaches the em-dash as the empty-field marker, so house style
+# would otherwise arm Guard 2 on an empty list.
+check_field "an em-dash placeholder does not arm the guard" guard2_armed false
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 00 lines
+**Do-NOT-build:** rollback'
+check_field "a zero-padded zero baseline does not arm" guard2_armed false
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 08 lines
+**Do-NOT-build:** rollback'
+# Leading zeros would make the human-readable $((BASELINE * 3)) an octal parse error.
+check_field "a zero-padded baseline normalizes" baseline_lines 8
+check_field "and derives its budget" budget_lines 24
+
 echo
 echo "passed $PASS, failed $FAIL"
 [[ "$FAIL" -eq 0 ]]

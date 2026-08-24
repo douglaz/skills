@@ -631,19 +631,23 @@ if [[ -f DRIVE.md ]]; then
   # derived from it as 3x. A bare label would parse and then bound nothing.
   # `~` is accepted because the docs' own examples write "~15 lines"; a parser that
   # rejects the form its documentation teaches leaves the guard unarmed with no hint why.
-  DRIVE_BASELINE=$(grep -m1 -oiE '\*\*Baseline:\*\*[[:space:]]*~?[0-9]+[[:space:]]*lines?\b' DRIVE.md 2>/dev/null \
+  DRIVE_BASELINE=$(grep -m1 -oiE '\*\*Baseline:\*\*[[:space:]]*~?[0-9]+[[:space:]]*lines?([^[:alnum:]]|$)' DRIVE.md 2>/dev/null \
     | grep -oE '[0-9]+' || echo "")
-  # Zero parses but bounds nothing: the derived budget would be 0, which rb-lite rejects
-  # as a usage error, so BUILD would abort rather than run bounded. Treat it as unarmed.
-  [[ "$DRIVE_BASELINE" == "0" ]] && DRIVE_BASELINE=""
+  # Strip leading zeros before any use: `00` would fail a string compare against "0" and
+  # arm the guard with a zero budget, and `08` makes the later $((BASELINE * 3)) an octal
+  # parse error. A baseline of zero bounds nothing — rb-lite rejects
+  # `--max-production-lines 0` as a usage error — so it must read as unarmed.
+  DRIVE_BASELINE=$(printf '%s' "$DRIVE_BASELINE" | sed -E 's/^0+//')
+  [[ -z "$DRIVE_BASELINE" ]] && DRIVE_BASELINE=""
   # Any non-empty list, but `none` is rejected: "we will not decline to build anything" is
   # the state this field exists to make someone type out deliberately.
   DRIVE_DO_NOT_BUILD=$(grep -m1 -oiE '\*\*Do-NOT-build:\*\*[[:space:]]*[^[:space:]].*' DRIVE.md 2>/dev/null \
-    | sed -E 's/^\*\*[Dd]o-[Nn][Oo][Tt]-[Bb]uild:\*\*[[:space:]]*//' | sed -E 's/[[:space:]]+$//' || echo "")
+    | sed -E 's/^\*\*[^*]*\*\*[[:space:]]*//' | sed -E 's/[[:space:]]+$//' || echo "")
   # `tr`, not ${VAR,,}: case conversion is a bash 4.0 feature and macOS ships /bin/bash
   # 3.2, where it is a syntax error that aborts the whole detector.
   _DNB_LOWER=$(printf '%s' "$DRIVE_DO_NOT_BUILD" | tr '[:upper:]' '[:lower:]')
-  if [[ "$_DNB_LOWER" == "none" || "$_DNB_LOWER" == "-" ]]; then
+  if [[ "$_DNB_LOWER" == "none" || "$_DNB_LOWER" == "-" \
+     || "$_DNB_LOWER" == "—" || "$_DNB_LOWER" == "–" || "$_DNB_LOWER" == "n/a" ]]; then
     DRIVE_DO_NOT_BUILD=""
   fi
 fi
