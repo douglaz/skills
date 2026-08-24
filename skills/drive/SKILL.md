@@ -541,11 +541,17 @@ far past comparable work**. Proxies only flag; confirm by re-reading the goal an
 whether what got built matches what the goal actually requires. When they diverge, cut
 back to the goal.
 
-Hard brake: **at 2× the LOC budget or round 4, stop and report** rather than feeding
-another round. That is a stop-list item. rb-lite enforces the budget half mechanically
-when BUILD passes `--max-production-lines`: it exits `14` and names the largest
-contributors. Exit 14 is a stop-and-report — re-shape the work or re-derive the
-baseline. Never relaunch with a larger number.
+Hard brake: **at the budget itself, or round 4, stop and report** rather than feeding
+another round. That is a stop-list item. rb-lite enforces the first half mechanically —
+BUILD passes the derived budget as `--max-production-lines`, so it exits `14` at the
+budget and names the largest contributors. There is no 2× grace above it: the number
+BUILD passes is the stop.
+
+Exit 14 is a stop-and-report. The only two answers are to **reduce or split the work**, or
+to return to SHAPE because the outcome itself was wrong and derive a new baseline there,
+before BUILD. Re-deriving a larger baseline against the implementation that just
+overran is raising the ceiling to fit what was built — the exact move this guard exists
+to prevent. Never relaunch with a larger number.
 
 Keep `--min-findings-severity` at its P2 default — P2/P3 are often genuine polish, and a
 P1 floor also filters out rb-lite's skeptical reviewer, which tags every finding `P2`.

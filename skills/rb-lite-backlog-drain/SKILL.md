@@ -68,9 +68,10 @@ implement → review loop for each bead.
    ```
 
    Take the budget from `drive-status --json` (`budget_lines`, already 3x the
-   `Baseline:` recorded in `DRIVE.md`); do not invent a number per bead. If the lane
-   reports `build_ready: false`, Guard 2 is unarmed — go write the baseline rather
-   than running unbounded. Outside a Drive lane, derive it the same way: state the
+   `Baseline:` recorded in `DRIVE.md`); do not invent a number per bead. Reject a
+   `null` `budget_lines` or `do_not_build` — those name the missing field, and rb-lite
+   rejects a non-positive budget as a usage error. Repair the `DRIVE.md` field first
+   rather than running unbounded. Outside a Drive lane, derive it the same way: state the
    smallest implementation that satisfies the bead's outcome, then take 3x.
    Do not pass `--reviewers-file`: rb-lite's built-in panel carries the skeptic, and
    a supplied file replaces the panel wholesale. Check the repo root for a leftover

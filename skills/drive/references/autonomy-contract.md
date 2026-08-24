@@ -119,7 +119,10 @@ number picked in advance is a target, and a findings-driven loop fills it exactl
 2026-08-18 a 350-line ceiling produced a 338-line block for work whose baseline was under
 20. Record `Baseline:` and `Do-NOT-build:` in `DRIVE.md`, where `drive-status` checks them;
 file-lock from round 1; treat round count and LOC as *flags* that trigger a
-goal-vs-complexity re-read, not as verdicts; hard-brake and report at 2× budget or round 4.
+goal-vs-complexity re-read, not as verdicts; hard-brake and report **at the budget** or
+round 4. BUILD passes that budget to rb-lite as `--max-production-lines`, so exit `14` is
+the brake firing — answer it by reducing or splitting the work, or by returning to SHAPE
+for a new outcome. Never re-derive a larger baseline to fit what already overran.
 Budgets cover production only — a budget that counts tests is met by deleting coverage.
 
 ---

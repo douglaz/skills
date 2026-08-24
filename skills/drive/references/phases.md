@@ -150,10 +150,12 @@ else RB=(nix run --refresh github:douglaz/rb-lite --); fi
   --run-dir <scratchpad>/<bead-id>
 ```
 
-`--max-production-lines` is Guard 2's mechanical half: read `Baseline:` from `DRIVE.md`
-(`drive-status --json` reports `budget_lines`, already multiplied) and pass it. A BUILD lane
-whose `drive-status` says `build_ready: false` has no baseline to derive from — go back and
-write one rather than running unbounded.
+`--max-production-lines` is Guard 2's mechanical half: read `budget_lines` from
+`drive-status --json` (already 3× the `Baseline:` in `DRIVE.md`) and pass it. Check the
+value, not just `build_ready`: a `null` `budget_lines` or `do_not_build` names which field
+is missing, while `build_ready` is also `true` in every non-BUILD phase. Never pass a null
+through to the flag — rb-lite rejects a non-positive budget as a usage error. Repair the
+missing `DRIVE.md` field first rather than running unbounded.
 
 Launch it **as the `run_in_background` command with no trailing `&`** — a trailing `&`
 detaches it from the tracked wrapper and you lose the completion notification.
