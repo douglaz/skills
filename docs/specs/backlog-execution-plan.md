@@ -1575,12 +1575,14 @@ unknown/missing/duplicate/misordered option exits. No-argument drive-status fixt
 sentinel `br`, require zero calls/counts `n/a`, make a bead-metadata-only dirty tree report
 GRAPH, suppress blocked-only warnings, and prove only typed scoped input can select BUILD. It
 proves that the open A4b/B0 rows link to the fact owner without copying commands. Run
-`./install.test` and `./check.sh`. Hard-stop budgets are 350 lines of E3-owned consumer
-change, 450 lines for the shared selector executable, and 1,600 lines of new deterministic
-test code; the evidence probe is excluded. `drive-status` collection/`infer()` and its fixture
-delta count in those budgets. Crossing a budget
-triggers an explicit SHAPE/KISS scope review rather than forcing dense tests or automatically
-rejecting otherwise clear code.
+`./install.test` and `./check.sh`. Guard 2's baseline is 510 production lines: 45 for the
+pinned resolver prefix, 220 for the shared selector, 50 for the drive-status delegate, 130
+for the native closure block, and 65 for consumer/API/document/wiring changes. The BUILD
+budget is exactly 1,530 production lines (3 × baseline). Tests and fixtures are uncapped but
+remain required, relevant, mutation-sensitive, and reviewed; `DRIVE.md` and the tracked
+Beads JSONL are bookkeeping exemptions. The evidence probe remains one-time evidence rather
+than a recurring gate. Crossing the production budget stops BUILD for reduction, splitting,
+or return to SHAPE; never raise the baseline to fit the implementation.
 
 Selective-install fixtures for `codex`, `claude`, and `agents` targets must prove the shared
 selector plus pinned E1 companions are installed exactly where each caller expects, while

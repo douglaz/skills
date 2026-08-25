@@ -5,11 +5,14 @@
 E3 (`skills-dhm`). GitHub #67 is deliberately OUT of this scope — it postdates the set and
 is a bounded follow-on after F1, not a silent expansion of a fixed 29-issue drive.
 **Scope-Label:** `drive-open-issues`
-**Phase:** SHAPE · **Bead:** `skills-dhm` · **Branch:** — (on `master`; BUILD opens one)
+**Baseline:** 510 lines — 45 pinned resolver + 220 shared selector + 50 drive-status
+delegate + 130 native closure block + 65 consumer/API/document/wiring
+**Do-NOT-build:** closure wrapper/helper, recovery marker or API, rollback/compensation/reopen, SQLite parser, reconciliation/status lifecycle, lock service, general scheduler or routing framework, linked-worktree support, batch/force close, downloader/updater or multi-version fallback, caller-PATH fallback, retries/daemon/config knobs, duplicate selector/parser, reverse install dependency, recurring release probe, carry-forward closure, DB-mode scheduler reads, second close on resume, pre-close note/status mutation, third new test file, graph mutation
+**Phase:** BUILD · **Bead:** `skills-dhm` · **Branch:** `feat/skills-dhm-native-close`
 **Pending:** —
 **Gate:** `./check.sh` · repository-gate environment: GNU Bash 5.3.15 (non-POSIX),
-Git 2.55.0, installed `br` 0.2.19; last green 2026-08-25 on `master` at `44d2574`
-(53 resolve-beads-jsonl, 124 bot-gate, and 93 drive-status fixtures; exit 0). The
+Git 2.55.0, installed `br` 0.2.19; last green 2026-08-25 on `master` at `935c3ac`
+(139 resolve-beads-jsonl, 53 installer, 124 bot-gate, and 93 drive-status fixtures; exit 0). The
 separate exact-`v0.3.2` Linux probe is one-time evidence, not this gate.
 
 ## Done
@@ -267,13 +270,10 @@ separate exact-`v0.3.2` Linux probe is one-time evidence, not this gate.
 ## Now
 
 E3 (`skills-dhm`) is the only ready bead; the other 31 are blocked on it. Its SHAPE
-work landed as PR #72 and the replacement branch is merged and pruned, so the next
-step is BUILD from `master`.
-
-Before entering BUILD, derive Guard 2 for E3 and record `**Baseline:** <n> lines — <why>`
-and `**Do-NOT-build:** <list>` in this header. They are deliberately absent right now:
-`drive-status` reports `build_ready: false` for a BUILD lane without them, and the
-baseline must be derived from E3's outcome rather than inherited from this record.
+work landed as PR #72. Guard 2 is armed from the smallest reviewed E3 implementation:
+510 production lines and a derived 1,530-line BUILD budget; tests and fixtures are
+uncapped but remain required and mutation-sensitive. BUILD is starting on
+`feat/skills-dhm-native-close`, round 0 of maximum 4.
 
 ## Next
 
