@@ -1881,13 +1881,17 @@ Implement:
   PATH candidate falls through to the immutable probe, while a timed-out
   immutable probe is a categorized preflight failure;
 - declared round limits passed to rb-lite;
-- separate production and test LOC budgets;
-- validate the contract before launch so every allowed path belongs to exactly
-  one production/test budget class or to an explicit unbudgeted exemption;
-  overlapping or unclassified allowed paths are contract errors;
+- ONE enforced budget class: production implementation lines. **Tests are not
+  capped** (user decision 2026-08-23, reconfirmed 2026-08-25). A budget that counts
+  tests is satisfied by deleting coverage, which is the opposite of the property the
+  budget protects, so test and fixture paths are an explicit unbudgeted exemption
+  rather than a second budgeted class;
+- validate the contract before launch so every allowed path is either in the
+  production budget class or in an explicit unbudgeted exemption; unclassified
+  allowed paths are contract errors, exempt paths are not;
 - at each checkpoint, return the controlled-stop status for every changed path
-  outside the allowlist, outside all declared classes/exemptions, or over its
-  class budget—no path may escape both counters;
+  outside the allowlist, outside all declared classes/exemptions, or over the
+  production budget—no path may escape both counters;
 - distinct churn and scope brake reasons;
 - acceptance-criterion re-read before cutback;
 - gate execution after a cutback;
@@ -1916,9 +1920,9 @@ capability response must fail closed rather than run the stale binary. A hanging
 PATH probe with a resistant/stopped descendant must be reaped before the
 fallback starts, and a hanging fallback must fail within its bound with no
 descendant or model launch. Separate
-fixtures must cover an outside-lock path, an allowed-but-unclassified path,
-overlapping classes, an explicit unbudgeted exemption, and independent
-production/test budget breaches.
+fixtures must cover an outside-lock path, an allowed-but-unclassified path, an
+explicit unbudgeted exemption, and a production budget breach. There is no test
+budget to breach, and a fixture asserting one would encode a rule this plan refuses.
 
 ## Workstream G — executable evidence and documentation
 

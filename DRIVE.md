@@ -2,15 +2,14 @@
 
 **Scope:** exactly the 29 GitHub issues in the #30–#66 set enumerated by
 `docs/specs/backlog-execution-plan.md`; the Beads graph is the only work. Current focus is
-E3 (`skills-dhm`).
+E3 (`skills-dhm`). GitHub #67 is deliberately OUT of this scope — it postdates the set and
+is a bounded follow-on after F1, not a silent expansion of a fixed 29-issue drive.
 **Scope-Label:** `drive-open-issues`
-**Phase:** SHAPE · **Bead:** `skills-dhm`
-· **Branch:** `feat/skills-dhm-native-br-close`
-**Pending:** disposition and rerun of exact Codex and Opus review on the native
-`br v0.3.2` replacement spec
+**Phase:** SHAPE · **Bead:** `skills-dhm` · **Branch:** — (on `master`; BUILD opens one)
+**Pending:** —
 **Gate:** `./check.sh` · repository-gate environment: GNU Bash 5.3.15 (non-POSIX),
-Git 2.55.0, installed `br` 0.2.19; last green 2026-08-19 on the current remediation tree
-(139 resolver, 53 installer, 124 bot-gate, and 70 drive-status fixtures; exit 0). The
+Git 2.55.0, installed `br` 0.2.19; last green 2026-08-25 on `master` at `44d2574`
+(53 resolve-beads-jsonl, 124 bot-gate, and 93 drive-status fixtures; exit 0). The
 separate exact-`v0.3.2` Linux probe is one-time evidence, not this gate.
 
 ## Done
@@ -267,11 +266,14 @@ separate exact-`v0.3.2` Linux probe is one-time evidence, not this gate.
 
 ## Now
 
-Close the current Codex/Opus SHAPE findings on this replacement branch, rerun the
-exact reviewers and `./check.sh`, then open the replacement spec PR from latest
-`master`. Once that PR is visible, mark the preserved 40-commit wrapper PR #71 as
-superseded rather than merging it. Keep the existing `skills-dhm` reservation on
-this branch throughout.
+E3 (`skills-dhm`) is the only ready bead; the other 31 are blocked on it. Its SHAPE
+work landed as PR #72 and the replacement branch is merged and pruned, so the next
+step is BUILD from `master`.
+
+Before entering BUILD, derive Guard 2 for E3 and record `**Baseline:** <n> lines — <why>`
+and `**Do-NOT-build:** <list>` in this header. They are deliberately absent right now:
+`drive-status` reports `build_ready: false` for a BUILD lane without them, and the
+baseline must be derived from E3's outcome rather than inherited from this record.
 
 ## Next
 
@@ -279,6 +281,29 @@ Build the reviewed medium E3 delta: pin native `br v0.3.2` identity, migrate the
 live consumers and ADR 0003, and add the two bounded deterministic tests while retaining
 the one-time real-release probe evidence. Land its work PR, then close E3 through the
 standalone-clone native metadata procedure before resuming the highest-priority ready lane.
+
+Before C2 or F3 BUILD, re-read their acceptance criteria against what PR #73 landed.
+Both were written before the convergence guards existed and now conflict with them:
+C2 as written regenerates a `--reviewers-file`, which replaces rb-lite's built-in panel
+wholesale and drops the skeptical reviewer; F3 asks for a separate test LOC budget class,
+which the standing decision below refuses. Their bead descriptions are amended; this note
+records why.
+
+## Standing decisions
+
+- **Tests are not capped** (2026-08-23, reconfirmed 2026-08-25 — user decision, not an
+  inference). LOC budgets cover production implementation only. A budget that counts tests
+  is satisfied by deleting coverage, which is the opposite of the property the budget
+  protects. Test and fixture paths are an explicit unbudgeted exemption, never a second
+  budgeted class. Tests still ride the same review, panel, bots, and gate, and must be
+  relevant, maintainable, and mutation-sensitive — they are simply not bounded by a number.
+  Encoded in `skills/drive/SKILL.md` Guard 2, `references/autonomy-contract.md` § 4,
+  rb-lite's `--budget-exclude` defaults, F3 (`skills-equ`), and this plan's F3 section.
+- **A supplied rb-lite reviewers file must carry a skeptic** (2026-08-25). rb-lite 0.3.0's
+  built-in panel includes a skeptical reviewer that reports over-specification only, and
+  `--reviewers-file` replaces that panel wholesale. C2 (`skills-47i`) is amended to require
+  one in its generated file, since otherwise building C2 would remove the loop's only
+  counter-pressure against scope creep.
 
 ## Open questions for the human
 
