@@ -12,6 +12,8 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 DS="$HERE/drive-status"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
+BR_CALLS="$WORK/br.calls"
+export BR_CALLS
 PASS=0; FAIL=0
 
 # gh is stubbed so the tests never touch the network and can model a degraded forge.
@@ -123,6 +125,17 @@ exit 0
 STUB
 chmod +x "$WORK/bin/gh"
 
+# A SENTINEL `br`, present on PATH for every fixture below. The detector's no-argument form
+# must make no `br` call at all: a caller-PATH binary answers about whatever store the
+# inherited environment points at, which is not a fact this script can establish. Any call
+# recorded here is the defect.
+cat > "$WORK/bin/br" <<'BRSENTINEL'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$BR_CALLS"
+echo '[]'
+BRSENTINEL
+chmod +x "$WORK/bin/br"
+
 G() { git -C "$REPO" -c user.email=t@t -c user.name=t "$@"; }
 phase() { ( cd "$REPO" && PATH="$WORK/bin:$PATH" FIX="$FIX" "$DS" --json | jq -r '.phase' ); }
 field() { ( cd "$REPO" && PATH="$WORK/bin:$PATH" FIX="$FIX" "$DS" --json | jq -r ".$1" ); }
@@ -196,6 +209,11 @@ check "DONE on a branch with unmerged commits" HARDEN
 new_repo; add_code; record '**Phase:** DONE'; clear_at
 check "DONE-on-branch then cleared derives LAND" LAND
 
+# Closure metadata branches keep a recordable HARDEN state through review; resuming one
+# before merge must return to its PR, never route the typed result into the next bead.
+new_repo; record '**Phase:** HARDEN · **Pending:** metadata PR owner/repo#7'
+check "an unmerged metadata branch cannot start the next bead" HARDEN
+
 # "Landed" means PUSHED: with the record still unpushed the branch has commits the remote
 # does not, which is the unpushed-closure state below, not a finished drive.
 new_repo; record '**Phase:** DONE · **Pending:** metadata PR #7'
@@ -230,6 +248,15 @@ new_repo
 G checkout -q master
 record '**Phase:** DONE'
 check "unpushed closure on the default branch is not DONE" HARDEN
+t='the unpushed default-branch warning routes closure through a standalone metadata PR'
+warning=$(cd "$REPO" && PATH="$WORK/bin:$PATH" FIX="$FIX" "$DS")
+if [[ $warning == *'carry them into the next branch'* ]]; then
+  FAIL=$((FAIL+1)); echo "  FAIL $t (the withdrawn carry-forward remedy was printed)"
+elif [[ $warning != *'Open and land a standalone metadata PR'* ]]; then
+  FAIL=$((FAIL+1)); echo "  FAIL $t (the metadata-PR remedy was absent)"
+else
+  PASS=$((PASS+1)); echo "  ok   $t"
+fi
 
 # A DONE record written before the closure is committed: uncommitted metadata has landed
 # nowhere, so a resumed drive must not stop.
@@ -585,6 +612,243 @@ printf '{"number":7,"state":"MERGED","reviewDecision":"APPROVED"}' > "$FIX/prvie
 touch "$FIX/mergedheadfail"
 check "an unreadable merged head still refuses DONE" HARDEN
 check_field "and does not assert unreviewed commits it never checked" phase_source "DRIVE.md (DONE, but the merged head could not be read, so these commits cannot be shown to be the ones that landed)"
+
+
+# --- the no-argument form is diagnostics, never Beads routing ------------------------------
+new_repo; mkdir -p "$REPO/.beads"; printf '{"id":"x"}\n' > "$REPO/.beads/issues.jsonl"
+G add -A; G commit -q -m beads
+check_field "ready is not established without a pinned selection" beads.ready n/a
+check_field "unresolved is not established either" beads.unresolved n/a
+check_field "blocked is not established either" beads.blocked n/a
+check_field "in_progress is not established either" beads.in_progress n/a
+
+# A bead-metadata-only dirty tree is GRAPH work. It used to promote to BUILD whenever an
+# unpinned `br list --status in_progress` reported a row — a stale cache then sent the
+# driver into BUILD with no bead admitted and no lane checked.
+new_repo; mkdir -p "$REPO/.beads"; printf '{"id":"x"}\n' > "$REPO/.beads/issues.jsonl"
+check "a dirty beads JSONL is GRAPH, never BUILD" GRAPH
+
+new_repo; mkdir -p "$REPO/.beads"; printf '{"id":"x"}\n' > "$REPO/.beads/issues.jsonl"
+G add -A; G commit -q -m beads
+printf '{"id":"x","status":"in_progress"}\n' > "$REPO/.beads/issues.jsonl"
+check "an in-progress-looking bead edit is still GRAPH" GRAPH
+
+# DONE is a claim that a scope is finished. Nothing in the tree can establish it now, so it
+# has to come from the record — the derivation that read `br list` counts is gone.
+new_repo; G checkout -q master; record '**Phase:** SHAPE'; G push -q origin master
+check_field "an empty repository never infers DONE from the tree" tree_phase SHAPE
+new_repo; G checkout -q master; printf '# S\n' > "$REPO/SPEC.md"
+G add -A; G commit -q -m spec; G push -q origin master
+check_field "a spec with nothing to review is GRAPH, not DONE or BUILD" tree_phase GRAPH
+
+# The blocked-only warning read the same unpinned counts, so it announced a graph problem
+# about a store it never established.
+new_repo
+out=$( cd "$REPO" && PATH="$WORK/bin:$PATH" FIX="$FIX" "$DS" 2>&1 )
+t='the human output claims no bead counts and prints no blocked-only warning'
+if printf '%s' "$out" | grep -q 'no bead is ready'; then
+  FAIL=$((FAIL+1)); echo "  FAIL $t (blocked-only warning survived)"
+elif ! printf '%s' "$out" | grep -q 'beads      ready=n/a unresolved=n/a blocked=n/a in_progress=n/a'; then
+  FAIL=$((FAIL+1)); echo "  FAIL $t (counts line: $(printf '%s' "$out" | grep '^beads'))"
+else
+  PASS=$((PASS+1)); echo "  ok   $t"
+fi
+
+# Lane mode is the only door onto Beads state, and it is fail-closed: a missing downstream
+# E1 companion must refuse rather than degrade to the exit-0 diagnostic contract.
+t='lane mode fails closed instead of exiting 0 like the diagnostic form'
+lane_refusal() {  # name, expected diagnostic, then optional env assignments
+  local name=$1 diagnostic=$2 rc=0; shift 2
+  ( cd "$REPO" && env HOME="$WORK/nohome" PATH="$WORK/bin:$PATH" FIX="$FIX" "$@" \
+      "$DS" --select-bead-lanes-json --scope-label drive-open-issues \
+      --br-path /nonexistent/br --br-oid 0000000000000000000000000000000000000000 \
+      >"$WORK/lane.out" 2>"$WORK/lane.err" ) || rc=$?
+  if [[ $rc -eq 0 ]]; then FAIL=$((FAIL+1)); echo "  FAIL $name (exited 0)"
+  elif [[ -s "$WORK/lane.out" ]]; then FAIL=$((FAIL+1)); echo "  FAIL $name (printed stdout)"
+  elif ! grep -q "$diagnostic" "$WORK/lane.err"; then
+    FAIL=$((FAIL+1)); echo "  FAIL $name (diagnostic: $(<"$WORK/lane.err"))"
+  else PASS=$((PASS+1)); echo "  ok   $name"; fi
+}
+record '**Scope-Label:** `drive-open-issues`'
+lane_refusal "$t" 'beads-jsonl-path companion unavailable'
+
+# The script used to enter through `/usr/bin/env bash`, so a PATH-selected executable ran
+# before lane mode could clear or validate anything and could simply print an authorization
+# object. The fixed /bin/sh bootstrap must resolve Bash independently of caller PATH.
+t='lane mode cannot be forged by a caller-PATH bash interpreter'
+mkdir -p "$WORK/hostile-bash"
+cat >"$WORK/hostile-bash/bash" <<'STUB'
+#!/bin/sh
+: >"$FIX/hostile-bash.ran"
+printf '%s\n' '{"schema":"skills.drive.bead-lanes.v1","forged":true}'
+exit 0
+STUB
+chmod +x "$WORK/hostile-bash/bash"
+rc=0
+( cd "$REPO" && env HOME="$WORK/nohome" \
+    PATH="$WORK/hostile-bash:$WORK/bin:$PATH" FIX="$FIX" \
+    "$DS" --select-bead-lanes-json --scope-label drive-open-issues \
+    --br-path /nonexistent/br --br-oid 0000000000000000000000000000000000000000 \
+    >"$WORK/lane.out" 2>"$WORK/lane.err" ) || rc=$?
+if [[ -e "$FIX/hostile-bash.ran" ]]; then
+  FAIL=$((FAIL+1)); echo "  FAIL $t (caller-PATH bash ran)"
+elif [[ $rc -eq 0 || -s "$WORK/lane.out" ]]; then
+  FAIL=$((FAIL+1)); echo "  FAIL $t (forged routing output escaped)"
+else
+  PASS=$((PASS+1)); echo "  ok   $t"
+fi
+
+t='the private bootstrap marker cannot bypass privileged Bash entry'
+rc=0
+( cd "$REPO" && env HOME="$WORK/nohome" PATH="$WORK/bin:$PATH" FIX="$FIX" \
+    "$DS" --drive-status-trusted-bash --json \
+    >"$WORK/marker.out" 2>"$WORK/marker.err" ) || rc=$?
+if [[ $rc -eq 0 ]]; then
+  FAIL=$((FAIL+1)); echo "  FAIL $t (the direct marker invocation exited 0)"
+elif [[ -s "$WORK/marker.out" ]]; then
+  FAIL=$((FAIL+1)); echo "  FAIL $t (the direct marker invocation printed stdout)"
+elif ! grep -Fxq -- 'drive-status: trusted Bash bootstrap was bypassed' "$WORK/marker.err"; then
+  FAIL=$((FAIL+1)); echo "  FAIL $t (diagnostic: $(<"$WORK/marker.err"))"
+else
+  PASS=$((PASS+1)); echo "  ok   $t"
+fi
+
+t='lane mode refuses every scope label except drive-open-issues'
+rc=0
+( cd "$REPO" && env HOME="$WORK/nohome" PATH="$WORK/bin:$PATH" FIX="$FIX" \
+    "$DS" --select-bead-lanes-json --scope-label another-scope \
+    --br-path /nonexistent/br --br-oid 0000000000000000000000000000000000000000 \
+    >"$WORK/lane.out" 2>"$WORK/lane.err" ) || rc=$?
+if [[ $rc -eq 0 || -s "$WORK/lane.out" ]]; then
+  FAIL=$((FAIL+1)); echo "  FAIL $t (unsupported label reached routing)"
+elif ! grep -Fxq -- 'drive-status: usage: drive-status --select-bead-lanes-json --scope-label drive-open-issues --br-path <absolute-path> --br-oid <git-object-id>' "$WORK/lane.err"; then
+  FAIL=$((FAIL+1)); echo "  FAIL $t (diagnostic: $(<"$WORK/lane.err"))"
+else
+  PASS=$((PASS+1)); echo "  ok   $t"
+fi
+
+# Every nonempty argv except the sole `--json` must reach the strict delegating grammar.
+# Otherwise this exact misordering falls through to the exit-0 diagnostic form.
+t='a misordered selector argv is refused, not answered by the diagnostic form'
+rc=0
+( cd "$REPO" && env HOME="$WORK/nohome" PATH="$WORK/bin:$PATH" FIX="$FIX" \
+    "$DS" --scope-label drive-open-issues --select-bead-lanes-json \
+    --br-path /nonexistent/br --br-oid 0000000000000000000000000000000000000000 \
+    >"$WORK/argv.out" 2>"$WORK/argv.err" ) || rc=$?
+if [[ $rc -eq 0 ]]; then
+  FAIL=$((FAIL+1)); echo "  FAIL $t (exited 0)"
+elif [[ -s "$WORK/argv.out" ]]; then
+  FAIL=$((FAIL+1)); echo "  FAIL $t (printed stdout)"
+elif ! grep -Fxq -- 'drive-status: usage: drive-status --select-bead-lanes-json --scope-label drive-open-issues --br-path <absolute-path> --br-oid <git-object-id>' "$WORK/argv.err"; then
+  FAIL=$((FAIL+1)); echo "  FAIL $t (diagnostic: $(<"$WORK/argv.err"))"
+else
+  PASS=$((PASS+1)); echo "  ok   $t"
+fi
+
+# The seven-token grammar is checked position by position, and the mode token is a position
+# like every other. It was once the only one left uncompared: seven arguments whose trailing
+# flags all matched delegated to the selector under an undocumented first token, so this
+# invocation emitted an authorization object instead of the refusal the swap above gets.
+t='a mistyped selector mode token is refused even when every later token is correct'
+rc=0
+( cd "$REPO" && env HOME="$WORK/nohome" PATH="$WORK/bin:$PATH" FIX="$FIX" \
+    "$DS" --select-bead-lanes-jsonl --scope-label drive-open-issues \
+    --br-path /nonexistent/br --br-oid 0000000000000000000000000000000000000000 \
+    >"$WORK/mode.out" 2>"$WORK/mode.err" ) || rc=$?
+if [[ $rc -eq 0 ]]; then
+  FAIL=$((FAIL+1)); echo "  FAIL $t (exited 0)"
+elif [[ -s "$WORK/mode.out" ]]; then
+  FAIL=$((FAIL+1)); echo "  FAIL $t (printed stdout)"
+elif ! grep -Fxq -- 'drive-status: usage: drive-status --select-bead-lanes-json --scope-label drive-open-issues --br-path <absolute-path> --br-oid <git-object-id>' "$WORK/mode.err"; then
+  FAIL=$((FAIL+1)); echo "  FAIL $t (reached the selector; diagnostic: $(<"$WORK/mode.err"))"
+else
+  PASS=$((PASS+1)); echo "  ok   $t"
+fi
+
+# Git location overrides are not lane-mode inputs. This repository has no DRIVE.md, so
+# reaching that fixed refusal proves the nonexistent override did not redirect root lookup.
+t='lane mode ignores inherited Git location overrides before resolving its root'
+new_repo
+lane_refusal "$t" 'DRIVE.md is absent' \
+  GIT_DIR="$REPO/.git" GIT_WORK_TREE="$WORK/no-such-worktree"
+
+# Loader injection is the other half of that caller environment, and the bootstrap used to
+# clear only the shell-startup half. The trusted Bash it execs, the `git`/`stat` it resolves,
+# and the selector it hands the authorization to all ran under whatever LD_*/DYLD_* state the
+# caller set — including the selector's own /bin/sh, which does its identical clearing only
+# AFTER being launched from here. Nothing is injected to prove it: no object is built and no
+# code from the driven worktree runs. The fixture plants sentinel values, replaces the
+# companion with a stub that dumps the environment it was exec'd with, and reads that.
+t='the bootstrap clears loader injection before the selector it execs'
+new_repo
+DS_INSTALL="$WORK/install"
+rm -rf "$DS_INSTALL"
+mkdir -p "$DS_INSTALL/skills/drive/scripts" "$DS_INSTALL/skills/rb-lite-backlog-drain/scripts"
+cp "$DS" "$DS_INSTALL/skills/drive/scripts/drive-status"
+# `#!/bin/sh`, one hard link, no symlink: the same admission the real companion must pass.
+cat >"$DS_INSTALL/skills/rb-lite-backlog-drain/scripts/select-bead-lanes" <<'STUB'
+#!/bin/sh
+env >"$FIX/selector.env"
+exit 0
+STUB
+chmod +x "$DS_INSTALL/skills/rb-lite-backlog-drain/scripts/select-bead-lanes"
+LOADER_VARS='LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT LD_DEBUG LD_DEBUG_OUTPUT LD_PROFILE
+LD_ORIGIN_PATH LD_PRELOAD_32 LD_PRELOAD_64 DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH
+DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FALLBACK_FRAMEWORK_PATH LIBPATH
+SHLIB_PATH GCONV_PATH LOCPATH'
+hostile=()
+for v in $LOADER_VARS; do hostile+=("$v=$WORK/no-such-loader-object"); done
+( cd "$REPO" && env HOME="$WORK/nohome" PATH="$WORK/bin:$PATH" FIX="$FIX" "${hostile[@]}" \
+    "$DS_INSTALL/skills/drive/scripts/drive-status" \
+    --select-bead-lanes-json --scope-label drive-open-issues \
+    --br-path /nonexistent/br --br-oid 0000000000000000000000000000000000000000 \
+    >"$WORK/loader.out" 2>"$WORK/loader.err" ) || true
+survived=()
+for v in $LOADER_VARS; do
+  grep -q -- "^$v=" "$FIX/selector.env" 2>/dev/null && survived+=("$v")
+done
+if [[ ! -s "$FIX/selector.env" ]]; then
+  FAIL=$((FAIL+1)); echo "  FAIL $t (the selector never ran, so nothing was checked)"
+elif ! grep -Fxq -- "FIX=$FIX" "$FIX/selector.env"; then
+  FAIL=$((FAIL+1)); echo "  FAIL $t (the environment dump is not the selector's own)"
+elif [[ ${#survived[@]} -ne 0 ]]; then
+  FAIL=$((FAIL+1)); echo "  FAIL $t (${#survived[@]} survived: ${survived[*]})"
+else
+  PASS=$((PASS+1)); echo "  ok   $t ($(printf '%s' "$LOADER_VARS" | wc -w) variables cleared)"
+fi
+
+# The /bin/sh bootstrap EXPORTS POSIXLY_CORRECT to reach the real special builtins, and an
+# export outlives the `exec` into Bash. Every tool this script runs would then inherit it —
+# a mode change entering through plain `bash drive-status` never made — so the body has to
+# take it back out of the environment.
+t='the diagnostic form does not export POSIXLY_CORRECT to the tools it runs'
+new_repo
+mkdir -p "$WORK/envprobe"
+REAL_GIT=$(command -v git)
+# The probe reads `env`, not `$POSIXLY_CORRECT`: /bin/sh IS bash-as-sh on some hosts, and
+# that sets the shell variable itself, so expanding it here would report `y` on every host
+# whether or not drive-status passed anything down.
+cat >"$WORK/envprobe/git" <<STUB
+#!/bin/sh
+if env | grep -q '^POSIXLY_CORRECT='; then echo inherited; else echo clean; fi >>"\$FIX/posix.env"
+exec $REAL_GIT "\$@"
+STUB
+chmod +x "$WORK/envprobe/git"
+( cd "$REPO" && PATH="$WORK/envprobe:$WORK/bin:$PATH" FIX="$FIX" "$DS" >/dev/null 2>&1 )
+if [[ ! -s "$FIX/posix.env" ]]; then
+  FAIL=$((FAIL+1)); echo "  FAIL $t (the probe git never ran, so nothing was checked)"
+elif grep -Fxq inherited "$FIX/posix.env"; then
+  FAIL=$((FAIL+1)); echo "  FAIL $t ($(grep -Fxc inherited "$FIX/posix.env") calls inherited it)"
+else
+  PASS=$((PASS+1)); echo "  ok   $t ($(wc -l <"$FIX/posix.env") calls)"
+fi
+
+t='no diagnostic or lane-mode fixture called the caller-PATH br'
+if [[ -e "$BR_CALLS" ]]; then
+  FAIL=$((FAIL+1)); echo "  FAIL $t: $(<"$BR_CALLS")"
+else
+  PASS=$((PASS+1)); echo "  ok   $t (0 calls)"
+fi
 
 echo
 echo "passed $PASS, failed $FAIL"

@@ -29,7 +29,7 @@ The phase machine, and the skill each phase delegates to:
 | Phase | Skill | Exit gate |
 |---|---|---|
 | SHAPE | `planning-workflow`, `grill-with-docs`, `spec` | spec committed, codex xhigh clean of P0/P1 |
-| GRAPH | `plan-to-beads-transfer` → `bead-polish-loop` → `second-model-bead-audit` | audit PASS, a scoped `br ready` bead exists |
+| GRAPH | `plan-to-beads-transfer` → `bead-polish-loop` → `second-model-bead-audit` | audit PASS, a validated typed selector authorizes an executable lane |
 | BUILD | `orchestrating-with-rb-lite` | rb-lite clean, you ran the gate yourself, **and** each load-bearing behavior was inverted and seen to redden |
 | PROVE | `testing-with-rb-lite` | the gate ran green at a real exit code **and** was observed to FAIL once per property it claims |
 | HARDEN | `multi-reviewer-loop` + a final pinned `codex review --base` | `multi-reviewer-loop` reports `CLEAN` (reviewers **and** consistency pass), then the cleared SHA is recorded |
@@ -58,8 +58,13 @@ turned out to be wrong. The rationale for each rule, with the transcript evidenc
 behind it, is in `references/autonomy-contract.md`.
 
 Ships with `scripts/drive-status`, a read-only detector that prints branch, gate command,
-bead counts, PR state, specs, the cleared SHA, and an inferred phase (`--json` for
-scripting). It also flags the failures that are otherwise invisible: a base that advanced
+PR state, specs, the cleared SHA, and an inferred phase (`--json` for scripting). Its
+no-argument form reports every bead count as `n/a` on purpose — it makes no `br` call, and a
+caller-PATH `br` against an unproven store is not a fact it can establish. Beads state
+reaches Drive only through the typed `--select-bead-lanes-json` mode, which delegates to the
+one shared owner and fails closed.
+
+It also flags the failures that are otherwise invisible: a base that advanced
 after clearance (a squash merge would then land a tree nobody reviewed, while every SHA
 still matches), and a `DONE` record that names a closure PR — it reports `WAITING_FOR_MERGE` and hands
 you the number to query, deliberately not calling the forge itself.
@@ -498,18 +503,32 @@ directories created by `--migrate-existing`.
 - `rb-lite` on `PATH`, or `nix run --refresh github:douglaz/rb-lite -- ...`
   (the `--refresh` avoids running an hour-stale cached revision), for
   `orchestrating-with-rb-lite`
-- `br` (≥ 0.1.45) and `bv` on `PATH`, plus a repo that uses `.beads/`, for
-  `plan-to-beads-transfer`, `bead-polish-loop`, `second-model-bead-audit`, and
-  `orchestrating-with-rb-lite` backlog-drain and harden-until-clean modes.
-  Older `br` corrupts its DB after the branch resets those modes depend on
+- the exact `br` release **`v0.3.2`** (commit
+  `4104c31e79bf806f53e2eba0a4cd2ba6c594f8b9`, release build) and `bv`, plus a repo that
+  uses `.beads/`, for `plan-to-beads-transfer`, `bead-polish-loop`,
+  `second-model-bead-audit`, and `orchestrating-with-rb-lite` backlog-drain and
+  harden-until-clean modes. The repository does not install either tool. Existing
+  maintenance commands resolve that exact `br` through E1's sanitized PATH; bead selection
+  and closure additionally admit a private pinned copy and re-prove its path, object id,
+  and `version --json` identity before every selection or closure command
+  (`skills/rb-lite-backlog-drain/SKILL.md#backlog-step-1` and `#backlog-step-11`).
+  Version-scoped retained measurement (2026-08-22): in separate empty disposable Git
+  repositories, `NO_COLOR=1 br agents --update --force --dry-run` under
+  installed `br 0.2.19` and exact `v0.3.2` each exited 0, wrote the same 57 stdout bytes and zero stderr
+  bytes while the managed block was absent. Initial installation therefore still uses
+  `agents --add --force` and verifies the installed block bytes instead of trusting update.
+  Retained version-scoped history: `br` **< 0.1.45** corrupted its DB after the branch
+  resets those modes depend on
 - `gh` authenticated for `orchestrating-with-rb-lite` backlog-drain and
   harden-until-clean modes (PR creation, checks, merge) and
   `pr-with-codex-bot-review`
 - `drive` orchestrates the other skills, so it inherits every prerequisite above
   for whichever phases a given project actually reaches. Its own
-  `scripts/drive-status` detector needs nothing — it degrades to `n/a`/`unknown` and exits
-  0 without `br`, `jq`, or `gh` — but its bead counts and PR state stay blank
-  until those are present.
+  `scripts/drive-status` detector needs nothing — its no-argument form makes no `br` call
+  at all, reports every bead count as `n/a`, and exits 0 without `br`, `jq`, or `gh`. Bead
+  state reaches Drive only through its explicit
+  `--select-bead-lanes-json` mode, which delegates to the one shared owner
+  `skills/rb-lite-backlog-drain/scripts/select-bead-lanes` and fails closed.
 - `drive`'s SHAPE phase delegates to planning skills that are **not** in this
   repo: `planning-workflow`, `spec`, `grill-me`, `grill-with-docs`,
   `plan-eng-review`, and `plan-ceo-review`. Install them separately (several ship

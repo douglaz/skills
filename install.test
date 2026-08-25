@@ -525,18 +525,21 @@ skills/second-model-bead-audit/SKILL.md|../rb-lite-backlog-drain/SKILL.md#backlo
 skills/second-model-bead-audit/references/reviewer-panel.md|../../rb-lite-backlog-drain/SKILL.md#backlog-step-11
 skills/orchestrating-with-rb-lite/SKILL.md|beads-jsonl-path/scripts/resolve-beads-jsonl
 skills/orchestrating-with-rb-lite/references/harden-until-clean.md|beads-jsonl-path/scripts/resolve-beads-jsonl
-skills/rb-lite-backlog-drain/SKILL.md|beads-jsonl-path/scripts/resolve-beads-jsonl
-skills/drive/SKILL.md|beads-jsonl-path/scripts/resolve-beads-jsonl
-skills/drive/references/phases.md|beads-jsonl-path/scripts/resolve-beads-jsonl
+skills/rb-lite-backlog-drain/SKILL.md|../beads-jsonl-path/SKILL.md#resolve-before-writing
+skills/rb-lite-backlog-drain/SKILL.md|../beads-jsonl-path/SKILL.md#pin-one-already-admitted-br-executable
+skills/rb-lite-backlog-drain/SKILL.md|scripts/select-bead-lanes
+skills/drive/SKILL.md|--select-bead-lanes-json
+skills/drive/references/phases.md|../../rb-lite-backlog-drain/SKILL.md#backlog-step-1
+skills/drive/references/phases.md|../../beads-jsonl-path/SKILL.md#resolve-before-writing
 skills/bead-polish-loop/SKILL.md|beads-jsonl-path/scripts/resolve-beads-jsonl
 skills/bead-polish-loop/SKILL.md|"$BEADS_JSONL_RESOLVER" --allow-dirty
 skills/plan-to-beads-transfer/SKILL.md|beads-jsonl-path/scripts/resolve-beads-jsonl
 skills/plan-to-beads-transfer/SKILL.md|"$BEADS_JSONL_RESOLVER" --allow-dirty
 skills/second-model-bead-audit/SKILL.md|beads-jsonl-path/scripts/resolve-beads-jsonl
 skills/second-model-bead-audit/references/reviewer-panel.md|beads-jsonl-path/scripts/resolve-beads-jsonl
-skills/rb-lite-backlog-drain/SKILL.md|"$BEADS_JSONL_RESOLVER" --allow-dirty
-skills/rb-lite-backlog-drain/SKILL.md|"$BEADS_JSONL_RESOLVER" --recovery
-skills/drive/SKILL.md|"$BEADS_JSONL_RESOLVER" --allow-dirty
+skills/rb-lite-backlog-drain/SKILL.md|--pinned-br "$PRIVATE_BR" "$PRIVATE_BR_OID"
+skills/rb-lite-backlog-drain/SKILL.md|# BEGIN NATIVE CLOSE
+skills/rb-lite-backlog-drain/SKILL.md|# END NATIVE CLOSE
 skills/multi-reviewer-loop/SKILL.md|Companion unavailable: do not delegate
 skills/pr-with-codex-bot-review/SKILL.md|Companion unavailable: stop
 skills/orchestrating-with-rb-lite/SKILL.md|Companion unavailable: stop
@@ -1107,9 +1110,6 @@ while IFS= read -r consumer; do
 done <<'RESOLVER_CONSUMERS'
 skills/beads-jsonl-path/SKILL.md
 skills/orchestrating-with-rb-lite/references/harden-until-clean.md
-skills/rb-lite-backlog-drain/SKILL.md
-skills/drive/SKILL.md
-skills/drive/references/phases.md
 skills/bead-polish-loop/SKILL.md
 skills/plan-to-beads-transfer/SKILL.md
 skills/second-model-bead-audit/SKILL.md
@@ -1123,21 +1123,22 @@ fi
 
 # These procedures are intentionally embedded so each can run without discovering a
 # companion document.  Fragment checks above catch required properties; this exact
-# normalized-code comparison catches a partial security update in any one of all nine
+# normalized-code comparison catches a partial security update in any one of all six
 # copies. Markdown list indentation is removed before comparison because it is not
 # part of the shell program a reader copies from a fenced block.
-t="all nine embedded resolver locators remain synchronized"
+t="all six embedded resolver locators remain synchronized"
 if locator_sync_failures=$(python3 - "$HERE" <<'PY'
 from pathlib import Path
 import sys
 
 root = Path(sys.argv[1])
+# The drain's step 11, drive's SKILL, and drive's phases reference used to carry copies
+# too. They now LINK to beads-jsonl-path and to the drain's own fenced production block,
+# which is what native-close.test and closure-consumers.test execute and extract; a copy
+# reintroduced there would be a procedure nothing runs.
 paths = [
     'skills/beads-jsonl-path/SKILL.md',
     'skills/orchestrating-with-rb-lite/references/harden-until-clean.md',
-    'skills/rb-lite-backlog-drain/SKILL.md',
-    'skills/drive/SKILL.md',
-    'skills/drive/references/phases.md',
     'skills/bead-polish-loop/SKILL.md',
     'skills/plan-to-beads-transfer/SKILL.md',
     'skills/second-model-bead-audit/SKILL.md',
@@ -3239,6 +3240,49 @@ PY
     pass "$t"
   fi
 fi
+
+# The shared lane selector and the pinned E1 companions are executables their callers
+# resolve by absolute installed path. If a target is missing either one, the caller's only
+# remaining option is the repository-relative copy every provenance rule above forbids.
+t="selective installs expose the shared selector and pinned E1 companions to every target" selector_failures=""
+while IFS='|' read -r label target root; do
+  b=$(new_repo_fixture)
+  if [[ "$label" == agents ]]; then
+    # install.sh selects the legacy ~/.agents root only when the Codex root is absent.
+    rm -rf "$b/codexhome/skills"
+    mkdir -p "$b/home/.agents/skills"
+  fi
+  if ! run "$b" --target "$target" drive >/dev/null; then
+    selector_failures+="$label install failed; "
+    continue
+  fi
+  helper="$b/$root/rb-lite-backlog-drain/scripts/select-bead-lanes" resolver="$b/$root/beads-jsonl-path/scripts/resolve-beads-jsonl"
+  if [[ ! -x "$helper" || ! -x "$resolver" \
+      || ! -x "$b/$root/beads-jsonl-path/scripts/git-clean" \
+      || ! -x "$b/$root/drive/scripts/drive-status" ]]; then
+    selector_failures+="$label is missing a selector, E1 companion, or Drive delegate; "
+  elif ! grep -Fq -- '--pinned-br' "$resolver"; then
+    selector_failures+="$label installed an E1 resolver without the pinned prefix; "
+  elif ! grep -Fq -- '--scoped --scope-label drive-open-issues' "$helper"; then
+    selector_failures+="$label installed a selector without the scoped grammar; "
+  fi
+done <<'SELECTOR_TARGETS'
+claude|claude|home/.claude/skills
+codex|codex|codexhome/skills
+agents|codex|home/.agents/skills
+SELECTOR_TARGETS
+if [[ -n "$selector_failures" ]]; then fail "$t" "$selector_failures"
+else pass "$t"; fi
+
+# drive reaches the selector through the edge it already has. A reverse
+# rb-lite-backlog-drain -> drive edge would make every drain install a standalone workflow
+# selector nobody asked for, which is the cycle the companion table exists to avoid.
+t="drive obtains the selector through its existing dependency, with no reverse edge"
+b=$(new_repo_fixture)
+if ! run "$b" --target claude rb-lite-backlog-drain >/dev/null; then
+  fail "$t" "installing the drain failed"
+elif [[ -e "$b/home/.claude/skills/drive" ]]; then fail "$t" "installing the drain pulled in drive"
+else pass "$t"; fi
 
 printf '\npassed %d, failed %d\n' "$PASS" "$FAIL"
 [[ $FAIL -eq 0 ]]

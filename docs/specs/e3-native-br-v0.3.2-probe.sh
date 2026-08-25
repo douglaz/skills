@@ -80,11 +80,20 @@ cp .beads/issues.jsonl compat-before.jsonl
 printf '%s\n' '{"database":"beads.db","jsonl_export":"issues.jsonl"}' >.beads/metadata.json
 printf '%s\n' '# issue_prefix: skills' >.beads/config.yaml
 set +e; "$BR" --no-auto-import --no-auto-flush where --json >compat-where.out 2>compat-where.err; compat_wrc=$?; set -e
-python3 -I - "$compat/compat-where.out" "$compat/.beads/issues.jsonl" <<'PYWHERE'
+python3 -I - "$compat/compat-where.out" "$compat/.beads/issues.jsonl" \
+  "$compat/.beads/beads.db" "$ROOT" <<'PYWHERE'
 import json, os, sys
 value = json.load(open(sys.argv[1]))
 if value.get("jsonl_path") != os.path.realpath(sys.argv[2]):
     raise SystemExit("where did not select the candidate JSONL")
+database_path = value.get("database_path")
+expected_database_path = os.path.realpath(sys.argv[3])
+if database_path != expected_database_path:
+    raise SystemExit("where did not report the production database_path")
+root = os.path.realpath(sys.argv[4])
+if not database_path.startswith(root + os.sep):
+    raise SystemExit("where database_path escaped the probe root")
+print("WHERE_DATABASE_PATH=$PROBE_ROOT" + database_path[len(root):])
 PYWHERE
 printf 'WHERE_NO_DB_RC=%s STDERR_BYTES=%s DB=%s\n' "$compat_wrc" \
   "$(wc -c <compat-where.err)" "$([[ -e .beads/beads.db ]] && echo present || echo absent)"
@@ -101,7 +110,7 @@ printf 'COMPAT_IMPORT_RC=%s IMPORT_STDOUT_BYTES=%s IMPORT_STDERR_BYTES=%s FLUSH_
 seed=$ROOT/seed; clone=$ROOT/clone; mkdir "$seed"; cd "$seed"
 git init -q; git config user.email probe@example.invalid; git config user.name Probe; mkdir .beads
 "$BR" init --prefix p --quiet
-A=$("$BR" create alpha --silent); B=$("$BR" create beta --silent); C=$("$BR" create gamma --silent); D=$("$BR" create delta-in-progress --silent); E=$("$BR" create outside-scope-decoy --silent); F=$("$BR" create scoped-closed-decoy --status closed --silent)
+A=$("$BR" create alpha --silent); B=$("$BR" create beta --silent); C=$("$BR" create gamma --silent); D=$("$BR" create delta-in-progress --silent); E=$("$BR" create outside-scope-decoy --silent); F=$("$BR" create scoped-closed-decoy --status closed --silent); G=$("$BR" create scoped-deferred --silent); H=$("$BR" create unlabeled-generic --silent)
 "$BR" --no-auto-import --no-auto-flush label add "$A" --label executor-skills >/dev/null
 "$BR" --no-auto-import --no-auto-flush label add "$A" --label drive-open-issues >/dev/null
 "$BR" --no-auto-import --no-auto-flush label add "$B" --label executor-rb-lite >/dev/null
@@ -113,7 +122,15 @@ A=$("$BR" create alpha --silent); B=$("$BR" create beta --silent); C=$("$BR" cre
 "$BR" --no-auto-import --no-auto-flush label add "$E" --label executor-rb-lite >/dev/null
 "$BR" --no-auto-import --no-auto-flush label add "$F" --label executor-skills >/dev/null
 "$BR" --no-auto-import --no-auto-flush label add "$F" --label drive-open-issues >/dev/null
+"$BR" --no-auto-import --no-auto-flush label add "$G" --label executor-skills >/dev/null
+"$BR" --no-auto-import --no-auto-flush label add "$G" --label drive-open-issues >/dev/null
+# `$H` is deliberately never labelled: the generic closure preflight admits a row by the
+# ABSENCE of every recognized Drive label, so what an unlabelled row's `labels` field looks
+# like on this release decides whether that admission is a real check or a vacuous one.
 "$BR" --no-auto-import --no-auto-flush update "$D" --status in_progress >/dev/null
+# A scoped row deferred the way this release defers, so the selector's own `list` argv can be
+# measured against deferred open work rather than reasoned about from the `status` field.
+"$BR" --no-auto-import --no-auto-flush update "$G" --defer 2099-01-01 >/dev/null
 "$BR" --no-auto-import --no-auto-flush dep add "$B" "$A" --quiet
 "$BR" --no-auto-import --no-auto-flush dep add "$E" "$A" --quiet
 "$BR" --no-auto-import --no-auto-flush comments add "$C" --message a-preserved >/dev/null
@@ -137,24 +154,40 @@ git clone -q "$seed" "$clone"; cd "$clone"; git config user.email probe@example.
 FRESH_DB_BEFORE=$(test -e .beads/beads.db && echo present || echo absent)
 printf 'FRESH_DB_BEFORE=%s\n' "$FRESH_DB_BEFORE"
 [[ $FRESH_DB_BEFORE == absent ]]
+set +e; "$BR" --no-auto-import --no-auto-flush version --json >version-no-db.json 2>version-no-db.err; version_no_db_rc=$?; set -e
+printf 'VERSION_NO_DB_RC=%s STDERR_BYTES=%s DB=%s\n' "$version_no_db_rc" \
+  "$(wc -c <version-no-db.err)" "$([[ -e .beads/beads.db ]] && echo present || echo absent)"
+[[ $version_no_db_rc -eq 0 && ! -s version-no-db.err && ! -e .beads/beads.db &&
+   "$(<version-no-db.json)" == "$VERSION_JSON" ]]
 set +e
 "$BR" --no-db --no-auto-import --no-auto-flush ready --limit 0 --label drive-open-issues --label executor-skills --json >ready-skills.json 2>ready-skills.err; ready_skills_rc=$?
+"$BR" --no-db --no-auto-import --no-auto-flush ready --limit 0 --label drive-open-issues --label executor-skills --include-deferred --json >ready-skills-deferred.json 2>ready-skills-deferred.err; ready_skills_deferred_rc=$?
 "$BR" --no-db --no-auto-import --no-auto-flush ready --limit 0 --label drive-open-issues --label executor-rb-lite --json >ready-rb.json 2>ready-rb.err; ready_rb_rc=$?
 "$BR" --no-db --no-auto-import --no-auto-flush ready --limit 0 --label drive-open-issues --label authority-human --json >ready-human.json 2>ready-human.err; ready_human_rc=$?
 "$BR" --no-db --no-auto-import --no-auto-flush list --label drive-open-issues --status open --all --json >list-open.json 2>list-open.err; list_open_rc=$?
+"$BR" --no-db --no-auto-import --no-auto-flush list --label drive-open-issues --status open --all --deferred --json >list-open-deferred.json 2>list-open-deferred.err; list_open_deferred_rc=$?
 "$BR" --no-db --no-auto-import --no-auto-flush list --label drive-open-issues --status in_progress --all --json >progress-all.json 2>progress-all.err; progress_all_rc=$?
-"$BR" --no-db --no-auto-import --no-auto-flush list --label drive-open-issues --label executor-skills --status in_progress --all --json >progress-skills.json 2>progress-skills.err; progress_skills_rc=$?
-"$BR" --no-db --no-auto-import --no-auto-flush list --label drive-open-issues --label executor-rb-lite --status in_progress --all --json >progress-rb.json 2>progress-rb.err; progress_rb_rc=$?
-"$BR" --no-db --no-auto-import --no-auto-flush list --label drive-open-issues --label authority-human --status in_progress --all --json >progress-human.json 2>progress-human.err; progress_human_rc=$?
+"$BR" --no-db --no-auto-import --no-auto-flush list --label drive-open-issues --status in_progress --all --deferred --json >progress-all-deferred.json 2>progress-all-deferred.err; progress_all_deferred_rc=$?
+"$BR" --no-db --no-auto-import --no-auto-flush list --label drive-open-issues --label executor-skills --status in_progress --all --deferred --json >progress-skills-deferred.json 2>progress-skills-deferred.err; progress_skills_deferred_rc=$?
+"$BR" --no-db --no-auto-import --no-auto-flush list --label drive-open-issues --label executor-rb-lite --status in_progress --all --deferred --json >progress-rb-deferred.json 2>progress-rb-deferred.err; progress_rb_deferred_rc=$?
+"$BR" --no-db --no-auto-import --no-auto-flush list --label drive-open-issues --label authority-human --status in_progress --all --deferred --json >progress-human-deferred.json 2>progress-human-deferred.err; progress_human_deferred_rc=$?
 "$BR" --no-db --no-auto-import --no-auto-flush blocked --limit 0 --label drive-open-issues --json >blocked-all.json 2>blocked-all.err; blocked_all_rc=$?
 set -e
-python3 -I - "$E" "$F" "$ready_skills_rc" "$ready_rb_rc" "$ready_human_rc" "$list_open_rc" "$progress_all_rc" "$progress_skills_rc" "$progress_rb_rc" "$progress_human_rc" "$blocked_all_rc" <<'PY'
+python3 -I - "$E" "$F" "$G" "$ready_skills_rc" "$ready_skills_deferred_rc" "$ready_rb_rc" "$ready_human_rc" "$list_open_rc" "$list_open_deferred_rc" "$progress_all_rc" "$progress_all_deferred_rc" "$progress_skills_deferred_rc" "$progress_rb_deferred_rc" "$progress_human_deferred_rc" "$blocked_all_rc" <<'PY'
 import json,sys
 decoys=set(sys.argv[1:3])
-names=('ready-skills','ready-rb','ready-human','list-open','progress-all','progress-skills','progress-rb','progress-human','blocked-all')
-expected=(1,0,1,3,1,1,0,0,1)
+deferred=sys.argv[3]
+# The `-deferred` names are the argv the selector now issues; `list-open` and `progress-all`
+# are the same queries without the flag, retained as controls so the transcript shows what
+# the flag does to each result set rather than asserting it.
+names=('ready-skills','ready-skills-deferred','ready-rb','ready-human','list-open',
+       'list-open-deferred','progress-all','progress-all-deferred',
+       'progress-skills-deferred','progress-rb-deferred','progress-human-deferred',
+       'blocked-all')
+expected=(1,2,0,1,4,4,1,1,1,0,0,1)
 projection={}
-for name,want,rc in zip(names,expected,sys.argv[3:]):
+selected={}
+for name,want,rc in zip(names,expected,sys.argv[4:]):
     payload=json.load(open(name+'.json'))
     stderr=open(name+'.err','rb').read()
     if name.startswith('list-') or name.startswith('progress-'):
@@ -170,7 +203,41 @@ for name,want,rc in zip(names,expected,sys.argv[3:]):
     if any(row.get('id') in decoys for row in rows):
         raise SystemExit('selector leaked outside-scope decoy: '+name)
     projection[name]=len(rows)
+    selected[name]=sorted(row['id'] for row in rows)
 print('NO_DB_SELECTOR_PROJECTION='+json.dumps(projection,sort_keys=True,separators=(',',':')))
+# Deferral is measured, not inferred from the `status` field. The row must really be deferred
+# for this release (absent from `ready`, present under `--include-deferred`), and the
+# `--deferred` count argv the selector issues must return it — that is what keeps deferred
+# open work inside `unresolved_count` without a second query surface. The two controls say
+# what the flag itself changes on this release: on both count queries, nothing.
+rows=[json.loads(line) for line in open('.beads/issues.jsonl')]
+deferred_row=next((row for row in rows if row.get('id') == deferred), None)
+if deferred_row is None:
+    raise SystemExit('the deferred fixture row is missing from the JSONL')
+deferral={
+ 'defer_until_is_set': bool(deferred_row.get('defer_until')),
+ 'jsonl_status': deferred_row.get('status'),
+ 'absent_from_lane_ready': deferred not in selected['ready-skills'],
+ 'present_under_include_deferred': deferred in selected['ready-skills-deferred'],
+ 'counted_by_selector_open_list': deferred in selected['list-open-deferred'],
+ 'deferred_flag_changes_open_list':
+   selected['list-open'] != selected['list-open-deferred'],
+ 'deferred_flag_changes_progress_list':
+   selected['progress-all'] != selected['progress-all-deferred'],
+}
+print('DEFERRED_OPEN_PROJECTION='+json.dumps(deferral,sort_keys=True,separators=(',',':')))
+if deferral != {'defer_until_is_set': True, 'jsonl_status': 'open',
+                'absent_from_lane_ready': True, 'present_under_include_deferred': True,
+                'counted_by_selector_open_list': True,
+                'deferred_flag_changes_open_list': False,
+                'deferred_flag_changes_progress_list': False}:
+    raise SystemExit('unexpected deferred-row visibility')
+# Both `--status in_progress` forms carry the flag, so the exact ID arrays — not just the
+# counts — must still partition. A one-sided flag would break this before it reached the
+# selector's own partition check.
+if sorted(selected['progress-skills-deferred'] + selected['progress-rb-deferred']
+          + selected['progress-human-deferred']) != selected['progress-all-deferred']:
+    raise SystemExit('the lane in-progress arrays do not partition the global one')
 PY
 [[ ! -e .beads/beads.db ]]
 set +e; "$BR" --no-auto-import --no-auto-flush sync --import-only >import.out 2>import.err; irc=$?; set -e
@@ -234,6 +301,88 @@ if len(after_comments) != len(before_comments)+1 or len(remaining) != 1: raise S
 if after_comments == before_comments + remaining: raise SystemExit('fixture did not exercise canonical insertion order')
 if list(changed) != [id] or changed[id] != ['close_reason','closed_at','comments','status','updated_at']: raise SystemExit('unexpected JSONL delta')
 PY
+
+# Step 11 routes on `show --json` row fields, not just on `status`: the pre-close preflight
+# reads `labels`, the resume classifier reads `comments[].text` and `close_reason` in BOTH
+# `--no-db` and cache mode, and the read-back reads `close_reason`. Pin that payload against
+# the real binary rather than against a fixture stub, in every mode a decision reads it from.
+set +e
+"$BR" --no-db --no-auto-import --no-auto-flush show "$A" --json >show-open-labeled.json 2>show-open-labeled.err; show_open_labeled_rc=$?
+"$BR" --no-db --no-auto-import --no-auto-flush show "$H" --json >show-unlabeled.json 2>show-unlabeled.err; show_unlabeled_rc=$?
+"$BR" --no-db --no-auto-import --no-auto-flush show "$C" --json >show-closed-no-db.json 2>show-closed-no-db.err; show_closed_no_db_rc=$?
+"$BR" --no-auto-import --no-auto-flush show "$C" --json >show-closed-db.json 2>show-closed-db.err; show_closed_db_rc=$?
+set -e
+python3 -I - "$A" "$H" "$C" "$reason" "$show_open_labeled_rc" "$show_unlabeled_rc" "$show_closed_no_db_rc" "$show_closed_db_rc" <<'PYSHOW'
+import json, sys
+open_id, unlabeled_id, closed_id, reason = sys.argv[1:5]
+names = ('show-open-labeled', 'show-unlabeled', 'show-closed-no-db', 'show-closed-db')
+wanted = {'show-open-labeled': open_id, 'show-unlabeled': unlabeled_id,
+          'show-closed-no-db': closed_id, 'show-closed-db': closed_id}
+projection = {}
+for name, rc in zip(names, sys.argv[5:]):
+    rows = json.load(open(name + '.json'))
+    if rc != '0' or open(name + '.err', 'rb').read():
+        raise SystemExit('show --json failed: ' + name)
+    if not isinstance(rows, list) or len(rows) != 1 or rows[0].get('id') != wanted[name]:
+        raise SystemExit('show --json did not return exactly the requested row: ' + name)
+    row = rows[0]
+    projection[name] = {
+        'has_labels': 'labels' in row,
+        'labels': sorted(row['labels']) if isinstance(row.get('labels'), list) else row.get('labels'),
+        'status': row.get('status'),
+        'has_close_reason': 'close_reason' in row,
+        'close_reason': row.get('close_reason'),
+        'has_comments': 'comments' in row,
+        'comment_texts': sorted(comment.get('text') for comment in row.get('comments', [])),
+    }
+print('SHOW_ROW_PROJECTION=' + json.dumps(projection, sort_keys=True, separators=(',', ':')))
+# Measured: this release OMITS `labels`, `comments`, and `close_reason` rather than emitting
+# an empty array or null, so absence is this payload's only spelling of "none". That is why
+# the consumers read them absence-tolerantly (`.[0].labels[]?`, `.comments[]?`, `label_list`'s
+# `has("labels")` fallback) instead of requiring the key: an unlabelled row is proved by the
+# missing key, so the generic lane's "carries no recognized Drive label" gate is measuring
+# absence, not passing vacuously over a shape it failed to parse.
+labeled = {'has_labels': True, 'labels': ['drive-open-issues', 'executor-skills'],
+           'status': 'open', 'has_close_reason': False, 'close_reason': None,
+           'has_comments': False, 'comment_texts': []}
+unlabeled = dict(labeled, has_labels=False, labels=None)
+closed = {'has_labels': True, 'labels': ['authority-human', 'drive-open-issues'],
+          'status': 'closed', 'has_close_reason': True, 'close_reason': reason,
+          'has_comments': True,
+          'comment_texts': ['a-preserved', 'evidence', 'z-preserved']}
+if projection != {'show-open-labeled': labeled, 'show-unlabeled': unlabeled,
+                  'show-closed-no-db': closed, 'show-closed-db': closed}:
+    raise SystemExit('unexpected show --json row payload')
+PYSHOW
+
+cp .beads/issues.jsonl before-in-progress.jsonl
+set +e; "$BR" --no-auto-import --no-auto-flush close "$D" --reason in-progress-probe --transition-comment in-progress-evidence >/dev/null 2>in-progress-close.err; ip_crc=$?; set -e
+set +e; "$BR" --no-auto-import --no-auto-flush sync --flush-only >/dev/null 2>in-progress-flush.err; ip_frc=$?; set -e
+python3 -I - "$D" "$ip_crc" "$ip_frc" <<'PYINPROGRESS'
+import json, sys
+issue_id, close_rc, flush_rc = sys.argv[1:]
+before = {row["id"]: row for row in map(json.loads, open("before-in-progress.jsonl"))}
+after = {row["id"]: row for row in map(json.loads, open(".beads/issues.jsonl"))}
+def field_changes(left, right):
+    return [field for field in sorted(set(left) | set(right))
+            if (field in left) != (field in right)
+            or (field in left and left[field] != right[field])]
+changed = {key: field_changes(before[key], after[key]) for key in before}
+changed = {key: fields for key, fields in changed.items() if fields}
+fields = changed.get(issue_id)
+print(f'IN_PROGRESS_CLOSE_RC={close_rc} FLUSH_RC={flush_rc} CLOSE_STDERR_BYTES={len(open("in-progress-close.err","rb").read())} FLUSH_STDERR_BYTES={len(open("in-progress-flush.err","rb").read())}')
+print('IN_PROGRESS_CHANGED_FIELDS=' + json.dumps(fields, separators=(',', ':')))
+if close_rc != '0' or flush_rc != '0' or open('in-progress-close.err','rb').read() or open('in-progress-flush.err','rb').read():
+    raise SystemExit('in-progress close or flush failed')
+if set(before) != set(after) or list(changed) != [issue_id]:
+    raise SystemExit('in-progress close changed the JSONL shape or a bystander')
+if before[issue_id].get('status') != 'in_progress' or after[issue_id].get('status') != 'closed':
+    raise SystemExit('in-progress target did not close')
+if after[issue_id].get('close_reason') != 'in-progress-probe':
+    raise SystemExit('in-progress close reason did not land')
+if fields != ['close_reason', 'closed_at', 'comments', 'status', 'updated_at']:
+    raise SystemExit('unexpected in-progress close field set')
+PYINPROGRESS
 
 # Restore reviewed bytes and recover DB, then demonstrate explicit flush failure.
 git checkout -q -- .beads/issues.jsonl

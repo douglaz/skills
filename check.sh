@@ -5,3 +5,5 @@ set -euo pipefail
 ./install.test
 ./skills/pr-with-codex-bot-review/scripts/bot-gate.test
 ./skills/drive/scripts/drive-status.test
+./skills/rb-lite-backlog-drain/scripts/native-close.test
+./skills/rb-lite-backlog-drain/scripts/closure-consumers.test

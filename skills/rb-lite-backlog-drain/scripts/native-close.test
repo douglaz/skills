@@ -1,0 +1,1261 @@
+#!/usr/bin/env bash
+# native-close.test — extracts the canonical Step 11 production block from SKILL.md and
+# executes it against deterministic fixture binaries.
+#
+# The block is the subject, not a copy of it: every case below runs the exact bytes the
+# skill publishes between `# BEGIN NATIVE CLOSE` and `# END NATIVE CLOSE`. A consumer that
+# copied the commands instead of linking here would drift out from under these fixtures,
+# which is why closure-consumers.test asserts the other three carry no copy.
+#
+# Usage: ./native-close.test        (exits 0 if all pass)
+
+set -uo pipefail
+HERE=$(cd "$(dirname "$0")" && pwd -P)
+SKILL="$HERE/../SKILL.md"
+E1="$HERE/../../beads-jsonl-path/scripts"
+SYSTEM_PATH=$PATH
+WORK=$(mktemp -d)
+SNAPS="$WORK/snapshot-dirs"
+: >"$SNAPS"
+cleanup() {
+  while IFS= read -r dir; do
+    [[ "$dir" == /tmp/native-close.* ]] && rm -rf "$dir"
+  done <"$SNAPS"
+  rm -rf "$WORK"
+}
+trap cleanup EXIT
+PASS=0; FAIL=0
+pass() { PASS=$((PASS + 1)); printf '  ok   %s\n' "$1"; }
+fail() { FAIL=$((FAIL + 1)); printf '  FAIL %s\n         %s\n' "$1" "$2"; }
+
+printf '%s\n' 'native-close fixtures'
+
+# --- extraction ------------------------------------------------------------------------
+BLOCK="$WORK/native-close.bash"
+begin_count=$(grep -c '^# BEGIN NATIVE CLOSE$' "$SKILL")
+end_count=$(grep -c '^# END NATIVE CLOSE$' "$SKILL")
+awk '/^# BEGIN NATIVE CLOSE$/{f=1} f{print} /^# END NATIVE CLOSE$/{f=0}' "$SKILL" >"$BLOCK"
+t='Step 11 publishes exactly one marked production block'
+if [[ "$begin_count" != 1 || "$end_count" != 1 ]]; then
+  fail "$t" "found $begin_count BEGIN and $end_count END markers"
+elif [[ ! -s "$BLOCK" ]]; then
+  fail "$t" 'the extracted block is empty'
+elif ! bash -n "$BLOCK" 2>"$WORK/parse.err"; then
+  fail "$t" "the extracted block does not parse: $(<"$WORK/parse.err")"
+else
+  pass "$t"
+fi
+
+t='the block closes exactly one id with a reason and a transition comment'
+# Comments stripped first: the block explains in prose that `--force` and batching are
+# forbidden, and a naive grep would read its own prohibition as the thing prohibited.
+grep -v '^[[:space:]]*#' "$BLOCK" >"$WORK/block.code"
+if [[ $(grep -cF 'close "$BEAD_ID" --reason "$CLOSE_REASON" --transition-comment "$CLOSE_EVIDENCE"' "$WORK/block.code") -ne 1 ]]; then
+  fail "$t" 'the single-id close with reason and transition comment is not the published form'
+elif ! grep -Fq 'sync --flush-only' "$WORK/block.code"; then
+  fail "$t" 'the strict flush is not the published form'
+elif grep -Eq -- '(^|[[:space:]])(--force|--all|--batch)([[:space:]]|$)|reopen' "$WORK/block.code"; then
+  fail "$t" 'the executable block offers --force, a reopen, or a batch flag'
+else
+  pass "$t"
+fi
+
+t='durable completion is emitted before best-effort snapshot cleanup'
+completion_line=$(grep -nF "printf 'CLOSURE_COMPLETE %s\n'" "$WORK/block.code" | cut -d: -f1)
+cleanup_line=$(grep -nF 'for nc_artifact in "${NC_SNAPSHOT_ARTIFACTS[@]}"' "$WORK/block.code" | tail -n 1 | cut -d: -f1)
+if [[ -z "$completion_line" || -z "$cleanup_line" ]]; then
+  fail "$t" 'the completion or cleanup operation is missing'
+elif [[ $completion_line -ge $cleanup_line ]]; then
+  fail "$t" "completion is line $completion_line but cleanup starts at line $cleanup_line"
+else
+  pass "$t"
+fi
+
+# --- fixtures --------------------------------------------------------------------------
+cat >"$WORK/seed.py" <<'SEED'
+import json, sys
+path, pre_updated = sys.argv[1:3]
+rows = [
+    # Representative of the measured 0.2.19 export: `dependencies` and `comments` are
+    # absent keys, not empty ones, so absent-versus-null has to be a real distinction.
+    {"id": "b1", "title": "bystander one", "status": "open", "priority": 1,
+     "issue_type": "task", "labels": ["drive-open-issues", "executor-rb-lite"],
+     "updated_at": "2026-08-01T00:00:00Z"},
+    {"id": "b2", "title": "target", "status": "open", "priority": 0,
+     "issue_type": "task", "labels": ["drive-open-issues", "executor-skills"],
+     "updated_at": pre_updated, "dependencies": [],
+     "comments": [{"text": "m-preserved", "created_at": "2026-08-01T00:00:01Z"},
+                  {"text": "z-preserved", "created_at": "2026-08-01T00:00:02Z"}]},
+    {"id": "b3", "title": "bystander two", "status": "open", "priority": 2,
+     "issue_type": "bug", "labels": ["drive-open-issues", "authority-human"],
+     "updated_at": "2026-08-01T00:00:03Z", "dependencies": [], "comments": []},
+    {"id": "b4", "title": "blocked", "status": "open", "priority": 1,
+     "issue_type": "task", "labels": ["drive-open-issues", "executor-skills"],
+     "updated_at": "2026-08-01T00:00:04Z"},
+]
+with open(path, "w") as stream:
+    for row in rows:
+        stream.write(json.dumps(row, separators=(",", ":")) + "\n")
+SEED
+
+cat >"$WORK/br.py" <<'BRSTUB'
+import json, os, sys
+
+TOOL = sys.argv[1]
+ARGS = sys.argv[2:]
+ROOT = os.path.dirname(TOOL)
+STATE = os.path.join(ROOT, "state")
+CONF = json.load(open(os.path.join(ROOT, "br.conf")))
+JSONL, DB = os.environ.get("BEADS_JSONL", CONF["jsonl"]), CONF["db"]
+CACHE = os.path.join(STATE, "db.jsonl")
+
+
+def rows(path):
+    return [json.loads(line) for line in open(path) if line.strip()]
+
+
+def dump(path, data):
+    with open(path, "w") as stream:
+        for row in data:
+            stream.write(json.dumps(row, separators=(",", ":")) + "\n")
+
+
+def flag(name):
+    return os.path.exists(os.path.join(STATE, name))
+
+
+def option(name):
+    if name in ARGS and ARGS.index(name) + 1 < len(ARGS):
+        return ARGS[ARGS.index(name) + 1]
+    return None
+
+
+def mutate(data):
+    path = os.path.join(STATE, "mutate")
+    if not os.path.exists(path):
+        return data
+    kind = open(path).read().strip()
+    target = next(row for row in data if row["id"] == CONF["target"])
+    bystander = next(row for row in data if row["id"] == CONF["bystander"])
+    if kind == "bystander":
+        bystander["title"] = "tampered"
+    elif kind == "extra-comment":
+        target["comments"] = target["comments"] + [{"text": "extra", "created_at": "x"}]
+    elif kind == "lose-comment":
+        # A PRE-EXISTING comment, specifically: dropping the new one instead would be
+        # caught by the exactly-one-addition rule and leave the preservation rule untested.
+        target["comments"] = [c for c in target["comments"]
+                              if c.get("text") != "m-preserved"]
+    elif kind == "lose-new-comment":
+        target["comments"] = [c for c in target["comments"]
+                              if c.get("text") != "a-evidence"]
+    elif kind == "drop-row":
+        data = [row for row in data if row["id"] != CONF["bystander"]]
+    elif kind == "duplicate-id":
+        data = data + [dict(bystander)]
+    elif kind == "extra-field":
+        target["title"] = "tampered"
+    elif kind == "same-updated":
+        target["updated_at"] = CONF["pre_updated_at"]
+    elif kind == "empty-closed-at":
+        target["closed_at"] = ""
+    elif kind == "null-key":
+        bystander["comments"] = None
+    elif kind == "empty-id":
+        bystander["id"] = ""
+    else:
+        raise SystemExit("unknown mutation " + kind)
+    return data
+
+
+with open(os.path.join(STATE, "calls.log"), "a") as stream:
+    prefix = "candidate " if JSONL != CONF["jsonl"] else ""
+    stream.write(prefix + " ".join(ARGS) + "\n")
+# The Beads location variables the resolver forwards to this binary. They decide which
+# store a close writes, so "the block cleared them" is only checkable from in here.
+with open(os.path.join(STATE, "env.log"), "a") as stream:
+    stream.write(" ".join(sorted(name for name in os.environ
+                                 if name.startswith(("BEADS_", "BR_")))) + "\n")
+counter = os.path.join(STATE, "calls.count")
+CALL = (int(open(counter).read().strip() or "0") if os.path.exists(counter) else 0) + 1
+open(counter, "w").write(str(CALL))
+
+
+def finish(out="", err="", code=0):
+    # The swap happens on the way out, so it is the NEXT invocation's admission that has
+    # to notice — which is the whole point of re-proving the tool per invocation.
+    marker = os.path.join(STATE, "swap-at")
+    if os.path.exists(marker) and int(open(marker).read().strip()) == CALL:
+        with open(TOOL, "a") as stream:
+            stream.write("# swapped\n")
+    sys.stdout.write(out)
+    sys.stderr.write(err)
+    raise SystemExit(code)
+
+
+def target_is_closed(path):
+    try:
+        return any(row.get("id") == CONF["target"] and row.get("status") == "closed"
+                   for row in rows(path))
+    except OSError:
+        return False
+
+
+sub = next((a for a in ARGS if a in ("version", "where", "sync", "show", "close")), None)
+if sub == "version":
+    finish(out=open(os.path.join(STATE, "version.json")).read())
+elif sub == "where":
+    # Death after the flush, before the proof: the proof's own locator is the first `where`
+    # that runs once the JSONL already carries the closed target, so keying on that reaches
+    # the state without depending on an absolute call number.
+    if flag("interrupt-post-flush") and target_is_closed(JSONL):
+        finish(err="interrupted after the flush\n", code=1)
+    finish(out=json.dumps({"jsonl_path": JSONL, "database_path": DB}) + "\n")
+elif sub == "sync" and "--import-only" in ARGS:
+    if flag("import-fail"):
+        finish(err="import failed\n", code=1)
+    dump(CACHE, rows(JSONL))
+    open(DB, "w").write("cache\n")
+    finish(out="imported\n")
+elif sub == "sync" and "--flush-only" in ARGS:
+    if not os.path.exists(CACHE):
+        finish(err="no cache to flush\n", code=7)
+    if flag("flush-fail"):
+        finish(err="flush failed\n", code=7)
+    data = rows(CACHE)
+    for row in data:
+        if isinstance(row.get("comments"), list):
+            # v0.3.2 sorts comments canonically on export, so the new one does not land
+            # last: the proof has to compare them order-independently.
+            row["comments"] = sorted(row["comments"], key=lambda c: c.get("text", ""))
+    dump(JSONL, mutate(data))
+    finish(out="flushed\n")
+elif sub == "show":
+    identities = [arg for arg in ARGS[ARGS.index("show") + 1:]
+                  if not arg.startswith("-")]
+    source = JSONL if "--no-db" in ARGS else CACHE
+    if not os.path.exists(source):
+        finish(err="no source\n", code=1)
+    data = [r for r in rows(source) if r.get("id") in identities]
+    if source == CACHE:
+        for row in data:
+            if isinstance(row.get("comments"), list):
+                row["comments"] = sorted(row["comments"], key=lambda c: c.get("text", ""))
+    finish(out=json.dumps(data) + "\n")
+elif sub == "close":
+    identity = ARGS[ARGS.index("close") + 1]
+    if not os.path.exists(CACHE):
+        finish(err="no cache\n", code=1)
+    data = rows(CACHE)
+    target = next((row for row in data if row.get("id") == identity), None)
+    if (target is None or target.get("status") not in ("open", "in_progress")
+            or flag("blocked-" + identity)):
+        finish(err="cannot close\n", code=3)
+    target["status"] = "closed"
+    target["close_reason"] = option("--reason")
+    target["closed_at"] = "2026-08-20T00:00:00Z"
+    target["updated_at"] = "2026-08-20T00:00:01Z"
+    target["comments"] = list(target.get("comments", [])) + [
+        {"text": option("--transition-comment"), "created_at": "2026-08-20T00:00:01Z"}]
+    dump(CACHE, data)
+    finish(out="closed\n")
+finish(err="unmapped invocation\n", code=2)
+BRSTUB
+
+PRE_UPDATED=2026-08-01T00:00:05Z
+REASON='work_pr=https://github.com/o/r/pull/1 merge_sha=0123456789012345678901234567890123456789'
+EVIDENCE=a-evidence
+
+new_fixture() {
+  local base companions
+  base=$(mktemp -d "$WORK/fx.XXXXXX") || return
+  companions="$base/home/.claude/skills/beads-jsonl-path/scripts"
+  mkdir -p "$base/clone/.beads" "$companions" "$base/tool/state" "$base/hostile" || return
+  cp "$E1/resolve-beads-jsonl" "$E1/git-clean" "$companions" || return
+  chmod +x "$companions/resolve-beads-jsonl" "$companions/git-clean" || return
+  git init -q "$base/clone" || return
+  git -C "$base/clone" config user.name 'Native Close Test' || return
+  git -C "$base/clone" config user.email native@example.invalid || return
+  python3 -I "$WORK/seed.py" "$base/clone/.beads/issues.jsonl" "$PRE_UPDATED" || return
+  git -C "$base/clone" add -- .beads/issues.jsonl || return
+  git -C "$base/clone" commit -qm seed || return
+  cp "$WORK/br.py" "$base/tool/br.py" || return
+  # `$0` is the pinned absolute path, so the stub finds its own state without an
+  # environment variable — which matters, because the resolver strips the environment.
+  printf '#!/usr/bin/env bash\nexec python3 -I "${0%%/*}/br.py" "$0" "$@"\n' \
+    >"$base/tool/br" || return
+  chmod +x "$base/tool/br" || return
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$base/tool/br-other" || return
+  chmod +x "$base/tool/br-other" || return
+  printf '{"version":"0.3.2","build":"release","commit":"4104c31e79bf806f53e2eba0a4cd2ba6c594f8b9"}\n' \
+    >"$base/tool/state/version.json" || return
+  python3 -I -c 'import json,sys; json.dump({"jsonl":sys.argv[1],"db":sys.argv[2],"target":"b2","bystander":"b1","pre_updated_at":sys.argv[3]}, open(sys.argv[4],"w"))' \
+    "$base/clone/.beads/issues.jsonl" "$base/clone/.beads/beads.db" "$PRE_UPDATED" \
+    "$base/tool/br.conf" || return
+  # A caller-PATH `br` that must never run: the pinned prefix does no PATH lookup, and the
+  # locator that would have found one runs only after the pinned binary is admitted.
+  printf '#!/usr/bin/env bash\n: >"%s/hostile.ran"\n' "$base" >"$base/hostile/br" || return
+  chmod +x "$base/hostile/br" || return
+  printf '%s' "$base"
+}
+
+tool_oid() { git -C "$1/clone" hash-object --no-filters -- "$1/tool/br"; }
+db_path() { python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["db"])' "$1/tool/br.conf"; }
+calls() { [[ -e "$1/tool/state/calls.log" ]] && cat "$1/tool/state/calls.log"; }
+count_calls() { calls "$1" | grep -cE "$2" || true; }
+count_real_flushes() { calls "$1" | awk '$0 !~ /^candidate / && /sync --flush-only/{n++} END{print n+0}'; }
+jsonl_oid() { git -C "$1/clone" hash-object --no-filters -- "$1/clone/.beads/issues.jsonl"; }
+row_field() {  # $1 base, $2 id, $3 jq filter over the row
+  python3 -I -c 'import json,sys
+rows=[json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+row=[r for r in rows if r.get("id")==sys.argv[2]]
+print(json.dumps(row[0].get(sys.argv[3]) if row else None, separators=(",",":")))' \
+    "$1/clone/.beads/issues.jsonl" "$2" "$3"
+}
+edit_bystander() {  # $1 base — another writer touches a row this closure never targets
+  python3 -I -c 'import json,sys
+p=sys.argv[1]; rows=[json.loads(l) for l in open(p) if l.strip()]
+for row in rows:
+    if row["id"]=="b1": row["title"]="edited by another writer"
+open(p,"w").writelines(json.dumps(r,separators=(",",":"))+"\n" for r in rows)' \
+    "$1/clone/.beads/issues.jsonl"
+}
+set_labels() {  # $1 base, remaining arguments become b2's labels
+  local base=$1; shift
+  python3 -I -c 'import json,sys
+p=sys.argv[1]; rows=[json.loads(l) for l in open(p) if l.strip()]
+for row in rows:
+    if row["id"]=="b2": row["labels"]=sys.argv[2:]
+open(p,"w").writelines(json.dumps(r,separators=(",",":"))+"\n" for r in rows)' \
+    "$base/clone/.beads/issues.jsonl" "$@"
+  git -C "$base/clone" diff --quiet || git -C "$base/clone" commit -qam relabel
+}
+set_status() {  # $1 base, $2 becomes b2's pre-close status
+  python3 -I -c 'import json,sys
+p=sys.argv[1]; rows=[json.loads(l) for l in open(p) if l.strip()]
+for row in rows:
+    if row["id"]=="b2": row["status"]=sys.argv[2]
+open(p,"w").writelines(json.dumps(r,separators=(",",":"))+"\n" for r in rows)' \
+    "$1/clone/.beads/issues.jsonl" "$2"
+  git -C "$1/clone" commit -qam status
+}
+set_db_path() {  # $1 base, $2 becomes the path reported by `br where` and used by sync
+  python3 -I -c 'import json,sys
+p=sys.argv[1]; conf=json.load(open(p)); conf["db"]=sys.argv[2]
+json.dump(conf, open(p,"w"))' "$1/tool/br.conf" "$2"
+}
+
+BLOCK_ID=b2 BLOCK_LANE=executor-skills BLOCK_SNAP= BLOCK_GIT_RUNNER=
+run_block() {  # $1 = base; honours the BLOCK_* knobs, then resets the per-run ones
+  local base=$1 rc
+  (
+    cd "${BLOCK_CWD:-$base/clone}" || exit 98
+    export HOME="$base/home"
+    export PATH="${BLOCK_PATH_PREFIX:+$BLOCK_PATH_PREFIX:}$SYSTEM_PATH"
+    export BEADS_JSONL_RESOLVER="$base/home/.claude/skills/beads-jsonl-path/scripts/resolve-beads-jsonl"
+    export BEADS_GIT_RUNNER="${BLOCK_GIT_RUNNER:-$base/home/.claude/skills/beads-jsonl-path/scripts/git-clean}"
+    export BEAD_ID="$BLOCK_ID" LANE_LABEL="$BLOCK_LANE"
+    export CLOSE_REASON="$REASON" CLOSE_EVIDENCE="$EVIDENCE"
+    export PRIVATE_BR="$base/tool/br"
+    export PRIVATE_BR_OID="${BLOCK_OID:-$(tool_oid "$base")}"
+    export CLOSE_SNAPSHOT_DIR="${BLOCK_SNAP-}"
+    # Always through one `bash -c`, so BLOCK_FUNCTIONS can export a hostile shell function
+    # into the block's own shell exactly the way a caller's environment would.
+    ${BLOCK_OVERRIDE+env "${BLOCK_OVERRIDE[@]}"} \
+      bash -c "${BLOCK_FUNCTIONS-:}"'
+exec bash "$1"' _ "$BLOCK"
+  ) >"$base/out" 2>"$base/err"
+  rc=$?
+  grep -o 'CLOSE_SNAPSHOT_DIR=.*' "$base/out" | sed 's/^CLOSE_SNAPSHOT_DIR=//' >>"$SNAPS"
+  BLOCK_OID=; BLOCK_PATH_PREFIX=; BLOCK_CWD=; BLOCK_FUNCTIONS=; BLOCK_GIT_RUNNER=
+  unset BLOCK_OVERRIDE
+  return $rc
+}
+snap_of() { grep -o 'CLOSE_SNAPSHOT_DIR=.*' "$1/out" | sed 's/^CLOSE_SNAPSHOT_DIR=//' | head -1; }
+interrupt_after_close() {  # uses and updates global b/snap
+  : >"$b/tool/state/flush-fail"
+  run_block "$b" >/dev/null 2>&1
+  snap=$(snap_of "$b")
+  rm -f "$b/tool/state/flush-fail"
+  : >"$b/tool/state/calls.log"
+}
+interrupt_after_flush() {  # uses and updates global b/snap
+  # Both stores end up closed and the snapshot is retained, which is the state a resume
+  # must find. A completed run would not do: it removes its own snapshot on the way out.
+  : >"$b/tool/state/interrupt-post-flush"
+  run_block "$b" >/dev/null 2>&1
+  snap=$(snap_of "$b")
+  rm -f "$b/tool/state/interrupt-post-flush"
+  : >"$b/tool/state/calls.log"
+}
+prepare_imported_snapshot() {  # $1 base; sets global snap to an exact pre-close proof input
+  local base=$1
+  (
+    cd "$base/clone" && HOME="$base/home" \
+      "$base/home/.claude/skills/beads-jsonl-path/scripts/resolve-beads-jsonl" \
+      --pinned-br "$base/tool/br" "$(tool_oid "$base")" --run-br \
+      --no-auto-import --no-auto-flush sync --import-only
+  ) >/dev/null 2>&1 || return
+  snap=$("$base/home/.claude/skills/beads-jsonl-path/scripts/git-clean" \
+    make-temp-dir native-close) || return
+  printf '%s\n' "$snap" >>"$SNAPS"
+  cp "$base/clone/.beads/issues.jsonl" "$snap/pre.jsonl" || return
+  printf '%s\n' "$base/clone/.beads/issues.jsonl" >"$snap/jsonl.path" || return
+  db_path "$base" >"$snap/db.path" || return
+  git -C "$base/clone" hash-object --no-filters -- "$snap/pre.jsonl" >"$snap/pre.oid" || return
+  : >"$base/tool/state/calls.log"
+}
+check_divergence() {  # name, base, exit, flush calls allowed, optional untouched JSONL oid
+  local name=$1 base=$2 rc=$3 flushes=$4 untouched=${5-}
+  if [[ $rc -eq 0 ]]; then fail "$name" 'a diverged JSONL was flushed over and certified'
+  elif ! grep -Fq 'stop for human repair' "$base/err"; then
+    fail "$name" "unexpected diagnostic: $(<"$base/err")"
+  elif [[ $(count_calls "$base" 'close ') -ne 0 ]]; then fail "$name" 'the resume closed again'
+  elif [[ $(count_real_flushes "$base") -ne "$flushes" ]]; then
+    fail "$name" "the resume flushed the real JSONL $(count_real_flushes "$base") times"
+  elif [[ -n "$untouched" && $(jsonl_oid "$base") != "$untouched" ]]; then
+    fail "$name" "the refused resume overwrote another writer's edit"
+  else pass "$name"; fi
+}
+check_resume() {  # name, base, exit, optional expected final JSONL oid
+  local name=$1 base=$2 rc=$3 expected_oid=${4-}
+  if [[ $rc -ne 0 ]]; then fail "$name" "the resume failed: $(<"$base/err")"
+  elif [[ $(count_calls "$base" 'close ') -ne 0 ]]; then fail "$name" 'the resume closed again'
+  elif [[ $(count_real_flushes "$base") -ne 1 ]]; then
+    fail "$name" 'the resume did not flush exactly once'
+  elif [[ $(row_field "$base" b2 status) != '"closed"' ]]; then fail "$name" 'the target is not closed'
+  elif [[ -n "$expected_oid" && $(jsonl_oid "$base") != "$expected_oid" ]]; then
+    fail "$name" 'the idempotent flush changed the JSONL bytes'
+  else pass "$name"; fi
+}
+
+# --- the whole procedure, once, in full -------------------------------------------------
+b=$(new_fixture)
+before_oid=$(jsonl_oid "$b")
+BLOCK_PATH_PREFIX="$b/hostile"
+run_block "$b"; rc=$?
+t='a first entry closes the bead and proves the flush structurally'
+if [[ $rc -ne 0 ]]; then
+  fail "$t" "exit $rc: $(<"$b/err")"
+elif ! grep -Fq 'CLOSURE_COMPLETE b2' "$b/out"; then
+  fail "$t" 'the block did not report a completed closure'
+elif [[ $(row_field "$b" b2 status) != '"closed"' ]]; then
+  fail "$t" 'the target is not closed in the JSONL'
+elif [[ $(row_field "$b" b2 close_reason) != "\"$REASON\"" ]]; then
+  fail "$t" 'the durable reason did not land'
+elif [[ $(jsonl_oid "$b") == "$before_oid" ]]; then
+  fail "$t" 'the JSONL did not change at all'
+elif [[ -e "$b/hostile.ran" ]]; then
+  fail "$t" 'a caller-PATH br was executed'
+else
+  pass "$t"
+fi
+
+t='the close is one id, after the import, and before the strict flush'
+order=$(calls "$b" | grep -oE 'sync --import-only|close b2|sync --flush-only' | tr '\n' ' ')
+if [[ "$order" != 'sync --import-only close b2 sync --flush-only ' ]]; then
+  fail "$t" "observed order: $order"
+elif [[ $(count_calls "$b" 'close ') -ne 1 ]]; then
+  fail "$t" 'more than one close reached the fixture binary'
+elif [[ $(count_calls "$b" 'version --json') -lt 1 ]]; then
+  fail "$t" 'the identity call never ran'
+else
+  pass "$t"
+fi
+
+t='existing comments survive as a multiset with exactly one canonical addition'
+after=$(row_field "$b" b2 comments)
+if [[ "$after" != '[{"text":"a-evidence","created_at":"2026-08-20T00:00:01Z"},{"text":"m-preserved","created_at":"2026-08-01T00:00:01Z"},{"text":"z-preserved","created_at":"2026-08-01T00:00:02Z"}]' ]]; then
+  fail "$t" "comments: $after"
+else
+  pass "$t"
+fi
+
+t='bystander rows come back byte-identical, absent keys included'
+git -C "$b/clone" show HEAD:.beads/issues.jsonl >"$b/pre.jsonl"
+if ! diff <(grep -v '"id":"b2"' "$b/pre.jsonl") \
+          <(grep -v '"id":"b2"' "$b/clone/.beads/issues.jsonl") >"$b/bystander.diff"; then
+  fail "$t" "bystanders changed: $(<"$b/bystander.diff")"
+else
+  pass "$t"
+fi
+
+t='a selected in-progress bead closes without a synthetic reopen'
+b=$(new_fixture)
+set_status "$b" in_progress
+run_block "$b"; rc=$?
+if [[ $rc -ne 0 ]]; then
+  fail "$t" "exit $rc: $(<"$b/err")"
+elif [[ $(row_field "$b" b2 status) != '"closed"' ]]; then
+  fail "$t" 'the in-progress target did not close'
+elif [[ $(count_calls "$b" 'close ') -ne 1 ]]; then
+  fail "$t" 'the in-progress target did not reach exactly one native close'
+elif calls "$b" | grep -qE 'update|reopen'; then
+  fail "$t" 'the close path rewrote status before native close'
+else
+  pass "$t"
+fi
+
+# --- lane admission ---------------------------------------------------------------------
+lane_failures=""
+while IFS='|' read -r identity lane; do
+  b=$(new_fixture)
+  set_labels "$b" drive-open-issues "$lane"
+  BLOCK_ID=$identity BLOCK_LANE=$lane run_block "$b" ||
+    lane_failures+="$lane refused a correctly labelled bead: $(<"$b/err"); "
+done <<'LANES'
+b2|executor-skills
+b2|executor-rb-lite
+b2|authority-human
+LANES
+BLOCK_ID=b2; BLOCK_LANE=executor-skills
+t='each of the three lane labels is accepted'
+if [[ -n "$lane_failures" ]]; then fail "$t" "$lane_failures"; else pass "$t"; fi
+
+refusal_failures=""
+assert_pre_mutation_refusal() {  # $1 base, $2 label, $3 = "preflight" or "close"
+  local base=$1 label=$2 stage=$3
+  if [[ $(row_field "$base" b2 status) != '"open"' ]]; then
+    refusal_failures+="$label mutated the target status; "
+  elif [[ $(row_field "$base" b2 comments) != '[{"text":"m-preserved","created_at":"2026-08-01T00:00:01Z"},{"text":"z-preserved","created_at":"2026-08-01T00:00:02Z"}]' ]]; then
+    refusal_failures+="$label changed the comments; "
+  elif [[ $(count_calls "$base" 'sync --flush-only') -ne 0 ]]; then
+    refusal_failures+="$label reached a flush; "
+  elif [[ "$stage" == preflight && $(count_calls "$base" 'close ') -ne 0 ]]; then
+    refusal_failures+="$label reached a close it should have refused before; "
+  elif [[ "$stage" == close && $(count_calls "$base" 'close ') -ne 1 ]]; then
+    refusal_failures+="$label did not attempt exactly one close; "
+  fi
+}
+
+b=$(new_fixture)
+if BLOCK_LANE=authority-human run_block "$b"; then
+  refusal_failures+="a wrong lane label was accepted; "
+fi
+assert_pre_mutation_refusal "$b" 'wrong lane' preflight
+
+b=$(new_fixture)
+set_labels "$b" drive-open-issues executor-skills authority-human
+if run_block "$b"; then refusal_failures+="two lane labels were accepted; "; fi
+assert_pre_mutation_refusal "$b" 'two lane labels' preflight
+
+b=$(new_fixture)
+set_labels "$b" drive-open-issues
+if run_block "$b"; then refusal_failures+="a missing lane label was accepted; "; fi
+assert_pre_mutation_refusal "$b" 'missing lane label' preflight
+
+# A named lane can only come from scoped selection, and every row that returns carries the
+# scope label. So a target carrying the lane WITHOUT `drive-open-issues` is one selection
+# could never have handed over — a stale or mistyped id — and closing it would mutate work
+# outside the scope this drive is authorized for.
+b=$(new_fixture)
+set_labels "$b" executor-skills
+if run_block "$b"; then refusal_failures+="an out-of-scope lane-only bead was accepted; "; fi
+assert_pre_mutation_refusal "$b" 'out-of-scope lane-only bead' preflight
+
+b=$(new_fixture)
+: >"$b/tool/state/blocked-b2"
+if run_block "$b"; then refusal_failures+="a blocked close reported success; "; fi
+assert_pre_mutation_refusal "$b" 'blocked close' close
+t='a pre-mutation refusal leaves status and comments untouched'
+if [[ -n "$refusal_failures" ]]; then fail "$t" "$refusal_failures"; else pass "$t"; fi
+
+# --- the fourth, internal classification ----------------------------------------------------
+# `generic-unlabeled` is not a Beads label and no row carries it: it is this block's own
+# fourth accepted value for a row the selector's generic mode returned, which by that
+# mode's contract carries NO recognized Drive label. Without it every bead a generic drain
+# selects refuses here, and the advertised drain cannot finish the step it must finish. The
+# two directions below are the whole fail-closed contract for it.
+generic_failures=""
+b=$(new_fixture)
+set_labels "$b" team-a
+if ! BLOCK_LANE=generic-unlabeled run_block "$b"; then
+  generic_failures+="an unlabeled bead could not be closed as generic work: $(<"$b/err"); "
+elif [[ $(row_field "$b" b2 status) != '"closed"' ]]; then
+  generic_failures+="the generic closure reported success without closing the bead; "
+fi
+# Fail-closed in the other direction: a Drive-managed row must not be launderable through
+# the generic value, whichever recognized label it carries.
+while IFS='|' read -r label labels; do
+  b=$(new_fixture)
+  # shellcheck disable=SC2086
+  set_labels "$b" $labels
+  if BLOCK_LANE=generic-unlabeled run_block "$b"; then
+    generic_failures+="$label was closed as generic work; "
+  elif [[ $(row_field "$b" b2 status) != '"open"' ]]; then
+    generic_failures+="$label was mutated before the refusal; "
+  fi
+done <<'GENERIC'
+a scoped bead|drive-open-issues executor-skills
+a bead carrying only the scope label|drive-open-issues
+a bead carrying only a lane label|authority-human
+GENERIC
+b=$(new_fixture)
+set_labels "$b" team-a
+if BLOCK_LANE=executor-skills run_block "$b"; then
+  generic_failures+="an unlabeled bead was closed under a named lane; "
+fi
+t='generic-unlabeled closes unlabeled work and refuses every Drive-managed row'
+if [[ -n "$generic_failures" ]]; then fail "$t" "$generic_failures"; else pass "$t"; fi
+
+# Four accepted values, exactly. A fifth is refused by the accepted-value guard itself,
+# which runs before the block creates its private directory or executes the pinned binary
+# even once — so an unknown classification never gets as far as initializing a cache in the
+# clone and refusing afterwards.
+t='an unrecognized classification refuses before any private directory or br call'
+b=$(new_fixture)
+if BLOCK_LANE=executor-other run_block "$b"; then
+  fail "$t" 'an unrecognized classification was accepted'
+elif ! grep -Fq 'not one of the four accepted values' "$b/err"; then
+  fail "$t" "unexpected diagnostic: $(<"$b/err")"
+elif [[ -n $(snap_of "$b") ]]; then
+  fail "$t" 'the refused run created a private directory'
+elif [[ $(count_calls "$b" .) -ne 0 ]]; then
+  fail "$t" "the refused run executed the pinned binary: $(calls "$b")"
+elif [[ $(row_field "$b" b2 status) != '"open"' ]]; then
+  fail "$t" 'the refused run mutated the target'
+else
+  pass "$t"
+fi
+
+# --- the caller's shell cannot own the preflight -------------------------------------------
+# Bash imports exported functions, so a caller `unset` that returns 0 makes the override
+# loop a no-op while it reports success — and E1 forwards every surviving BEADS_*/BR_*
+# variable to the pinned binary, which is what decides the store this close writes.
+# `command` is exported too, because `command unset` is the obvious defence and it is not
+# one: a `command` function shadows it just as easily. Only POSIX special-builtin
+# precedence recovers a lookup neither can reach.
+t='inherited unset and command functions cannot keep Beads location overrides alive'
+b=$(new_fixture)
+BLOCK_FUNCTIONS='unset() { return 0; }; command() { return 0; }; export -f unset command'
+BLOCK_OVERRIDE=(BEADS_DIR=/nonexistent BR_DB=/nonexistent BEADS_JSONL=/nonexistent)
+run_block "$b"; rc=$?
+if [[ $rc -ne 0 ]]; then
+  fail "$t" "the hostile function broke a valid closure: $(<"$b/err")"
+elif [[ ! -s "$b/tool/state/env.log" ]]; then
+  fail "$t" 'the fixture recorded no environment, so nothing was checked'
+elif grep -qE '(^| )(BEADS_DIR|BEADS_JSONL|BR_DB)( |$)' "$b/tool/state/env.log"; then
+  fail "$t" "an override survived to the pinned binary: $(sort -u "$b/tool/state/env.log")"
+else
+  pass "$t"
+fi
+
+# --- admission --------------------------------------------------------------------------
+identity_failures=""
+while IFS='|' read -r label version build commit; do
+  b=$(new_fixture)
+  printf '{"version":"%s","build":"%s","commit":"%s"}\n' \
+    "$version" "$build" "$commit" >"$b/tool/state/version.json"
+  if run_block "$b"; then identity_failures+="$label was admitted; "; fi
+  [[ $(count_calls "$b" 'where --json') -eq 0 ]] ||
+    identity_failures+="$label reached the locator before identity admission; "
+done <<'IDENTITIES'
+a wrong version|0.3.1|release|4104c31e79bf806f53e2eba0a4cd2ba6c594f8b9
+a debug build|0.3.2|debug|4104c31e79bf806f53e2eba0a4cd2ba6c594f8b9
+a wrong commit|0.3.2|release|0000000000000000000000000000000000000000
+IDENTITIES
+
+b=$(new_fixture)
+before_oid=$(jsonl_oid "$b")
+if BLOCK_OID=$(git -C "$b/clone" hash-object --no-filters -- "$b/tool/br-other") \
+   run_block "$b"; then
+  identity_failures+="an object id taken from a different binary was admitted; "
+fi
+[[ $(count_calls "$b" '.') -eq 0 ]] ||
+  identity_failures+="a mismatched object id still executed the binary; "
+[[ $(jsonl_oid "$b") == "$before_oid" && ! -e "$b/clone/.beads/beads.db" ]] ||
+  identity_failures+="a refused admission changed the store; "
+t='an identity liar and a mismatched object id are both refused'
+if [[ -n "$identity_failures" ]]; then fail "$t" "$identity_failures"; else pass "$t"; fi
+
+swap_failures=""
+while IFS= read -r at; do
+  b=$(new_fixture)
+  printf '%s\n' "$at" >"$b/tool/state/swap-at"
+  if run_block "$b"; then
+    swap_failures+="a tool swapped after call $at was still trusted; "
+  elif ! grep -Fq CLOSURE_INCOMPLETE "$b/err"; then
+    swap_failures+="a swap after call $at did not report CLOSURE_INCOMPLETE; "
+  elif [[ $(row_field "$b" b2 status) != '"open"' ]]; then
+    swap_failures+="a swap after call $at still closed the bead in the JSONL; "
+  fi
+done <<'SWAPS'
+1
+2
+3
+SWAPS
+t='a private tool swapped between two commands is refused by the next admission'
+if [[ -n "$swap_failures" ]]; then fail "$t" "$swap_failures"; else pass "$t"; fi
+
+# --- entry preconditions -----------------------------------------------------------------
+entry_failures=""
+b=$(new_fixture)
+printf 'stale\n' >"$b/clone/.beads/beads.db"
+if run_block "$b"; then entry_failures+="a first entry accepted an existing cache; "; fi
+[[ $(count_calls "$b" 'sync ') -eq 0 ]] || entry_failures+="an existing cache still reached sync; "
+
+b=$(new_fixture)
+printf 'unstaged\n' >>"$b/clone/.beads/issues.jsonl"
+if run_block "$b"; then entry_failures+="an unstaged JSONL divergence was accepted; "; fi
+[[ $(count_calls "$b" 'sync --import-only') -eq 0 ]] ||
+  entry_failures+="an unstaged divergence still reached the import; "
+
+b=$(new_fixture)
+printf 'staged\n' >>"$b/clone/.beads/issues.jsonl"
+git -C "$b/clone" add -- .beads/issues.jsonl
+git -C "$b/clone" checkout-index -f -- .beads/issues.jsonl
+if run_block "$b"; then entry_failures+="a staged JSONL divergence was accepted; "; fi
+t='a first entry requires an absent cache and a clean tracked JSONL'
+if [[ -n "$entry_failures" ]]; then fail "$t" "$entry_failures"; else pass "$t"; fi
+
+t='a configured database outside the standalone clone is refused before import'
+b=$(new_fixture)
+outside_db="$b/outside-cache.db"
+set_db_path "$b" "$outside_db"
+if run_block "$b"; then
+  fail "$t" 'an outside database path was accepted'
+elif [[ -e "$outside_db" ]]; then
+  fail "$t" 'the refused entry wrote the outside database'
+elif [[ $(count_calls "$b" 'sync --import-only') -ne 0 ]]; then
+  fail "$t" 'the outside database path reached the importing write'
+else
+  pass "$t"
+fi
+
+t='a linked worktree is refused before anything runs'
+b=$(new_fixture)
+git -C "$b/clone" worktree add -q -b linked "$b/linked" >/dev/null 2>&1
+if [[ ! -f "$b/linked/.git" ]]; then
+  fail "$t" 'could not create a linked worktree fixture'
+else
+  BLOCK_CWD="$b/linked" run_block "$b"; rc=$?
+  if [[ $rc -eq 0 ]]; then
+    fail "$t" 'a linked worktree was accepted as a standalone clone'
+  elif [[ $(count_calls "$b" '.') -ne 0 ]]; then
+    fail "$t" 'a linked worktree still executed the pinned binary'
+  else
+    pass "$t"
+  fi
+fi
+
+t='a first entry prints the canonical private directory when its parent spelling is a symlink'
+b=$(new_fixture)
+companions=$b/home/.claude/skills/beads-jsonl-path/scripts
+state=$companions/symlink-temp
+mkdir -p "$state/real"
+ln -s real "$state/link"
+cat >"$companions/git-clean-symlink-temp" <<'SYMLINK_TEMP'
+#!/usr/bin/env bash
+set -u
+SELF=${0%/*}
+STATE=$SELF/symlink-temp
+if [[ ${1-} == make-temp-dir ]]; then
+  mkdir "$STATE/real/snapshot" || exit
+  chmod 700 "$STATE/real/snapshot" || exit
+  printf '%s\n' "$STATE/link/snapshot"
+else
+  exec "$SELF/git-clean" "$@"
+fi
+SYMLINK_TEMP
+chmod +x "$companions/git-clean-symlink-temp"
+real_parent=$(CDPATH= cd -P -- "$state/real" && pwd -P)
+BLOCK_GIT_RUNNER="$companions/git-clean-symlink-temp"
+run_block "$b"; rc=$?
+printed=$(snap_of "$b")
+if [[ $rc -ne 0 ]]; then
+  fail "$t" "exit $rc: $(<"$b/err")"
+elif [[ $printed != "$real_parent/snapshot" ]]; then
+  fail "$t" "printed the noncanonical path: $printed"
+else
+  pass "$t"
+fi
+
+# --- structural proof mutants -------------------------------------------------------------
+mutant_failures=""
+while IFS= read -r kind; do
+  b=$(new_fixture)
+  printf '%s\n' "$kind" >"$b/tool/state/mutate"
+  if run_block "$b"; then
+    mutant_failures+="the $kind flush passed the structural proof; "
+  elif ! grep -Fq CLOSURE_INCOMPLETE "$b/err"; then
+    mutant_failures+="the $kind flush failed without CLOSURE_INCOMPLETE; "
+  fi
+done <<'MUTANTS'
+bystander
+extra-comment
+lose-comment
+lose-new-comment
+drop-row
+duplicate-id
+extra-field
+same-updated
+empty-closed-at
+null-key
+empty-id
+MUTANTS
+t='every structural mutation of the flushed graph is refused'
+if [[ -n "$mutant_failures" ]]; then fail "$t" "$mutant_failures"; else pass "$t"; fi
+
+t='tampering with the retained pre-close copy refuses the proof'
+b=$(new_fixture)
+interrupt_after_close
+if [[ -z "$snap" || ! -s "$snap/pre.jsonl" ]]; then
+  fail "$t" 'the interrupted run left no retained snapshot'
+else
+  printf '{"id":"tampered"}\n' >>"$snap/pre.jsonl"
+  BLOCK_SNAP="$snap" run_block "$b"; rc=$?
+  BLOCK_SNAP=
+  if [[ $rc -eq 0 ]]; then
+    fail "$t" 'a tampered snapshot still produced a proof'
+  elif ! grep -Fq CLOSURE_INCOMPLETE "$b/err"; then
+    fail "$t" "unexpected diagnostic: $(<"$b/err")"
+  else
+    pass "$t"
+  fi
+fi
+
+# --- retained-directory admission ------------------------------------------------------------
+# A resume writes fixed-name evidence files immediately. Its caller-supplied directory and
+# every known artifact therefore have to be admitted before the first redirection can follow
+# a replacement. Each fixture starts with zero post-preparation calls and checks that it stays
+# there; the symlink cases also put bytes at the target that a followed redirection would
+# truncate.
+retained_guard_failures=""
+
+b=$(new_fixture)
+prepare_imported_snapshot "$b" || retained_guard_failures+="could not prepare directory-symlink fixture; "
+real_snap=$snap.real
+mv "$snap" "$real_snap"
+printf '%s\n' "$real_snap" >>"$SNAPS"
+printf 'directory sentinel\n' >"$real_snap/version.json"
+ln -s "$real_snap" "$snap"
+BLOCK_SNAP="$snap" run_block "$b"; rc=$?
+BLOCK_SNAP=
+if [[ $rc -eq 0 || $(<"$real_snap/version.json") != 'directory sentinel' ||
+      $(count_calls "$b" '.') -ne 0 ]]; then
+  retained_guard_failures+="a symlinked retained directory was followed; "
+elif ! grep -Fq 'the retained closure directory is not one canonical private directory outside the clone' "$b/err"; then
+  retained_guard_failures+="a symlinked retained directory used the wrong diagnostic; "
+fi
+
+b=$(new_fixture)
+prepare_imported_snapshot "$b" || retained_guard_failures+="could not prepare artifact-symlink fixture; "
+outside_version=$b/outside-version.json
+printf 'artifact sentinel\n' >"$outside_version"
+ln -s "$outside_version" "$snap/version.json"
+BLOCK_SNAP="$snap" run_block "$b"; rc=$?
+BLOCK_SNAP=
+if [[ $rc -eq 0 || $(<"$outside_version") != 'artifact sentinel' ||
+      $(count_calls "$b" '.') -ne 0 ]]; then
+  retained_guard_failures+="a symlinked retained artifact was followed; "
+elif ! grep -Fq 'a retained closure artifact is not a regular private file' "$b/err"; then
+  retained_guard_failures+="a symlinked retained artifact used the wrong diagnostic; "
+fi
+
+b=$(new_fixture)
+prepare_imported_snapshot "$b" || retained_guard_failures+="could not prepare artifact-hardlink fixture; "
+outside_version=$b/outside-version.json
+printf 'hardlink sentinel\n' >"$outside_version"
+ln "$outside_version" "$snap/version.json"
+BLOCK_SNAP="$snap" run_block "$b"; rc=$?
+BLOCK_SNAP=
+if [[ $rc -eq 0 || $(<"$outside_version") != 'hardlink sentinel' ||
+      $(count_calls "$b" '.') -ne 0 ]]; then
+  retained_guard_failures+="a hard-linked retained artifact alias was overwritten; "
+elif ! grep -Fq 'a retained closure artifact is not a regular private file' "$b/err"; then
+  retained_guard_failures+="a hard-linked retained artifact used the wrong diagnostic; "
+fi
+
+b=$(new_fixture)
+prepare_imported_snapshot "$b" || retained_guard_failures+="could not prepare nonregular-artifact fixture; "
+mkdir "$snap/version.json"
+BLOCK_SNAP="$snap" run_block "$b"; rc=$?
+BLOCK_SNAP=
+if [[ $rc -eq 0 || $(count_calls "$b" '.') -ne 0 ]]; then
+  retained_guard_failures+="a nonregular retained artifact reached execution; "
+elif ! grep -Fq 'a retained closure artifact is not a regular private file' "$b/err"; then
+  retained_guard_failures+="a nonregular retained artifact used the wrong diagnostic; "
+fi
+
+b=$(new_fixture)
+prepare_imported_snapshot "$b" || retained_guard_failures+="could not prepare inside-worktree fixture; "
+inside_snap=$b/clone/retained-close
+mv "$snap" "$inside_snap"
+snap=$inside_snap
+BLOCK_SNAP="$snap" run_block "$b"; rc=$?
+BLOCK_SNAP=
+if [[ $rc -eq 0 || $(count_calls "$b" '.') -ne 0 ]]; then
+  retained_guard_failures+="an inside-worktree retained directory reached execution; "
+elif ! grep -Fq 'the retained closure directory is not one canonical private directory outside the clone' "$b/err"; then
+  retained_guard_failures+="an inside-worktree retained directory used the wrong diagnostic; "
+fi
+
+b=$(new_fixture)
+prepare_imported_snapshot "$b" || retained_guard_failures+="could not prepare non-private fixture; "
+chmod 755 "$snap"
+BLOCK_SNAP="$snap" run_block "$b"; rc=$?
+BLOCK_SNAP=
+if [[ $rc -eq 0 || $(count_calls "$b" '.') -ne 0 ]]; then
+  retained_guard_failures+="a non-private retained directory reached execution; "
+elif ! grep -Fq 'the retained closure directory is not one canonical private directory outside the clone' "$b/err"; then
+  retained_guard_failures+="a non-private retained directory used the wrong diagnostic; "
+fi
+
+t='resume admits one canonical private outside directory with only regular known artifacts'
+if [[ -n "$retained_guard_failures" ]]; then
+  fail "$t" "$retained_guard_failures"
+else
+  pass "$t"
+fi
+
+# --- resume matrix --------------------------------------------------------------------------
+t='an incomplete early snapshot refuses resume and directs a fresh-clone restart'
+b=$(new_fixture)
+snap=$("$b/home/.claude/skills/beads-jsonl-path/scripts/git-clean" make-temp-dir native-close)
+printf '%s\n' "$snap" >>"$SNAPS"
+BLOCK_SNAP="$snap" run_block "$b"; rc=$?
+BLOCK_SNAP=
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'an incomplete retained snapshot reported success'
+elif ! grep -Fq 'CLOSURE_INCOMPLETE' "$b/err" ||
+     ! grep -Fq 'abandon this clone and start from a fresh one' "$b/err"; then
+  fail "$t" "the refusal did not direct a fresh restart: $(<"$b/err")"
+elif [[ $(count_calls "$b" '.') -ne 0 ]]; then
+  fail "$t" 'an incomplete retained snapshot reached the pinned binary'
+else
+  pass "$t"
+fi
+
+t='death after import before close abandons this clone for a fresh restart'
+b=$(new_fixture)
+printf '1\n' >"$b/tool/state/swap-at"   # refuse right after the identity call…
+run_block "$b" >/dev/null 2>&1
+snap=$(snap_of "$b")
+b2=$(new_fixture)                        # …so build the interrupted state deliberately
+(
+  cd "$b2/clone" && HOME="$b2/home" \
+    "$b2/home/.claude/skills/beads-jsonl-path/scripts/resolve-beads-jsonl" \
+    --pinned-br "$b2/tool/br" "$(tool_oid "$b2")" --run-br \
+    --no-auto-import --no-auto-flush sync --import-only
+) >/dev/null 2>&1
+snap2=$("$b2/home/.claude/skills/beads-jsonl-path/scripts/git-clean" make-temp-dir native-close)
+printf '%s\n' "$snap2" >>"$SNAPS"
+cp "$b2/clone/.beads/issues.jsonl" "$snap2/pre.jsonl"
+printf '%s\n' "$b2/clone/.beads/issues.jsonl" >"$snap2/jsonl.path"
+db_path "$b2" >"$snap2/db.path"
+git -C "$b2/clone" hash-object --no-filters -- "$snap2/pre.jsonl" >"$snap2/pre.oid"
+: >"$b2/tool/state/calls.log"
+BLOCK_SNAP="$snap2" run_block "$b2"; rc=$?
+BLOCK_SNAP=
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'a both-open resume reported success'
+elif ! grep -Fq CLOSURE_ABANDON "$b2/err" ||
+     ! grep -Fq 'start from a fresh one' "$b2/err"; then
+  fail "$t" "expected an abandon, got: $(<"$b2/err")"
+elif [[ $(count_calls "$b2" 'close |sync --flush-only') -ne 0 ]]; then
+  fail "$t" 'a both-open resume still closed or flushed'
+elif [[ $(row_field "$b2" b2 status) != '"open"' ]]; then
+  fail "$t" 'a both-open resume changed the JSONL'
+elif [[ $(jsonl_oid "$b2") != "$(git -C "$b2/clone" hash-object --no-filters -- "$snap2/pre.jsonl")" ]]; then
+  fail "$t" 'a both-open resume moved the JSONL bytes while inspecting'
+elif [[ ! -s "$snap2/pre.jsonl" ]]; then
+  fail "$t" 'an abandoned resume discarded the snapshot a fresh attempt still compares against'
+else
+  pass "$t"
+fi
+
+t='an imported in-progress origin is recognized as pre-close and abandoned on resume'
+b=$(new_fixture)
+set_status "$b" in_progress
+if ! prepare_imported_snapshot "$b"; then
+  fail "$t" 'could not prepare the retained in-progress fixture'
+else
+  BLOCK_SNAP="$snap" run_block "$b"; rc=$?
+  BLOCK_SNAP=
+  if [[ $rc -eq 0 ]]; then
+    fail "$t" 'a retained in-progress resume reported success'
+  elif ! grep -Fq CLOSURE_ABANDON "$b/err"; then
+    fail "$t" "expected an abandon, got: $(<"$b/err")"
+  elif [[ $(count_calls "$b" 'close |sync --flush-only') -ne 0 ]]; then
+    fail "$t" 'the retained in-progress resume closed or flushed'
+  elif [[ $(row_field "$b" b2 status) != '"in_progress"' ]]; then
+    fail "$t" 'the retained in-progress resume changed the target state'
+  elif [[ ! -s "$snap/pre.jsonl" ]]; then
+    fail "$t" 'the abandon discarded the retained in-progress snapshot'
+  else
+    pass "$t"
+  fi
+fi
+
+t='a both-open resume refuses a bystander edit instead of abandoning the clone'
+b=$(new_fixture)
+if ! prepare_imported_snapshot "$b"; then
+  fail "$t" 'could not prepare the retained pre-close fixture'
+else
+  edit_bystander "$b"
+  diverged=$(jsonl_oid "$b")
+  BLOCK_SNAP="$snap" run_block "$b"; rc=$?
+  BLOCK_SNAP=
+  check_divergence "$t" "$b" "$rc" 0 "$diverged"
+fi
+
+t='death between the close and the flush resumes as a flush, then proves'
+b=$(new_fixture)
+interrupt_after_close
+BLOCK_SNAP="$snap" run_block "$b"; rc=$?
+BLOCK_SNAP=
+check_resume "$t" "$b" "$rc"
+
+t='resume classifies the exact configured in-clone database rather than the default name'
+b=$(new_fixture)
+set_db_path "$b" "$b/clone/.beads/custom.db"
+interrupt_after_close
+BLOCK_SNAP="$snap" run_block "$b"; rc=$?
+BLOCK_SNAP=
+check_resume "$t" "$b" "$rc"
+
+t='resume counts one newly added evidence comment when the same text already existed'
+b=$(new_fixture)
+python3 -I -c 'import json,sys
+rows=[json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+for row in rows:
+    if row["id"]=="b2":
+        row["comments"].append({"text":"a-evidence","created_at":"2026-08-01T00:00:03Z"})
+open(sys.argv[1],"w").writelines(json.dumps(r,separators=(",",":"))+"\n" for r in rows)' \
+  "$b/clone/.beads/issues.jsonl"
+git -C "$b/clone" commit -qam same-evidence
+interrupt_after_close
+BLOCK_SNAP="$snap" run_block "$b"; rc=$?
+BLOCK_SNAP=
+check_resume "$t" "$b" "$rc"
+
+t='a cache closed with some other reason is human repair, not a flush'
+b=$(new_fixture)
+interrupt_after_close
+python3 -I -c 'import json,sys
+rows=[json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+for row in rows:
+    if row["id"]=="b2": row["close_reason"]="somebody-elses-write"
+open(sys.argv[1],"w").writelines(json.dumps(r,separators=(",",":"))+"\n" for r in rows)' \
+  "$b/tool/state/db.jsonl"
+settled=$(jsonl_oid "$b")
+: >"$b/tool/state/calls.log"
+BLOCK_SNAP="$snap" run_block "$b"; rc=$?
+BLOCK_SNAP=
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'a cache carrying a different closure was flushed as if it were ours'
+elif ! grep -Fq 'stop for human repair' "$b/err"; then
+  fail "$t" "unexpected diagnostic: $(<"$b/err")"
+elif [[ $(count_calls "$b" 'sync --flush-only') -ne 0 ]]; then
+  fail "$t" 'the unrecognized closure was flushed anyway'
+elif [[ $(jsonl_oid "$b") != "$settled" ]]; then
+  fail "$t" 'the refused resume changed the JSONL'
+else
+  pass "$t"
+fi
+
+t='a JSONL that diverged from the retained snapshot is human repair, not a resume flush'
+b=$(new_fixture)
+interrupt_after_close
+edit_bystander "$b"                      # the target row is untouched; another row is not
+diverged=$(jsonl_oid "$b")
+: >"$b/tool/state/calls.log"
+BLOCK_SNAP="$snap" run_block "$b"; rc=$?
+BLOCK_SNAP=
+check_divergence "$t" "$b" "$rc" 0 "$diverged"
+
+t='a resumed run re-admits the private tool before it inspects anything'
+b=$(new_fixture)
+interrupt_after_close
+settled=$(jsonl_oid "$b")
+# The invocation counter is cumulative across the fixture, so reset it too: swap-at is an
+# absolute call number, and leaving it high would arm a swap that never fires.
+printf '0\n' >"$b/tool/state/calls.count"
+printf '1\n' >"$b/tool/state/swap-at"
+BLOCK_SNAP="$snap" run_block "$b"; rc=$?
+BLOCK_SNAP=
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'a tool swapped before the resume was still trusted'
+elif ! grep -Fq CLOSURE_INCOMPLETE "$b/err"; then
+  fail "$t" "unexpected diagnostic: $(<"$b/err")"
+elif [[ $(count_calls "$b" 'close |sync --flush-only') -ne 0 ]]; then
+  fail "$t" 'a refused resume still closed or flushed'
+elif [[ $(jsonl_oid "$b") != "$settled" ]]; then
+  fail "$t" 'a refused resume changed the JSONL'
+else
+  pass "$t"
+fi
+
+t='a both-closed interruption reruns one idempotent flush and the bytes do not move'
+b=$(new_fixture)
+interrupt_after_flush
+settled=$(jsonl_oid "$b")
+BLOCK_SNAP="$snap" run_block "$b"; rc=$?
+BLOCK_SNAP=
+check_resume "$t" "$b" "$rc" "$settled"
+
+t='a both-closed resume whose idempotent flush moves a byte stops instead of proving'
+b=$(new_fixture)
+interrupt_after_flush
+edit_bystander "$b"                      # divergence only the re-flush can reveal
+diverged=$(jsonl_oid "$b")
+BLOCK_SNAP="$snap" run_block "$b"; rc=$?
+BLOCK_SNAP=
+check_divergence "$t" "$b" "$rc" 1 "$diverged"
+
+t='a resumed run clears injected location overrides before it inspects anything'
+b=$(new_fixture)
+interrupt_after_close
+BLOCK_OVERRIDE=(BEADS_DIR=/nonexistent BEADS_DB=/nonexistent BR_DB=/nonexistent)
+BLOCK_SNAP="$snap" run_block "$b"; rc=$?
+BLOCK_SNAP=
+if [[ $rc -ne 0 ]]; then
+  fail "$t" "injected overrides broke a valid resume: $(<"$b/err")"
+elif calls "$b" | grep -q nonexistent; then
+  fail "$t" 'an injected override reached the pinned binary'
+else
+  pass "$t"
+fi
+
+# --- the private snapshot's lifetime ----------------------------------------------------------
+# It holds the whole pre-close graph, so it must not outlive the proof that reads it — and
+# it must survive everything short of that proof because the resume-or-abandon matrix needs
+# it to classify a complete retained snapshot.
+snapshot_failures=""
+b=$(new_fixture)
+run_block "$b"; rc=$?
+snap=$(snap_of "$b")
+if [[ $rc -ne 0 ]]; then
+  snapshot_failures+="a valid closure failed: $(<"$b/err"); "
+elif [[ -z "$snap" ]]; then
+  snapshot_failures+="the block printed no snapshot directory; "
+elif [[ -e "$snap" ]]; then
+  snapshot_failures+="a completed closure left its private snapshot behind; "
+fi
+
+b=$(new_fixture)
+interrupt_after_close
+if [[ ! -s "$snap/pre.jsonl" ]]; then
+  snapshot_failures+="an interrupted closure discarded the snapshot its resume needs; "
+else
+  BLOCK_SNAP="$snap" run_block "$b"; rc=$?
+  BLOCK_SNAP=
+  if [[ $rc -ne 0 ]]; then
+    snapshot_failures+="the resume failed: $(<"$b/err"); "
+  elif [[ -e "$snap" ]]; then
+    snapshot_failures+="a completed resume left its private snapshot behind; "
+  fi
+fi
+
+b=$(new_fixture)
+printf 'bystander\n' >"$b/tool/state/mutate"
+if run_block "$b"; then snapshot_failures+="a mutated flush passed the structural proof; "; fi
+snap=$(snap_of "$b")
+[[ -n "$snap" && -s "$snap/pre.jsonl" ]] ||
+  snapshot_failures+="a refused proof discarded the snapshot the retained clone needs; "
+
+b=$(new_fixture)
+: >"$b/tool/state/blocked-b2"
+if run_block "$b"; then snapshot_failures+="a blocked close reported success; "; fi
+snap=$(snap_of "$b")
+[[ -n "$snap" && -s "$snap/pre.jsonl" ]] ||
+  snapshot_failures+="a pre-mutation refusal discarded the snapshot; "
+t='a completed closure removes its private snapshot and every unfinished path keeps it'
+if [[ -n "$snapshot_failures" ]]; then fail "$t" "$snapshot_failures"; else pass "$t"; fi
+
+t='cleanup removes only the artifacts the block wrote, never the rest of a handed-back directory'
+# CLOSE_SNAPSHOT_DIR is caller-supplied on a resume, so a glob over it would unlink whatever
+# else is in the directory it was handed. Nothing here is allowed to be a delete-anything
+# primitive that a successful proof happens to trigger.
+b=$(new_fixture)
+interrupt_after_close
+printf 'not ours\n' >"$snap/operator-notes.txt"
+BLOCK_SNAP="$snap" run_block "$b"; rc=$?
+BLOCK_SNAP=
+if [[ ! -s "$snap/operator-notes.txt" ]]; then
+  fail "$t" 'the cleanup deleted a file the block never wrote'
+elif [[ -e "$snap/pre.jsonl" || -e "$snap/version.json" ]]; then
+  fail "$t" 'the cleanup left its own artifacts behind'
+elif ! grep -Fq 'CLOSURE_COMPLETE b2' "$b/out"; then
+  fail "$t" 'the completed closure was not reported'
+elif [[ $rc -ne 0 ]]; then
+  fail "$t" "best-effort cleanup retracted success with exit $rc"
+elif ! grep -Fq 'could not be removed' "$b/err"; then
+  fail "$t" "unexpected diagnostic: $(<"$b/err")"
+else
+  pass "$t"
+fi
+
+t='a snapshot that cannot be removed is reported without retracting the closure'
+# The bead is closed and proven at this point. Downgrading that to CLOSURE_INCOMPLETE would
+# send the next run into the resume matrix for work that is already finished.
+b=$(new_fixture)
+interrupt_after_close
+mkdir "$snap/blocker"                    # `unlink` and `rmdir` both refuse a subdirectory
+BLOCK_SNAP="$snap" run_block "$b"; rc=$?
+BLOCK_SNAP=
+if [[ $rc -ne 0 ]]; then
+  fail "$t" "an unremovable snapshot retracted success with exit $rc"
+elif ! grep -Fq 'CLOSURE_COMPLETE b2' "$b/out"; then
+  fail "$t" 'the completed closure was not reported'
+elif grep -Fq CLOSURE_INCOMPLETE "$b/err"; then
+  fail "$t" 'a cleanup failure was reported as an incomplete closure'
+elif ! grep -Fq 'could not be removed' "$b/err"; then
+  fail "$t" "unexpected diagnostic: $(<"$b/err")"
+elif [[ $(row_field "$b" b2 status) != '"closed"' ]]; then
+  fail "$t" 'the bead reported complete is not closed'
+else
+  pass "$t"
+fi
+
+# --- capability and no-cache coverage --------------------------------------------------------
+t='the E1 make-temp-dir capability the block depends on works and is private'
+b=$(new_fixture)
+dir=$("$b/home/.claude/skills/beads-jsonl-path/scripts/git-clean" make-temp-dir native-close)
+if [[ -z "$dir" || ! -d "$dir" ]]; then
+  fail "$t" 'make-temp-dir produced no directory'
+elif [[ "$(stat -c %a "$dir" 2>/dev/null || stat -f %Lp "$dir")" != 700 ]]; then
+  fail "$t" 'the private directory is not mode 700'
+else
+  rmdir "$dir"
+  pass "$t"
+fi
+
+t='a DB-absent locator and no-db read create no cache'
+b=$(new_fixture)
+(
+  cd "$b/clone" || exit 98
+  export HOME="$b/home"
+  R="$b/home/.claude/skills/beads-jsonl-path/scripts/resolve-beads-jsonl"
+  "$R" --pinned-br "$b/tool/br" "$(tool_oid "$b")" >/dev/null &&
+  "$R" --pinned-br "$b/tool/br" "$(tool_oid "$b")" --run-br \
+    --no-db --no-auto-import --no-auto-flush show b2 --json >/dev/null
+) >/dev/null 2>&1
+if [[ -e "$b/clone/.beads/beads.db" ]]; then
+  fail "$t" 'a no-db read created the cache'
+elif [[ $(count_calls "$b" 'where --json') -lt 1 ]]; then
+  fail "$t" 'the locator never ran'
+else
+  pass "$t"
+fi
+
+t='an import followed by a strict flush is byte-identical with no mutation'
+b=$(new_fixture)
+before=$(jsonl_oid "$b")
+(
+  cd "$b/clone" || exit 98
+  export HOME="$b/home"
+  R="$b/home/.claude/skills/beads-jsonl-path/scripts/resolve-beads-jsonl"
+  "$R" --pinned-br "$b/tool/br" "$(tool_oid "$b")" --run-br \
+    --no-auto-import --no-auto-flush sync --import-only &&
+  "$R" --pinned-br "$b/tool/br" "$(tool_oid "$b")" --run-br \
+    --no-auto-import --no-auto-flush sync --flush-only
+) >/dev/null 2>&1
+if [[ $(jsonl_oid "$b") != "$before" ]]; then
+  fail "$t" 'the 0.2.19-shaped export did not survive an import and flush unchanged'
+else
+  pass "$t"
+fi
+
+printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
+[[ $FAIL -eq 0 ]]

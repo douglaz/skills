@@ -94,7 +94,8 @@ consumers of the new invariant) before writing more spec.
 3. `second-model-bead-audit` — the default final gate. A conditional/failed verdict feeds
    accepted findings back into one more focused polish round, then re-audits.
 
-**Exit gate:** audit verdict PASS and a **scoped** ready bead exists — `"$BEADS_JSONL_RESOLVER" --run-br ready` filtered
+**Exit gate:** audit verdict PASS and a **scoped** ready bead exists — the typed lane
+object from `drive-status --select-bead-lanes-json`, filtered
 through `DRIVE.md`'s `Scope:` line, not the raw repository count.
 
 **Failure:** the audit says coverage is thin → the *spec* is thin. Go back to SHAPE for
@@ -104,13 +105,20 @@ the uncovered area rather than inventing beads to paper over it.
 
 ## BUILD — one bead → one branch
 
-**Enter when:** `"$BEADS_JSONL_RESOLVER" --run-br ready` has a bead **inside the goal's scope**.
+**Enter when:** the typed lane object carries a ready or in-progress row **inside the
+goal's scope**. Get it from
+`drive-status --select-bead-lanes-json --scope-label drive-open-issues --br-path ... --br-oid ...`,
+which delegates to the one shared owner,
+[`rb-lite-backlog-drain/scripts/select-bead-lanes`](../../rb-lite-backlog-drain/SKILL.md#backlog-step-1).
+Nothing else may authorize a Beads-derived BUILD: a refused or missing selection fails
+closed, an `executor-rb-lite` row authorizes only external delegation, and an
+`authority-human` row stops automated routing entirely.
 
 Scope first, then pick. The scope is the `Scope:` line in `DRIVE.md` — one canonical
 definition every phase reads. If the goal named a bead, epic, or milestone, only beads in
 that set are eligible, and DONE means *that set* is empty — not the whole repository
 backlog.
-A bare `"$BEADS_JSONL_RESOLVER" --run-br ready` in a repo with unrelated work will happily hand you a higher-priority
+A bare unscoped ready query in a repo with unrelated work will happily hand you a higher-priority
 bead the user never asked for, and the drive would then build, review, and **merge** it
 autonomously. Draining the entire backlog is a legitimate goal, but only when the user
 actually said so ("drain the backlog"), never as a side effect of a scoped request.
@@ -120,12 +128,12 @@ inherits the boundary along with the goal. Within scope, take the
 highest-priority bead; ties break toward whatever unblocks the most work.
 
 One bead = one branch = one rb-lite run = one **work** PR = one squash merge = one bead
-closed. (The closure that lands after the last bead may need its own small metadata PR —
-see § LAND. That is bookkeeping, not a second work PR, and this rule does not forbid it.)
-Never two runs on one branch, never two beads in one run.
+closed. Every bead's closure gets its own small standalone metadata PR — see § LAND. That
+is bookkeeping, not a second work PR, and this rule does not forbid it. Never two runs on
+one branch, never two beads in one run.
 
-Write the task file with the scope budget from Guard 2 — exact file list, LOC budget,
-explicit **do NOT build** list, done-definition naming the tests.
+Write the task file with the scope budget from Guard 2 — exact file list, production LOC
+budget, explicit **do NOT build** list, done-definition naming the tests.
 
 Resolve `rb-lite` the way `orchestrating-with-rb-lite` does — PATH first, then the Nix
 wrapper. Do not hardcode a local checkout path; most installs will not have one.
@@ -154,8 +162,9 @@ else RB=(nix run --refresh github:douglaz/rb-lite --); fi
 Launch it **as the `run_in_background` command with no trailing `&`** — a trailing `&`
 detaches it from the tracked wrapper and you lose the completion notification.
 
-Watch each round. Two proxies flag overengineering (round count climbing, LOC far past
-comparable beads); confirm by re-reading the goal. Hard brake at 2× budget or round 4.
+Watch each round. Two proxies flag overengineering (round count climbing, production LOC
+far past comparable beads — test volume is not one of them); confirm by re-reading the
+goal. Hard brake at 2× the production budget or round 4.
 
 **Known traps:**
 - rb-lite leaves changes **uncommitted**. It also runs `cargo fmt` — a focused fix can
@@ -625,36 +634,57 @@ good diff and the cap is spent on real findings.
 ### Squash-merge, then clean up
 
 **Exit gate:** merged at a tip the codex bot read with no pending round, no undispositioned
-finding from either bot, with a fresh base, branch reset, bead
-closed (`"$BEADS_JSONL_RESOLVER" --run-br close <id>`), `DRIVE.md` updated — the last two through a reviewed path.
+finding from either bot, with a fresh base, branch reset, the bead closed through the
+native procedure below, and `DRIVE.md` updated — the last two through a reviewed path.
 
-`"$BEADS_JSONL_RESOLVER" --run-br close` cannot ride this branch. It is tempting to think it can: `.beads/issues.jsonl`
-is tracked, so a closure committed on the branch looks transactional. **It is not** — see
-ADR 0003, which records the code evidence, because this is attractive enough to be
-re-proposed. In short: `"$BEADS_JSONL_RESOLVER" --run-br close` auto-flushes immediately, the local SQLite DB is shared
-by every branch with no git awareness, and import is last-write-wins on `updated_at`, so
-the default branch's older OPEN record loses to the branch's newer closure. The closure
-leaks across the checkout and nothing errors.
+Closure cannot ride this branch, and it cannot ride the *next* bead's branch either. It is
+tempting to think it can: `.beads/issues.jsonl` is tracked, so a closure committed on a
+branch looks transactional. **It is not** — see ADR 0003, which records the code evidence,
+because this is attractive enough to be re-proposed. In short: a close auto-flushes
+immediately, the local SQLite cache is shared by every branch with no git awareness, and
+import is last-write-wins on `updated_at`, so the default branch's older OPEN record loses
+to the branch's newer closure. The closure leaks across the checkout and nothing errors.
 
-So closure is genuinely post-merge, and must not be committed straight to the default
-branch. Do not leave it uncommitted either — the next BUILD would start from a dirty base
-and silently carry the previous bead's closure into its diff. Instead:
+So closure is genuinely post-merge, and it runs on **one standalone metadata clone, branch,
+and PR of its own** — the whole procedure, including the exact `br v0.3.2` admission and the
+structural proof, is the fenced production block in
+[exact companion skill `rb-lite-backlog-drain`, step 11](../../rb-lite-backlog-drain/SKILL.md#backlog-step-11).
+Load it and run that block; do not restate its commands here, because a restated copy is a
+second procedure `native-close.test` does not execute. Quote its `CLOSURE_COMPLETE` line as
+the evidence. Do not leave the closure uncommitted either — the next BUILD would start from
+a dirty base and silently carry the previous bead's closure into its diff.
 
-- **A scoped bead remains** → carry the closure commit (plus the `DRIVE.md` update) into
-  the next bead's branch, where it rides that PR through the panel and the configured bots.
-- **The scope is empty** → open one small metadata PR (bead closure + final `DRIVE.md`)
-  and land it through the same gates. Write it as `**Phase:** DONE · **Pending:** metadata
-  PR owner/repo#N` so a resumed session queries that PR instead of stopping at a DONE that
-  never landed. **Qualify it with the repository**, do not write a bare `#N`: on a fork the
-  metadata PR may live in the parent or in the fork and the same number is a different PR
-  in each, so a bare number sends a resumed clone to read an unrelated PR's state as this
-  drive's. `drive-status` still parses the bare form for records already written, and
-  reports `pending_pr_repo: null` for them so the ambiguity is visible rather than assumed.
-  `N` does not exist until the PR is open, so amend it in afterwards — the first pushed
-  head is never the one that merges. Give the PR body a machine-readable marker line, one
-  per bead it closes — `bead-closure: <bead-id>` — because ordinary work PR bodies carry
-  the bead id too, and the discovery query below filters on the marker to tell a merged
-  closure from merged work.
+Then land it:
+
+- **Always** → open one small metadata PR (bead closure + `DRIVE.md`) and land it through
+  the same gates. From its first commit until it merges, the metadata branch must record
+  `**Phase:** HARDEN`; once the PR number exists, amend that to
+  `**Phase:** HARDEN · **Pending:** metadata PR owner/repo#N`. It may derive LAND after the
+  panel clears it. It must not start the next bead from the metadata branch or record a
+  routed phase there.
+
+  After the metadata PR merges, refresh the default branch and only then rerun typed lane
+  selection against the merged closure. With `unresolved_count > 0`, record the nonterminal
+  phase the typed routing rules select; with `unresolved_count == 0`, record `DONE`. Only
+  that refreshed post-merge checkout may record `BUILD`, `GRAPH`, or `DONE`.
+
+  Persist that post-merge record through one finite reviewed path. A nonterminal record
+  rides the next normal reviewed work or GRAPH branch. For zero unresolved,
+  cut a separate status-only PR from the refreshed default branch that records `DONE`; it
+  carries no bead closure, so it
+  does not recurse into this closure procedure. `drive-status` routes `HARDEN` until it merges;
+  after the same gates, review, and merge, the default branch durably carries `DONE`.
+
+  In the final form, **qualify the pending PR with the repository**; do not write a bare
+  `#N`. On a fork the metadata PR may live in the parent or in the fork and the same number
+  is a different PR in each, so a bare number sends a resumed clone to read an unrelated
+  PR's state as this drive's. `drive-status` still parses the bare form for records already
+  written, and reports `pending_pr_repo: null` for them so the ambiguity is visible rather
+  than assumed. `N` does not exist until the PR is open, so amend it in afterwards — the
+  first pushed head is never the one that merges. Give every metadata PR body a
+  machine-readable marker line, one per bead it closes — `bead-closure: <bead-id>` — because
+  ordinary work PR bodies carry the bead id too, and the discovery query below filters on
+  the marker to tell a merged closure from merged work.
 
   **That record is only on the metadata branch until it merges**, so a fresh clone of the
   default branch cannot see it: it finds the old `DRIVE.md` and an open bead, and would
@@ -706,8 +736,8 @@ and silently carry the previous bead's closure into its diff. Instead:
           | test("(^|[^a-z0-9._-])" + ($id|ascii_downcase|gsub("\\.";"\\.")) + "([^a-z0-9._-]|$)")))'
   ```
 
-`BEAD_ID` comes from the bead you are resuming — on a fresh clone take it from `"$BEADS_JSONL_RESOLVER" --run-br list`'s
-open beads, one query per candidate. There is no durable variable carrying it across a
+`BEAD_ID` comes from the bead you are resuming — on a fresh clone take it from the typed
+lane object's unresolved rows, one query per candidate. There is no durable variable carrying it across a
 clone boundary, so a snippet that assumes one silently rejects every PR (`$id != ""`) and
 misses the closure it exists to find.
 
@@ -756,263 +786,31 @@ when its PRs were written.
   query.** An open closure PR means the drive is `WAITING_FOR_MERGE`, not unfinished —
   land that PR rather than starting the work again.
 
-And verify the closure actually happened. `"$BEADS_JSONL_RESOLVER" --run-br close` exits 0 even when the flush that
-writes the JSONL failed, because the error is caught and logged at debug level:
+And verifying that the closure actually happened is the block's job, not a snippet's. It
+re-admits the pinned executable before every command, requires the explicit
+`sync --flush-only` to succeed on its own exit code — the automatic flush after a mutating
+command swallows its error at debug level — and then proves the flushed JSONL structurally:
+identical id sets, byte-identical bystander records, exactly the five allowed changed fields
+on the target, and the pre-close comment multiset preserved with exactly one addition. A
+flush re-exports **every** bead from the gitignored cache over the tracked file, so a
+per-bead check would not see the collateral damage that proof is there to catch.
 
-```bash
-# Resolve and prove the JSONL clean FIRST: `"$BEADS_JSONL_RESOLVER" --run-br close` auto-flushes the cache over it.
-# Clear loader injection in this already-running shell before the locator starts
-# any new process. The resolver/git-clean script bodies are too late: a shebang
-# interpreter would already have loaded caller-selected libraries.
-_bjp_posixly_was_set=${POSIXLY_CORRECT+x}
-_bjp_posixly_value=${POSIXLY_CORRECT-}
-POSIXLY_CORRECT=y
-export POSIXLY_CORRECT
-\unset LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT LD_DEBUG LD_DEBUG_OUTPUT LD_PROFILE \
-  LD_ORIGIN_PATH LD_PRELOAD_32 LD_PRELOAD_64 DYLD_INSERT_LIBRARIES \
-  DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH \
-  DYLD_FALLBACK_FRAMEWORK_PATH LIBPATH SHLIB_PATH GCONV_PATH LOCPATH || {
-  printf '%s\n' 'cannot clear dynamic-loader injection before beads-jsonl-path — do NOT write' >&2
-  exit 1
-}
-if [ -n "$_bjp_posixly_was_set" ]; then
-  POSIXLY_CORRECT=$_bjp_posixly_value
-  export POSIXLY_CORRECT
-else
-  \unset POSIXLY_CORRECT
-fi
-BEADS_JSONL_RESOLVER=$(
-  (
-    # Resolve the clean interpreter in a subshell. POSIX special-builtin precedence
-    # prevents exported caller functions from redefining this trust path, and the
-    # subshell leaves the caller's shell state untouched.
-    POSIXLY_CORRECT=y
-    export POSIXLY_CORRECT
-    \unset -f command builtin exec unset 2>/dev/null || :
-    _bjp_bash=$(command -p -v bash) || {
-      printf '%s\n' 'cannot locate a trusted Bash for the beads JSONL locator — do NOT write' >&2
-      exit 1
-    }
-    unset BASH_ENV ENV BASH_COMPAT BASH_LOADABLES_PATH BASH_XTRACEFD CDPATH GLOBIGNORE
-    exec "$_bjp_bash" --noprofile --norc -p -s <<'__BJP_TRUSTED_BASH__'
-# Privileged Bash ignores inherited functions. Clear the other startup controls too,
-# then perform every candidate, worktree, provenance, and byte-agreement decision here.
-command unset BASH_ENV ENV BASH_COMPAT BASH_LOADABLES_PATH BASH_XTRACEFD CDPATH GLOBIGNORE || {
-  printf '%s\n' 'cannot sanitize the beads JSONL locator shell environment — do NOT write' >&2
-  exit 1
-}
-while command builtin read -r _ _ _bjp_function; do
-  command unset -f -- "$_bjp_function" || {
-    printf '%s\n' 'cannot sanitize the beads JSONL locator shell environment — do NOT write' >&2
-    exit 1
-  }
-done < <(command builtin declare -F)
-unset _bjp_function
-_bjp_git=$(command -p -v git) || {
-  printf '%s\n' 'cannot locate a trusted Git for beads-jsonl-path — do NOT write' >&2
-  exit 1
-}
-_bjp_cmp=$(command -p -v cmp) || {
-  printf '%s\n' 'cannot locate a trusted cmp for beads-jsonl-path — do NOT write' >&2
-  exit 1
-}
-_bjp_stat=$(command -p -v stat) || {
-  printf '%s\n' 'cannot locate a trusted stat for beads-jsonl-path — do NOT write' >&2
-  exit 1
-}
-_bjp_regular_link_count() {
-  local path=$1 count
-  if count=$("$_bjp_stat" -c %h "$path" 2>/dev/null) && [[ $count =~ ^[0-9]+$ ]]; then
-    :
-  elif count=$("$_bjp_stat" -f %l "$path" 2>/dev/null) && [[ $count =~ ^[0-9]+$ ]]; then
-    :
-  else
-    return 1
-  fi
-  printf '%s\n' "$count"
-}
-_bjp_git_environment=( "${!GIT@}" )
-for _bjp_git_variable in "${_bjp_git_environment[@]}"; do
-  command unset -- "$_bjp_git_variable" || {
-    printf '%s\n' 'cannot sanitize the Git environment for beads-jsonl-path — do NOT write' >&2
-    exit 1
-  }
-done
-unset _bjp_git_variable _bjp_git_environment
-
-BEADS_JSONL_RESOLVER=
-BEADS_GIT_RUNNER=
-for _bjp_dir in "$HOME/.claude/skills/beads-jsonl-path" \
-  "${CODEX_HOME:-$HOME/.codex}/skills/beads-jsonl-path" \
-  "$HOME/.agents/skills/beads-jsonl-path"; do
-  case $_bjp_dir in
-    /*) ;;
-    *) printf '%s\n' 'installed beads-jsonl-path target is not absolute — do NOT write' >&2; exit 1 ;;
-  esac
-  _bjp_candidate="$_bjp_dir/scripts/resolve-beads-jsonl"
-  [ -x "$_bjp_candidate" ] || continue
-  [ ! -L "$_bjp_candidate" ] || {
-    printf '%s\n' 'installed beads-jsonl-path resolver is a symbolic link — do NOT write' >&2
-    exit 1
-  }
-  _bjp_root_raw=$("$_bjp_git" --no-replace-objects -c core.fsmonitor=false rev-parse --show-toplevel 2>/dev/null) || {
-    printf '%s\n' 'cannot resolve the current Git worktree — do NOT write' >&2
-    exit 1
-  }
-  _bjp_root=$(
-    CDPATH=
-    export CDPATH
-    cd -P -- "$_bjp_root_raw" 2>/dev/null && pwd -P
-  ) || {
-    printf '%s\n' 'cannot canonicalize the current Git worktree — do NOT write' >&2
-    exit 1
-  }
-  _bjp_candidate_dir=$(
-    CDPATH=
-    export CDPATH
-    cd -P -- "$_bjp_dir/scripts" 2>/dev/null && pwd -P
-  ) || {
-    printf '%s\n' 'cannot canonicalize installed beads-jsonl-path target — do NOT write' >&2
-    exit 1
-  }
-  _bjp_candidate="$_bjp_candidate_dir/resolve-beads-jsonl"
-  [ ! -L "$_bjp_candidate" ] || {
-    printf '%s\n' 'installed beads-jsonl-path resolver is a symbolic link — do NOT write' >&2
-    exit 1
-  }
-  case $_bjp_root:$_bjp_candidate_dir in
-    /:/*|*:"$_bjp_root"|*:"$_bjp_root"/*)
-      printf '%s\n' 'installed beads-jsonl-path target is inside the current Git worktree — do NOT write' >&2
-      exit 1
-      ;;
-  esac
-  [ -f "$_bjp_candidate" ] || {
-    printf '%s\n' 'installed beads-jsonl-path resolver is not a regular file — do NOT write' >&2
-    exit 1
-  }
-  _bjp_link_count=$(_bjp_regular_link_count "$_bjp_candidate") || {
-    printf '%s\n' 'cannot inspect installed beads-jsonl-path resolver hard-link count — do NOT write' >&2
-    exit 1
-  }
-  [ "$_bjp_link_count" = 1 ] || {
-    printf '%s\n' 'installed beads-jsonl-path resolver has multiple hard links — do NOT write' >&2
-    exit 1
-  }
-  unset _bjp_link_count
-  if ! IFS= command builtin read -r _bjp_shebang <"$_bjp_candidate"; then
-    printf '%s\n' 'cannot inspect installed beads-jsonl-path resolver interpreter — do NOT write' >&2
-    exit 1
-  fi
-  [ "$_bjp_shebang" = '#!/bin/sh' ] || {
-    printf '%s\n' 'installed beads-jsonl-path resolver has an unexpected interpreter — do NOT write' >&2
-    exit 1
-  }
-  unset _bjp_shebang
-  _bjp_runner="$_bjp_candidate_dir/git-clean"
-  [ -x "$_bjp_runner" ] || {
-    printf '%s\n' 'installed beads-jsonl-path Git runner unavailable — do NOT write' >&2
-    exit 1
-  }
-  [ ! -L "$_bjp_runner" ] || {
-    printf '%s\n' 'installed beads-jsonl-path Git runner is a symbolic link — do NOT write' >&2
-    exit 1
-  }
-  [ -f "$_bjp_runner" ] || {
-    printf '%s\n' 'installed beads-jsonl-path Git runner is not a regular file — do NOT write' >&2
-    exit 1
-  }
-  _bjp_link_count=$(_bjp_regular_link_count "$_bjp_runner") || {
-    printf '%s\n' 'cannot inspect installed beads-jsonl-path Git runner hard-link count — do NOT write' >&2
-    exit 1
-  }
-  [ "$_bjp_link_count" = 1 ] || {
-    printf '%s\n' 'installed beads-jsonl-path Git runner has multiple hard links — do NOT write' >&2
-    exit 1
-  }
-  unset _bjp_link_count
-  if ! IFS= command builtin read -r _bjp_shebang <"$_bjp_runner"; then
-    printf '%s\n' 'cannot inspect installed beads-jsonl-path Git runner interpreter — do NOT write' >&2
-    exit 1
-  fi
-  [ "$_bjp_shebang" = '#!/bin/sh' ] || {
-    printf '%s\n' 'installed beads-jsonl-path Git runner has an unexpected interpreter — do NOT write' >&2
-    exit 1
-  }
-  unset _bjp_shebang
-  unset _bjp_candidate_dir
-  if [ -z "$BEADS_JSONL_RESOLVER" ]; then
-    BEADS_JSONL_RESOLVER=$_bjp_candidate
-    BEADS_GIT_RUNNER=$_bjp_runner
-  elif ! "$_bjp_cmp" -s "$BEADS_JSONL_RESOLVER" "$_bjp_candidate" \
-      || ! "$_bjp_cmp" -s "$BEADS_GIT_RUNNER" "$_bjp_runner"; then
-    printf '%s\n' 'installed beads-jsonl-path companions disagree — do NOT write' >&2
-    exit 1
-  fi
-  unset _bjp_runner
-done
-unset _bjp_candidate _bjp_root _bjp_root_raw _bjp_git _bjp_cmp _bjp_stat
-[ -n "$BEADS_JSONL_RESOLVER" ] && [ -n "$BEADS_GIT_RUNNER" ] || {
-  printf '%s\n' 'beads-jsonl-path companion unavailable — do NOT write' >&2
-  exit 1
-}
-printf '%s\n' "$BEADS_JSONL_RESOLVER"
-__BJP_TRUSTED_BASH__
-  )
-) || exit 1
-BEADS_GIT_RUNNER=${BEADS_JSONL_RESOLVER%/*}/git-clean
-unset _bjp_candidate
-# Installed targets only, for the same provenance reason as Phase 0's resolver: a relative
-# `skills/beads-jsonl-path/scripts/resolve-beads-jsonl` is whatever executable the DRIVEN
-# repo planted there. From a checkout, run its copy by absolute path instead.
-[ -n "$BEADS_JSONL_RESOLVER" ] || {
-  echo "beads-jsonl-path companion unavailable — do NOT write" >&2
-  exit 1
-}
-BEADS_JSONL=$("$BEADS_JSONL_RESOLVER") || exit 1
-"$BEADS_JSONL_RESOLVER" --run-br close <id> || { echo "br close failed"; exit 1; }
-"$BEADS_JSONL_RESOLVER" --run-br sync --flush-only || { echo "closure not persisted — auto-flush was swallowed"; exit 1; }
-```
-
-`||`, not `;`: a semicolon discards the exit status of the command before it, so the pair
-would report success on a closure that never happened.
-
-That proves the *closure* landed; it says nothing about what else the same flush wrote.
-Every `br` write re-exports **all** beads from the gitignored `.beads/beads.db` over the
-tracked JSONL, so any body the cache holds a stale copy of is reverted — silently, exit 0,
-and once committed it reads as an ordinary bead-state sync. So field-diff the tracked JSONL
-and read the field-level changes before staging — resolving its path first, since
-`.beads/issues.jsonl` is only the default and a hardcoded path diffs nothing on a
-`.beads.jsonl` layout:
-
-```bash
-# In a fresh shell, rerun the resolver-locator block above first,
-# stopping before its final clean-mode `BEADS_JSONL=` call. `--allow-dirty` because
-# the closure you just flushed IS the divergence the default mode refuses — that mode
-# guards writes, and this diff runs after one. Never hardcode `.beads/issues.jsonl` here.
-BEADS_JSONL=$("$BEADS_JSONL_RESOLVER" --allow-dirty) \
-  || { echo "cannot resolve the beads JSONL"; exit 1; }
-"$BEADS_GIT_RUNNER" --literal-pathspecs diff --no-ext-diff --no-textconv --text HEAD -- "$BEADS_JSONL" \
-  || { echo "cannot diff the JSONL — do NOT stage"; exit 1; }
-```
-
-Ids on only one side, or a `description` this phase did not write, is the tell. Never
-hand-edit that file (a hand
-edit does not advance `updated_at`, which is what makes the cache stale and undetectable);
-write bead text with `"$BEADS_JSONL_RESOLVER" --run-br update <id> --description "<full body>"`. Recovery is in
+Run it from
 [exact companion skill `rb-lite-backlog-drain`, step 11](../../rb-lite-backlog-drain/SKILL.md#backlog-step-11).
-
-A flush
-over a graph that was already committed and unchanged legitimately reports nothing, so a
-blanket "must be non-empty" would fail a healthy preflight.
+Never hand-edit the JSONL: a hand edit does not advance `updated_at`, which is what makes
+the cache stale and the loss undetectable. First establish the runner through
+[`beads-jsonl-path` § Resolve before writing](../../beads-jsonl-path/SKILL.md#resolve-before-writing),
+then write bead text with
+`"$BEADS_JSONL_RESOLVER" --run-br update <id> --description "<full body>"`.
 
 Either way the tree is clean before BUILD re-enters, and nothing reaches the default
 branch unreviewed.
 
-Then go straight back to BUILD if a **scoped** ready bead remains — `"$BEADS_JSONL_RESOLVER" --run-br ready` filtered to
-the goal's bead set, exactly as at BUILD entry. That loop is the whole point; do not stop to
+Then go straight back to BUILD if a **scoped** ready bead remains — re-run the typed lane
+selection and read it filtered to the goal's bead set, exactly as at BUILD entry. That loop is the whole point; do not stop to
 ask whether to take the next bead *inside* the scope.
 
-A bare `"$BEADS_JSONL_RESOLVER" --run-br ready` here re-opens the scope escape the entry check closes: the named scope
+A bare unscoped ready query here re-opens the scope escape the entry check closes: the named scope
 empties, an unrelated repository bead is ready, and the loop builds, reviews, and **merges**
 work the user never authorized. When the scope is empty, the drive is done — even if the
 repository still has ready beads. Say so and stop.
@@ -1020,9 +818,9 @@ repository still has ready beads. Say so and stop.
 
 ## DONE
 
-**Within the goal's scope**, `"$BEADS_JSONL_RESOLVER" --run-br ready` is empty and so is the unresolved set — bare
-`"$BEADS_JSONL_RESOLVER" --run-br list` (there is no `"$BEADS_JSONL_RESOLVER" --run-br open` subcommand; bare `"$BEADS_JSONL_RESOLVER" --run-br list` is open + in_progress, excluding
-closed). Scope matters here as much as at BUILD entry: a scoped goal is DONE when *its* set
+**Within the goal's scope**, the typed lane object has every lane array empty and
+`unresolved_count` zero. Unresolved is open **plus** in_progress, excluding closed, which is
+why zero unresolved is the only DONE signal and an empty ready array alone is not. Scope matters here as much as at BUILD entry: a scoped goal is DONE when *its* set
 is empty, not when the repository is. Waiting on the global backlog turns a finished
 milestone into an open-ended drain the user never asked for.
 
@@ -1030,19 +828,21 @@ milestone into an open-ended drain the user never asked for.
 record at all (see LAND above) — check `gh pr list -R <upstream> --state all` before
 concluding the drive is unfinished. An OPEN one still needs landing; a CLOSED-but-unmerged
 one must be reopened or replaced rather than rebuilding the bead. A bare `gh pr list` in a
-fork clone queries the fork, where the closure PR is not. A record reading `DONE · Pending: metadata PR
-#N` means "DONE once #N merges" — the merged file cannot state its own post-merge status,
-so the driver queries. `drive-status` reports that state as `WAITING_FOR_MERGE`, not
-`DONE`, precisely so a resumed session goes and lands the PR instead of reporting a
-finished drive whose closure is still unmerged.
+fork clone queries the fork, where the closure PR is not. Current metadata branches keep
+`Phase: HARDEN` until merge; a legacy record reading `DONE · Pending: metadata PR #N`
+still means "DONE once #N merges", so the driver queries it. `drive-status` reports that
+legacy state as `WAITING_FOR_MERGE`, not `DONE`, precisely so a resumed session lands the
+PR instead of reporting a finished drive whose closure is still unmerged.
 
 Report what landed, what is deferred and why, and stop. This is the one place a summary is
 legitimately the end of the turn.
 
-`drive-status` counts globally — it has no way to know your scope — so its `DONE` and its
-bead numbers are repository-wide. Filter them against the scope in `DRIVE.md` yourself
-before believing them.
+`drive-status`'s no-argument form reports no bead numbers at all — every count is `n/a`,
+and its inference can no longer reach BUILD or DONE from bead state. The scoped lane object
+is the only Beads evidence, and it is already filtered to `DRIVE.md`'s `Scope-Label:`.
 
-If `"$BEADS_JSONL_RESOLVER" --run-br ready` is empty but the unresolved set is **not**, you are not done: every remaining
-bead is blocked or deferred. That is a graph problem — re-audit dependencies and deferrals
-in GRAPH rather than hunting for a bead to build. `drive-status` flags this case explicitly.
+If every lane array is empty but `unresolved_count` is **not** zero, you are not done: every
+remaining bead is blocked or deferred. That is a graph problem — re-audit dependencies and
+deferrals in GRAPH rather than hunting for a bead to build. The object's `blocked_count`
+says how much of it is dependency-blocked; `drive-status`'s no-argument form cannot tell
+you this, and reports every bead count as `n/a` rather than guessing.

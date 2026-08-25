@@ -1,10 +1,19 @@
 # Bead closure stays post-merge
 
 **For a bead whose closure asserts that implemented work landed**, `br close` runs after
-the squash merge, and the resulting bookkeeping reaches the default
-branch through a reviewed path — carried into the next bead's branch, or via a small
-metadata PR when the scope is empty. It does **not** run on the feature branch before the
-review panel.
+the squash merge, on **one standalone metadata clone, branch, and PR of its own**, and that
+PR must merge before the next lane read. It does **not** run on the feature branch before
+the review panel, and it is no longer carried into the next bead's branch.
+
+That last part is a change. Carrying the closure commit forward was the earlier rule, and
+it is withdrawn for two reasons the native procedure made concrete. The pinned `br v0.3.2`
+keeps a worktree-local cache, so running closure inside a checkout that is also carrying
+work can split state between two caches; and the closure's own evidence — the structural
+pre/post comparison in
+[`rb-lite-backlog-drain`, step 11](../../skills/rb-lite-backlog-drain/SKILL.md#backlog-step-11) —
+is only meaningful against a JSONL whose sole pending change is that closure. A branch
+already carrying the next bead's work has no such baseline. So: fresh standalone clone,
+closure, one small metadata PR, merged.
 
 That qualifier is load-bearing. GRAPH-time closures assert something else entirely — a
 bead is a duplicate, superseded, or not worth building — and `plan-to-beads-transfer`
@@ -47,7 +56,7 @@ mutation, plus a compensating `br reopen` on every abandoned PR. Rejected: its c
 depends on an ordering rule that must never once be forgotten, and its failure mode is a
 silently wrong graph. The post-merge path is uglier, but a stranded closure is visible.
 
-`Pending:`, the metadata PR, and carry-into-next-branch therefore stay.
+`Pending:` and the metadata PR therefore stay; carry-into-next-branch does not.
 
 Revisit if `br` gains branch awareness in the storage layer; the atomic-land option reopens
 immediately if it does.

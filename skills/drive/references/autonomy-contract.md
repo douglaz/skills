@@ -114,8 +114,12 @@ The user's own refinement: the real control is **watching each round and interve
 the code starts degrading**, not blunt pre-set caps. Caps are backstops and checkpoints.
 
 **Rule:** Guard 2. Declare the budget and the do-NOT-build list up front; file-lock from
-round 1; treat round count and LOC as *flags* that trigger a goal-vs-complexity re-read,
-not as verdicts; hard-brake and report at 2× budget or round 4.
+round 1; treat round count and **production** LOC as *flags* that trigger a
+goal-vs-complexity re-read, not as verdicts; hard-brake and report at 2× the production
+budget or round 4. Tests and fixtures are outside the LOC budget and are not a bloat
+signal — the ratchet this section describes is speculative *hardening*, not coverage. A
+test earns review on whether it is relevant, maintainable, and mutation-sensitive; that
+question is never answered by a line count.
 
 ---
 

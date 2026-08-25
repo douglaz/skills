@@ -10,15 +10,16 @@ description: >-
   into beads". Use `testing-with-rb-lite` instead when the deliverable is a test or
   live verification gate that must be independently executed. Do not use for
   cross-project orchestration, open-ended planning, or tiny one-shot edits.
-compatibility: Requires `rb-lite` on `PATH` or `nix run --refresh github:douglaz/rb-lite -- ...` (use `--refresh` at least once per session so Nix does not reuse an hour-stale cached revision). rb-lite itself has no default implementer, so pass `--implementer` with one preset or a comma-separated cycle, or use `--implement-cmd`; this skill defaults to `--implementer claude,codex` unless the user pins another choice. `codex` and `claude` must be installed and authenticated; the default Claude reviewer needs `jq`, and normal timeout-enabled runs need a compatible `timeout`, either from the host shell for source installs or from the Nix wrapper for Nix installs. This skill's reviewer panel is codex + claude only, set by writing `.rb-lite-reviewers` before the run; rb-lite's built-in default additionally runs Gemini through `npx`, which this skill does not use. Backlog-drain mode also requires `br` (>= 0.1.45), `gh`, and the repo's normal local verification tools; harden-until-clean mode additionally needs `codex` and `claude` for the outer review panel.
+compatibility: Requires `rb-lite` on `PATH` or `nix run --refresh github:douglaz/rb-lite -- ...` (use `--refresh` at least once per session so Nix does not reuse an hour-stale cached revision). rb-lite itself has no default implementer, so pass `--implementer` with one preset or a comma-separated cycle, or use `--implement-cmd`; this skill defaults to `--implementer claude,codex` unless the user pins another choice. `codex` and `claude` must be installed and authenticated; the default Claude reviewer needs `jq`, and normal timeout-enabled runs need a compatible `timeout`, either from the host shell for source installs or from the Nix wrapper for Nix installs. This skill's reviewer panel is codex + claude only, set by writing `.rb-lite-reviewers` before the run; rb-lite's built-in default additionally runs Gemini through `npx`, which this skill does not use. Backlog-drain mode also requires the exact `br` release `v0.3.2` (commit `4104c31e79bf806f53e2eba0a4cd2ba6c594f8b9`, release build): existing maintenance commands resolve it through E1's sanitized PATH, while selection and closure admit a private pinned copy. It also requires `gh` and the repo's normal local verification tools; harden-until-clean mode additionally needs `codex` and `claude` for the outer review panel.
 ---
 
 Use `rb-lite` as the default lightweight implement → review loop for
 single-branch, single-task work in the current repo. Also use it as the
-execution engine for draining an existing `br` backlog: `"$BEADS_JSONL_RESOLVER" --run-br ready` supplies
-the work list, and each bead gets one focused rb-lite run. When the work list
-does not exist yet and the goal is a clean branch, the harden-until-clean drive
-generates it from a review panel and feeds the same drain.
+execution engine for draining an existing `br` backlog: the shared
+`select-bead-lanes` owner supplies the typed work list through
+[backlog step 1](../rb-lite-backlog-drain/SKILL.md#backlog-step-1), and each bead gets one
+focused rb-lite run. When the work list does not exist yet and the goal is a clean branch,
+the harden-until-clean drive generates it from a review panel and feeds the same drain.
 
 ## What rb-lite is, in one paragraph
 
@@ -181,17 +182,22 @@ Backlog-drain mode additionally needs `br` for bead selection/state, `gh`
 for PR creation/checks/merge, and **`jq` in the HOST shell**. That last one is not
 covered by the Nix-wrapper exemption above: the wrapper supplies `jq` to rb-lite, not
 to you. Load exact companion skill `rb-lite-backlog-drain` for
-[step 11's collateral-damage check and recovery](../rb-lite-backlog-drain/SKILL.md#backlog-step-11),
+[step 11's native closure and collateral-damage evidence](../rb-lite-backlog-drain/SKILL.md#backlog-step-11),
 which resolve the graph's real path through exact companion
 `beads-jsonl-path/scripts/resolve-beads-jsonl` — its default clean-state mode before the
 first write, `--allow-dirty` for the structurally tracked post-write field diff, and
 `--recovery` only when naming the damaged artifact. Without that owner a drain can run `"$BEADS_JSONL_RESOLVER" --run-br update`
 and flush — silently reverting unrelated bead bodies — and only then fail at the command
-that would have located the damage. Check it before the first bead, not after. Require **`br` ≥ 0.1.45**: older builds corrupt
-their DB after branch resets, so `"$BEADS_JSONL_RESOLVER" --run-br update`/`"$BEADS_JSONL_RESOLVER" --run-br close` start returning
-`ISSUE_NOT_FOUND` while `"$BEADS_JSONL_RESOLVER" --run-br show`/`"$BEADS_JSONL_RESOLVER" --run-br list` keep working — which hides the
-failure until bead state is already lost. Both drain modes reset branches after
-every merge, so they hit that bug hard. It should use the repo's documented local gates;
+that would have located the damage. Check it before the first bead, not after. Require the
+**exact `br` release `v0.3.2`**, commit
+`4104c31e79bf806f53e2eba0a4cd2ba6c594f8b9`, release build. Existing maintenance commands
+resolve it through E1's sanitized PATH; selection and closure use the private pinned copy
+and re-prove its identity before every command on those two paths
+([exact companion skill `rb-lite-backlog-drain`, step 1](../rb-lite-backlog-drain/SKILL.md#backlog-step-1)).
+Version-scoped history, not a current floor: on `br` **< 0.1.45** a branch reset corrupted
+the DB, after which `update`/`close` returned `ISSUE_NOT_FOUND` while `show`/`list` kept
+working and hid the loss until bead state was already gone. Both drain modes reset branches
+after every merge, so they hit that bug hard; the exact pin above supersedes that floor. It should use the repo's documented local gates;
 for Rust/Nix repos, default to `cargo fmt`, `cargo clippy`, `cargo test`, and
 `nix build` through `nix develop` where that is the established pattern.
 
@@ -610,7 +616,7 @@ phrases like "X happens when Y", not only test function names.>
   show.
 
 ## Acceptance criteria
-- <Acceptance criteria copied from `"$BEADS_JSONL_RESOLVER" --run-br show <id>`.>
+- <Acceptance criteria copied from backlog step 2's pinned no-DB show.>
 - <What must KEEP working — name the legitimate cases the change must preserve.
   Criteria that only describe what to block get signed off, and the breakage
   they cause comes back as its own bead later.>
@@ -681,7 +687,10 @@ actively. This is a primary failure mode, not a nicety.
   Name what to leave OUT — defensive edge cases beyond the milestone's threat
   model, config knobs, new abstractions, retry/scheduling machinery — and a target
   like "one focused module, ~N lines; if you're writing materially more, stop and
-  simplify." Pin "done" to the specific named tests and nothing beyond them.
+  simplify." Pin "done" to the specific named tests and nothing beyond them. The
+  budget is for **production code**: tests and fixtures do not spend it, because
+  meeting a budget by deleting coverage is not simplification. They are still
+  reviewed — an irrelevant or duplicated test is a finding — but their count is not.
 - **At the gate, judge each finding — don't reflexively relay or reflexively cut.**
   Genuine P0/P1 milestone blockers (money / secret / correctness) always go back.
   Real P2 polish is worth keeping too — relay it while it's improving the code. P3
@@ -693,8 +702,9 @@ actively. This is a primary failure mode, not a nicety.
   reach for it once the P2 stream has gone gold-plating, not from the start.)
 - **Detecting it takes sharp eyes — proxies flag, analysis confirms.** Two cheap
   proxies raise the alarm: a high **review-round count** (the loop keeps finding
-  ever-deeper edges) and a large **line count** versus comparable beads (a "simple"
-  module returning at thousands of lines). But proxies only flag, and can mislead —
+  ever-deeper edges) and a large **production line count** versus comparable beads
+  (a "simple" module returning at thousands of lines). Test volume is not one of
+  these proxies. But proxies only flag, and can mislead —
   a genuinely hard bead earns its rounds; a necessarily-verbose module earns its
   lines. The only way to be SURE is to **read the prompt's GOAL, then compare it to
   the COMPLEXITY of what was actually built**: do the modules, abstractions,
@@ -990,9 +1000,9 @@ rb-lite run \
 **Run one bead from a backlog:**
 
 ```bash
-# First initialize BEADS_JSONL_RESOLVER with the installed companion procedure
-# in references/harden-until-clean.md section 2.
-"$BEADS_JSONL_RESOLVER" --run-br show <id>
+# First run linked backlog step 1; it initializes every variable below.
+"$BEADS_JSONL_RESOLVER" --pinned-br "$PRIVATE_BR" "$PRIVATE_BR_OID" --run-br \
+  --no-db --no-auto-import --no-auto-flush show <id>
 rb-lite run \
   --implementer claude,codex \
   --task-file .rb-lite/tasks/bead-<id>.md \

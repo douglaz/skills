@@ -1,19 +1,190 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # drive-status — print the signals needed to infer a project's lifecycle phase.
 # Read-only. Never mutates the repo. Exits 0 even when signals are missing.
 #
 # Usage: drive-status [--json]
+#        drive-status --select-bead-lanes-json --scope-label drive-open-issues \
+#                     --br-path <absolute-path> --br-oid <git-object-id>
+#
+# Those two forms are the whole grammar; any other argv is refused with exit 1 and no stdout.
+#
+# The second form is the ONLY mode that reports Beads state, and it does not compute it:
+# it delegates to the shared owner, rb-lite-backlog-drain/scripts/select-bead-lanes, and
+# fails closed. The diagnostic form makes no `br` call at all — see "beads" below.
+
+# `/usr/bin/env bash` would let caller PATH choose the interpreter before lane mode could
+# defend itself. Enter through fixed /bin/sh, resolve Bash from the system utility path,
+# and re-enter behind a private marker. The marker is accepted only from privileged Bash,
+# so supplying it directly to an ordinary /bin/sh or Bash cannot reach routing output.
+#
+# The loader namespace goes with the shell-startup one. A shebang cannot defend its OWN
+# interpreter against LD_PRELOAD/DYLD injection — /bin/sh is already running by the time
+# this line does, which is why `beads-jsonl-path` § Resolve before writing makes that a
+# caller obligation — but everything this script launches afterwards is still ahead of it:
+# the trusted Bash below, the `git`/`stat` it resolves, and the selector it execs. The three
+# scripts on the same authorization path (`resolve-beads-jsonl`, `git-clean`,
+# `select-bead-lanes`) clear exactly this list for exactly that reason, and the selector's
+# own /bin/sh is one of the processes launched from here.
+if [ "${1-}" != --drive-status-trusted-bash ]; then
+  POSIXLY_CORRECT=y
+  export POSIXLY_CORRECT
+  \unset -f command builtin exec unset 2>/dev/null || :
+  _DS_BOOTSTRAP_BASH=$(command -p -v bash) || {
+    printf '%s\n' 'drive-status: cannot locate trusted Bash' >&2
+    exit 1
+  }
+  unset BASH_ENV ENV BASH_COMPAT BASH_LOADABLES_PATH BASH_XTRACEFD CDPATH GLOBIGNORE \
+    LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT LD_DEBUG LD_DEBUG_OUTPUT LD_PROFILE \
+    LD_ORIGIN_PATH LD_PRELOAD_32 LD_PRELOAD_64 DYLD_INSERT_LIBRARIES \
+    DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH \
+    DYLD_FALLBACK_FRAMEWORK_PATH LIBPATH SHLIB_PATH GCONV_PATH LOCPATH
+  \exec "$_DS_BOOTSTRAP_BASH" --noprofile --norc -p "$0" \
+    --drive-status-trusted-bash "$@"
+fi
+case $- in
+  *p*) ;;
+  *)
+    printf '%s\n' 'drive-status: trusted Bash bootstrap was bypassed' >&2
+    exit 1
+    ;;
+esac
+if ! (eval '[[ -n ${BASH_VERSINFO[0]} ]]') 2>/dev/null; then
+  printf '%s\n' 'drive-status: trusted Bash bootstrap was bypassed' >&2
+  exit 1
+fi
+shift
+# The bootstrap above EXPORTED POSIXLY_CORRECT so this shell would enter through the real
+# special builtins. Leaving it set would outlive that job twice over: this shell stays in
+# POSIX mode, and every child it runs — git, gh, sed, grep — inherits the variable, which
+# plain `bash drive-status` never did. Unsetting it clears both. It also settles what the
+# lane block below has to do: POSIXLY_CORRECT is unset on every path that reaches it, so
+# that block re-enables POSIX mode and clears it again unconditionally, with nothing to save.
+unset POSIXLY_CORRECT
 
 set -uo pipefail
 
-JSON=false
-[[ "${1:-}" == "--json" ]] && JSON=true
+JSON=false SELECT_LANES=false
+if [ "$#" -eq 1 ] && [ "$1" = --json ]; then JSON=true
+elif [ "$#" -gt 0 ]; then SELECT_LANES=true; fi
 
-ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || {
+# Lane mode is an authorization path, so inherited Git location variables are not inputs:
+# they could move both the Scope-Label check and companion-containment check to another
+# worktree before the selector gets a chance to clear them itself.
+_DS_GIT=git
+if $SELECT_LANES; then
+  # Neither are inherited shell FUNCTIONS. Bash imports them from the environment, so a
+  # caller-exported `git` makes `command -p -v git` return the bare name and every check
+  # below runs the caller's code against a repository it chose — including the clearing
+  # loop, if `command` or `unset` is what was redefined. POSIX special-builtin precedence
+  # is the one lookup a function cannot shadow: enable it, recover the four builtins this
+  # bootstrap needs, then drop every inherited function before resolving anything.
+  # Loader and shell-startup injection reached the bootstrap above, which cleared both
+  # namespaces before this shell existed; only THIS interpreter's own loading stays a caller
+  # obligation — see `beads-jsonl-path` § Resolve before writing.
+  POSIXLY_CORRECT=y
+  \unset -f command builtin exec unset 2>/dev/null || :
+  while command builtin read -r _ _ _DS_FUNCTION; do
+    command builtin unset -f -- "$_DS_FUNCTION" || {
+      printf '%s\n' 'drive-status: cannot clear the inherited shell functions' >&2
+      exit 1
+    }
+  done < <(command builtin declare -F)
+  # Unconditional, not a restore: the unset above ran on every path into this block, so
+  # there is no caller value left to put back — and leaving POSIX mode on would hand it to
+  # the `git` this mode resolves and the selector it execs.
+  command unset POSIXLY_CORRECT
+  command unset _DS_FUNCTION
+  # Canonicalized HERE, before the `cd "$ROOT"` below. `BASH_SOURCE[0]` stays relative when
+  # the caller invoked this script by a relative path, so consuming it after that cd would
+  # look for the companion beside the DRIVEN REPOSITORY instead of beside this install —
+  # running whatever that repository planted at the matching path, which the containment
+  # check below cannot catch because it is outside the worktree.
+  case ${BASH_SOURCE[0]} in
+    */*) _DS_SELF_DIR=${BASH_SOURCE[0]%/*} ;;
+    *) _DS_SELF_DIR=. ;;
+  esac
+  _DS_SELF_DIR=$(CDPATH= cd -P -- "$_DS_SELF_DIR" 2>/dev/null && pwd -P) || {
+    printf '%s\n' 'drive-status: cannot canonicalize the installed drive-status directory' >&2
+    exit 1
+  }
+  for _DS_GIT_VARIABLE in ${!GIT@}; do
+    command unset -- "$_DS_GIT_VARIABLE" || {
+      printf '%s\n' 'drive-status: cannot clear the Git location overrides' >&2
+      exit 1
+    }
+  done
+  unset _DS_GIT_VARIABLE
+  _DS_GIT=$(command -p -v git) || {
+    printf '%s\n' 'drive-status: cannot locate trusted Git' >&2
+    exit 1
+  }
+fi
+ROOT=$("$_DS_GIT" rev-parse --show-toplevel 2>/dev/null) || {
+  # Lane mode never degrades: a caller that cannot be told which worktree this is must
+  # not receive a selection object it would route on.
+  if $SELECT_LANES; then
+    printf '%s\n' 'drive-status: not a git repository' >&2
+    exit 1
+  fi
   if $JSON; then echo '{"error":"not a git repository"}'; else echo "not a git repository"; fi
   exit 0
 }
-cd "$ROOT" || exit 0
+unset _DS_GIT
+cd "$ROOT" || {
+  # Same rule one line later: the diagnostic form may give up quietly, but lane mode
+  # exiting 0 with no object would let a caller that checks only the status read "no
+  # work" out of a worktree it never entered.
+  if $SELECT_LANES; then
+    printf '%s\n' 'drive-status: cannot enter the repository root' >&2
+    exit 1
+  fi
+  exit 0
+}
+
+if $SELECT_LANES; then
+  lane_die() { printf 'drive-status: %s\n' "$1" >&2; exit 1; }
+  [[ $# -eq 7 && "$1" == "--select-bead-lanes-json" \
+     && "$2" == "--scope-label" && "$3" == drive-open-issues \
+     && "$4" == "--br-path" && "$6" == "--br-oid" ]] \
+    || lane_die 'usage: drive-status --select-bead-lanes-json --scope-label drive-open-issues --br-path <absolute-path> --br-oid <git-object-id>'
+  [[ -n "$3" && -n "$5" && -n "$7" ]] \
+    || lane_die 'usage: drive-status --select-bead-lanes-json --scope-label drive-open-issues --br-path <absolute-path> --br-oid <git-object-id>'
+  # The shared selector owns the active DRIVE.md declaration check as well as the Beads
+  # reads. That keeps this UI delegate and Step 1's direct entry on the same fail-closed
+  # authorization path, with no caller-PATH parser in front of the owner.
+  # Installed companions only, and never one inside the driven worktree: this runs in the
+  # repository being driven, so a repository-relative copy is whatever that repository
+  # planted there. From a checkout, run select-bead-lanes by absolute path instead.
+  _DS_STAT=$(command -p -v stat) || lane_die 'cannot locate trusted stat for selector admission'
+  _selector_link_count() {
+    local count
+    if count=$("$_DS_STAT" -c %h "$1" 2>/dev/null) && [[ "$count" =~ ^[0-9]+$ ]]; then
+      :
+    elif count=$("$_DS_STAT" -f %l "$1" 2>/dev/null) && [[ "$count" =~ ^[0-9]+$ ]]; then
+      :
+    else
+      return 1
+    fi
+    [[ "$count" == 1 ]]
+  }
+  _c=$(CDPATH= cd -P -- "$_DS_SELF_DIR/../../rb-lite-backlog-drain/scripts" 2>/dev/null \
+    && pwd -P) || lane_die 'select-bead-lanes companion unavailable — install rb-lite-backlog-drain'
+  case "$ROOT:$_c" in
+    /:/*|*:"$ROOT"|*:"$ROOT"/*)
+      lane_die 'the installed select-bead-lanes companion is inside the driven worktree' ;;
+  esac
+  SELECT_BEAD_LANES="$_c/select-bead-lanes"
+  [[ -x "$SELECT_BEAD_LANES" && -f "$SELECT_BEAD_LANES" && ! -L "$SELECT_BEAD_LANES" ]] \
+    || lane_die 'the installed select-bead-lanes companion is not a regular executable'
+  _selector_link_count "$SELECT_BEAD_LANES" \
+    || lane_die 'the installed select-bead-lanes companion has multiple hard links'
+  IFS= read -r _shebang <"$SELECT_BEAD_LANES" \
+    || lane_die 'cannot inspect the installed select-bead-lanes interpreter'
+  [[ "$_shebang" == '#!/bin/sh' ]] \
+    || lane_die 'the installed select-bead-lanes companion has an unexpected interpreter'
+  # exec, so the owner's exact stdout, stderr, and exit status are what the caller sees.
+  exec "$SELECT_BEAD_LANES" --scoped --scope-label "$3" --br-path "$5" --br-oid "$7"
+fi
 
 BRANCH=$(git branch --show-current 2>/dev/null || echo "")
 # The PR's own base outranks every heuristic below: a PR can target a release or stacked
@@ -504,31 +675,14 @@ if [[ -f flake.nix && -n "$GATE" && "$GATE" != nix* ]] && command -v nix >/dev/n
 fi
 
 # --- beads ---
-# `br --json` returns either a bare array (`ready`, `blocked`) or an envelope
-# {issues,total,limit,offset,has_more} (`list`). A plain `jq length` on the envelope
-# counts its 5 KEYS, not the issues — a constant that never reaches 0, which would make
-# the DONE phase unreachable.
-_brcount() {
-  local out
-  out=$(jq 'if type=="array" then length else (.total // (.issues | length)) end' 2>/dev/null)
-  [[ "$out" =~ ^[0-9]+$ ]] && printf '%s' "$out" || printf '?'
-}
+# The diagnostic form makes NO `br` call. A caller-PATH `br` is whatever the driven
+# repository put on PATH, and the store it answers about is whatever the inherited
+# BEADS_*/BR_* environment points at — neither is a fact this detector can establish, and
+# both were being turned into a phase. Beads state now has exactly one owner,
+# rb-lite-backlog-drain/scripts/select-bead-lanes, reached through
+# `--select-bead-lanes-json` above with an admitted pinned binary; these counts stay `n/a`
+# so the human output says "not established" instead of a number nobody proved.
 BR_READY="n/a"; BR_UNRESOLVED="n/a"; BR_BLOCKED="n/a"; BR_INPROGRESS="n/a"
-if command -v br >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 \
-   && [[ -d .beads || -f .beads.jsonl || -n $(find . -maxdepth 2 -name '*.beads.jsonl' -print -quit 2>/dev/null) ]]; then
-  # --limit 0 explicitly: current br defaults to unlimited, but the README supports br
-  # >= 0.1.45 where `ready` defaulted to 20 — a silent cap on a large backlog.
-  BR_READY=$(br ready --limit 0 --json 2>/dev/null | _brcount)
-  # Bare `br list` is the UNRESOLVED set (open + in_progress, excluding closed).
-  # Filtering `--status open` would drop in_progress and let DONE fire mid-bead.
-  BR_UNRESOLVED=$(br list --json 2>/dev/null | _brcount)
-  # "blocked" is derived from dependencies, not a status value: `br list --status blocked`
-  # silently returns nothing. `br blocked` is the real query — and it defaults to
-  # --limit 50, which would silently cap the count at 50 on a large backlog.
-  BR_BLOCKED=$(br blocked --limit 0 --json 2>/dev/null | _brcount)
-  # An in_progress bead means a BUILD is under way even when ready=0 and the tree is clean.
-  BR_INPROGRESS=$(br list --status in_progress --json 2>/dev/null | _brcount)
-fi
 
 # --- specs / plans ---
 # Match both conventional basenames AND anything under docs/spec[s]/ — the SHAPE phase
@@ -748,12 +902,12 @@ infer() {
   fi
   if [[ -n "$changed" ]]; then
     case "$(_classify_paths "$changed")" in
-      # Bead-metadata-only edits are GRAPH work (br create/update rewrites the beads JSONL)
-      # — unless a bead is already in_progress, in which case `br update --status
-      # in_progress` wrote that file and the real state is an active BUILD.
-      bead) [[ "$BR_INPROGRESS" =~ ^[0-9]+$ && "$BR_INPROGRESS" -gt 0 ]] \
-              && { echo "BUILD"; return; }
-            echo "GRAPH"; return ;;
+      # Bead-metadata-only edits are GRAPH work (br create/update rewrites the beads JSONL).
+      # This arm used to promote to BUILD when an unpinned `br` reported an in_progress
+      # bead; that read came from a caller-PATH binary against an unproven store, and a
+      # stale one sent the driver into BUILD with no bead admitted. Beads-derived routing
+      # now comes only from the typed selector object, which this diagnostic never has.
+      bead) echo "GRAPH"; return ;;
       doc)  echo "SHAPE"; return ;;
       *)    echo "BUILD"; return ;;
     esac
@@ -772,8 +926,7 @@ infer() {
   # Committed work only means HARDEN when it is actually code. Spec-only commits are
   # interrupted SHAPE (its exit gate — the xhigh review — has not run); bead-only commits
   # are GRAPH. On the DEFAULT branch, doc/bead commits are a stranded bead closure — LAND
-  # no longer prescribes committing one there (it carries the closure into the next bead's
-  # branch, or opens a metadata PR), so this is a recovery path, not a state to steer by:
+  # requires a standalone metadata branch/PR, so this is a recovery path, not a state to steer by:
   # fall through to the bead-derived states rather than sending the driver back through
   # SHAPE/GRAPH. Substantive code on the default branch is still unreviewed work and still
   # means HARDEN.
@@ -789,16 +942,13 @@ infer() {
       *)    echo "HARDEN"; return ;;
     esac
   fi
-  # Bead-derived states, most specific first.
-  [[ "$BR_INPROGRESS" =~ ^[0-9]+$ && "$BR_INPROGRESS" -gt 0 ]] && { echo "BUILD"; return; }
-  [[ "$BR_READY" =~ ^[0-9]+$ && "$BR_READY" -gt 0 ]] && { echo "BUILD"; return; }
-  # ready==0 with work left => everything remaining is blocked or deferred: a graph problem.
-  [[ "$BR_UNRESOLVED" =~ ^[0-9]+$ && "$BR_UNRESOLVED" -gt 0 ]] && { echo "GRAPH"; return; }
-  # No unresolved beads. DONE only if a drive was actually under way; otherwise an empty or
-  # freshly-initialised bead workspace just means nothing has been graphed yet — note this
-  # keys on the COUNT, not on the "n/a" sentinel, so `br init` with zero issues (0, not n/a)
-  # routes to planning rather than falling through to BUILD with no bead to build.
-  if [[ "$BR_UNRESOLVED" == "0" && "$DRIVE_MD" == "present" ]]; then echo "DONE"; return; fi
+  # No bead-derived state is reachable from here. BUILD and DONE are the two phases that
+  # authorize acting on the graph — taking a bead, or calling a scope finished — and both
+  # used to be derived from unpinned `br` counts. That derivation is gone: a Beads BUILD,
+  # a Beads GRAPH, an authority stop, and DONE are all routed from the typed selector
+  # object the caller obtains through `--select-bead-lanes-json`. What is left here is
+  # tree evidence only, so a repository with no reviewed spec is SHAPE and one with a
+  # spec but nothing to review is GRAPH.
   [[ -z "$SPECS" ]] && { echo "SHAPE"; return; }
   echo "GRAPH"
 }
@@ -940,14 +1090,6 @@ if [[ "$PHASE" == "DONE" && -n "$DRIVE_PENDING" ]]; then
   PHASE="WAITING_FOR_MERGE"
   PHASE_SOURCE="DRIVE.md (DONE pending #$DRIVE_PENDING)"
 fi
-# Recomputed outside infer(): `$(infer)` is command substitution, so anything infer()
-# assigns dies with its subshell.
-BLOCKED_ONLY=false
-if [[ "$TREE_PHASE" == "GRAPH" && "$BR_READY" =~ ^[0-9]+$ && "$BR_READY" -eq 0 \
-   && "$BR_UNRESOLVED" =~ ^[0-9]+$ && "$BR_UNRESOLVED" -gt 0 ]]; then
-  BLOCKED_ONLY=true
-fi
-
 if $JSON; then
   jq -n \
     --arg root "$ROOT" --arg branch "$BRANCH" --arg default_branch "$DEFAULT_BRANCH" \
@@ -1031,7 +1173,7 @@ if $DONE_ON_BRANCH && [[ "$PHASE" != "LAND" && "$BRANCH_COMMITS" -eq 0 ]]; then
   fi
 fi
 $DONE_ON_BRANCH && $_DONE_DIRTY && [[ "$PHASE" != "LAND" ]] && printf '  ⚠ %s says DONE but the tree is dirty (%s modified, %s untracked) — closure metadata\n    that is not committed has not landed anywhere. Finish it before reporting DONE.\n' "$PHASE_WAS" "$DIRTY_COUNT" "$UNTRACKED"
-$DONE_ON_BRANCH && ! $_DONE_DIRTY && $ON_DEFAULT && [[ "$PHASE" != "LAND" ]] && printf '  ⚠ %s says DONE but %s has %s unpushed commit(s) — a fresh clone would still see the\n    bead open. Push them, or carry them into the next branch; do NOT report DONE.\n' "$PHASE_WAS" "${BRANCH:-HEAD}" "$BRANCH_COMMITS"
+$DONE_ON_BRANCH && ! $_DONE_DIRTY && $ON_DEFAULT && [[ "$PHASE" != "LAND" ]] && printf '  ⚠ %s says DONE but %s has %s unpushed commit(s) — a fresh clone would still see the\n    bead open. Open and land a standalone metadata PR; do NOT report DONE.\n' "$PHASE_WAS" "${BRANCH:-HEAD}" "$BRANCH_COMMITS"
 $DONE_ON_BRANCH && ! $ON_DEFAULT && [[ "$PHASE" != "LAND" && "$BRANCH_COMMITS" -gt 0 ]] && printf '  ⚠ %s says DONE but this branch has %s unmerged commit(s) — that record\n    describes the state AFTER this PR lands. Treating it as HARDEN: these commits are\n    unreviewed and go through the panel like any others.\n' "$PHASE_WAS" "$BRANCH_COMMITS"
 $DONE_PENDING && printf '  ⚠ DONE is pending metadata PR %s, so this is WAITING_FOR_MERGE, not DONE. Query that\n    PR: merged means the drive really is done; open means go finish landing it.\n' "${DRIVE_PENDING_REPO:+$DRIVE_PENDING_REPO}#$DRIVE_PENDING"
 $DONE_PENDING && [[ -z "$DRIVE_PENDING_REPO" ]] && printf '    The record names no repository, so #%s is ambiguous on a fork — the same number\n    exists in both. Query %s, and re-record it as `owner/repo#%s`.\n' "$DRIVE_PENDING" "${_RREPO:-the parent}" "$DRIVE_PENDING"
@@ -1076,5 +1218,8 @@ fi
 [[ "$UNTRACKED" -gt 0 ]] && printf '  ⚠ %s untracked file(s) — codex reviewers are BLIND to these; git add before review.\n' "$UNTRACKED"
 [[ "$PR_STATE" == "unknown" ]] && printf '  ⚠ PR state unknown (no gh / not authenticated / query failed) — bot rounds may already\n    exist on an open PR, so check before re-triggering them. HARDEN still stands either\n    way: only a local clearance marker admits LAND, never PR state.\n'
 [[ "$PR_STATE" == "n/a-non-github" ]] && printf '  ⚠ non-GitHub remote — gh cannot see PRs here. Check the forge yourself before treating\n    a HARDEN reading as "no PR open".\n'
-$BLOCKED_ONLY && printf '  ⚠ no bead is ready (ready=0, unresolved=%s, blocked=%s) — the rest are blocked or\n    deferred. This is a graph problem: re-audit dependencies and deferrals rather than\n    looking for a bead to build.\n' "$BR_UNRESOLVED" "$BR_BLOCKED"
+# The blocked-only warning that used to live here read unpinned `br` counts, so it fired
+# on a store this detector never established. The same state is now reported by the typed
+# selector object (`unresolved_count > 0` with every lane array empty), where the counts
+# are proved rather than guessed.
 exit 0

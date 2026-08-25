@@ -15,10 +15,12 @@ argument-hint: "[goal or bead id] [--phase shape|graph|build|prove|harden|land]"
 compatibility: >-
   Inherits the prerequisites of whichever phases a project actually reaches:
   `codex` and `claude` on PATH for HARDEN, `rb-lite` (PATH or the Nix wrapper) for
-  BUILD, `br` and `jq` for the bead phases, `gh` authenticated for LAND. The
-  bundled `scripts/drive-status` detector needs none of them — it degrades to
-  `n/a`/`unknown` and exits 0 — but its bead counts and PR state stay blank
-  without them. SHAPE delegates to planning skills that are not in this repo.
+  BUILD, `gh` authenticated for LAND. Bead selection and closure require
+  the exact `br` release `v0.3.2` (commit `4104c31e79bf806f53e2eba0a4cd2ba6c594f8b9`,
+  release build), admitted as a private pinned executable rather than taken from PATH,
+  plus `jq`. The bundled `scripts/drive-status` detector needs none of them — its
+  no-argument form makes no `br` call at all, reports every bead count as `n/a`, and
+  exits 0. SHAPE delegates to planning skills that are not in this repo.
 allowed-tools:
   - Bash
   - Read
@@ -113,8 +115,37 @@ summarisation, may predate a script that replaced prose — this skill and
 `scripts/`, and remembered prose is then a version that was retired for being wrong. The
 tell is a procedure you can recite in full without having opened a file this turn.
 
-It prints repo, branch, cleanliness, gate command, bead counts, PR state, spec files, the
-cleared SHA, and an inferred phase. `scripts/drive-status.test` covers the derivation —
+It prints repo, branch, cleanliness, gate command, PR state, spec files, the
+cleared SHA, and an inferred phase. **Its bead counts are always `n/a`, on purpose**: the
+no-argument form makes no `br` call, because a caller-PATH `br` against an unproven store
+is not a fact this skill can establish. Beads state has exactly one owner, and you reach
+it explicitly:
+
+```bash
+DS=<the drive-status path resolved above>
+# PRIVATE_BR / PRIVATE_BR_OID are the admitted pinned v0.3.2 executable and its E1
+# object id — see exact companion skill `rb-lite-backlog-drain`, step 11, for how they
+# are established. A caller-supplied pair is not admission. Run this from the
+# loader-cleared shell `beads-jsonl-path` § Resolve before writing establishes, the same
+# one that produced those inputs: LD_PRELOAD reaches a script's shebang interpreter
+# before its first line, so only the caller can clear it.
+"$DS" --select-bead-lanes-json --scope-label drive-open-issues \
+  --br-path "$PRIVATE_BR" --br-oid "$PRIVATE_BR_OID"
+```
+
+That prints one LF-terminated `skills.drive.bead-lanes.v1` object, or exits nonzero with
+no stdout. **Only that typed object may authorize a Beads-derived route.** A missing,
+refused, or unparsed selection is not "no work" and not "nothing blocked" — it fails
+closed, and the phase falls back to the tree-only inference below. The one supported label
+is the literal `drive-open-issues`; it must also be the exact value on `DRIVE.md`'s
+`**Scope-Label:**` line. It is never inferred from bead rows, because those rows are what
+the label selects. Any other well-formed value is unsupported and refuses.
+
+Route on the object, not on a summary of it: `executor-skills` rows may authorize a local
+BUILD; `executor-rb-lite` rows authorize only external delegation; any `authority-human`
+row stops automated routing for a human; every array empty with `unresolved_count > 0` is
+GRAPH, not DONE; and `unresolved_count == 0` is DONE only under the existing DRIVE-record
+precondition. `scripts/drive-status.test` covers the derivation —
 one case per real defect, against scratch repos and a stubbed `gh`, each shown to go red against a
 real defect. Run it after touching the phase logic. Read it, then confirm the inference against `DRIVE.md`
 if present. **Never guess the phase.**
@@ -171,8 +202,8 @@ wants to re-run a phase.
 | Phase | Entry condition | Skill it runs | Exit gate (evidence required) |
 |---|---|---|---|
 | **SHAPE** | Goal is prose; no reviewed spec | `planning-workflow`, `grill-with-docs`, `spec` | Spec file committed **and** a codex xhigh review returns no P0/P1 |
-| **GRAPH** | Spec exists; no bead graph covering it | `plan-to-beads-transfer` → `bead-polish-loop` → `second-model-bead-audit` | Audit verdict PASS; a **scoped** `"$BEADS_JSONL_RESOLVER" --run-br ready` bead exists (see `Scope:` in `DRIVE.md`) |
-| **BUILD** | A ready bead exists | `orchestrating-with-rb-lite` (one bead = one branch) | rb-lite exits clean, you ran the gate yourself at a real exit code, **and** each load-bearing behavior the bead introduced was inverted with its pinning assertion observed to fail |
+| **GRAPH** | Spec exists; no bead graph covering it | `plan-to-beads-transfer` → `bead-polish-loop` → `second-model-bead-audit` | Audit verdict PASS; the typed lane object carries a ready row in an executor lane (see `Scope-Label:` in `DRIVE.md`) |
+| **BUILD** | The typed lane object carries a ready or in-progress `executor-skills` row (local) or `executor-rb-lite` row (delegated) | `orchestrating-with-rb-lite` (one bead = one branch) | rb-lite exits clean, you ran the gate yourself at a real exit code, **and** each load-bearing behavior the bead introduced was inverted with its pinning assertion observed to fail |
 | **PROVE** | Bead's deliverable is a test/gate, or the change touches money/data/infra | gate folded into the BUILD task, **or** a separate test bead run through `testing-with-rb-lite` — decide *before* BUILD starts, since a second rb-lite run on the same branch is forbidden | the gate ran green at a real exit code **and** a matching assertion was observed to FAIL for every property it claims; quote both runs. Green alone does not close PROVE |
 | **HARDEN** | Branch has unreviewed substantive code | `multi-reviewer-loop` (its "ask the user at the end" step is satisfied by the drive goal — keep going; its stop-list still applies), then a final pinned `codex review --base <ref>` | `multi-reviewer-loop` reports `CLEAN` — both reviewers clean **and** its consistency pass clean, on the same tree; gate green at a real exit code |
 | **LAND** | The panel cleared this checkout, `cleared` still equals the tip, the base is an ancestor of it *and* is still the base the panel reviewed, and the worktree is clean (derived, never recorded — see Guard 4). Exit needs `bot-gate` at `NO_PENDING_EVIDENCE` — no bot exposes a terminal "cleared" signal, so waiting for one never ends (ADR 0004) | `pr-with-codex-bot-review` | `bot-gate` exits 0 (`NO_PENDING_EVIDENCE`) and no bot thread is left unresolved — never "the bots cleared it", which ADR 0004 shows cannot be observed; base still fresh at merge time, squash-merged, branch reset; bead closed and `DRIVE.md` updated **by a reviewed path** |
@@ -252,248 +283,24 @@ A phase closes on evidence or it does not close.
   written to catch. Gates that passed *before* the loss are not evidence either; the work
   was real when they ran. See
   [multi-reviewer-loop/references/reviewer-panel.md](../multi-reviewer-loop/references/reviewer-panel.md).
-- **`br` is not exempt — but know which failure you are guarding.** An *explicit*
-  `"$BEADS_JSONL_RESOLVER" --run-br sync --flush-only` propagates a real exit code, so just require it to succeed. The
-  *automatic* flush that follows a mutating command like `"$BEADS_JSONL_RESOLVER" --run-br close` does not: its error is
-  caught and logged at debug level, so `"$BEADS_JSONL_RESOLVER" --run-br close` exits 0 with the JSONL unwritten. A
-  closed bead is not a closed bead until an explicit sync has confirmed the write:
+- **Bead closure is not yours to improvise.** Closure is `br v0.3.2`'s own primitive —
+  one full-ID `close --reason --transition-comment`, then one strict `sync --flush-only` —
+  run on a standalone metadata clone after the work PR merges, and proved by a structural
+  pre/post comparison of the whole JSONL rather than by an exit code. The **canonical
+  fact owner is the fenced production block in
+  [exact companion skill `rb-lite-backlog-drain`, step 11](../rb-lite-backlog-drain/SKILL.md#backlog-step-11)**;
+  load it and run that block. Do not paste an equivalent here: the block is extracted and
+  executed by `rb-lite-backlog-drain/scripts/native-close.test`, and a copy is a second
+  procedure nothing tests.
 
-  ```bash
-  # Resolve and prove the JSONL clean FIRST: `"$BEADS_JSONL_RESOLVER" --run-br close` auto-flushes the cache over it.
-  # Clear loader injection in this already-running shell before the locator starts
-  # any new process. The resolver/git-clean script bodies are too late: a shebang
-  # interpreter would already have loaded caller-selected libraries.
-  _bjp_posixly_was_set=${POSIXLY_CORRECT+x}
-  _bjp_posixly_value=${POSIXLY_CORRECT-}
-  POSIXLY_CORRECT=y
-  export POSIXLY_CORRECT
-  \unset LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT LD_DEBUG LD_DEBUG_OUTPUT LD_PROFILE \
-    LD_ORIGIN_PATH LD_PRELOAD_32 LD_PRELOAD_64 DYLD_INSERT_LIBRARIES \
-    DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH \
-    DYLD_FALLBACK_FRAMEWORK_PATH LIBPATH SHLIB_PATH GCONV_PATH LOCPATH || {
-    printf '%s\n' 'cannot clear dynamic-loader injection before beads-jsonl-path — do NOT write' >&2
-    exit 1
-  }
-  if [ -n "$_bjp_posixly_was_set" ]; then
-    POSIXLY_CORRECT=$_bjp_posixly_value
-    export POSIXLY_CORRECT
-  else
-    \unset POSIXLY_CORRECT
-  fi
-  BEADS_JSONL_RESOLVER=$(
-    (
-      # Resolve the clean interpreter in a subshell. POSIX special-builtin precedence
-      # prevents exported caller functions from redefining this trust path, and the
-      # subshell leaves the caller's shell state untouched.
-      POSIXLY_CORRECT=y
-      export POSIXLY_CORRECT
-      \unset -f command builtin exec unset 2>/dev/null || :
-      _bjp_bash=$(command -p -v bash) || {
-        printf '%s\n' 'cannot locate a trusted Bash for the beads JSONL locator — do NOT write' >&2
-        exit 1
-      }
-      unset BASH_ENV ENV BASH_COMPAT BASH_LOADABLES_PATH BASH_XTRACEFD CDPATH GLOBIGNORE
-      exec "$_bjp_bash" --noprofile --norc -p -s <<'__BJP_TRUSTED_BASH__'
-  # Privileged Bash ignores inherited functions. Clear the other startup controls too,
-  # then perform every candidate, worktree, provenance, and byte-agreement decision here.
-  command unset BASH_ENV ENV BASH_COMPAT BASH_LOADABLES_PATH BASH_XTRACEFD CDPATH GLOBIGNORE || {
-    printf '%s\n' 'cannot sanitize the beads JSONL locator shell environment — do NOT write' >&2
-    exit 1
-  }
-  while command builtin read -r _ _ _bjp_function; do
-    command unset -f -- "$_bjp_function" || {
-      printf '%s\n' 'cannot sanitize the beads JSONL locator shell environment — do NOT write' >&2
-      exit 1
-    }
-  done < <(command builtin declare -F)
-  unset _bjp_function
-  _bjp_git=$(command -p -v git) || {
-    printf '%s\n' 'cannot locate a trusted Git for beads-jsonl-path — do NOT write' >&2
-    exit 1
-  }
-  _bjp_cmp=$(command -p -v cmp) || {
-    printf '%s\n' 'cannot locate a trusted cmp for beads-jsonl-path — do NOT write' >&2
-    exit 1
-  }
-  _bjp_stat=$(command -p -v stat) || {
-    printf '%s\n' 'cannot locate a trusted stat for beads-jsonl-path — do NOT write' >&2
-    exit 1
-  }
-  _bjp_regular_link_count() {
-    local path=$1 count
-    if count=$("$_bjp_stat" -c %h "$path" 2>/dev/null) && [[ $count =~ ^[0-9]+$ ]]; then
-      :
-    elif count=$("$_bjp_stat" -f %l "$path" 2>/dev/null) && [[ $count =~ ^[0-9]+$ ]]; then
-      :
-    else
-      return 1
-    fi
-    printf '%s\n' "$count"
-  }
-  _bjp_git_environment=( "${!GIT@}" )
-  for _bjp_git_variable in "${_bjp_git_environment[@]}"; do
-    command unset -- "$_bjp_git_variable" || {
-      printf '%s\n' 'cannot sanitize the Git environment for beads-jsonl-path — do NOT write' >&2
-      exit 1
-    }
-  done
-  unset _bjp_git_variable _bjp_git_environment
-
-  BEADS_JSONL_RESOLVER=
-  BEADS_GIT_RUNNER=
-  for _bjp_dir in "$HOME/.claude/skills/beads-jsonl-path" \
-    "${CODEX_HOME:-$HOME/.codex}/skills/beads-jsonl-path" \
-    "$HOME/.agents/skills/beads-jsonl-path"; do
-    case $_bjp_dir in
-      /*) ;;
-      *) printf '%s\n' 'installed beads-jsonl-path target is not absolute — do NOT write' >&2; exit 1 ;;
-    esac
-    _bjp_candidate="$_bjp_dir/scripts/resolve-beads-jsonl"
-    [ -x "$_bjp_candidate" ] || continue
-    [ ! -L "$_bjp_candidate" ] || {
-      printf '%s\n' 'installed beads-jsonl-path resolver is a symbolic link — do NOT write' >&2
-      exit 1
-    }
-    _bjp_root_raw=$("$_bjp_git" --no-replace-objects -c core.fsmonitor=false rev-parse --show-toplevel 2>/dev/null) || {
-      printf '%s\n' 'cannot resolve the current Git worktree — do NOT write' >&2
-      exit 1
-    }
-    _bjp_root=$(
-      CDPATH=
-      export CDPATH
-      cd -P -- "$_bjp_root_raw" 2>/dev/null && pwd -P
-    ) || {
-      printf '%s\n' 'cannot canonicalize the current Git worktree — do NOT write' >&2
-      exit 1
-    }
-    _bjp_candidate_dir=$(
-      CDPATH=
-      export CDPATH
-      cd -P -- "$_bjp_dir/scripts" 2>/dev/null && pwd -P
-    ) || {
-      printf '%s\n' 'cannot canonicalize installed beads-jsonl-path target — do NOT write' >&2
-      exit 1
-    }
-    _bjp_candidate="$_bjp_candidate_dir/resolve-beads-jsonl"
-    [ ! -L "$_bjp_candidate" ] || {
-      printf '%s\n' 'installed beads-jsonl-path resolver is a symbolic link — do NOT write' >&2
-      exit 1
-    }
-    case $_bjp_root:$_bjp_candidate_dir in
-      /:/*|*:"$_bjp_root"|*:"$_bjp_root"/*)
-        printf '%s\n' 'installed beads-jsonl-path target is inside the current Git worktree — do NOT write' >&2
-        exit 1
-        ;;
-    esac
-    [ -f "$_bjp_candidate" ] || {
-      printf '%s\n' 'installed beads-jsonl-path resolver is not a regular file — do NOT write' >&2
-      exit 1
-    }
-    _bjp_link_count=$(_bjp_regular_link_count "$_bjp_candidate") || {
-      printf '%s\n' 'cannot inspect installed beads-jsonl-path resolver hard-link count — do NOT write' >&2
-      exit 1
-    }
-    [ "$_bjp_link_count" = 1 ] || {
-      printf '%s\n' 'installed beads-jsonl-path resolver has multiple hard links — do NOT write' >&2
-      exit 1
-    }
-    unset _bjp_link_count
-    if ! IFS= command builtin read -r _bjp_shebang <"$_bjp_candidate"; then
-      printf '%s\n' 'cannot inspect installed beads-jsonl-path resolver interpreter — do NOT write' >&2
-      exit 1
-    fi
-    [ "$_bjp_shebang" = '#!/bin/sh' ] || {
-      printf '%s\n' 'installed beads-jsonl-path resolver has an unexpected interpreter — do NOT write' >&2
-      exit 1
-    }
-    unset _bjp_shebang
-    _bjp_runner="$_bjp_candidate_dir/git-clean"
-    [ -x "$_bjp_runner" ] || {
-      printf '%s\n' 'installed beads-jsonl-path Git runner unavailable — do NOT write' >&2
-      exit 1
-    }
-    [ ! -L "$_bjp_runner" ] || {
-      printf '%s\n' 'installed beads-jsonl-path Git runner is a symbolic link — do NOT write' >&2
-      exit 1
-    }
-    [ -f "$_bjp_runner" ] || {
-      printf '%s\n' 'installed beads-jsonl-path Git runner is not a regular file — do NOT write' >&2
-      exit 1
-    }
-    _bjp_link_count=$(_bjp_regular_link_count "$_bjp_runner") || {
-      printf '%s\n' 'cannot inspect installed beads-jsonl-path Git runner hard-link count — do NOT write' >&2
-      exit 1
-    }
-    [ "$_bjp_link_count" = 1 ] || {
-      printf '%s\n' 'installed beads-jsonl-path Git runner has multiple hard links — do NOT write' >&2
-      exit 1
-    }
-    unset _bjp_link_count
-    if ! IFS= command builtin read -r _bjp_shebang <"$_bjp_runner"; then
-      printf '%s\n' 'cannot inspect installed beads-jsonl-path Git runner interpreter — do NOT write' >&2
-      exit 1
-    fi
-    [ "$_bjp_shebang" = '#!/bin/sh' ] || {
-      printf '%s\n' 'installed beads-jsonl-path Git runner has an unexpected interpreter — do NOT write' >&2
-      exit 1
-    }
-    unset _bjp_shebang
-    unset _bjp_candidate_dir
-    if [ -z "$BEADS_JSONL_RESOLVER" ]; then
-      BEADS_JSONL_RESOLVER=$_bjp_candidate
-      BEADS_GIT_RUNNER=$_bjp_runner
-    elif ! "$_bjp_cmp" -s "$BEADS_JSONL_RESOLVER" "$_bjp_candidate" \
-        || ! "$_bjp_cmp" -s "$BEADS_GIT_RUNNER" "$_bjp_runner"; then
-      printf '%s\n' 'installed beads-jsonl-path companions disagree — do NOT write' >&2
-      exit 1
-    fi
-    unset _bjp_runner
-  done
-  unset _bjp_candidate _bjp_root _bjp_root_raw _bjp_git _bjp_cmp _bjp_stat
-  [ -n "$BEADS_JSONL_RESOLVER" ] && [ -n "$BEADS_GIT_RUNNER" ] || {
-    printf '%s\n' 'beads-jsonl-path companion unavailable — do NOT write' >&2
-    exit 1
-  }
-  printf '%s\n' "$BEADS_JSONL_RESOLVER"
-  __BJP_TRUSTED_BASH__
-    )
-  ) || exit 1
-  BEADS_GIT_RUNNER=${BEADS_JSONL_RESOLVER%/*}/git-clean
-  unset _bjp_candidate
-  # Installed targets only, for the same provenance reason as Phase 0's resolver: a
-  # relative `skills/beads-jsonl-path/scripts/resolve-beads-jsonl` is whatever executable
-  # the DRIVEN repo planted there. From a checkout, run its copy by absolute path.
-  [ -n "$BEADS_JSONL_RESOLVER" ] || {
-    echo "beads-jsonl-path companion unavailable — do NOT close" >&2
-    exit 1
-  }
-  BEADS_JSONL=$("$BEADS_JSONL_RESOLVER") || exit 1
-  "$BEADS_JSONL_RESOLVER" --run-br close <id> || { echo "br close failed"; exit 1; }
-  "$BEADS_JSONL_RESOLVER" --run-br sync --flush-only || { echo "closure not persisted to the JSONL"; exit 1; }
-  ```
-
-  The explicit sync is the whole guard, and it needs to know nothing about the repo: the
-  mutation is already in the shared DB, so the sync either writes it out or fails with a
-  real exit code. This replaced a before/after fingerprint of the JSONL files, which had to
-  know every beads layout, stay portable across GNU and BSD userland, and be captured
-  before the first mutation — and got each of those wrong once, in review, across six
-  copies of itself.
-
-  That sync proves *your* write landed. It does not tell you what else it overwrote: a
-  flush re-exports **every** bead from the gitignored `.beads/beads.db` over the tracked
-  JSONL, so any body the cache holds a stale copy of is reverted, silently, at exit 0.
-  Hand-editing `.beads/issues.jsonl` is what makes the cache stale — do not; use
-  `"$BEADS_JSONL_RESOLVER" --run-br update <id> --description "<full body>"`. Then rerun the resolver-locator block above,
-  stopping before its final clean-mode `BEADS_JSONL=` call, resolve the post-write path
-  with `BEADS_JSONL=$("$BEADS_JSONL_RESOLVER" --allow-dirty) || exit 1`,
-  and field-diff the tracked JSONL before committing; the write you just made is the
-  divergence the default mode refuses.
-  `.beads/issues.jsonl` is only the default:
-  `.beads.jsonl` and `<name>.beads.jsonl` are supported too, and a hardcoded path diffs
-  nothing on those — a false all-clear in the direction that loses text. Detail and
-  recovery:
-  load exact companion skill `rb-lite-backlog-drain` and follow
-  [step 11](../rb-lite-backlog-drain/SKILL.md#backlog-step-11).
+  What matters for the phase gate is the shape of the evidence. An *explicit*
+  `sync --flush-only` propagates a real exit code; the *automatic* flush after a mutating
+  command does not — its error is caught and logged at debug level, so a close can exit 0
+  with the JSONL unwritten. And a landed flush still says nothing about what else it
+  overwrote: every write re-exports the whole gitignored cache over the tracked JSONL. The
+  block's structural proof is what closes both gaps, and `CLOSURE_COMPLETE` on its stdout
+  is the evidence to quote. Anything else — `CLOSURE_INCOMPLETE`, `CLOSURE_ABANDON`, or no
+  line at all — is not a closed bead.
   **Companion unavailable: stop, rerun the same installer command once, reload it, and do
   not improvise this procedure.**
 
@@ -508,22 +315,28 @@ Declare before entering BUILD, in the task file:
 
 - exact file list (file-lock — forbid all others from round 1), **plus a standing
   exemption for `DRIVE.md` and the beads JSONL**. Guard 4 rewrites `DRIVE.md` at every
-  transition and LAND runs `"$BEADS_JSONL_RESOLVER" --run-br close`, so a lock that forbids them forbids the
+  transition and LAND closes the bead on its own standalone metadata clone, so a lock that forbids them forbids the
   bookkeeping this skill requires. Exempt them; do not spend budget on them. The exemption
   is from the **budget**, not from review — they ride the same branch, the same panel and
   the same bots as everything else (`references/phases.md` § LAND).
-- rough LOC budget
+- a rough LOC budget covering **production implementation only**. Tests and fixtures do
+  not consume it, and neither does the `DRIVE.md`/beads bookkeeping exempted above. A
+  budget that counts them is met by deleting coverage, which is the opposite of what this
+  guard is for. Again, exempt from the **budget** is not exempt from review: tests ride the
+  same branch, panel, bots, and gate as everything else, and irrelevant, duplicated, or
+  unmaintainable ones are an ordinary review finding — just never a line-count stop.
 - an explicit **do NOT build** list: defensive edges, abstractions, and config knobs
   beyond this milestone
 - done-definition tied to named tests
 
-Then watch each round. Two proxies raise the alarm — **round count climbing** and **LOC
-far past comparable work**. Proxies only flag; confirm by re-reading the goal and asking
-whether what got built matches what the goal actually requires. When they diverge, cut
-back to the goal.
+Then watch each round. Two proxies raise the alarm — **round count climbing** and
+**production LOC far past comparable work**. Proxies only flag; confirm by re-reading the
+goal and asking whether what got built matches what the goal actually requires. When they
+diverge, cut back to the goal.
 
-Hard brake: **at 2× the LOC budget or round 4, stop and report** rather than feeding
-another round. That is a stop-list item.
+Hard brake: **at 2× the production LOC budget or round 4, stop and report** rather than
+feeding another round. That is a stop-list item. Test volume never trips this brake;
+judge tests on whether each one pins a behaviour the goal actually claims.
 
 Keep `--min-findings-severity` open at first — P2/P3 are often genuine polish. Raise the
 floor to P1 only once that stream has turned into gold-plating. `--max-rounds` is a
@@ -558,6 +371,7 @@ and so "status?" is already answered.
 # DRIVE — <goal, one line>
 
 **Scope:** epic acme-M2 (beads acme-40..acme-49) — the ONLY beads this drive may take
+**Scope-Label:** `drive-open-issues`
 **Phase:** BUILD · **Bead:** acme-42 · **Branch:** acme-42-retry-budget
 **Pending:** —
 **Gate:** `nix develop -c ./check.sh` · last green 2026-08-01 (exit 0)
@@ -616,19 +430,26 @@ instant records a commit the panel never saw. The guarded snippet in
 A fresh clone has narrative but no clearance. That is correct: clearance is a claim about
 a panel run in *this* checkout. Re-run the panel.
 
-**`Pending: metadata PR owner/repo#N` stays committed**, because it is the one fact that
-must reach a fresh clone: it is how a reader learns DONE is conditional on a PR. A record
-reading `DONE` with a `Pending:` PR means "DONE once that PR merges" — query it. Qualify it
-with the repository: a bare `#N` is ambiguous on a fork, where the same number names a
-different PR in the parent and in the fork. `references/phases.md` § LAND covers the
-ordering.
+**`Pending: metadata PR owner/repo#N` stays committed**, but the metadata branch records
+`HARDEN` until that PR merges; it never starts the next bead. Refresh the default branch
+after merge, rerun typed selection there, and only then record `BUILD`, `GRAPH`, or `DONE`.
+Qualify the pending PR with the repository: a bare `#N` is ambiguous on a fork, where the
+same number names a different PR in the parent and in the fork. Legacy `DONE` + `Pending:`
+records remain query-before-finish states. `references/phases.md` § LAND covers the ordering.
 
-**`Scope:` is the one canonical definition and every phase reads it.** `drive-status`
-counts the whole repository — it cannot know your scope — so its bead numbers and its
-`DONE` are repository-wide. Filter them through `Scope:` before believing either. GRAPH
-needs a *scoped* ready bead, BUILD may only take a bead inside the scope, and DONE means
-the scope is empty, not the backlog. Without this line a fresh session inherits the goal
-but not its boundary, and will happily pick up unrelated work.
+**`Scope:` is the one canonical definition and every phase reads it.** GRAPH needs a
+scoped ready bead, BUILD may only take a bead inside the scope, and DONE means the scope is
+empty, not the backlog. Without this line a fresh session inherits the goal but not its
+boundary, and will happily pick up unrelated work.
+
+**`Scope-Label:` is its machine half**, exactly one line with the literal value
+`**Scope-Label:** `drive-open-issues``. No other label is supported. It is what
+`drive-status --select-bead-lanes-json` passes to the shared selector, and the selector
+returns only rows carrying it. Missing, duplicated, malformed, or disagreeing with the
+requested label refuses scoped selection outright — and it is never derived from bead
+rows, since those rows are what it selects. Without it there is no Beads-derived routing
+at all; the tree-only inference still works, and still cannot reach BUILD or DONE from
+bead state.
 
 
 ## Reporting

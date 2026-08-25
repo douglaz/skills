@@ -22,26 +22,104 @@ the first bead and follow all twelve steps in order. When a sibling skill links 
 numbered section for recovery, execute only that cited section; do not start a drain or
 touch unrelated beads.
 
-## Contents
-
-- Steps 1–4: pick, read, branch, and write the task file
-- Steps 5–7: run rb-lite, interpret its summary, and run local gates
-- Steps 8–10: commit, push, wait for CI, merge, and reset
-- Step 11: close the bead through a reviewed metadata path
-- Step 12: resume safely and continue until the scoped backlog is empty
-
 Use this mode when the user wants to clear an existing `br` backlog with
 rb-lite. The beads are the input; do not invent a fresh work list. Codex is
 operating the queue and PR workflow, while rb-lite handles the inner
 implement → review loop for each bead.
 
-1. **Pick.** Run `"$BEADS_JSONL_RESOLVER" --run-br ready --limit 10`. Take the top P0 first; if none,
-   the lowest-numbered P1; only descend to P2 if the user says so or the
-   P1 list is empty / oversized.
+<a id="backlog-step-1"></a>
 
-2. **Read.** Run `"$BEADS_JSONL_RESOLVER" --run-br show <id>` (and `"$BEADS_JSONL_RESOLVER" --run-br show <id> --json` if structured
-   fields help). If the acceptance criteria are vague, pause and ask the
-   user before writing the task.
+1. **Pick, through the one shared selector.** Bead selection never runs a bare `br` in the
+   caller's shell. Prepare its two inputs **once per scheduling session**:
+
+   - **The pinned executable.** Admit the exact `br v0.3.2` artifact and record
+     `PRIVATE_BR` (its canonical path in a private directory outside the driven worktree)
+     and `PRIVATE_BR_OID` (`"$BEADS_GIT_RUNNER" hash-file "$PRIVATE_BR"`), exactly as
+     [step 11](#backlog-step-11) does. Provenance comes from the artifact — the pinned
+     Linux digests or a recorded local release build of the exact commit — never from a
+     path and object id someone handed you.
+   - **The helper.** Select `SELECT_BEAD_LANES` through the installed-companion trust
+     block, as one absolute path **outside** the driven worktree:
+     `$HOME/.claude/skills/rb-lite-backlog-drain/scripts/select-bead-lanes`, the
+     `${CODEX_HOME:-$HOME/.codex}` equivalent, or `$HOME/.agents/...`. Never execute a
+     repository-relative `skills/rb-lite-backlog-drain/scripts/select-bead-lanes`: that
+     path is whatever the repository being drained planted there.
+   - **The shell you call from.** Stay in the loader-cleared shell
+     [`beads-jsonl-path`](../beads-jsonl-path/SKILL.md#resolve-before-writing) established,
+     where `BEADS_GIT_RUNNER` was admitted: no script can clear `LD_PRELOAD` for its own
+     interpreter, so the caller does it once before these processes start. Clear the Beads
+     location namespace in that same shell too — the selector and
+     [step 11](#backlog-step-11) clear it internally, but E1's `--run-br` deliberately
+     **forwards** `BEADS_*`/`BR_*`, so an override left standing sends every other step to
+     a different store than the one selection was authorized against.
+
+     ```bash
+     for _v in ${!BEADS_@} ${!BR_@}; do
+       case $_v in BEADS_JSONL_RESOLVER|BEADS_GIT_RUNNER) continue ;; esac
+       unset "$_v" || { echo "cannot clear the Beads location overrides"; exit 1; }
+     done
+     ```
+
+   Then call **exactly one** of the two modes, and keep calling that same one:
+
+   ```bash
+   # A drive with a declared scope (DRIVE.md carries one `**Scope-Label:**` line):
+   "$SELECT_BEAD_LANES" --scoped --scope-label drive-open-issues \
+     --br-path "$PRIVATE_BR" --br-oid "$PRIVATE_BR_OID"
+   # A directly requested generic drain, with no Drive scope in force:
+   "$SELECT_BEAD_LANES" --generic --br-path "$PRIVATE_BR" --br-oid "$PRIVATE_BR_OID"
+   ```
+
+   Scoped mode requires the active Drive declaration. `drive-status
+   --select-bead-lanes-json ...` is its UI delegate; direct invocation avoids a reverse
+   dependency between `drive` and this skill.
+
+   Both modes clear the location overrides, run the pinned E1 clean locator, record the
+   JSONL's object id, do pinned `--no-db` reads only, and require that same id after the
+   last read. Failure, schema violation, or movement exits nonzero with **no stdout**.
+
+   **Route only on the typed object.**
+
+   - `lanes["executor-skills"]` — resume `in_progress` before selecting `ready`; these may
+     authorize a local BUILD. Take the top P0 first, otherwise the lowest-numbered P1;
+     descend to P2 only if the user says so or the P1 list is empty or oversized. Do not
+     start a second branch while this serialized drain still has a resumed bead.
+   - `lanes["executor-rb-lite"]` — routable, but only as **external** delegation. It never
+     authorizes local execution here.
+   - `lanes["authority-human"]` — report and **stop**. An authority row blocks automated
+     routing whatever else is ready.
+   - Every array empty with `unresolved_count > 0` — a graph problem, not a finished
+     scope: report GRAPH. `blocked_count` says how much of it is dependency-blocked.
+   - In scoped mode, `unresolved_count == 0` with every array and count zero — DONE, and
+     only under the existing DRIVE-record precondition.
+
+   Generic mode answers the same questions with `ready`/`in_progress` at the top level and
+   no lanes. Ready or in-progress work authorizes generic BUILD. With no executable row,
+   positive unresolved means GRAPH; zero unresolved/counts/arrays means DONE without `DRIVE.md`.
+   An ordinary **unlabeled** row is work, not an empty queue, and must never be read as DONE.
+   If any unresolved row carries `drive-open-issues`,
+   `executor-skills`, `executor-rb-lite`, or `authority-human`, it refuses with
+   `Drive-managed labels require scoped routing`: recognized metadata belongs to the scoped
+   router, never to a generic local drain. That unresolved-row check is the whole of what
+   generic mode enforces — it never reads `DRIVE.md`, so choosing the mode is the caller's
+   assertion, made here, that no Drive scope is in force. The mode chosen here also fixes the
+   `LANE_LABEL` [step 11](#backlog-step-11) closes under: a scoped row's own lane, or
+   `generic-unlabeled` for a row this mode returned.
+
+2. **Read, through the same pinned tool and store.** Use step 1's retained inputs:
+
+   ```bash
+   "$BEADS_JSONL_RESOLVER" --pinned-br "$PRIVATE_BR" "$PRIVATE_BR_OID" --run-br \
+     --no-db --no-auto-import --no-auto-flush show <id>          # add --json if it helps
+   ```
+
+   Not a bare `--run-br show`: that one resolves `br` on the caller's PATH, and its
+   DB-mode read answers out of the local cache — which step 1's `--no-db` selection never
+   consulted and cannot vouch for. The body you write the task from would then be whatever
+   a stale cache holds, not the bead the selection authorized. `--no-db` reads the same
+   clean tracked JSONL the selector routed on, and the pinned prefix is the same tool. The
+   store is the one step 1's shell already fixed by clearing the location overrides. If
+   the acceptance criteria are vague, pause and ask the user before writing the task.
 
 3. **Sync base and branch.** Confirm there is no unrelated dirty work, fetch
    the selected base, and start the bead from that clean base. Use one branch
@@ -325,336 +403,540 @@ implement → review loop for each bead.
 
 <a id="backlog-step-11"></a>
 
-11. **Close the bead, through a reviewed path.** Run `"$BEADS_JSONL_RESOLVER" --run-br update <bead-id> -s closed`
-    after the merged code is present on the base branch. That write lands in the
-    tracked `.beads/*.jsonl`, so do **not** commit it straight to the default branch —
-    it would reach the branch unreviewed. Carry the closure commit into the next bead's
-    branch, where it rides that PR; when the queue is empty and there is no next branch,
-    open one small metadata PR for it **and land it** — carry it through review and merge
-    like any other. Opening it is not enough: until it merges, the closure never reaches
-    the default branch and a fresh clone still shows the bead open, which is the failure
-    this reviewed path exists to prevent. The drain is not done until that PR is merged. Do not leave it uncommitted either, or the next
-    run starts from a dirty base and silently carries the previous closure into its diff.
+11. **Close the bead natively, after the merge.** This is the canonical closure fact for
+    every skill in this repository; the other command-bearing consumers link here rather
+    than carrying their own copy.
 
-    **Give the PR body a machine-readable marker line, one per bead it closes:**
+Closure is `br v0.3.2`'s own primitive: one full-ID `close --reason --transition-comment`,
+then one strict `sync --flush-only`. No wrapper, marker, rollback, batching, or `--force`.
+Run it on a **fresh standalone clone** of merged default, never a linked worktree: pinned
+`v0.3.2` keeps a worktree-local cache, so a linked checkout can split state across two
+caches. The exact release is mandatory.
 
-    ```text
-    bead-closure: <bead-id>
-    ```
+**Before the block below, establish the two inputs it will not establish for you.**
 
-    Step 8 puts the bead id in every ordinary work PR body too, so the id alone cannot
-    distinguish "the work merged" from "the closure merged" — and step 12's resume
-    discovery depends on telling them apart. The marker is what it filters on.
+- `PRIVATE_BR` / `PRIVATE_BR_OID`. Provenance comes from the artifact, never a
+  caller-supplied pair. The one accepted prebuilt is Linux archive
+  `br-0.3.2-linux_x86_64.tar.gz` (SHA-256
+  `e67c560e77e912490e44a65e3e9c13205210d171e729c5d801072ee508207288`) and the binary it
+  contains (SHA-256
+  `590aebae292bca9d36bf90d3219dcb27a3536f402864841b2a11d5c07c4c6c63`); on any other
+  platform, build commit `4104c31e79bf806f53e2eba0a4cd2ba6c594f8b9` locally in release
+  mode from a clean checkout and record the source commit, the build command, and the
+  resulting digest. Place exactly that executable as `br` in a private directory
+  **outside** the clone with `"$BEADS_GIT_RUNNER" make-temp-dir` and `copy-file`, then
+  record `PRIVATE_BR_OID=$("$BEADS_GIT_RUNNER" hash-file "$PRIVATE_BR")`. The
+  [`--pinned-br` prefix](../beads-jsonl-path/SKILL.md#pin-one-already-admitted-br-executable)
+  re-proves that exact path and object id before every invocation with no PATH fallback,
+  so a tool swapped between two commands is refused by the next.
+- `BEADS_JSONL_RESOLVER` / `BEADS_GIT_RUNNER`, from
+  [`beads-jsonl-path` § Resolve before writing](../beads-jsonl-path/SKILL.md#resolve-before-writing) —
+  **stopping before its final clean-mode `BEADS_JSONL=` call**, which runs `br where` and
+  so must not precede admission. That bootstrap is the only Git run before admission;
+  after it every `br`, `jq`, and Git call goes through those two runners.
 
-    Verify it landed with a checked *explicit* sync: it propagates a real exit code, which
-    the automatic flush after `"$BEADS_JSONL_RESOLVER" --run-br update` does not — that one swallows its error. The
-    mutation is already in the shared DB, so the sync either writes it out or fails loudly:
+`CLOSE_REASON` is one nonempty line carrying durable outcome identity: normally the merged
+work-PR URL plus its 40-lowercase-hex merge SHA; for a decision or no-change closure, an
+immutable decision/review-thread URL plus the accepted comment, range, or no-change
+identity; for an authority publication, an immutable release URL, tag, or commit.
+`CLOSE_EVIDENCE` is the nonempty reviewed note, with no NUL and no outer whitespace.
+`LANE_LABEL` is `executor-skills`, `executor-rb-lite`, `authority-human`, or internal
+`generic-unlabeled` — never a Beads label or graph value, carried by no bead. It names a
+row the selector's **generic** mode returned, which by that mode's contract carries no
+recognized Drive metadata; without it a generic drain could start ordinary unlabeled work
+and have no way to finish it.
 
-    ```bash
-    # Resolve and prove the JSONL clean FIRST: `"$BEADS_JSONL_RESOLVER" --run-br update` auto-flushes the cache over it.
-    # Clear loader injection in this already-running shell before the locator starts
-    # any new process. The resolver/git-clean script bodies are too late: a shebang
-    # interpreter would already have loaded caller-selected libraries.
-    _bjp_posixly_was_set=${POSIXLY_CORRECT+x}
-    _bjp_posixly_value=${POSIXLY_CORRECT-}
-    POSIXLY_CORRECT=y
-    export POSIXLY_CORRECT
-    \unset LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT LD_DEBUG LD_DEBUG_OUTPUT LD_PROFILE \
-      LD_ORIGIN_PATH LD_PRELOAD_32 LD_PRELOAD_64 DYLD_INSERT_LIBRARIES \
-      DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH \
-      DYLD_FALLBACK_FRAMEWORK_PATH LIBPATH SHLIB_PATH GCONV_PATH LOCPATH || {
-      printf '%s\n' 'cannot clear dynamic-loader injection before beads-jsonl-path — do NOT write' >&2
-      exit 1
+Whichever value you pass is checked against the target, never trusted, before the close,
+so a mismatch leaves status and comments untouched:
+
+- one of the three lane labels — the target's recognized lane set must be exactly that one
+  label, and the row must also carry `drive-open-issues`;
+- `generic-unlabeled` — the target must carry none of `drive-open-issues`,
+  `executor-skills`, `executor-rb-lite`, or `authority-human`, which is the same guarantee
+  generic selection already enforced when it handed the bead over.
+
+Neither classification can stand in for the other, and a missing, multiple, wrong, or
+out-of-scope one refuses before the close. A fifth value refuses at the accepted-value
+guard, before the private directory or the pinned binary, so it never reaches the
+cache-creating import.
+
+`CLOSE_SNAPSHOT_DIR` is empty first; the block prints its private directory — **keep that
+path**. There is no rollback/state marker. Before `CLOSURE_COMPLETE`, recovery follows the
+matrix below, not always a same-clone resume: an incomplete snapshot or pre-close state means
+abandon this clone and restart fresh; eligible closed states resume here. The captured line is
+durable completion evidence. Only then are artifacts removed best-effort; interruption after it
+cannot retract completion, and cleanup failure only warns.
+
+Because that directory is caller-supplied and the resume writes fixed names into it before
+classifying anything, it is **admitted before it is opened**: one canonical, absolute,
+owner-held, mode-0700 real directory outside the clone, every artifact name it knows
+absent or an owner-held regular single-link file. Symlinked directory or artifact,
+hard-linked outside alias, non-private mode, or a path inside the worktree refuses before
+the first redirection — which is why a first entry prints the canonical spelling of the
+directory it just made.
+
+Exact v0.3.2 `where --json` owns `database_path`; metadata may rename the cache. Its
+canonical parent must be inside the clone, and the recorded exact path and sidecars govern
+both entry and resume. The block never assumes `beads.db`.
+
+```bash
+# BEGIN NATIVE CLOSE
+# Inputs: BEAD_ID CLOSE_REASON CLOSE_EVIDENCE LANE_LABEL PRIVATE_BR PRIVATE_BR_OID
+# CLOSE_SNAPSHOT_DIR (empty on a first entry), BEADS_JSONL_RESOLVER, BEADS_GIT_RUNNER.
+set -uo pipefail
+# Bash imports the caller's exported functions, so a caller `unset` or `command` would own
+# every check below, including the override clearing that decides which store this close
+# writes to. POSIX special-builtin precedence is the one lookup a function cannot shadow:
+# recover the builtins through it, then drop every inherited function first. Loader
+# injection stays a caller obligation; no script can clear LD_PRELOAD for its own
+# interpreter.
+nc_posix_was=${POSIXLY_CORRECT+x}
+nc_posix_value=${POSIXLY_CORRECT-}
+POSIXLY_CORRECT=y
+\unset -f command builtin exec unset 2>/dev/null || :
+while command builtin read -r _ _ nc_function; do
+  command builtin unset -f -- "$nc_function" || {
+    printf 'CLOSURE_INCOMPLETE %s\n' 'cannot clear the inherited shell functions' >&2
+    exit 1
+  }
+done < <(command builtin declare -F)
+if [ -n "$nc_posix_was" ]; then POSIXLY_CORRECT=$nc_posix_value
+else command unset POSIXLY_CORRECT; fi
+command unset nc_function nc_posix_was nc_posix_value
+nc_stop() { printf 'CLOSURE_INCOMPLETE %s\n' "$1" >&2; exit 1; }
+# Abandoning is a success of the matrix, not of the closure: the clone is untouched, so
+# the remedy is a new clone, not a repair. It still exits nonzero.
+nc_abandon() { printf 'CLOSURE_ABANDON %s\n' "$1" >&2; exit 1; }
+# Named inputs first: a missing one is this block's fixed diagnostic, not an `unbound
+# variable` abort from whichever expansion reaches it first.
+for nc_input in BEADS_JSONL_RESOLVER BEADS_GIT_RUNNER BEAD_ID CLOSE_REASON \
+  CLOSE_EVIDENCE LANE_LABEL PRIVATE_BR PRIVATE_BR_OID; do
+  [ -n "${!nc_input-}" ] || nc_stop "the required input $nc_input is unset or empty"
+done
+CLOSE_SNAPSHOT_DIR=${CLOSE_SNAPSHOT_DIR-}
+NC_PIN=( "$BEADS_JSONL_RESOLVER" --pinned-br "$PRIVATE_BR" "$PRIVATE_BR_OID" --run-br )
+NC_NO_AUTO=( --no-auto-import --no-auto-flush )
+# Every name this block writes there: a resume admits these before opening any of them,
+# and the cleanup at the end removes exactly this list.
+NC_SNAPSHOT_ARTIFACTS=( {version,where}.{json,err} {jsonl,db}.path pre.{jsonl,oid}
+  import.{out,err} pre-show.{json,err} resume-{jsonl,db}.{json,err}
+  retry.jsonl post-show.{json,err} )
+
+[ -d .git ] || nc_stop 'not a standalone clone: .git is not a directory'
+# Location overrides decide which store every command below reads and writes: clear the
+# whole namespace, exported or not, keeping only the two validated runner paths. Block-own
+# arrays are NC_-prefixed so this sweep cannot unset them under `set -u`.
+for nc_variable in ${!BEADS_@} ${!BR_@}; do
+  case $nc_variable in BEADS_JSONL_RESOLVER|BEADS_GIT_RUNNER) continue ;; esac
+  unset "$nc_variable" || nc_stop 'cannot clear the Beads location overrides'
+done
+case $LANE_LABEL in
+  executor-skills|executor-rb-lite|authority-human|generic-unlabeled) ;;
+  *) nc_stop 'the expected lane label is not one of the four accepted values' ;;
+esac
+[[ "$CLOSE_REASON" != *$'\n'* ]] || nc_stop 'the close reason is not one line'
+[[ ! "$CLOSE_EVIDENCE" =~ ^[[:space:]]|[[:space:]]$ ]] ||
+  nc_stop 'the evidence has outer whitespace'
+NC_ROOT=$("$BEADS_GIT_RUNNER" worktree-root) ||
+  nc_stop 'cannot resolve the standalone clone root'
+
+if [ -n "$CLOSE_SNAPSHOT_DIR" ]; then
+  SNAP=$CLOSE_SNAPSHOT_DIR
+  # Caller-supplied, and everything below redirects into it or unlinks a name inside it,
+  # so admit it FIRST: one canonical absolute owner-held mode-0700 real directory outside
+  # the clone, every known artifact name absent or an owner-held single-link regular file.
+  # Otherwise the first `>` follows a replacement to a file this closure does not own.
+  NC_BAD_DIR='the retained closure directory is not one canonical private directory outside the clone'
+  NC_BAD_ARTIFACT='a retained closure artifact is not a regular private file'
+  NC_STAT=$(command -p -v stat) || nc_stop "$NC_BAD_DIR"
+  nc_stat() { "$NC_STAT" -c "$1" -- "$3" 2>/dev/null ||
+    "$NC_STAT" -f "$2" "$3" 2>/dev/null; }
+  nc_snapshot_canonical=$(CDPATH= cd -P -- "$SNAP" 2>/dev/null && command builtin pwd -P) &&
+    nc_snapshot_mode=$(nc_stat %a %Lp "$SNAP") &&
+    [ -d "$SNAP" ] && [ ! -L "$SNAP" ] && [ -O "$SNAP" ] &&
+    [[ "$SNAP" == /* && "$SNAP" != *$'\n'* ]] &&
+    [ "$nc_snapshot_canonical" = "$SNAP" ] && [ "$nc_snapshot_mode" = 700 ] ||
+    nc_stop "$NC_BAD_DIR"
+  case $SNAP in "$NC_ROOT"|"$NC_ROOT"/*) nc_stop "$NC_BAD_DIR" ;; esac
+  for nc_artifact in "${NC_SNAPSHOT_ARTIFACTS[@]}"; do
+    nc_artifact_path=$SNAP/$nc_artifact
+    [ ! -L "$nc_artifact_path" ] || nc_stop "$NC_BAD_ARTIFACT"
+    [ ! -e "$nc_artifact_path" ] || {
+      [ -f "$nc_artifact_path" ] && [ -O "$nc_artifact_path" ] &&
+        [ "$(nc_stat %h %l "$nc_artifact_path")" = 1 ] || nc_stop "$NC_BAD_ARTIFACT"
     }
-    if [ -n "$_bjp_posixly_was_set" ]; then
-      POSIXLY_CORRECT=$_bjp_posixly_value
-      export POSIXLY_CORRECT
-    else
-      \unset POSIXLY_CORRECT
+  done
+  [ -s "$SNAP/pre.jsonl" ] && [ -s "$SNAP/pre.oid" ] &&
+    [ -s "$SNAP/jsonl.path" ] && [ -s "$SNAP/db.path" ] ||
+    nc_stop 'the retained pre-close snapshot is incomplete — abandon this clone and start from a fresh one'
+else
+  SNAP=$("$BEADS_GIT_RUNNER" make-temp-dir native-close) ||
+    nc_stop 'cannot create the private closure directory'
+  # Print the canonical spelling: it is the one form the admission above accepts when
+  # this same path comes back as CLOSE_SNAPSHOT_DIR.
+  SNAP=$(CDPATH= cd -P -- "$SNAP" 2>/dev/null && command builtin pwd -P) ||
+    nc_stop 'cannot canonicalize the private closure directory'
+fi
+printf 'CLOSE_SNAPSHOT_DIR=%s\n' "$SNAP"
+
+# Identity first, and on every entry including a resume: the locator itself runs
+# `br where`, so nothing may execute this binary before it has been re-proved.
+"${NC_PIN[@]}" "${NC_NO_AUTO[@]}" version --json \
+  >"$SNAP/version.json" 2>"$SNAP/version.err" ||
+  nc_stop 'the pinned br identity call failed'
+[ -s "$SNAP/version.err" ] && nc_stop 'the pinned br identity call wrote to stderr'
+"$BEADS_JSONL_RESOLVER" --run-jq -e '.version == "0.3.2" and .build == "release"
+  and .commit == "4104c31e79bf806f53e2eba0a4cd2ba6c594f8b9"' \
+  <"$SNAP/version.json" >/dev/null ||
+  nc_stop 'the pinned br is not the exact v0.3.2 release build'
+
+# Contain and record the pinned `where` database path before import; entry and resume must
+# never guess `beads.db`.
+"${NC_PIN[@]}" "${NC_NO_AUTO[@]}" where --json \
+  >"$SNAP/where.json" 2>"$SNAP/where.err" || nc_stop 'the pinned where call failed'
+[ -s "$SNAP/where.err" ] && nc_stop 'the pinned where call wrote to stderr'
+DATABASE_PATH=$("$BEADS_JSONL_RESOLVER" --run-jq -er '
+  .database_path
+  | select(type == "string" and length > 0 and startswith("/") and (contains("\n") | not))' \
+  <"$SNAP/where.json" 2>/dev/null) || nc_stop 'the database path is not one absolute line'
+nc_database_name=${DATABASE_PATH##*/}
+nc_database_dir=${DATABASE_PATH%/*}
+[ -n "$nc_database_name" ] && [ "$nc_database_name" != . ] &&
+  [ "$nc_database_name" != .. ] && [ "$nc_database_dir" != "$DATABASE_PATH" ] ||
+  nc_stop 'the database path has no file name'
+NC_DATABASE_DIR=$(CDPATH= cd -P -- "$nc_database_dir" 2>/dev/null && command builtin pwd -P) ||
+  nc_stop 'cannot canonicalize the database directory'
+case $NC_DATABASE_DIR in
+  "$NC_ROOT"|"$NC_ROOT"/*) ;;
+  *) nc_stop 'the configured database is outside the standalone clone' ;;
+esac
+DATABASE_PATH=$NC_DATABASE_DIR/$nc_database_name
+unset NC_ROOT NC_DATABASE_DIR nc_database_dir nc_database_name
+
+if [ -z "$CLOSE_SNAPSHOT_DIR" ]; then
+  BEADS_JSONL=$("$BEADS_JSONL_RESOLVER" --pinned-br "$PRIVATE_BR" "$PRIVATE_BR_OID") ||
+    nc_stop 'the clean beads JSONL locator refused'
+  for nc_cache in "$DATABASE_PATH" "$DATABASE_PATH-wal" \
+    "$DATABASE_PATH-shm" "$DATABASE_PATH-journal"; do
+    { [ -e "$nc_cache" ] || [ -L "$nc_cache" ]; } &&
+      nc_stop 'a first entry requires an absent cache — use a fresh standalone clone'
+  done
+  # Proof input, not a recovery marker: the final comparison reads and re-hashes this copy.
+  printf '%s\n' "$BEADS_JSONL" >"$SNAP/jsonl.path" ||
+    nc_stop 'cannot record the resolved beads JSONL path'
+  printf '%s\n' "$DATABASE_PATH" >"$SNAP/db.path" ||
+    nc_stop 'cannot record the resolved database path'
+  "$BEADS_GIT_RUNNER" copy-file "$BEADS_JSONL" "$SNAP/pre.jsonl" ||
+    nc_stop 'cannot copy the clean beads JSONL'
+  PRE_OID=$("$BEADS_GIT_RUNNER" hash-file "$BEADS_JSONL") ||
+    nc_stop 'cannot hash the clean beads JSONL'
+  [ "$PRE_OID" = "$("$BEADS_GIT_RUNNER" hash-file "$SNAP/pre.jsonl")" ] ||
+    nc_stop 'the private copy does not match the clean beads JSONL'
+  printf '%s\n' "$PRE_OID" >"$SNAP/pre.oid" || nc_stop 'cannot record the snapshot hash'
+  "${NC_PIN[@]}" "${NC_NO_AUTO[@]}" sync --import-only \
+    >"$SNAP/import.out" 2>"$SNAP/import.err" || nc_stop 'the pinned import failed'
+  [ -s "$SNAP/import.err" ] && nc_stop 'the pinned import wrote to stderr'
+  "${NC_PIN[@]}" --no-db "${NC_NO_AUTO[@]}" show "$BEAD_ID" --json \
+    >"$SNAP/pre-show.json" 2>"$SNAP/pre-show.err" ||
+    nc_stop 'cannot read the target before closing'
+  "$BEADS_JSONL_RESOLVER" --run-jq -e --arg id "$BEAD_ID" --arg lane "$LANE_LABEL" '
+    def lanes: ["executor-skills", "executor-rb-lite", "authority-human"];
+    def carried($names): [.[0].labels[]? | select(. as $l | $names | index($l))];
+    length == 1 and .[0].id == $id
+    and (.[0].status == "open" or .[0].status == "in_progress")
+    and (if $lane == "generic-unlabeled"
+         then carried(["drive-open-issues"] + lanes) == []
+         else carried(lanes) == [$lane] and carried(["drive-open-issues"]) != [] end)' \
+    <"$SNAP/pre-show.json" >/dev/null ||
+    nc_stop 'the target is not exactly one open or in-progress bead carrying exactly the expected scope and lane'
+  # The whole mutation: one full id, no preceding status write, no batch, no --force; a
+  # failed second pinned admission is CLOSURE_INCOMPLETE, never another binary.
+  "${NC_PIN[@]}" "${NC_NO_AUTO[@]}" \
+    close "$BEAD_ID" --reason "$CLOSE_REASON" --transition-comment "$CLOSE_EVIDENCE" &&
+  "${NC_PIN[@]}" "${NC_NO_AUTO[@]}" sync --flush-only ||
+    nc_stop 'the native close and strict flush did not both succeed'
+else
+  # Resume. Re-admit, reclassify, and never close a second time.
+  BEADS_JSONL=$("$BEADS_JSONL_RESOLVER" --pinned-br "$PRIVATE_BR" "$PRIVATE_BR_OID" \
+    --allow-dirty) || nc_stop 'the beads JSONL could not be resolved on resume'
+  IFS= read -r RECORDED_PATH <"$SNAP/jsonl.path" &&
+    IFS= read -r RECORDED_DB_PATH <"$SNAP/db.path" &&
+    IFS= read -r PRE_OID <"$SNAP/pre.oid" ||
+    nc_stop 'the retained pre-close snapshot is unreadable'
+  [ "$BEADS_JSONL" = "$RECORDED_PATH" ] ||
+    nc_stop 'the resumed clone resolves a different beads JSONL'
+  [ "$DATABASE_PATH" = "$RECORDED_DB_PATH" ] ||
+    nc_stop 'the resumed clone resolves a different database path'
+  [ "$PRE_OID" = "$("$BEADS_GIT_RUNNER" hash-file "$SNAP/pre.jsonl")" ] ||
+    nc_stop 'the retained pre-close copy no longer has its recorded hash'
+  NOW_OID=$("$BEADS_GIT_RUNNER" hash-file "$BEADS_JSONL") ||
+    nc_stop 'cannot hash the beads JSONL on resume'
+  DB_PRESENT=false
+  for nc_cache in "$DATABASE_PATH" "$DATABASE_PATH-wal" \
+    "$DATABASE_PATH-shm" "$DATABASE_PATH-journal"; do
+    { [ -e "$nc_cache" ] || [ -L "$nc_cache" ]; } && DB_PRESENT=true
+  done
+  # Three states, and bare "closed" is not one: another reason or comment is a different
+  # write than the one this resume is finishing, so it reaches human repair, not a flush.
+  NC_CLASSIFY='def evidence_count($rows):
+      [$rows[] | select(.id == $id) | .comments[]? | select(.text == $text)] | length;
+    def pre_status:
+      ([$pre[] | select(.id == $id) | .status]) as $states
+      | if ($states | length) == 1
+           and ($states[0] == "open" or $states[0] == "in_progress")
+        then $states[0] else error("pre-status") end;
+    if length == 1 and .[0].status == "closed" and .[0].close_reason == $reason
+       and evidence_count(.) == evidence_count($pre) + 1
+    then "intended-closed"
+    elif length == 1 and .[0].status == pre_status then "pre-close"
+    else "other" end'
+  # Classify BEFORE any DB-mode command: with the cache absent only `--no-db` may run,
+  # because a DB-mode read would create the very cache this branch is deciding about.
+  "${NC_PIN[@]}" --no-db "${NC_NO_AUTO[@]}" show "$BEAD_ID" --json \
+    >"$SNAP/resume-jsonl.json" 2>"$SNAP/resume-jsonl.err" ||
+    nc_stop 'cannot read the target from the JSONL on resume'
+  JSONL_STATE=$("$BEADS_JSONL_RESOLVER" --run-jq -er --arg id "$BEAD_ID" \
+    --arg reason "$CLOSE_REASON" --arg text "$CLOSE_EVIDENCE" \
+    --slurpfile pre "$SNAP/pre.jsonl" "$NC_CLASSIFY" <"$SNAP/resume-jsonl.json") ||
+    nc_stop 'cannot classify the resumed JSONL row'
+  if ! $DB_PRESENT; then
+    [ "$NOW_OID" = "$PRE_OID" ] &&
+      nc_abandon 'the cache is absent and the JSONL still matches the retained pre-close snapshot — abandon this clone and start from a fresh one'
+    nc_stop 'the cache is absent and the JSONL does not match the retained snapshot'
+  fi
+  "${NC_PIN[@]}" "${NC_NO_AUTO[@]}" show "$BEAD_ID" --json \
+    >"$SNAP/resume-db.json" 2>"$SNAP/resume-db.err" ||
+    nc_stop 'cannot read the target from the cache on resume'
+  DB_STATE=$("$BEADS_JSONL_RESOLVER" --run-jq -er --arg id "$BEAD_ID" \
+    --arg reason "$CLOSE_REASON" --arg text "$CLOSE_EVIDENCE" \
+    --slurpfile pre "$SNAP/pre.jsonl" "$NC_CLASSIFY" <"$SNAP/resume-db.json") ||
+    nc_stop 'cannot classify the resumed cache row'
+  if [ "$DB_STATE" = pre-close ] && [ "$JSONL_STATE" = pre-close ]; then
+    [ "$NOW_OID" = "$PRE_OID" ] || nc_stop 'the JSONL diverged from the retained pre-close snapshot — stop for human repair'
+    nc_abandon 'the cache and the JSONL are both still in the retained pre-close state — a resumed attempt never closes; abandon this clone and start from a fresh one'
+  elif [ "$DB_STATE" = intended-closed ] && [ "$JSONL_STATE" = pre-close ]; then
+    # The target row matching is not enough: the flush publishes the cache over the WHOLE
+    # file and the proof compares against the retained snapshot, so a diverged JSONL would
+    # be destroyed and certified. Exact bytes or human repair.
+    [ "$NOW_OID" = "$PRE_OID" ] ||
+      nc_stop 'the JSONL diverged from the retained pre-close snapshot — stop for human repair'
+    "${NC_PIN[@]}" "${NC_NO_AUTO[@]}" sync --flush-only ||
+      nc_stop 'the strict flush failed on resume'
+  elif [ "$DB_STATE" = intended-closed ] && [ "$JSONL_STATE" = intended-closed ]; then
+    NC_RETRY=$SNAP/retry.jsonl
+    "$BEADS_GIT_RUNNER" copy-file "$BEADS_JSONL" "$NC_RETRY" &&
+      [ "$NOW_OID" = "$("$BEADS_GIT_RUNNER" hash-file "$NC_RETRY")" ] || nc_stop 'cannot retain the pre-flush JSONL'
+    "${NC_PIN[@]}" "${NC_NO_AUTO[@]}" sync --flush-only || nc_stop 'the idempotent strict flush failed on resume'
+    if [ "$NOW_OID" != "$("$BEADS_GIT_RUNNER" hash-file "$BEADS_JSONL")" ]; then
+      "$BEADS_GIT_RUNNER" copy-file "$NC_RETRY" "$BEADS_JSONL" &&
+        [ "$NOW_OID" = "$("$BEADS_GIT_RUNNER" hash-file "$BEADS_JSONL")" ] || nc_stop 'the idempotent flush moved the JSONL and restoration failed — use the retained copy for human repair'
+      nc_stop 'the idempotent flush moved the JSONL; its prior bytes were restored — stop for human repair'
     fi
-    BEADS_JSONL_RESOLVER=$(
-      (
-        # Resolve the clean interpreter in a subshell. POSIX special-builtin precedence
-        # prevents exported caller functions from redefining this trust path, and the
-        # subshell leaves the caller's shell state untouched.
-        POSIXLY_CORRECT=y
-        export POSIXLY_CORRECT
-        \unset -f command builtin exec unset 2>/dev/null || :
-        _bjp_bash=$(command -p -v bash) || {
-          printf '%s\n' 'cannot locate a trusted Bash for the beads JSONL locator — do NOT write' >&2
-          exit 1
-        }
-        unset BASH_ENV ENV BASH_COMPAT BASH_LOADABLES_PATH BASH_XTRACEFD CDPATH GLOBIGNORE
-        exec "$_bjp_bash" --noprofile --norc -p -s <<'__BJP_TRUSTED_BASH__'
-    # Privileged Bash ignores inherited functions. Clear the other startup controls too,
-    # then perform every candidate, worktree, provenance, and byte-agreement decision here.
-    command unset BASH_ENV ENV BASH_COMPAT BASH_LOADABLES_PATH BASH_XTRACEFD CDPATH GLOBIGNORE || {
-      printf '%s\n' 'cannot sanitize the beads JSONL locator shell environment — do NOT write' >&2
-      exit 1
-    }
-    while command builtin read -r _ _ _bjp_function; do
-      command unset -f -- "$_bjp_function" || {
-        printf '%s\n' 'cannot sanitize the beads JSONL locator shell environment — do NOT write' >&2
-        exit 1
-      }
-    done < <(command builtin declare -F)
-    unset _bjp_function
-    _bjp_git=$(command -p -v git) || {
-      printf '%s\n' 'cannot locate a trusted Git for beads-jsonl-path — do NOT write' >&2
-      exit 1
-    }
-    _bjp_cmp=$(command -p -v cmp) || {
-      printf '%s\n' 'cannot locate a trusted cmp for beads-jsonl-path — do NOT write' >&2
-      exit 1
-    }
-    _bjp_stat=$(command -p -v stat) || {
-      printf '%s\n' 'cannot locate a trusted stat for beads-jsonl-path — do NOT write' >&2
-      exit 1
-    }
-    _bjp_regular_link_count() {
-      local path=$1 count
-      if count=$("$_bjp_stat" -c %h "$path" 2>/dev/null) && [[ $count =~ ^[0-9]+$ ]]; then
-        :
-      elif count=$("$_bjp_stat" -f %l "$path" 2>/dev/null) && [[ $count =~ ^[0-9]+$ ]]; then
-        :
-      else
-        return 1
-      fi
-      printf '%s\n' "$count"
-    }
-    _bjp_git_environment=( "${!GIT@}" )
-    for _bjp_git_variable in "${_bjp_git_environment[@]}"; do
-      command unset -- "$_bjp_git_variable" || {
-        printf '%s\n' 'cannot sanitize the Git environment for beads-jsonl-path — do NOT write' >&2
-        exit 1
-      }
-    done
-    unset _bjp_git_variable _bjp_git_environment
+  else
+    nc_stop 'the resumed state is not one this matrix admits — stop for human repair'
+  fi
+fi
 
-    BEADS_JSONL_RESOLVER=
-    BEADS_GIT_RUNNER=
-    for _bjp_dir in "$HOME/.claude/skills/beads-jsonl-path" \
-      "${CODEX_HOME:-$HOME/.codex}/skills/beads-jsonl-path" \
-      "$HOME/.agents/skills/beads-jsonl-path"; do
-      case $_bjp_dir in
-        /*) ;;
-        *) printf '%s\n' 'installed beads-jsonl-path target is not absolute — do NOT write' >&2; exit 1 ;;
-      esac
-      _bjp_candidate="$_bjp_dir/scripts/resolve-beads-jsonl"
-      [ -x "$_bjp_candidate" ] || continue
-      [ ! -L "$_bjp_candidate" ] || {
-        printf '%s\n' 'installed beads-jsonl-path resolver is a symbolic link — do NOT write' >&2
-        exit 1
-      }
-      _bjp_root_raw=$("$_bjp_git" --no-replace-objects -c core.fsmonitor=false rev-parse --show-toplevel 2>/dev/null) || {
-        printf '%s\n' 'cannot resolve the current Git worktree — do NOT write' >&2
-        exit 1
-      }
-      _bjp_root=$(
-        CDPATH=
-        export CDPATH
-        cd -P -- "$_bjp_root_raw" 2>/dev/null && pwd -P
-      ) || {
-        printf '%s\n' 'cannot canonicalize the current Git worktree — do NOT write' >&2
-        exit 1
-      }
-      _bjp_candidate_dir=$(
-        CDPATH=
-        export CDPATH
-        cd -P -- "$_bjp_dir/scripts" 2>/dev/null && pwd -P
-      ) || {
-        printf '%s\n' 'cannot canonicalize installed beads-jsonl-path target — do NOT write' >&2
-        exit 1
-      }
-      _bjp_candidate="$_bjp_candidate_dir/resolve-beads-jsonl"
-      [ ! -L "$_bjp_candidate" ] || {
-        printf '%s\n' 'installed beads-jsonl-path resolver is a symbolic link — do NOT write' >&2
-        exit 1
-      }
-      case $_bjp_root:$_bjp_candidate_dir in
-        /:/*|*:"$_bjp_root"|*:"$_bjp_root"/*)
-          printf '%s\n' 'installed beads-jsonl-path target is inside the current Git worktree — do NOT write' >&2
-          exit 1
-          ;;
-      esac
-      [ -f "$_bjp_candidate" ] || {
-        printf '%s\n' 'installed beads-jsonl-path resolver is not a regular file — do NOT write' >&2
-        exit 1
-      }
-      _bjp_link_count=$(_bjp_regular_link_count "$_bjp_candidate") || {
-        printf '%s\n' 'cannot inspect installed beads-jsonl-path resolver hard-link count — do NOT write' >&2
-        exit 1
-      }
-      [ "$_bjp_link_count" = 1 ] || {
-        printf '%s\n' 'installed beads-jsonl-path resolver has multiple hard links — do NOT write' >&2
-        exit 1
-      }
-      unset _bjp_link_count
-      if ! IFS= command builtin read -r _bjp_shebang <"$_bjp_candidate"; then
-        printf '%s\n' 'cannot inspect installed beads-jsonl-path resolver interpreter — do NOT write' >&2
-        exit 1
-      fi
-      [ "$_bjp_shebang" = '#!/bin/sh' ] || {
-        printf '%s\n' 'installed beads-jsonl-path resolver has an unexpected interpreter — do NOT write' >&2
-        exit 1
-      }
-      unset _bjp_shebang
-      _bjp_runner="$_bjp_candidate_dir/git-clean"
-      [ -x "$_bjp_runner" ] || {
-        printf '%s\n' 'installed beads-jsonl-path Git runner unavailable — do NOT write' >&2
-        exit 1
-      }
-      [ ! -L "$_bjp_runner" ] || {
-        printf '%s\n' 'installed beads-jsonl-path Git runner is a symbolic link — do NOT write' >&2
-        exit 1
-      }
-      [ -f "$_bjp_runner" ] || {
-        printf '%s\n' 'installed beads-jsonl-path Git runner is not a regular file — do NOT write' >&2
-        exit 1
-      }
-      _bjp_link_count=$(_bjp_regular_link_count "$_bjp_runner") || {
-        printf '%s\n' 'cannot inspect installed beads-jsonl-path Git runner hard-link count — do NOT write' >&2
-        exit 1
-      }
-      [ "$_bjp_link_count" = 1 ] || {
-        printf '%s\n' 'installed beads-jsonl-path Git runner has multiple hard links — do NOT write' >&2
-        exit 1
-      }
-      unset _bjp_link_count
-      if ! IFS= command builtin read -r _bjp_shebang <"$_bjp_runner"; then
-        printf '%s\n' 'cannot inspect installed beads-jsonl-path Git runner interpreter — do NOT write' >&2
-        exit 1
-      fi
-      [ "$_bjp_shebang" = '#!/bin/sh' ] || {
-        printf '%s\n' 'installed beads-jsonl-path Git runner has an unexpected interpreter — do NOT write' >&2
-        exit 1
-      }
-      unset _bjp_shebang
-      unset _bjp_candidate_dir
-      if [ -z "$BEADS_JSONL_RESOLVER" ]; then
-        BEADS_JSONL_RESOLVER=$_bjp_candidate
-        BEADS_GIT_RUNNER=$_bjp_runner
-      elif ! "$_bjp_cmp" -s "$BEADS_JSONL_RESOLVER" "$_bjp_candidate" \
-          || ! "$_bjp_cmp" -s "$BEADS_GIT_RUNNER" "$_bjp_runner"; then
-        printf '%s\n' 'installed beads-jsonl-path companions disagree — do NOT write' >&2
-        exit 1
-      fi
-      unset _bjp_runner
-    done
-    unset _bjp_candidate _bjp_root _bjp_root_raw _bjp_git _bjp_cmp _bjp_stat
-    [ -n "$BEADS_JSONL_RESOLVER" ] && [ -n "$BEADS_GIT_RUNNER" ] || {
-      printf '%s\n' 'beads-jsonl-path companion unavailable — do NOT write' >&2
-      exit 1
-    }
-    printf '%s\n' "$BEADS_JSONL_RESOLVER"
-    __BJP_TRUSTED_BASH__
-      )
-    ) || exit 1
-    BEADS_GIT_RUNNER=${BEADS_JSONL_RESOLVER%/*}/git-clean
-    unset _bjp_candidate
-    # Installed targets only. A relative `skills/beads-jsonl-path/scripts/resolve-beads-jsonl`
-    # is whatever executable the repo being drained planted there, and this snippet would
-    # run it. From a checkout, run that checkout's copy by absolute path instead.
-    [ -n "$BEADS_JSONL_RESOLVER" ] || {
-      echo "beads-jsonl-path companion unavailable — do NOT write" >&2
-      exit 1
-    }
-    BEADS_JSONL=$("$BEADS_JSONL_RESOLVER") || exit 1
-    "$BEADS_JSONL_RESOLVER" --run-br update <bead-id> -s closed || { echo "br update failed"; exit 1; }
-    "$BEADS_JSONL_RESOLVER" --run-br sync --flush-only || { echo "not persisted"; exit 1; }
-    ```
+# Proof. The flush made the JSONL intentionally dirty — what clean mode refuses — so the
+# path comes back through --allow-dirty.
+BEADS_JSONL=$("$BEADS_JSONL_RESOLVER" --pinned-br "$PRIVATE_BR" "$PRIVATE_BR_OID" \
+  --allow-dirty) || nc_stop 'cannot resolve the flushed beads JSONL'
+[ "$PRE_OID" = "$("$BEADS_GIT_RUNNER" hash-file "$SNAP/pre.jsonl")" ] ||
+  nc_stop 'the retained pre-close copy changed before the proof'
+"$BEADS_JSONL_RESOLVER" --run-jq -e -n --slurpfile pre "$SNAP/pre.jsonl" \
+  --slurpfile post "$BEADS_JSONL" --arg id "$BEAD_ID" --arg reason "$CLOSE_REASON" \
+  --arg text "$CLOSE_EVIDENCE" '
+  def ids($rows): [$rows[] | if (.id | type) == "string" and (.id | length) > 0
+                             then .id else error("id") end];
+  def changed($before; $after):
+    [ (($before | keys) + ($after | keys) | unique)[] as $key
+      | select(($before | has($key)) != ($after | has($key))
+               or $before[$key] != $after[$key])
+      | $key ];
+  def multiset($values):
+    ($values | map(tojson) | group_by(.) | map({key: .[0], value: length}) | from_entries);
+  ids($pre) as $pre_ids | ids($post) as $post_ids
+  | if ($pre_ids | unique | length) != ($pre_ids | length)
+       or ($post_ids | unique | length) != ($post_ids | length)
+    then error("duplicate id") else . end
+  | if ($pre_ids | length) != ($post_ids | length) then error("row count") else . end
+  | if ($pre_ids | sort) != ($post_ids | sort) then error("id set") else . end
+  | INDEX($pre[]; .id) as $before | INDEX($post[]; .id) as $after
+  | if any($pre_ids[]; . != $id and (changed($before[.]; $after[.]) | length) > 0)
+    then error("bystander") else . end
+  | if (changed($before[$id]; $after[$id]) | sort)
+       != ["close_reason", "closed_at", "comments", "status", "updated_at"]
+    then error("changed fields") else . end
+  | $after[$id] as $target
+  | if $target.status == "closed" and $target.close_reason == $reason
+       and ($target.closed_at | type) == "string" and ($target.closed_at | length) > 0
+       and ($target.updated_at | type) == "string" and ($target.updated_at | length) > 0
+       and $target.updated_at != $before[$id].updated_at
+    then . else error("target fields") end
+  | multiset($before[$id].comments // []) as $was
+  | multiset($target.comments // []) as $now
+  | if any($was | to_entries[]; (($now[.key]) // 0) < .value)
+    then error("comment lost") else . end
+  | [$now | to_entries[] | {key: .key, value: (.value - (($was[.key]) // 0))}
+     | select(.value != 0)] as $added
+  | if ($added | length) != 1 or $added[0].value != 1
+    then error("comment added") else . end
+  | if ($added[0].key | fromjson | .text) != $text
+    then error("comment text") else . end
+  | true' >/dev/null || nc_stop 'the structural closure proof refused'
+"${NC_PIN[@]}" --no-db "${NC_NO_AUTO[@]}" show "$BEAD_ID" --json \
+  >"$SNAP/post-show.json" 2>"$SNAP/post-show.err" ||
+  nc_stop 'cannot read the closed target'
+"$BEADS_JSONL_RESOLVER" --run-jq -e --arg id "$BEAD_ID" --arg reason "$CLOSE_REASON" \
+  'length == 1 and .[0].id == $id and .[0].status == "closed"
+   and .[0].close_reason == $reason' <"$SNAP/post-show.json" >/dev/null ||
+  nc_stop 'the closed target does not read back as closed with the exact reason'
+# For human review only. A literal Git diff never substitutes for the proof above.
+"$BEADS_GIT_RUNNER" --literal-pathspecs diff --no-ext-diff --no-textconv --text \
+  HEAD -- "$BEADS_JSONL" || nc_stop 'cannot render the closure diff for human review'
+# Every closure/proof step is final. Publish durable external completion before cleanup:
+# before this line the retained proof is resumable; after a captured line completion is
+# authoritative even if interruption leaves private artifacts behind.
+printf 'CLOSURE_COMPLETE %s\n' "$BEAD_ID" ||
+  nc_stop 'cannot emit durable completion evidence'
+# Only now remove the exact artifacts best-effort. A copy of the whole pre-close graph does
+# not belong in /tmp, but cleanup cannot retract a truthful completion already published.
+nc_removed=true
+nc_unlink=$(command -p -v unlink) && nc_rmdir=$(command -p -v rmdir) || nc_removed=false
+if $nc_removed; then
+  # Exactly the names this block writes, never `"$SNAP"/*`: on a resume the directory is
+  # caller-supplied, and a glob would unlink whatever else it was handed. Anything
+  # unexpected survives, `rmdir` refuses the populated directory, and the removal reports
+  # as failed rather than quietly taking a file with it.
+  for nc_artifact in "${NC_SNAPSHOT_ARTIFACTS[@]}"; do
+    [ -e "$SNAP/$nc_artifact" ] || [ -L "$SNAP/$nc_artifact" ] || continue
+    "$nc_unlink" "$SNAP/$nc_artifact" || nc_removed=false
+  done
+  "$nc_rmdir" "$SNAP" || nc_removed=false
+fi
+$nc_removed || {
+  printf '%s\n' 'the closure is complete, but its private directory could not be removed — delete the printed CLOSE_SNAPSHOT_DIR by hand' >&2 || :
+}
+# END NATIVE CLOSE
+```
 
-    **Check for divergence BEFORE the first `br` write.** `"$BEADS_JSONL_RESOLVER" --run-br update` auto-flushes, so a
-    staged or unstaged divergence in the JSONL is destroyed by the very first mutation — and
-    since neither the index nor `HEAD` holds it, every later diff shows only your intended
-    change, which makes the loss *undetectable*, not merely unrecoverable. Resolve and
-    prove the real path clean with `beads-jsonl-path/scripts/resolve-beads-jsonl` before
-    any writing `br` command; `.beads/issues.jsonl` is only the default layout, and a
-    hardcoded path gives a false all-clear on a `.beads.jsonl` repo.
+The structural proof is the gate, not the exit codes. Both inputs must have unique nonempty
+string ids, equal row counts, and identical id sets before any map is built; every bystander
+record and every non-allowed target field must preserve key presence *and* JSON value; the
+target's changed-field set must be exactly `status`, `closed_at`, `close_reason`,
+`updated_at`, and `comments`, with both timestamps present, nonempty, and `updated_at`
+actually moved. Comments are compared as a multiset and order-independently, because
+v0.3.2 sorts them canonically on export: every pre-close comment object must survive intact
+and exactly one new comment must appear, carrying `CLOSE_EVIDENCE`. Losing, rewriting, or
+gaining any other comment refuses.
 
-    **That sync proves the closure reached the file. It says nothing about what else the
-    same write overwrote.** Every `br` write flushes the whole gitignored cache over the
-    tracked JSONL, so a write to **one** bead rewrites **all** of them, and any body the
-    cache holds a stale copy of is reverted. Observed on `"$BEADS_JSONL_RESOLVER" --run-br 0.2.19`: closing a single bead
-    silently reverted ~40 KB of specification text across three *other* beads and deleted a
-    fourth. Exit 0, success message, nothing failed. This step is the last write of every
-    bead, which is how the drain routes you into it every time.
+A **pre-mutation refusal leaves status and comments untouched** — a blocked close exits
+nonzero with the bead still in its original open or in-progress state and no comment added.
+A later failure follows the resume
+matrix; nothing here promises rollback. Never close twice, reopen, compensate, or claim a
+rollback happened.
 
-    Hand-editing the JSONL is what makes the cache stale — a hand edit does not advance
-    `updated_at`, so cache and file hold different bodies under identical timestamps and
-    nothing can tell them apart. **Write bead text through `"$BEADS_JSONL_RESOLVER" --run-br update <id> --description "<full body>"`, never
-    the file.** The task template's ".beads/ is orchestration state" line is a *reviewing*
-    scope rule, not an editing licence. And the advertised guard does not help: `"$BEADS_JSONL_RESOLVER" --run-br sync
-    --help`'s "Stale DB Guard" is an **id**-level check, so same-id-different-body — the
-    case that loses text — is unguarded by design.
+**Resume, in one sentence per state.** Cache absent and the JSONL byte-identical to the
+retained pre-close snapshot: this clone was never touched — abandon it and start from a fresh
+one. Both pre-close: the same answer, but only if the JSONL still matches that snapshot. Cache
+closed with the intended reason and comment while the JSONL still matches: flush only. Both
+closed: retain the JSONL, retry the idempotent flush once, and restore if it moves before human
+repair; otherwise prove. Anything else stops. The two flush branches are eligible only because
+the normal path already completed the byte-preserving import and target preflight; each protects
+the complete file rather than trusting only the target row's status.
 
-    So field-diff the resolved path before committing any `br` write. Rerun the
-    resolver-locator block above, stopping before its final clean-mode `BEADS_JSONL=` call,
-    and resolve it with
-    `BEADS_JSONL=$("$BEADS_JSONL_RESOLVER" --allow-dirty) || exit 1` here: the write already
-    happened, so the divergence you are inspecting is exactly what the default clean-state
-    mode refuses. In recovery use
-    `BEADS_JSONL=$("$BEADS_JSONL_RESOLVER" --recovery) || exit 1`, which can name a missing
-    artifact without pretending it is still tracked and structurally safe. A fresh
-    recovery session that
-    hardcodes `.beads/issues.jsonl` restores nothing on a `.beads.jsonl` repo. A full-file
-    re-serialization with every id on both sides is normal; ids on only one side, or a
-    `description` you did not touch, is the tell.
+Then run `./check.sh`, take the diff through independent review, and land it as one
+standalone metadata PR — see the commit and PR mechanics below.
 
-    **Recovery depends on which side holds the good text, and guessing cements the loss.**
+**That closure commit does not ride a work branch.** The Beads DB is shared across branches
+with no git awareness and import is last-write-wins on `updated_at`, so a closure committed
+on a feature branch leaks to the default branch at the next checkout;
+`docs/adr/0003-bead-closure-stays-post-merge.md` records the code evidence. Closure runs
+after the squash merge, on its own standalone clone, branch, and PR, and that PR must
+**merge** — until it does, a fresh clone still shows the bead open.
 
-    - **(a) cache stale, file still good** — rebuild the cache from the file.
-      `"$BEADS_JSONL_RESOLVER" --run-br sync --import-only` alone cannot do it: it compares `updated_at`, so equal
-      timestamps with different bodies report `Skipped: N (up-to-date)` forever. The stale
-      DB has to go first.
-    - **(b) the flush already ran and the diff shows damage** — the working copy *is* the
-      damaged artifact. Restore it from the good side, **rebuild the cache**, and only then
-      replay: replaying first lets the still-stale cache auto-flush over what you just
-      restored. Read
-      `"$BEADS_GIT_RUNNER" --literal-pathspecs diff --no-ext-diff --no-textconv --text --cached -- "$BEADS_JSONL"`
-      and
-      `"$BEADS_GIT_RUNNER" --literal-pathspecs diff --no-ext-diff --no-textconv --text -- "$BEADS_JSONL"`,
-      then decide explicitly which of the index, worktree, or `HEAD` holds the good
-      bodies; a staged copy only proves a choice exists, and an earlier flush may
-      have been staged before anyone noticed.
+**Give the PR body a machine-readable marker line, one per bead it closes:**
 
-    Four things the recipe must do in both cases, each learned by getting it wrong: back up
-    the cache and **check the copy succeeded**; **verify the DB and its `-wal`/`-shm`
-    siblings are actually gone** (`rm -f` is silent on a permissions failure, and a
-    surviving cache makes the import skip equal-timestamp records and report success);
-    **check the import and the replay before any flush** (the stale DB is already deleted,
-    so a failed import leaves an empty one and the flush writes *that* over what you just
-    restored); and **rebuild the cache BEFORE replaying anything** — restore, delete and
-    re-import the DB, and only then replay. Restoring the file and replaying straight away
-    lets the first `br` command auto-flush the *still-stale* cache over what you just
-    restored, destroying the recovery with the recovery. And **replay the complete intended
-    delta**, not one command: the drain's case is a single closure, but
-    `plan-to-beads-transfer` and `bead-polish-loop` batch, so restoring from git there
-    discards their legitimate work unless the whole manifest is replayed.
+```text
+bead-closure: <bead-id>
+```
 
-    **A round summary is not a replay manifest.** It records what you decided, not the
-    generated ids, the exact field values, or the order they were written in — and recovery
-    discards the working JSONL before you can go back and read them off it. So batching
-    callers must write the manifest *before* the first mutation: one line per intended `br`
-    command, complete enough to re-run verbatim. A coverage matrix or a round summary
-    reconstructed afterwards is a description of the work, not a copy of it.
+Step 8 puts the bead id in every ordinary work PR body too, so the id alone cannot
+distinguish "the work merged" from "the closure merged" — and step 12's resume discovery
+depends on telling them apart. The marker is what it filters on.
 
-    Git is the whole recovery, which is why the field-diff must happen **before** you stage
-    anything: an uncommitted hand-edit that a flush overwrote is simply gone. That is the
-    sharpest reason never to write bead text through the file.
+**Never hand-edit the JSONL.** A hand edit does not advance `updated_at`, so the cache and
+the file hold different bodies under identical timestamps and nothing can tell them apart;
+`sync --help`'s "Stale DB Guard" is an **id**-level check, so same-id-different-body — the
+case that loses text — is unguarded by design. Write bead text with
+`"$BEADS_JSONL_RESOLVER" --run-br update <id> --description "<full body>"`. The task
+template's ".beads/ is orchestration state" line is a *reviewing* scope rule, not an
+editing licence.
 
-    This is **not** the pre-0.1.45 corruption bug in
-    [owning skill's Tool dependencies](../orchestrating-with-rb-lite/SKILL.md#tool-dependencies): no
-    `ISSUE_NOT_FOUND`, no branch reset, and every command reported success.
+**A flush still re-exports every bead**, which is why the proof above compares whole rows
+rather than the target alone: on `br 0.2.19`, closing a single bead through the old
+`update -s closed` path silently reverted ~40 KB of specification text across three other
+beads and deleted a fourth, at exit 0. That is a measured 0.2.19 observation retained as
+version-scoped evidence, and the structural proof is what turns it from an invisible loss
+into a refusal. The pin does not retire it. Re-measured on 2026-08-22 under both `br 0.2.19`
+and the pinned `br v0.3.2`, on the **native** path this step actually runs: import, then a
+JSONL-only body edit that does not advance `updated_at`, then
+`close --reason --transition-comment` and `sync --flush-only`. Under both versions the
+target closed correctly and the edited bystander body silently reverted to the cache's
+copy, with all three commands at exit 0 and zero stderr bytes. This is **not** the pre-0.1.45 corruption bug in
+[owning skill's Tool dependencies](../orchestrating-with-rb-lite/SKILL.md#tool-dependencies):
+no `ISSUE_NOT_FOUND`, no branch reset, and every command reported success.
 
-    Closing on the feature branch before the merge is **not** a safe shortcut, however
-    transactional it looks — the beads DB is shared across branches with no git
-    awareness, and import is last-write-wins, so the closure leaks. See
-    `docs/adr/0003-bead-closure-stays-post-merge.md` for the code evidence.
+<a id="backlog-step-11-recovery"></a>
+
+**Recovering from that reversion on a live worktree.** This step's own closure runs on a
+disposable standalone clone, so its answer to trouble is the abandon matrix above: throw
+the clone away. The skills that write beads *in place* — `bead-polish-loop`,
+`plan-to-beads-transfer`, `second-model-bead-audit`, and
+[harden-until-clean § 2](../orchestrating-with-rb-lite/references/harden-until-clean.md) —
+have no clone to abandon, and they link here for the repair rather than each carrying a
+copy. Which side holds the good text decides the recipe, and guessing cements the loss.
+
+- **(a) the cache is stale and the file is still good** — rebuild the cache from the file.
+  `sync --import-only` alone cannot do it: it compares `updated_at`, so equal timestamps
+  with different bodies report `Skipped: N (up-to-date)` forever. The stale cache has to go
+  first.
+- **(b) the flush already ran and the field diff shows damage** — the working copy *is* the
+  damaged artifact. Read both
+  `"$BEADS_GIT_RUNNER" --literal-pathspecs diff --no-ext-diff --no-textconv --text --cached -- "$BEADS_JSONL"`
+  and the same command without `--cached`, then decide **explicitly** which of the index,
+  the worktree, or `HEAD` holds the good bodies. A staged copy only proves a choice exists,
+  and an earlier flush may have been staged before anyone noticed — so restoring
+  unconditionally from `HEAD` can overwrite the very copy you selected.
+
+Four things the recipe must do in either case, each learned by getting it wrong: back up
+the cache and **check that the copy succeeded**; **verify the cache and its `-wal`/`-shm`
+siblings are actually gone** (`rm -f` is silent on a permissions failure, and a surviving
+cache makes the import skip equal-timestamp records and report success); **check the import
+and the replay before any flush** (the stale cache is already deleted, so a failed import
+leaves an empty one and the flush writes *that* over what was just restored); and **rebuild
+the cache before replaying anything** — restore, delete, re-import, and only then replay.
+Replaying first lets the next `br` command auto-flush the still-stale cache over the
+restored file, destroying the recovery with the recovery. Finally, **replay the complete
+intended delta**, not one command: a single closure is the drain's case, but the batching
+callers above lose their whole round unless the entire manifest is replayed.
+
+**A round summary is not a replay manifest.** It records what was decided, not the
+generated ids, the exact field values, or the order they were written in — and recovery
+discards the working JSONL before anyone can read them back off it. So a batching caller
+writes the manifest *before* its first mutation: one line per intended `br` command,
+complete enough to re-run verbatim. Resolve the path for that inspection with
+`"$BEADS_JSONL_RESOLVER" --allow-dirty`, or `--recovery` when the artifact may be missing
+entirely; a hardcoded `.beads/issues.jsonl` restores nothing on a `.beads.jsonl` repo. Git
+is the whole recovery, which is why the field diff has to happen **before** anything is
+staged: an uncommitted hand edit that a flush overwrote is simply gone.
 
 <a id="backlog-step-12"></a>
 
-12. **Loop.** Return to `"$BEADS_JSONL_RESOLVER" --run-br ready --limit 10` — but **on a resumed drain, look for an
+12. **Loop.** Repeat **the same mode** [step 1](#backlog-step-1) chose, with the retained
+    `PRIVATE_BR`/`PRIVATE_BR_OID`/`SELECT_BEAD_LANES` — or, after a resume that lost them,
+    prepare new inputs the same way first. Never switch modes silently, and never read
+    generic unlabeled work as an empty queue. Then, **on a resumed drain, look for an
     in-flight closure PR before selecting work.** A closure lives on its metadata branch
     until it merges, so a fresh clone of the default branch sees the old JSONL with the
     bead still open and will happily rebuild and re-merge work that is already done. The
@@ -700,8 +982,8 @@ implement → review loop for each bead.
             | test("(^|[^a-z0-9._-])" + ($id|ascii_downcase|gsub("\\.";"\\.")) + "([^a-z0-9._-]|$)")))'
     ```
 
-    `BEAD_ID` is the bead you are about to take — loop this query over each open bead from
-    `"$BEADS_JSONL_RESOLVER" --run-br ready`/`"$BEADS_JSONL_RESOLVER" --run-br list` rather than assuming a variable survived the clone. Empty, the
+    `BEAD_ID` is the bead you are about to take — loop this query over each unresolved row
+    in the typed selection rather than assuming a variable survived the clone. Empty, the
     filter rejects everything and the closure PR this exists to find is missed.
 
     Keyed on the **`bead-closure:` marker plus the bead id**, not on the id alone: step 8

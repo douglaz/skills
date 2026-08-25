@@ -1,0 +1,1088 @@
+#!/usr/bin/env bash
+# closure-consumers.test — the consumers of the two E3 fact owners.
+#
+# Two halves. The first extracts the four command-bearing closure consumers and the
+# selector's callers from their Markdown and proves they LINK to the fact owner instead of
+# carrying a copy: a copied procedure drifts, and nothing executes the copy. The second
+# runs the shared selector and its drive-status delegate against deterministic fixture
+# binaries, because "the object is typed" is only true if a malformed row refuses.
+#
+# Usage: ./closure-consumers.test        (exits 0 if all pass)
+
+set -uo pipefail
+HERE=$(cd "$(dirname "$0")" && pwd -P)
+SKILLS=$(cd "$HERE/../.." && pwd -P)
+REPO=$(cd "$SKILLS/.." && pwd -P)
+E1="$SKILLS/beads-jsonl-path/scripts"
+SELECTOR="$HERE/select-bead-lanes"
+SYSTEM_PATH=$PATH
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+PASS=0; FAIL=0
+pass() { PASS=$((PASS + 1)); printf '  ok   %s\n' "$1"; }
+fail() { FAIL=$((FAIL + 1)); printf '  FAIL %s\n         %s\n' "$1" "$2"; }
+exact_result() {  # name, exit, stdout file, stderr file, expected line
+  local name=$1 rc=$2 out=$3 err=$4 expected=$5
+  if [[ $rc -ne 0 ]]; then fail "$name" "exit $rc: $(<"$err")"
+  elif [[ "$(<"$out")" != "$expected" ]]; then fail "$name" "unexpected object: $(<"$out")"
+  elif [[ -s "$err" ]]; then fail "$name" "unexpected stderr: $(<"$err")"
+  elif [[ $(wc -l <"$out") -ne 1 ]]; then fail "$name" 'stdout was not one LF-terminated line'
+  else pass "$name"; fi
+}
+COMMIT=4104c31e79bf806f53e2eba0a4cd2ba6c594f8b9
+
+printf '%s\n' 'closure-consumer fixtures'
+
+# --- the four closure consumers link to the one fact owner --------------------------------
+OWNER="$SKILLS/rb-lite-backlog-drain/SKILL.md"
+consumer_failures=""
+grep -q '^# BEGIN NATIVE CLOSE$' "$OWNER" ||
+  consumer_failures+="the owner no longer carries the marked production block; "
+while IFS='|' read -r file anchor; do
+  path="$REPO/$file"
+  if [[ ! -f "$path" ]]; then
+    consumer_failures+="$file is missing; "
+  elif ! grep -Fq "$anchor" "$path"; then
+    consumer_failures+="$file does not link to $anchor; "
+  elif grep -q 'BEGIN NATIVE CLOSE' "$path"; then
+    consumer_failures+="$file carries its own copy of the production block; "
+  # Naming the primitive is fine; carrying an INVOCATION of it is the copy that drifts.
+  elif grep -Eq -- 'close [^ ]+ --reason|sync --import-only' "$path"; then
+    consumer_failures+="$file copies closure commands instead of linking; "
+  fi
+done <<'CONSUMERS'
+skills/drive/SKILL.md|../rb-lite-backlog-drain/SKILL.md#backlog-step-11
+skills/drive/references/phases.md|../../rb-lite-backlog-drain/SKILL.md#backlog-step-11
+skills/orchestrating-with-rb-lite/references/harden-until-clean.md|../../rb-lite-backlog-drain/SKILL.md#backlog-step-11
+CONSUMERS
+t='the three non-owning closure consumers link rather than copy'
+if [[ -n "$consumer_failures" ]]; then fail "$t" "$consumer_failures"; else pass "$t"; fi
+
+t='every consumer states the stop condition rather than a bare success'
+stop_failures=""
+for file in skills/drive/SKILL.md skills/drive/references/phases.md \
+            skills/orchestrating-with-rb-lite/references/harden-until-clean.md; do
+  grep -Fq 'rb-lite-backlog-drain' "$REPO/$file" ||
+    stop_failures+="$file does not name the owning skill; "
+done
+grep -Fq 'CLOSURE_INCOMPLETE' "$REPO/skills/drive/SKILL.md" ||
+  stop_failures+="drive/SKILL.md does not name the incomplete-closure outcome; "
+grep -Fq 'CLOSURE_ABANDON' "$OWNER" ||
+  stop_failures+="the owner does not name the abandon outcome; "
+if [[ -n "$stop_failures" ]]; then fail "$t" "$stop_failures"; else pass "$t"; fi
+
+t='BUILD says every bead closure gets its own standalone metadata PR'
+build_closure_failures=""
+grep -Fq "Every bead's closure gets its own small standalone metadata PR" \
+  "$SKILLS/drive/references/phases.md" ||
+  build_closure_failures+='BUILD still describes the metadata PR as optional or last-bead-only; '
+grep -Fq 'closure that lands after the last bead may need' \
+  "$SKILLS/drive/references/phases.md" &&
+  build_closure_failures+='BUILD retains the withdrawn carry-forward rule; '
+if [[ -n "$build_closure_failures" ]]; then
+  fail "$t" "$build_closure_failures"
+else
+  pass "$t"
+fi
+
+t='LAND holds metadata branches in HARDEN until merge and advances only from refreshed master'
+land_phase_failures=""
+for phrase in 'From its first commit until it merges' \
+              '`**Phase:** HARDEN · **Pending:** metadata PR owner/repo#N`' \
+              'must not start the next' 'bead from the metadata branch' \
+              'After the metadata PR merges' 'refresh the default branch' \
+              '`unresolved_count > 0`' '`unresolved_count == 0`' \
+              'Only' 'refreshed post-merge checkout may record `BUILD`, `GRAPH`, or `DONE`' \
+              'next normal reviewed work or GRAPH branch' 'separate status-only PR' \
+              'carries no bead closure' 'routes `HARDEN` until it merges' \
+              'durably carries `DONE`'; do
+  grep -Fq "$phrase" "$SKILLS/drive/references/phases.md" ||
+    land_phase_failures+="LAND does not pin [$phrase]; "
+done
+grep -Fq 'in that metadata clone' \
+  "$SKILLS/drive/references/phases.md" &&
+  land_phase_failures+='LAND still records the next routed phase on the metadata branch; '
+if [[ -n "$land_phase_failures" ]]; then
+  fail "$t" "$land_phase_failures"
+else
+  pass "$t"
+fi
+
+t='the open A4b and B0 rows reference the fact owner without copying commands'
+# CHECKED, not just captured: a missing JSONL, a malformed line, or no python3 all print
+# nothing and exit nonzero, and an emptiness test on that output reads as "no problems".
+if ! row_failures=$(python3 -I - "$REPO/.beads/issues.jsonl" <<'PY'
+import json, sys
+rows = {r["id"]: r for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
+problems = []
+for identity in ("skills-dta", "skills-xfd"):
+    row = rows.get(identity)
+    if row is None:
+        problems.append(identity + " is missing")
+        continue
+    body = row.get("description") or ""
+    if "rb-lite-backlog-drain/SKILL.md#backlog-step-11" not in body:
+        problems.append(identity + " does not link to the fact owner")
+    if "--transition-comment" in body or "sync --flush-only" in body:
+        problems.append(identity + " copies closure commands")
+print("; ".join(problems))
+PY
+); then
+  fail "$t" 'the A4b/B0 row reader failed, so nothing was checked'
+elif [[ -n "$row_failures" ]]; then fail "$t" "$row_failures"; else pass "$t"; fi
+
+t='step 11 still owns the whole-cache-reversion recovery its callers link to'
+# The closure procedure answers interruption through a resume-or-abandon matrix; its abandon
+# branches can discard a disposable clone. Five skills that write beads in a LIVE worktree
+# cannot do that, and they link here for repair rather than each carrying a copy.
+# Four of those files are outside this bead's ownership, which is why the guard is here.
+recovery_failures=""
+for phrase in '<a id="backlog-step-11-recovery"></a>' 'Skipped: N (up-to-date)' \
+              'A round summary is not a replay manifest.' \
+              'restore, delete, re-import, and only then replay'; do
+  grep -Fq "$phrase" "$OWNER" || recovery_failures+="the owner dropped [$phrase]; "
+done
+for file in skills/bead-polish-loop/SKILL.md skills/plan-to-beads-transfer/SKILL.md \
+            skills/second-model-bead-audit/SKILL.md \
+            skills/second-model-bead-audit/references/reviewer-panel.md \
+            skills/orchestrating-with-rb-lite/references/harden-until-clean.md; do
+  grep -Fq 'rb-lite-backlog-drain/SKILL.md#backlog-step-11' "$REPO/$file" ||
+    recovery_failures+="$file no longer points at the fact owner; "
+done
+if [[ -n "$recovery_failures" ]]; then fail "$t" "$recovery_failures"; else pass "$t"; fi
+
+t='every compatibility mirror pins the exact v0.3.2 release identity'
+mirror_failures=""
+for file in skills/drive/SKILL.md skills/orchestrating-with-rb-lite/SKILL.md \
+            skills/orchestrating-with-rb-lite/references/harden-until-clean.md README.md; do
+  grep -Fq '0.3.2' "$REPO/$file" || mirror_failures+="$file does not name v0.3.2; "
+  grep -Fq "$COMMIT" "$REPO/$file" || mirror_failures+="$file does not pin the commit; "
+done
+for file in README.md skills/orchestrating-with-rb-lite/SKILL.md \
+            skills/orchestrating-with-rb-lite/references/harden-until-clean.md; do
+  grep -Fq 'maintenance commands resolve' "$REPO/$file" ||
+    mirror_failures+="$file hides the existing sanitized-PATH maintenance commands; "
+done
+# Version-scoped, not deleted: the pre-0.1.45 branch-reset corruption is retained history.
+grep -Fq '0.1.45' "$REPO/skills/orchestrating-with-rb-lite/SKILL.md" ||
+  mirror_failures+="the 0.1.45 corruption evidence was dropped instead of version-scoped; "
+# The two facts E3 carried across the pin. Each must still name the version it was first
+# measured on AND say it was re-measured, so neither silently becomes a claim about a
+# release nobody checked. Not the prose, just the scoping.
+for file in skills/beads-jsonl-path/SKILL.md skills/rb-lite-backlog-drain/SKILL.md; do
+  grep -Fq '0.2.19' "$REPO/$file" ||
+    mirror_failures+="$file dropped the version its retained fact was measured on; "
+  grep -Fq 'Re-measured' "$REPO/$file" ||
+    mirror_failures+="$file does not record re-measuring that fact under the pin; "
+done
+grep -Fq 'agents --update --force --dry-run' "$REPO/README.md" ||
+  mirror_failures+="README.md does not record the E2b update measurement; "
+grep -Fq 'installed `br 0.2.19` and exact `v0.3.2` each exited 0' "$REPO/README.md" ||
+  mirror_failures+="README.md does not scope the E2b measurement to both versions; "
+if [[ -n "$mirror_failures" ]]; then fail "$t" "$mirror_failures"; else pass "$t"; fi
+
+t='the E1 SKILL, the resolver usage text, and the selector grammar cannot drift apart'
+drift_failures=""
+grep -Fq -- '--pinned-br <absolute-path> <git-object-id>' "$SKILLS/beads-jsonl-path/SKILL.md" ||
+  drift_failures+="the E1 SKILL does not publish the prefix grammar; "
+grep -Fq -- '--pinned-br <absolute-path> <git-object-id>' "$E1/resolve-beads-jsonl" ||
+  drift_failures+="the resolver usage diagnostic does not publish the prefix grammar; "
+grep -Fq -- '--scoped --scope-label drive-open-issues --br-path <absolute-path> --br-oid <git-object-id>' "$SELECTOR" ||
+  drift_failures+="the selector usage does not publish the scoped grammar; "
+grep -Fq -- '--generic --br-path <absolute-path> --br-oid <git-object-id>' "$SELECTOR" ||
+  drift_failures+="the selector usage does not publish the generic grammar; "
+grep -Fq -- '--scoped --scope-label "$3" --br-path "$5" --br-oid "$7"' \
+  "$SKILLS/drive/scripts/drive-status" ||
+  drift_failures+="drive-status does not delegate with the exact scoped argv; "
+grep -Fq -- '--select-bead-lanes-json' "$SKILLS/drive/SKILL.md" ||
+  drift_failures+="the drive SKILL does not name the delegating mode; "
+for file in skills/drive/SKILL.md skills/drive/references/phases.md \
+            skills/rb-lite-backlog-drain/SKILL.md; do
+  grep -Fq -- '--scope-label drive-open-issues' "$REPO/$file" ||
+    drift_failures+="$file does not publish the selector's one supported scope label; "
+  grep -Fq -- '--scope-label <label>' "$REPO/$file" &&
+    drift_failures+="$file still advertises an arbitrary scope label; "
+done
+if [[ -n "$drift_failures" ]]; then fail "$t" "$drift_failures"; else pass "$t"; fi
+
+t='backlog steps 1 and 12 call the one shared owner through an absolute path'
+step_failures=""
+grep -Fq '"$SELECT_BEAD_LANES" --scoped --scope-label drive-open-issues \' "$OWNER" ||
+  step_failures+="step 1 does not publish the scoped invocation; "
+grep -Fq '"$SELECT_BEAD_LANES" --generic --br-path "$PRIVATE_BR" --br-oid "$PRIVATE_BR_OID"' "$OWNER" ||
+  step_failures+="step 1 does not publish the generic invocation; "
+grep -Fq 'Never execute a' "$OWNER" ||
+  step_failures+="step 1 does not forbid a repository-relative helper; "
+grep -Fq 'Repeat **the same mode**' "$OWNER" ||
+  step_failures+="step 12 does not repeat step 1's mode; "
+grep -Fq '<a id="backlog-step-1"></a>' "$OWNER" ||
+  step_failures+="step 1 has no anchor for its consumers to link to; "
+# Step 2 reads the id step 1 authorized. A bare `--run-br show` resolves br on the caller's
+# PATH and forwards the caller's BEADS_*/BR_* location variables, so the body the task file
+# is written from could come out of a stale cache or another store than the one selected.
+grep -Fq -- '--no-db --no-auto-import --no-auto-flush show <id>' "$OWNER" ||
+  step_failures+="step 2 does not read the selected bead through the pinned no-db prefix; "
+# E1's `--run-br` forwards BEADS_*/BR_* on purpose, so the selection's override clearing
+# does not carry to the steps after it. The caller shell has to do it once.
+grep -Fq 'for _v in ${!BEADS_@} ${!BR_@}; do' "$OWNER" ||
+  step_failures+="step 1 does not clear the Beads location namespace in the caller shell; "
+grep -Fq -- '"$BEADS_JSONL_RESOLVER" --run-br show' "$OWNER" &&
+  step_failures+="step 2 still reads the selected bead through an unpinned show; "
+if [[ -n "$step_failures" ]]; then fail "$t" "$step_failures"; else pass "$t"; fi
+
+t='every backlog task-body read uses the pinned no-db release path'
+read_failures=""
+for file in skills/rb-lite-backlog-drain/SKILL.md \
+            skills/orchestrating-with-rb-lite/SKILL.md; do
+  path="$REPO/$file"
+  grep -Fq -- '--pinned-br "$PRIVATE_BR" "$PRIVATE_BR_OID"' "$path" ||
+    read_failures+="$file does not publish the pinned release identity; "
+  grep -Fq -- '--no-db --no-auto-import --no-auto-flush show <id>' "$path" ||
+    read_failures+="$file does not publish the pinned no-db show; "
+  grep -Fq -- '"$BEADS_JSONL_RESOLVER" --run-br show <id>' "$path" &&
+    read_failures+="$file still publishes a bare cached show; "
+done
+grep -Fq -- 'First run linked backlog step 1' \
+  "$SKILLS/orchestrating-with-rb-lite/SKILL.md" ||
+  read_failures+='the quick recipe does not initialize the pinned Step 1 variables; '
+if [[ -n "$read_failures" ]]; then fail "$t" "$read_failures"; else pass "$t"; fi
+
+t='both selector callers are told to enter from the loader-cleared shell E1 owns'
+# The selector cannot clear LD_PRELOAD for its own shebang interpreter, so this is a
+# caller obligation or it is nothing. E1 owns the preamble; these two must point at it.
+loader_failures=""
+grep -Fq 'loader injection in this already-running shell' \
+  "$SKILLS/beads-jsonl-path/SKILL.md" ||
+  loader_failures+="the E1 SKILL no longer owns the loader-clearing preamble; "
+grep -Fq '(../beads-jsonl-path/SKILL.md#resolve-before-writing)' "$OWNER" ||
+  loader_failures+="step 1 does not send the caller to that preamble; "
+grep -Fq 'loader-cleared shell' "$OWNER" ||
+  loader_failures+="step 1 does not require a loader-cleared shell; "
+grep -Fq 'loader-cleared shell' "$SKILLS/drive/SKILL.md" ||
+  loader_failures+="the drive SKILL does not require a loader-cleared shell; "
+grep -Fq 'loader-cleared shell' "$SELECTOR" ||
+  loader_failures+="the selector does not record that its callers must clear loader state; "
+if [[ -n "$loader_failures" ]]; then fail "$t" "$loader_failures"; else pass "$t"; fi
+
+t='routing rules live with the typed object, not with a bare ready query'
+routing_failures=""
+for phrase in 'executor-skills' 'executor-rb-lite' 'authority-human' 'unresolved_count'; do
+  grep -Fq "$phrase" "$OWNER" || routing_failures+="the owner does not name $phrase; "
+  grep -Fq "$phrase" "$SKILLS/drive/SKILL.md" ||
+    routing_failures+="the drive SKILL does not name $phrase; "
+done
+grep -Eq 'run-br (ready|list)' "$OWNER" &&
+  routing_failures+="the owner still selects work with a bare run-br query; "
+grep -Eq 'run-br (ready|list)' "$SKILLS/drive/references/phases.md" &&
+  routing_failures+="phases.md still selects work with a bare run-br query; "
+grep -Eq 'run-br (ready|list)' "$SKILLS/orchestrating-with-rb-lite/SKILL.md" &&
+  routing_failures+="orchestrating-with-rb-lite still advertises a bare run-br selector; "
+grep -Fq 'select-bead-lanes' "$SKILLS/orchestrating-with-rb-lite/SKILL.md" ||
+  routing_failures+="orchestrating-with-rb-lite does not send backlog selection through the shared owner; "
+grep -Fq 'resume `in_progress` before selecting `ready`' "$OWNER" ||
+  routing_failures+="the serialized drain does not resume in-progress work first; "
+if [[ -n "$routing_failures" ]]; then fail "$t" "$routing_failures"; else pass "$t"; fi
+
+# --- selector fixtures -------------------------------------------------------------------
+cat >"$WORK/br.py" <<'BRSTUB'
+import json, os, subprocess, sys
+
+TOOL = sys.argv[1]
+ARGS = sys.argv[2:]
+ROOT = os.path.dirname(TOOL)
+STATE = os.path.join(ROOT, "state")
+CONF = json.load(open(os.path.join(ROOT, "br.conf")))
+
+with open(os.path.join(STATE, "calls.log"), "a") as stream:
+    stream.write(" ".join(ARGS) + "\n")
+counter = os.path.join(STATE, "calls.count")
+CALL = (int(open(counter).read().strip() or "0") if os.path.exists(counter) else 0) + 1
+open(counter, "w").write(str(CALL))
+
+
+def finish(out="", err="", code=0):
+    for name, action in (("swap-at", "swap"), ("touch-at", "touch"), ("commit-at", "commit")):
+        marker = os.path.join(STATE, name)
+        if os.path.exists(marker) and int(open(marker).read().strip()) == CALL:
+            target = TOOL if action == "swap" else CONF["jsonl"]
+            with open(target, "a") as stream:
+                stream.write("# moved\n")
+            if action == "commit":
+                # A concurrent writer that also stages and commits: HEAD, index, and
+                # worktree agree again, so the clean locator is satisfied and only the
+                # retained object id can tell that the graph changed underneath.
+                root = os.path.dirname(os.path.dirname(target))
+                for command in (["add", "--", target], ["commit", "-qm", "concurrent"]):
+                    subprocess.run(["git", "-C", root] + command, check=True,
+                                   stdout=subprocess.DEVNULL)
+    stderr_at = os.path.join(STATE, "stderr-at")
+    if os.path.exists(stderr_at) and int(open(stderr_at).read().strip()) == CALL:
+        err += "fixture warning\n"
+    blocker = os.path.join(STATE, "block-cleanup-at")
+    if os.path.exists(blocker) and int(open(blocker).read().strip()) == CALL:
+        # The selector redirects this call's stdout into its private workspace, so that
+        # file's directory IS the workspace. Planting a subdirectory there is the only way
+        # to reach the cleanup failure from outside, since `unlink`/`rmdir` both refuse
+        # one and the selector resolves those two through the default PATH.
+        workspace = os.path.dirname(os.path.realpath("/proc/self/fd/1"))
+        if os.path.isdir(workspace):
+            os.mkdir(os.path.join(workspace, "blocker"))
+            open(os.path.join(STATE, "blocked-workspace"), "w").write(workspace + "\n")
+    sys.stdout.write(out)
+    sys.stderr.write(err)
+    raise SystemExit(code)
+
+
+def option(name):
+    if name in ARGS and ARGS.index(name) + 1 < len(ARGS):
+        return ARGS[ARGS.index(name) + 1]
+    return None
+
+
+LANES = ("executor-skills", "executor-rb-lite", "authority-human")
+sub = next((a for a in ARGS if a in ("version", "where", "ready", "list", "blocked")), None)
+if sub == "version":
+    finish(out=open(os.path.join(STATE, "version.json")).read())
+elif sub == "where":
+    finish(out=json.dumps({"jsonl_path": CONF["jsonl"]}) + "\n")
+
+graph = json.load(open(os.path.join(STATE, "graph.json")))
+blocked = json.load(open(os.path.join(STATE, "blocked.json")))
+wanted = [ARGS[i + 1] for i, a in enumerate(ARGS) if a == "--label" and i + 1 < len(ARGS)]
+lane = next((label for label in wanted if label in LANES), None)
+
+
+def matches(row):
+    labels = row.get("labels") or []
+    return all(label in labels for label in wanted)
+
+
+if sub == "ready":
+    name = "ready-" + (lane or "all")
+    payload = [r for r in graph if r.get("status") == "open"
+               and r["id"] not in blocked and matches(r)]
+elif sub == "blocked":
+    name = "blocked"
+    payload = [r for r in graph if r["id"] in blocked and matches(r)]
+else:
+    status = option("--status")
+    rows = [r for r in graph if r.get("status") == status and matches(r)]
+    name = "open" if status == "open" else "progress-" + (lane or "all")
+    payload = {"issues": rows, "total": len(rows), "has_more": False}
+
+recipe = os.path.join(STATE, "mutate")
+if os.path.exists(recipe):
+    for line in open(recipe):
+        line = line.rstrip("\n")
+        if not line:
+            continue
+        key, _, expression = line.partition("|")
+        if key == name:
+            local = {"p": payload, "json": json}
+            exec(expression, local)          # noqa: S102 - fixture-authored mutation
+            payload = local["p"]
+finish(out=json.dumps(payload) + "\n")
+BRSTUB
+
+DEFAULT_GRAPH='[
+ {"id":"s1","status":"open","priority":0,"issue_type":"task","labels":["drive-open-issues","executor-skills"]},
+ {"id":"s2","status":"open","priority":4,"issue_type":"chore","labels":["drive-open-issues","executor-skills"]},
+ {"id":"s3","status":"in_progress","priority":1,"issue_type":"task","labels":["drive-open-issues","executor-skills"]},
+ {"id":"r1","status":"open","priority":2,"issue_type":"bug","labels":["drive-open-issues","executor-rb-lite"]},
+ {"id":"h1","status":"open","priority":3,"issue_type":"task","labels":["drive-open-issues","authority-human"]},
+ {"id":"k1","status":"open","priority":1,"issue_type":"task","labels":["drive-open-issues","executor-rb-lite"]},
+ {"id":"x1","status":"open","priority":0,"issue_type":"task","labels":["executor-rb-lite"]},
+ {"id":"c1","status":"closed","priority":0,"issue_type":"task","labels":["drive-open-issues","executor-skills"]}
+]'
+
+new_fixture() {  # $1 = optional Git object format (the repo default, normally sha1)
+  local base companions helper drive
+  base=$(mktemp -d "$WORK/fx.XXXXXX") || return
+  companions="$base/home/.claude/skills/beads-jsonl-path/scripts"
+  helper="$base/home/.claude/skills/rb-lite-backlog-drain/scripts"
+  drive="$base/home/.claude/skills/drive/scripts"
+  mkdir -p "$base/clone/.beads" "$companions" "$helper" "$drive" "$base/tool/state" || return
+  cp "$E1/resolve-beads-jsonl" "$E1/git-clean" "$companions" || return
+  cp "$SELECTOR" "$helper" || return
+  cp "$SKILLS/drive/scripts/drive-status" "$drive" || return
+  chmod +x "$companions"/* "$helper"/* "$drive"/* || return
+  git init -q ${1:+--object-format="$1"} "$base/clone" || return
+  git -C "$base/clone" config user.name 'Consumer Test' || return
+  git -C "$base/clone" config user.email consumer@example.invalid || return
+  printf '{"id":"s1"}\n' >"$base/clone/.beads/issues.jsonl" || return
+  printf '# DRIVE\n\n**Scope-Label:** `drive-open-issues`\n**Phase:** BUILD\n' \
+    >"$base/clone/DRIVE.md" || return
+  git -C "$base/clone" add -A || return
+  git -C "$base/clone" commit -qm seed || return
+  cp "$WORK/br.py" "$base/tool/br.py" || return
+  printf '#!/usr/bin/env bash\nexec python3 -I "${0%%/*}/br.py" "$0" "$@"\n' \
+    >"$base/tool/br" || return
+  chmod +x "$base/tool/br" || return
+  printf '{"version":"0.3.2","build":"release","commit":"%s"}\n' "$COMMIT" \
+    >"$base/tool/state/version.json" || return
+  printf '%s\n' "$DEFAULT_GRAPH" >"$base/tool/state/graph.json" || return
+  printf '["k1"]\n' >"$base/tool/state/blocked.json" || return
+  python3 -I -c 'import json,sys; json.dump({"jsonl":sys.argv[1]}, open(sys.argv[2],"w"))' \
+    "$base/clone/.beads/issues.jsonl" "$base/tool/br.conf" || return
+  printf '%s' "$base"
+}
+
+patch_graph() {  # $1 base, $2 python statement over `g`
+  python3 -I -c 'import json,sys
+g=json.load(open(sys.argv[1]))
+exec(sys.argv[2])
+json.dump(g, open(sys.argv[1],"w"))' "$1/tool/state/graph.json" "$2"
+}
+mutate_query() { printf '%s|%s\n' "$2" "$3" >>"$1/tool/state/mutate"; }
+oid_of() { git -C "$1/clone" hash-object --no-filters -- "$2"; }
+sel_calls() { [[ -e "$1/tool/state/calls.log" ]] && cat "$1/tool/state/calls.log"; }
+
+SEL_MODE=(--scoped --scope-label drive-open-issues)
+run_selector() {  # $1 = base
+  local base=$1 rc
+  (
+    cd "$base/clone" || exit 98
+    export HOME="$base/home" PATH="$SYSTEM_PATH"
+    ${SEL_ENV+env "${SEL_ENV[@]}"} \
+      "$base/home/.claude/skills/rb-lite-backlog-drain/scripts/select-bead-lanes" \
+      "${SEL_MODE[@]}" --br-path "$base/tool/br" \
+      --br-oid "${SEL_OID:-$(oid_of "$base" "$base/tool/br")}"
+  ) >"$base/out" 2>"$base/err"
+  rc=$?
+  SEL_OID=; unset SEL_ENV
+  return $rc
+}
+
+EXPECTED_SCOPED='{"schema":"skills.drive.bead-lanes.v1","scope_label":"drive-open-issues","br":{"version":"0.3.2","build":"release","commit":"'$COMMIT'"},"jsonl_oid":"@OID@","unresolved_count":6,"blocked_count":1,"lanes":{"executor-skills":{"ready":[{"id":"s1","status":"open","priority":0,"issue_type":"task","labels":["drive-open-issues","executor-skills"]},{"id":"s2","status":"open","priority":4,"issue_type":"chore","labels":["drive-open-issues","executor-skills"]}],"in_progress":[{"id":"s3","status":"in_progress","priority":1,"issue_type":"task","labels":["drive-open-issues","executor-skills"]}]},"executor-rb-lite":{"ready":[{"id":"r1","status":"open","priority":2,"issue_type":"bug","labels":["drive-open-issues","executor-rb-lite"]}],"in_progress":[]},"authority-human":{"ready":[{"id":"h1","status":"open","priority":3,"issue_type":"task","labels":["drive-open-issues","authority-human"]}],"in_progress":[]}}}'
+
+b=$(new_fixture)
+run_selector "$b"; rc=$?
+expected=${EXPECTED_SCOPED/@OID@/$(oid_of "$b" "$b/clone/.beads/issues.jsonl")}
+t='scoped selection emits exactly one typed object on stdout and nothing on stderr'
+exact_result "$t" "$rc" "$b/out" "$b/err" "$expected"
+
+# `jsonl_oid` is whatever E1 `hash-file` returns in THIS repository, not an assumed 40 hex
+# digits. Every case above runs in a SHA-1 repository, so without this one the 64-hex half
+# of the selector's object-id validation is a branch nothing executes.
+t='a Git SHA-256 repository yields a 64-hex object id the schema carries verbatim'
+b256=$(new_fixture sha256)
+run_selector "$b256"; rc=$?
+oid256=$(oid_of "$b256" "$b256/clone/.beads/issues.jsonl")
+if [[ ${#oid256} -ne 64 ]]; then
+  fail "$t" "the fixture repository produced a ${#oid256}-character object id"
+else
+  exact_result "$t" "$rc" "$b256/out" "$b256/err" "${EXPECTED_SCOPED/@OID@/$oid256}"
+fi
+
+check_call_shapes() {  # $1 base; appends to call_failures
+  local call
+  while IFS= read -r call; do
+    [[ "$call" == *'version --json'* || "$call" == *'where --json'* ]] && continue
+    [[ "$call" == *'--no-db'* ]] || call_failures+="[$call] is not a no-db read; "
+    [[ "$call" == *'--no-auto-import --no-auto-flush'* ]] ||
+      call_failures+="[$call] does not disable auto import and flush; "
+    case "$call" in
+      *' ready '*|*' blocked '*)
+        [[ "$call" == *'--limit 0'* ]] || call_failures+="[$call] has no --limit 0; " ;;
+      *' list '*)
+        [[ "$call" == *'--all'* ]] || call_failures+="[$call] is not an --all listing; "
+        # Every `list` here feeds a count, and the probe pins those counting queries with
+        # `--deferred`. Measured on the pinned release the flag changes neither result --
+        # the deferred open row is inside `list --status open --all` either way -- so this
+        # asserts that the selector issues the argv the evidence covers, not that the flag
+        # is what keeps a deferred-only backlog out of DONE.
+        [[ "$call" == *'--deferred'* ]] ||
+          call_failures+="[$call] does not count deferred rows; " ;;
+    esac
+  done < <(sel_calls "$1")
+}
+
+t='every parsed query uses no-db, no-auto, an explicit unlimited limit, and counts deferrals'
+call_failures=""
+check_call_shapes "$b"
+if [[ -n "$call_failures" ]]; then fail "$t" "$call_failures"; else pass "$t"; fi
+
+t='more than fifty ready rows are returned without truncation'
+b=$(new_fixture)
+patch_graph "$b" 'g.extend([{"id":"m%d"%i,"status":"open","priority":1,"issue_type":"task","labels":["drive-open-issues","executor-skills"]} for i in range(60)])'
+run_selector "$b"
+if [[ $(grep -o '"id":"m[0-9]*"' "$b/out" | sort -u | wc -l) -ne 60 ]]; then
+  fail "$t" "only $(grep -c -o '"id":"m[0-9]*"' "$b/out") of 60 rows survived"
+elif [[ "$(<"$b/out")" != *'"unresolved_count":66'* ]]; then
+  fail "$t" 'the unresolved count did not include every row'
+else
+  pass "$t"
+fi
+
+t='blocked-only work is a positive unresolved count with every lane array empty'
+b=$(new_fixture)
+patch_graph "$b" 'g[:] = [r for r in g if r["id"] == "k1"]'
+run_selector "$b"
+if [[ "$(<"$b/out")" != *'"unresolved_count":1,"blocked_count":1'* ]]; then
+  fail "$t" "unexpected counts: $(<"$b/out")"
+elif grep -Fq '"ready":[{' "$b/out"; then
+  fail "$t" 'a blocked row was offered as ready'
+else
+  pass "$t"
+fi
+
+t='a truly empty scope is all zeros and all empty arrays'
+b=$(new_fixture)
+patch_graph "$b" 'g[:] = []'
+printf '[]\n' >"$b/tool/state/blocked.json"
+run_selector "$b"
+if [[ "$(<"$b/out")" != *'"unresolved_count":0,"blocked_count":0,"lanes":{"executor-skills":{"ready":[],"in_progress":[]},"executor-rb-lite":{"ready":[],"in_progress":[]},"authority-human":{"ready":[],"in_progress":[]}}}' ]]; then
+  fail "$t" "unexpected empty projection: $(<"$b/out")"
+else
+  pass "$t"
+fi
+
+# --- row, envelope, and count mutants -------------------------------------------------------
+row_mutants=""
+run_refusal() {  # $1 base, $2 label
+  local base=$1 label=$2
+  if run_selector "$base"; then
+    row_mutants+="$label was accepted; "
+  elif [[ -s "$base/out" ]]; then
+    row_mutants+="$label printed a selection while refusing; "
+  elif [[ ! -s "$base/err" ]]; then
+    row_mutants+="$label refused with no diagnostic; "
+  fi
+}
+
+while IFS='|' read -r label statement; do
+  b=$(new_fixture)
+  patch_graph "$b" "$statement"
+  run_refusal "$b" "$label"
+done <<'ROWS'
+priority below zero|[r.update(priority=-1) for r in g if r["id"]=="s1"]
+priority above four|[r.update(priority=5) for r in g if r["id"]=="s1"]
+fractional priority|[r.update(priority=1.5) for r in g if r["id"]=="s1"]
+string priority|[r.update(priority="0") for r in g if r["id"]=="s1"]
+empty issue type|[r.update(issue_type="") for r in g if r["id"]=="s1"]
+missing issue type|[r.pop("issue_type") for r in g if r["id"]=="s1"]
+empty id|[r.update(id="") for r in g if r["id"]=="s1"]
+non-string id|[r.update(id=7) for r in g if r["id"]=="s1"]
+duplicate id in one lane|g.append(dict(g[0]))
+the same id in two lanes|g.append(dict(g[0], labels=["drive-open-issues","executor-rb-lite"]))
+a row carrying two lane labels|[r.update(labels=["drive-open-issues","executor-skills","authority-human"]) for r in g if r["id"]=="s1"]
+duplicated label entries|[r.update(labels=["drive-open-issues","executor-skills","executor-skills"]) for r in g if r["id"]=="s1"]
+a non-string label|[r.update(labels=["drive-open-issues","executor-skills",7]) for r in g if r["id"]=="s1"]
+ROWS
+t='every malformed scoped row refuses with no stdout'
+if [[ -n "$row_mutants" ]]; then fail "$t" "$row_mutants"; else pass "$t"; fi
+
+row_mutants=""
+while IFS='|' read -r label query statement; do
+  b=$(new_fixture)
+  mutate_query "$b" "$query" "$statement"
+  run_refusal "$b" "$label"
+done <<'ENVELOPES'
+an inflated open total|open|p["total"] = p["total"] + 1
+a deflated global progress total|progress-all|p["total"] = 0
+a truthy has_more|open|p["has_more"] = True
+a missing has_more|open|del p["has_more"]
+a missing total|open|del p["total"]
+a string total|open|p["total"] = "4"
+issues that are not an array|open|p["issues"] = {}
+an envelope where an array belongs|ready-executor-skills|p = {"issues": p, "total": len(p), "has_more": False}
+an array where an envelope belongs|open|p = p["issues"]
+a row missing the scope label|ready-executor-skills|p[0]["labels"] = ["executor-skills"]
+a row carrying a second lane label|ready-executor-skills|p[0]["labels"] = ["drive-open-issues","executor-skills","authority-human"]
+a row whose lane label is another lane|ready-executor-skills|p[0]["labels"] = ["drive-open-issues","executor-rb-lite"]
+a wrong status in a ready row|ready-executor-skills|p[0]["status"] = "closed"
+a wrong status in an in-progress row|progress-executor-skills|p["issues"][0]["status"] = "open"
+a lane row missing from the global progress list|progress-all|p = {"issues": [], "total": 0, "has_more": False}
+a global progress row missing from every lane|progress-executor-skills|p = {"issues": [], "total": 0, "has_more": False}
+a lane row claimed by two lanes|progress-executor-rb-lite|p = json.loads(json.dumps({"issues": [{"id":"s3","status":"in_progress","priority":1,"issue_type":"task","labels":["drive-open-issues","executor-rb-lite"]}], "total": 1, "has_more": False}))
+ENVELOPES
+t='every envelope, array, and partition mutation refuses with no stdout'
+if [[ -n "$row_mutants" ]]; then fail "$t" "$row_mutants"; else pass "$t"; fi
+
+row_mutants=""
+b=$(new_fixture)
+printf 'not json\n' >"$b/tool/state/version.json"
+run_refusal "$b" 'unparsable identity output'
+while IFS='|' read -r label version build commit; do
+  b=$(new_fixture)
+  printf '{"version":"%s","build":"%s","commit":"%s"}\n' \
+    "$version" "$build" "$commit" >"$b/tool/state/version.json"
+  run_refusal "$b" "$label"
+done <<IDENTITIES
+a wrong version|0.3.3|release|$COMMIT
+a debug build|0.3.2|debug|$COMMIT
+a wrong commit|0.3.2|release|deadbeef
+IDENTITIES
+identity_calls=$(sel_calls "$b" | grep -cE 'ready|list|blocked' || true)
+[[ "$identity_calls" -eq 0 ]] ||
+  row_mutants+="an identity liar still ran $identity_calls queries; "
+b=$(new_fixture)
+SEL_OID=$(oid_of "$b" "$b/tool/br.py") run_refusal "$b" 'an object id from another file'
+[[ $(sel_calls "$b" | wc -l) -eq 0 ]] ||
+  row_mutants+="a self-supplied object id still executed the binary; "
+t='the selector independently refuses an identity liar and a self-supplied object id'
+if [[ -n "$row_mutants" ]]; then fail "$t" "$row_mutants"; else pass "$t"; fi
+
+row_mutants=""
+for at in 2 3 5 9; do
+  b=$(new_fixture)
+  printf '%s\n' "$at" >"$b/tool/state/swap-at"
+  run_refusal "$b" "a private-tool swap after call $at"
+done
+t='a private tool swapped before any query is refused by the next admission'
+if [[ -n "$row_mutants" ]]; then fail "$t" "$row_mutants"; else pass "$t"; fi
+
+row_mutants=""
+for at in 2 12; do
+  b=$(new_fixture)
+  printf '%s\n' "$at" >"$b/tool/state/stderr-at"
+  run_refusal "$b" "locator pass $at wrote to stderr"
+done
+t='stderr from either clean locator pass refuses with no stdout'
+if [[ -n "$row_mutants" ]]; then fail "$t" "$row_mutants"; else pass "$t"; fi
+
+row_mutants=""
+for at in 2 4 8; do
+  b=$(new_fixture)
+  printf '%s\n' "$at" >"$b/tool/state/touch-at"
+  run_refusal "$b" "a JSONL mutated after call $at"
+done
+b=$(new_fixture)
+printf '5\n' >"$b/tool/state/commit-at"
+run_refusal "$b" 'a JSONL rewritten and committed mid-read'
+b=$(new_fixture)
+printf 'unstaged\n' >>"$b/clone/.beads/issues.jsonl"
+run_refusal "$b" 'an unstaged JSONL divergence'
+[[ $(sel_calls "$b" | grep -cE 'ready|list|blocked' || true) -eq 0 ]] ||
+  row_mutants+="an unstaged divergence still ran a query; "
+b=$(new_fixture)
+printf 'staged\n' >>"$b/clone/.beads/issues.jsonl"
+git -C "$b/clone" add -- .beads/issues.jsonl
+git -C "$b/clone" checkout-index -f -- .beads/issues.jsonl
+run_refusal "$b" 'a staged JSONL divergence'
+t='a JSONL that moves under the reads, or was already dirty, refuses with no stdout'
+if [[ -n "$row_mutants" ]]; then fail "$t" "$row_mutants"; else pass "$t"; fi
+
+t='a workspace that cannot be removed refuses instead of publishing the selection'
+# The object is a routing authorization and stdout cannot be retracted, so the workspace
+# has to be gone BEFORE the line is written — cleaning up in the exit trap afterwards
+# leaves a failed invocation printing something a caller will parse and act on.
+b=$(new_fixture)
+printf '1\n' >"$b/tool/state/block-cleanup-at"    # the identity call, whose stdout is in it
+run_selector "$b"; rc=$?
+blocked=$(cat "$b/tool/state/blocked-workspace" 2>/dev/null || true)
+if [[ -z "$blocked" ]]; then
+  fail "$t" 'the fixture could not plant an undeletable entry, so nothing was checked'
+elif [[ $rc -eq 0 ]]; then
+  fail "$t" 'a failed cleanup still exited zero'
+elif [[ -s "$b/out" ]]; then
+  fail "$t" "a failed cleanup published a routing object anyway: $(<"$b/out")"
+elif ! grep -Fxq 'cannot remove the bead lane selector workspace' "$b/err"; then
+  fail "$t" "unexpected diagnostic: $(<"$b/err")"
+elif [[ $(wc -l <"$b/err") -ne 1 ]]; then
+  fail "$t" "the refusal was not one fixed line: $(<"$b/err")"
+else
+  pass "$t"
+fi
+[[ -z "$blocked" ]] || rm -rf "$blocked"
+
+t='an operation refusal stays one line when exit cleanup also fails'
+b=$(new_fixture)
+printf '1\n' >"$b/tool/state/block-cleanup-at"
+printf 'not json at all\n' >"$b/tool/state/version.json"
+run_selector "$b"; rc=$?
+blocked=$(cat "$b/tool/state/blocked-workspace" 2>/dev/null || true)
+if [[ -z "$blocked" ]]; then
+  fail "$t" 'the fixture could not plant an undeletable entry, so nothing was checked'
+elif [[ $rc -eq 0 ]]; then
+  fail "$t" 'the combined operation and cleanup failure exited zero'
+elif [[ -s "$b/out" ]]; then
+  fail "$t" "the refusal published a selection: $(<"$b/out")"
+elif ! grep -Fxq 'the pinned br is not the exact v0.3.2 release build' "$b/err"; then
+  fail "$t" "unexpected diagnostic: $(<"$b/err")"
+elif [[ $(wc -l <"$b/err") -ne 1 ]]; then
+  fail "$t" "the refusal was $(wc -l <"$b/err") lines: $(<"$b/err")"
+else
+  pass "$t"
+fi
+[[ -z "$blocked" ]] || rm -rf "$blocked"
+
+t='a companion that writes its own diagnostic still refuses in exactly one fixed line'
+# The published contract is ONE fixed line, so a caller can tell a refusal from a selection
+# without parsing. A helper that fails noisily — here jq, on an identity document that is
+# not JSON — would otherwise put its own wording on stderr ahead of that line.
+b=$(new_fixture)
+printf 'not json at all\n' >"$b/tool/state/version.json"
+run_selector "$b"; rc=$?
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'a malformed identity document was accepted'
+elif [[ -s "$b/out" ]]; then
+  fail "$t" "the refusal published a selection: $(<"$b/out")"
+elif ! grep -Fxq 'the pinned br is not the exact v0.3.2 release build' "$b/err"; then
+  fail "$t" "unexpected diagnostic: $(<"$b/err")"
+elif [[ $(wc -l <"$b/err") -ne 1 ]]; then
+  fail "$t" "the refusal was $(wc -l <"$b/err") lines: $(<"$b/err")"
+else
+  pass "$t"
+fi
+
+t='inherited Beads and Git location overrides are cleared, not honoured'
+b=$(new_fixture)
+SEL_ENV=(BEADS_DIR=/nonexistent BEADS_JSONL=/nonexistent BR_DB=/nonexistent
+         BEADS_JSONL_RESOLVER=/nonexistent GIT_DIR=/nonexistent)
+run_selector "$b"; rc=$?
+if [[ $rc -ne 0 ]]; then
+  fail "$t" "injected overrides broke a valid selection: $(<"$b/err")"
+elif sel_calls "$b" | grep -q nonexistent; then
+  fail "$t" 'an injected override reached the pinned binary'
+else
+  pass "$t"
+fi
+
+usage_failures=""
+b=$(new_fixture)
+S="$b/home/.claude/skills/rb-lite-backlog-drain/scripts/select-bead-lanes"
+O=$(oid_of "$b" "$b/tool/br")
+while IFS= read -r argv; do
+  # shellcheck disable=SC2086
+  if ( cd "$b/clone" && HOME="$b/home" "$S" $argv ) >"$b/u.out" 2>"$b/u.err"; then
+    usage_failures+="[$argv] was accepted; "
+  elif [[ -s "$b/u.out" ]]; then
+    usage_failures+="[$argv] printed a selection; "
+  elif ! grep -Fq 'usage: select-bead-lanes' "$b/u.err"; then
+    usage_failures+="[$argv] did not print the usage text; "
+  fi
+done <<USAGE
+
+--scoped
+--scoped --scope-label drive-open-issues --br-path $b/tool/br
+--scoped --scope-label other --br-path $b/tool/br --br-oid $O
+--scoped --br-path $b/tool/br --scope-label drive-open-issues --br-oid $O
+--scoped --scope-label drive-open-issues --br-path $b/tool/br --br-oid $O --br-oid $O
+--generic --br-path $b/tool/br
+--generic --br-path $b/tool/br --br-oid $O --extra
+--generic --scope-label drive-open-issues --br-path $b/tool/br --br-oid $O
+--unknown --br-path $b/tool/br --br-oid $O
+USAGE
+t='the selector grammar refuses unknown, missing, duplicate, and misordered options'
+if [[ -n "$usage_failures" ]]; then fail "$t" "$usage_failures"; else pass "$t"; fi
+
+t='an empty pinned path refuses before the selector can fall back to caller PATH'
+b=$(new_fixture)
+O=$(oid_of "$b" "$b/tool/br")
+if ( cd "$b/clone" && HOME="$b/home" PATH="$b/tool:$SYSTEM_PATH" \
+    "$b/home/.claude/skills/rb-lite-backlog-drain/scripts/select-bead-lanes" \
+    --scoped --scope-label drive-open-issues --br-path '' --br-oid "$O" \
+    >"$b/u.out" 2>"$b/u.err" ); then
+  fail "$t" 'the empty path selected work through the caller-PATH br'
+elif [[ -s "$b/u.out" ]]; then
+  fail "$t" 'the refused empty path printed a selection'
+elif [[ $(sel_calls "$b" | wc -l) -ne 0 ]]; then
+  fail "$t" 'the empty path executed the caller-PATH br'
+else
+  pass "$t"
+fi
+
+# --- generic mode ----------------------------------------------------------------------------
+GENERIC_GRAPH='[
+ {"id":"g1","status":"open","priority":1,"issue_type":"task","labels":["team-a"]},
+ {"id":"g2","status":"in_progress","priority":0,"issue_type":"bug","labels":[]},
+ {"id":"g3","status":"open","priority":2,"issue_type":"task","labels":["team-a"]},
+ {"id":"gc","status":"closed","priority":0,"issue_type":"task","labels":["executor-skills","drive-open-issues"]}
+]'
+new_generic_fixture() {
+  local base
+  base=$(new_fixture) || return
+  printf '%s\n' "$GENERIC_GRAPH" >"$base/tool/state/graph.json" || return
+  printf '["g3"]\n' >"$base/tool/state/blocked.json" || return
+  printf '%s' "$base"
+}
+
+b=$(new_generic_fixture)
+SEL_MODE=(--generic)
+run_selector "$b"; rc=$?
+oid=$(oid_of "$b" "$b/clone/.beads/issues.jsonl")
+expected='{"schema":"skills.drive.generic-ready.v1","br":{"version":"0.3.2","build":"release","commit":"'$COMMIT'"},"jsonl_oid":"'$oid'","unresolved_count":3,"blocked_count":1,"ready":[{"id":"g1","status":"open","priority":1,"issue_type":"task","labels":["team-a"]}],"in_progress":[{"id":"g2","status":"in_progress","priority":0,"issue_type":"bug","labels":[]}]}'
+t='generic selection returns unlabeled work, and a closed Drive-labelled row does not block it'
+exact_result "$t" "$rc" "$b/out" "$b/err" "$expected"
+
+# Generic mode has its own four queries, so the scoped check above says nothing about them.
+t='generic mode issues the same shapes, including deferral-counting lists'
+call_failures=""
+check_call_shapes "$b"
+if [[ -n "$call_failures" ]]; then fail "$t" "$call_failures"; else pass "$t"; fi
+
+row_mutants=""
+while IFS='|' read -r label statement; do
+  b=$(new_generic_fixture)
+  patch_graph "$b" "$statement"
+  if run_selector "$b"; then
+    row_mutants+="$label was accepted; "
+  elif [[ -s "$b/out" ]]; then
+    row_mutants+="$label printed a selection while refusing; "
+  elif ! grep -Fq 'Drive-managed labels require scoped routing' "$b/err"; then
+    row_mutants+="$label produced the wrong diagnostic: $(<"$b/err"); "
+  fi
+done <<'GENERIC'
+an open row carrying the scope label|[r.update(labels=["drive-open-issues"]) for r in g if r["id"]=="g1"]
+an open row carrying the skills lane|[r.update(labels=["executor-skills"]) for r in g if r["id"]=="g1"]
+an open row carrying the rb-lite lane|[r.update(labels=["executor-rb-lite"]) for r in g if r["id"]=="g3"]
+an in-progress row carrying the authority lane|[r.update(labels=["authority-human"]) for r in g if r["id"]=="g2"]
+GENERIC
+t='any recognized Drive label in unresolved generic work refuses with the fixed diagnostic'
+if [[ -n "$row_mutants" ]]; then fail "$t" "$row_mutants"; else pass "$t"; fi
+
+row_mutants=""
+b=$(new_generic_fixture); patch_graph "$b" 'g[:] = [r for r in g if r["id"]=="g3"]'
+SEL_MODE=(--generic); run_selector "$b"
+if [[ "$(<"$b/out")" != *'"unresolved_count":1,"blocked_count":1,"ready":[],"in_progress":[]}' ]]; then
+  row_mutants+="blocked-only generic work did not report a positive unresolved count; "
+fi
+b=$(new_generic_fixture); patch_graph "$b" 'g[:] = []'
+printf '[]\n' >"$b/tool/state/blocked.json"
+git -C "$b/clone" rm -q -- DRIVE.md
+git -C "$b/clone" commit -qm no-drive-record
+SEL_MODE=(--generic); run_selector "$b"
+if [[ "$(<"$b/out")" != *'"unresolved_count":0,"blocked_count":0,"ready":[],"in_progress":[]}' ]]; then
+  row_mutants+="a truly empty generic queue without DRIVE.md did not report all zeros; "
+fi
+grep -Fq 'zero unresolved/counts/arrays means DONE without `DRIVE.md`' "$OWNER" ||
+  row_mutants+="the owner still makes generic DONE depend on a Drive record; "
+b=$(new_generic_fixture); mutate_query "$b" open 'p["total"] = 9'
+SEL_MODE=(--generic)
+if run_selector "$b"; then row_mutants+="a generic count mismatch was accepted; "; fi
+b=$(new_generic_fixture); patch_graph "$b" '[r.update(priority=9) for r in g if r["id"]=="g1"]'
+SEL_MODE=(--generic)
+if run_selector "$b"; then row_mutants+="a generic out-of-range priority was accepted; "; fi
+b=$(new_generic_fixture); printf '3\n' >"$b/tool/state/touch-at"
+SEL_MODE=(--generic)
+if run_selector "$b"; then row_mutants+="a generic mid-read JSONL mutation was accepted; "; fi
+SEL_MODE=(--scoped --scope-label drive-open-issues)
+t='generic mode keeps the same counts, schema, and stable-OID protections'
+if [[ -n "$row_mutants" ]]; then fail "$t" "$row_mutants"; else pass "$t"; fi
+
+# --- drive-status delegation --------------------------------------------------------------------
+run_drive_status() {  # $1 base, rest: argv
+  local base=$1 path=${DS_PATH:-$SYSTEM_PATH}; shift
+  ( cd "$base/clone" && HOME="$base/home" PATH="$path" \
+      "$base/home/.claude/skills/drive/scripts/drive-status" "$@" ) \
+    >"$base/ds.out" 2>"$base/ds.err"
+}
+
+b=$(new_fixture)
+O=$(oid_of "$b" "$b/tool/br")
+run_drive_status "$b" --select-bead-lanes-json --scope-label drive-open-issues \
+  --br-path "$b/tool/br" --br-oid "$O"; rc=$?
+expected=${EXPECTED_SCOPED/@OID@/$(oid_of "$b" "$b/clone/.beads/issues.jsonl")}
+t='drive-status delegates its lane mode to the shared owner byte for byte'
+exact_result "$t" "$rc" "$b/ds.out" "$b/ds.err" "$expected"
+
+t='a relative invocation resolves the companion beside the script, not beside the repo'
+# `cd "$ROOT"` happens before the companion lookup, so a relative `BASH_SOURCE[0]` used
+# afterwards is measured from the DRIVEN REPOSITORY. That resolves one directory further
+# up than the install actually launched, lands outside the worktree, and therefore sails
+# through the containment check — while running whatever is planted there.
+b=$(new_fixture)
+inst="$b/relinst/skills"
+mkdir -p "$inst/drive/scripts" "$inst/rb-lite-backlog-drain/scripts" "$b/clone/sub"
+cp "$SKILLS/drive/scripts/drive-status" "$inst/drive/scripts/drive-status"
+cp "$SELECTOR" "$inst/rb-lite-backlog-drain/scripts/select-bead-lanes"
+chmod +x "$inst/drive/scripts/drive-status" "$inst/rb-lite-backlog-drain/scripts/select-bead-lanes"
+decoy="$WORK/relinst/skills/rb-lite-backlog-drain/scripts"
+# `cd -P` walks every component, so the decoy tree mirrors the install's shape.
+mkdir -p "$decoy" "$WORK/relinst/skills/drive/scripts"
+printf '#!/bin/sh\n: >"%s/decoy-ran"\nprintf %%s "DECOY\\n"\n' "$b" >"$decoy/select-bead-lanes"
+chmod +x "$decoy/select-bead-lanes"
+O=$(oid_of "$b" "$b/tool/br")
+( cd "$b/clone/sub" && HOME="$b/home" PATH="$SYSTEM_PATH" \
+    ../../relinst/skills/drive/scripts/drive-status --select-bead-lanes-json \
+    --scope-label drive-open-issues --br-path "$b/tool/br" --br-oid "$O" ) \
+  >"$b/ds.out" 2>"$b/ds.err"
+rc=$?
+if [[ -e "$b/decoy-ran" ]]; then
+  fail "$t" 'a selector from outside the install tree was executed'
+else
+  exact_result "$t" "$rc" "$b/ds.out" "$b/ds.err" \
+    "${EXPECTED_SCOPED/@OID@/$(oid_of "$b" "$b/clone/.beads/issues.jsonl")}"
+fi
+rm -rf "$WORK/relinst"
+
+t='an inherited git function cannot move lane mode to another repository'
+# Bash imports exported functions, so `command -p -v git` returns the bare name and the
+# caller's code answers "which worktree is this" — the question the DRIVE.md scope check
+# and the companion containment check are both measured against.
+b=$(new_fixture)
+git init -q "$b/decoyrepo"
+printf '# DRIVE\n\n**Scope-Label:** `drive-open-issues`\n' >"$b/decoyrepo/DRIVE.md"
+O=$(oid_of "$b" "$b/tool/br")
+hostile="git() { : >'$b/hijack-ran'; printf '%s\\n' '$b/decoyrepo'; }; export -f git"
+( cd "$b/clone" && HOME="$b/home" PATH="$SYSTEM_PATH" bash -c "$hostile"'
+exec "$1" --select-bead-lanes-json --scope-label drive-open-issues \
+  --br-path "$2" --br-oid "$3"' _ \
+    "$b/home/.claude/skills/drive/scripts/drive-status" "$b/tool/br" "$O" ) \
+  >"$b/ds.out" 2>"$b/ds.err"
+rc=$?
+if [[ -e "$b/hijack-ran" ]]; then
+  fail "$t" 'the inherited git function answered for the worktree'
+else
+  exact_result "$t" "$rc" "$b/ds.out" "$b/ds.err" \
+    "${EXPECTED_SCOPED/@OID@/$(oid_of "$b" "$b/clone/.beads/issues.jsonl")}"
+fi
+
+t='drive-status clears inherited Git location overrides before choosing its worktree'
+b=$(new_fixture)
+git init -q "$b/other"
+git -C "$b/other" config user.name 'Consumer Test'
+git -C "$b/other" config user.email consumer@example.invalid
+printf '# DRIVE\n\n**Scope-Label:** `drive-open-issues`\n' >"$b/other/DRIVE.md"
+git -C "$b/other" add -A && git -C "$b/other" commit -qm seed
+O=$(oid_of "$b" "$b/tool/br")
+if ! ( cd "$b/clone" && HOME="$b/home" PATH="$SYSTEM_PATH" \
+    GIT_DIR="$b/other/.git" GIT_WORK_TREE="$b/other" \
+    "$b/home/.claude/skills/drive/scripts/drive-status" \
+    --select-bead-lanes-json --scope-label drive-open-issues \
+    --br-path "$b/tool/br" --br-oid "$O" ) >"$b/ds.out" 2>"$b/ds.err"; then
+  fail "$t" "location overrides redirected lane mode: $(<"$b/ds.err")"
+elif [[ "$(<"$b/ds.out")" != "${EXPECTED_SCOPED/@OID@/$(oid_of "$b" "$b/clone/.beads/issues.jsonl")}" ]]; then
+  fail "$t" 'location overrides selected a different repository'
+elif [[ -s "$b/ds.err" ]]; then
+  fail "$t" "valid selection wrote stderr: $(<"$b/ds.err")"
+else
+  pass "$t"
+fi
+
+scope_failures=""
+while IFS='|' read -r label record request diagnostic; do
+  b=$(new_fixture)
+  if [[ "$record" == "ABSENT" ]]; then
+    rm -f "$b/clone/DRIVE.md"
+  else
+    # %b, not %s: the duplicate row carries a `\n` that has to become a second line, and
+    # %s would leave it as a literal backslash-n that the count check never sees.
+    printf '# DRIVE\n\n%b\n**Phase:** BUILD\n' "$record" >"$b/clone/DRIVE.md"
+  fi
+  git -C "$b/clone" add -A >/dev/null 2>&1
+  git -C "$b/clone" commit -qam scope >/dev/null 2>&1
+  O=$(oid_of "$b" "$b/tool/br")
+  out="$b/ds.out"; err="$b/ds.err"
+  if [[ "$label" == 'a missing DRIVE.md' ]]; then
+    out="$b/out"; err="$b/err"
+    run_selector "$b" && accepted=true || accepted=false
+  else
+    if [[ "$label" == 'a malformed Scope-Label' ]]; then
+      mkdir -p "$b/hostile"
+      printf '#!/bin/sh\ncase "$*" in *-cE*) printf "1\\n";; *) printf "**Scope-Label:** `drive-open-issues`\\n";; esac\n' >"$b/hostile/grep"
+      printf '#!/bin/sh\nprintf "drive-open-issues\\n"\n' >"$b/hostile/sed"
+      chmod +x "$b/hostile/grep" "$b/hostile/sed"
+      DS_PATH="$b/hostile:$SYSTEM_PATH"
+    else
+      DS_PATH=$SYSTEM_PATH
+    fi
+    DS_PATH="$DS_PATH" run_drive_status "$b" --select-bead-lanes-json \
+      --scope-label "$request" --br-path "$b/tool/br" --br-oid "$O" \
+      && accepted=true || accepted=false
+  fi
+  if $accepted; then
+    scope_failures+="$label was accepted; "
+  elif [[ -s "$out" ]]; then
+    scope_failures+="$label printed a selection while refusing; "
+  elif ! grep -Fxq -- "$diagnostic" "$err"; then
+    scope_failures+="$label produced the wrong diagnostic: $(<"$err"); "
+  elif [[ $(sel_calls "$b" | wc -l) -ne 0 ]]; then
+    scope_failures+="$label still executed the pinned binary; "
+  fi
+done <<'SCOPES'
+a missing DRIVE.md|ABSENT|drive-open-issues|DRIVE.md is absent, so no Scope-Label is declared — scoped selection refused
+a DRIVE.md with no Scope-Label|**Scope:** everything|drive-open-issues|DRIVE.md must declare exactly one **Scope-Label:** line
+a duplicated Scope-Label|**Scope-Label:** `drive-open-issues`\n**Scope-Label:** `drive-open-issues`|drive-open-issues|DRIVE.md must declare exactly one **Scope-Label:** line
+a malformed Scope-Label|**Scope-Label:** drive-open-issues|drive-open-issues|the DRIVE.md **Scope-Label:** line is malformed
+a Scope-Label with no value|**Scope-Label:**|drive-open-issues|the DRIVE.md **Scope-Label:** line is malformed
+a requested label the record does not declare|**Scope-Label:** `other-scope`|drive-open-issues|the requested scope label is not the one DRIVE.md declares
+SCOPES
+t='direct and delegated scope labels refuse absent, duplicate, malformed, forged, or disagreeing records'
+if [[ -n "$scope_failures" ]]; then fail "$t" "$scope_failures"; else pass "$t"; fi
+
+t='the scope label is never inferred from the rows it selects'
+b=$(new_fixture)
+printf '# DRIVE\n\n**Scope:** everything\n**Phase:** BUILD\n' >"$b/clone/DRIVE.md"
+git -C "$b/clone" commit -qam no-label >/dev/null 2>&1
+O=$(oid_of "$b" "$b/tool/br")
+if run_drive_status "$b" --select-bead-lanes-json --scope-label drive-open-issues \
+    --br-path "$b/tool/br" --br-oid "$O"; then
+  fail "$t" 'rows carrying drive-open-issues were enough to enable scoped routing'
+elif [[ -s "$b/ds.out" ]]; then
+  fail "$t" 'a refused selection still printed'
+else
+  pass "$t"
+fi
+
+argv_failures=""
+b=$(new_fixture)
+O=$(oid_of "$b" "$b/tool/br")
+while IFS= read -r argv; do
+  # shellcheck disable=SC2086
+  if run_drive_status "$b" $argv; then
+    argv_failures+="[$argv] was accepted; "
+  elif [[ -s "$b/ds.out" ]]; then
+    argv_failures+="[$argv] printed a selection; "
+  elif ! grep -Fq 'usage: drive-status --select-bead-lanes-json' "$b/ds.err"; then
+    argv_failures+="[$argv] did not print the delegating usage text; "
+  fi
+done <<ARGV
+--select-bead-lanes-json
+--select-bead-lanes-json --scope-label drive-open-issues --br-path $b/tool/br
+--select-bead-lanes-json --br-path $b/tool/br --scope-label drive-open-issues --br-oid $O
+--select-bead-lanes-json --scope-label drive-open-issues --br-path $b/tool/br --br-oid $O --br-oid $O
+--select-bead-lanes-json --scope-label drive-open-issues --br-path $b/tool/br --oid $O
+--select-bead-lanez-json --scope-label drive-open-issues --br-path $b/tool/br --br-oid $O
+ARGV
+t='the delegating drive-status grammar is exact'
+if [[ -n "$argv_failures" ]]; then fail "$t" "$argv_failures"; else pass "$t"; fi
+
+t='lane mode fails closed when the helper is not installed outside the worktree'
+b=$(new_fixture)
+rm -rf "$b/home/.claude/skills/rb-lite-backlog-drain"
+mkdir -p "$b/clone/skills/rb-lite-backlog-drain/scripts"
+cp "$SELECTOR" "$b/clone/skills/rb-lite-backlog-drain/scripts/select-bead-lanes"
+chmod +x "$b/clone/skills/rb-lite-backlog-drain/scripts/select-bead-lanes"
+O=$(oid_of "$b" "$b/tool/br")
+if run_drive_status "$b" --select-bead-lanes-json --scope-label drive-open-issues \
+    --br-path "$b/tool/br" --br-oid "$O"; then
+  fail "$t" 'a repository-relative helper was executed'
+elif [[ -s "$b/ds.out" ]]; then
+  fail "$t" 'a refused selection still printed'
+elif ! grep -Fq 'select-bead-lanes companion unavailable' "$b/ds.err"; then
+  fail "$t" "unexpected diagnostic: $(<"$b/ds.err")"
+else
+  pass "$t"
+fi
+
+t='drive-status refuses hard links and uses the selector beside the active Drive copy'
+admission_failures=""
+b=$(new_fixture)
+mkdir -p "$b/clone/attacker"
+ln "$b/home/.claude/skills/rb-lite-backlog-drain/scripts/select-bead-lanes" \
+  "$b/clone/attacker/select-bead-lanes"
+O=$(oid_of "$b" "$b/tool/br")
+if run_drive_status "$b" --select-bead-lanes-json --scope-label drive-open-issues \
+    --br-path "$b/tool/br" --br-oid "$O"; then
+  admission_failures+="a hard-linked helper was accepted; "
+elif [[ -s "$b/ds.out" || $(sel_calls "$b" | wc -l) -ne 0 ]]; then
+  admission_failures+="a hard-linked helper executed or printed a selection; "
+fi
+b=$(new_fixture)
+mkdir -p "$b/home/.codex/skills/rb-lite-backlog-drain/scripts"
+printf '#!/bin/sh\n: >%s/stale-ran\nexit 1\n' "$b" \
+  >"$b/home/.codex/skills/rb-lite-backlog-drain/scripts/select-bead-lanes"
+chmod +x "$b/home/.codex/skills/rb-lite-backlog-drain/scripts/select-bead-lanes"
+O=$(oid_of "$b" "$b/tool/br")
+if ! run_drive_status "$b" --select-bead-lanes-json --scope-label drive-open-issues \
+    --br-path "$b/tool/br" --br-oid "$O"; then
+  admission_failures+="the active Drive copy did not use its adjacent selector; "
+elif [[ -e "$b/stale-ran" ]]; then
+  admission_failures+="a selector from another installation shadowed the active copy; "
+fi
+if [[ -n "$admission_failures" ]]; then fail "$t" "$admission_failures"; else pass "$t"; fi
+
+printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
+[[ $FAIL -eq 0 ]]

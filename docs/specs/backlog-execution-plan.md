@@ -1241,34 +1241,46 @@ The candidate probe invocation was
 LC_ALL=C TZ=UTC /run/current-system/sw/bin/bash --noprofile --norc
 docs/specs/e3-native-br-v0.3.2-probe.sh /tmp/br-v0.3.2-bin/br
 /tmp/br-v0.3.2-bin/br-0.3.2-linux_x86_64.tar.gz
-/home/master/p/skills-e3-native-br/.beads/issues.jsonl`; it exited 0 with 1,574 stdout bytes
-and zero stderr bytes. Its retained projection is:
+/home/master/p/skills-e3-native-br/.beads/issues.jsonl`. Re-run on 2026-08-23 after the
+`database_path`, DB-absent `version --json`, `in_progress`, scoped-deferred, and
+`show --json` row-payload scenarios were added and the count queries took `--deferred`, it
+exited 0 with 3,194 stdout bytes, zero stderr bytes, and stdout SHA-256
+`7bce21ba9fd63dc9d4bc1191e21660826dea7aa8440b769017dc4886a6f90685`. Its retained
+projection is:
 
 ```text
 PROBE_ENV=Bash=5.3.15(1)-release Git=git version 2.55.0 Python=Python 3.14.6 Kernel=Linux 7.1.6 x86_64
 CANDIDATE_JSONL_SHA256=7269d4e17a3be4b19f957b4084001e0f529db7453cf667fef84b6e89a85a98eb
+WHERE_DATABASE_PATH=$PROBE_ROOT/compat/.beads/beads.db
 WHERE_NO_DB_RC=0 STDERR_BYTES=0 DB=absent
 COMPAT_IMPORT_RC=0 IMPORT_STDOUT_BYTES=91 IMPORT_STDERR_BYTES=0 FLUSH_RC=0 FLUSH_STDOUT_BYTES=36 FLUSH_STDERR_BYTES=0 CMP_RC=0
 FRESH_DB_BEFORE=absent
-NO_DB_SELECTOR_PROJECTION={"blocked-all":1,"list-open":3,"progress-all":1,"progress-human":0,"progress-rb":0,"progress-skills":1,"ready-human":1,"ready-rb":0,"ready-skills":1}
+VERSION_NO_DB_RC=0 STDERR_BYTES=0 DB=absent
+NO_DB_SELECTOR_PROJECTION={"blocked-all":1,"list-open":4,"list-open-deferred":4,"progress-all":1,"progress-all-deferred":1,"progress-human-deferred":0,"progress-rb-deferred":0,"progress-skills-deferred":1,"ready-human":1,"ready-rb":0,"ready-skills":1,"ready-skills-deferred":2}
+DEFERRED_OPEN_PROJECTION={"absent_from_lane_ready":true,"counted_by_selector_open_list":true,"defer_until_is_set":true,"deferred_flag_changes_open_list":false,"deferred_flag_changes_progress_list":false,"jsonl_status":"open","present_under_include_deferred":true}
 IMPORT_RC=0 IMPORT_STDOUT_BYTES=90 IMPORT_STDERR_BYTES=0
 STALE_DB_NO_DB_READY_COUNT=1
 BLOCKED_CLOSE_RC=3 STATUS=open COMMENTS=0
 SUCCESS_CLOSE_RC=0 FLUSH_RC=0 CLOSE_STDERR_BYTES=0 FLUSH_STDERR_BYTES=0
 SUCCESS_PROJECTION={"close_reason":"work_pr=https://github.com/o/r/pull/1 merge_sha=0123456789012345678901234567890123456789","comment":"evidence","status":"closed"}
 SUCCESS_CHANGED_FIELDS=["close_reason","closed_at","comments","status","updated_at"]
+SHOW_ROW_PROJECTION={"show-closed-db":{"close_reason":"work_pr=https://github.com/o/r/pull/1 merge_sha=0123456789012345678901234567890123456789","comment_texts":["a-preserved","evidence","z-preserved"],"has_close_reason":true,"has_comments":true,"has_labels":true,"labels":["authority-human","drive-open-issues"],"status":"closed"},"show-closed-no-db":{"close_reason":"work_pr=https://github.com/o/r/pull/1 merge_sha=0123456789012345678901234567890123456789","comment_texts":["a-preserved","evidence","z-preserved"],"has_close_reason":true,"has_comments":true,"has_labels":true,"labels":["authority-human","drive-open-issues"],"status":"closed"},"show-open-labeled":{"close_reason":null,"comment_texts":[],"has_close_reason":false,"has_comments":false,"has_labels":true,"labels":["drive-open-issues","executor-skills"],"status":"open"},"show-unlabeled":{"close_reason":null,"comment_texts":[],"has_close_reason":false,"has_comments":false,"has_labels":false,"labels":null,"status":"open"}}
+IN_PROGRESS_CLOSE_RC=0 FLUSH_RC=0 CLOSE_STDERR_BYTES=0 FLUSH_STDERR_BYTES=0
+IN_PROGRESS_CHANGED_FIELDS=["close_reason","closed_at","comments","status","updated_at"]
 EXPLICIT_FLUSH_FAILURE_RC=7 DB_STATUS=closed STDOUT_BYTES=0 STDERR_BYTES=109
 FLUSH_RETRY_RC=0 JSONL_STATUS=closed STDERR_BYTES=0
 IDEMPOTENT_FLUSH_RC=0 STDOUT_BYTES=36 STDERR_BYTES=0 CMP_RC=0
 ```
 
-The scenarios directly measure fresh-cache import, a blocked close with unchanged
-status/comment count, a successful close with both reason and one transition comment,
+The scenarios directly measure the DB-absent `where --json` `database_path` key as the
+exact absolute path production consumes, fresh-cache import, a blocked close with unchanged
+status/comment count, a successful open close with both reason and one transition
+comment, and a separate `in_progress` close whose exact changed-field set is the same five-field set,
 strict-flush success/failure/retry/idempotent byte equality, unchanged ID sets, and order-independent preservation
 of existing comments with exactly one addition.
 They also pin the selector surfaces E3 migrates: lane-filtered `ready --limit 0` and scoped
-`blocked --limit 0` return arrays; scoped `list --status open --all` and per-lane
-`list --status in_progress --all` return
+`blocked --limit 0` return arrays; scoped `list --status open --all --deferred` and per-lane
+`list --status in_progress --all --deferred` return
 objects with typed `issues`, integral `total`, and false `has_more`; every command uses
 no-db/no-auto flags. The
 stale-DB case changes a DB-only title and proves the no-db ready row still carries JSONL
@@ -1276,6 +1288,33 @@ title `alpha`; the DB is then discarded inside the disposable probe. A fifth ope
 executor decoy lacks `drive-open-issues` and is asserted absent from every scoped result,
 pinning `list`/`blocked` label filtering rather than relying only on counts. A sixth scoped
 closed decoy is asserted absent from open/progress/ready/blocked projections.
+A seventh scoped row is deferred the way this release defers (`update --defer 2099-01-01`),
+which settles by measurement what `status` alone cannot say about a query's membership: it
+is absent from lane `ready`, present under `ready --include-deferred`, and present in the
+scoped `list --status open --all --deferred` the selector now issues for its counts. The
+same two `list` queries are also run without the flag as controls, and on this release its
+presence changes neither result set — so the flag states the property in argv without
+changing what the pinned build returns. Deferred open work therefore lands inside
+`unresolved_count` on this pinned build with the flag and without it, and a deferred-only
+backlog reports a positive count with empty lanes (the GRAPH case) rather than `DONE`. The
+flag is retained because it is the argv this probe pins, not because it is the mechanism:
+that reading is what the two controls exist to prevent. The lane and global
+in-progress queries take the flag together, and the probe asserts their exact ID arrays
+still partition, so a one-sided flag is caught here rather than at the selector's own
+partition check.
+An eighth row is created and deliberately never labelled, and the probe pins the
+`show --json` row payload itself rather than only its `status`, because Step 11 routes on
+three of its fields: the pre-close preflight reads `labels`, the resume classifier reads
+`comments[].text` and `close_reason` in both `--no-db` and cache mode, and the read-back
+reads `close_reason`. Measured on this release, those keys are **omitted** rather than
+emitted empty — an unlabelled open row carries no `labels` key at all, an uncommented row
+no `comments`, an open row no `close_reason` — while the closed row carries all three with
+the exact reason and the order-independent three-text comment set, identically in both
+modes. Absence is therefore this payload's only spelling of "none", which is what makes the
+consumers' absence-tolerant reads (`.[0].labels[]?`, `.comments[]?`, `label_list`'s
+`has("labels")` fallback) the correct shape rather than a hole: the generic lane's "carries
+no recognized Drive label" admission is measuring a real absence, not passing vacuously over
+a payload it failed to parse.
 The internal transaction/lock claims come from source review at that tag in
 `src/cli/commands/close.rs`, `src/storage/sqlite.rs`, `src/cli/commands/sync.rs`, and
 `src/sync/mod.rs`, not inference from the probe. The default best-effort auto-flush claim
@@ -1295,7 +1334,10 @@ On every entry require `.git` to be a directory, clear all Beads location overri
 select/validate E1's installed companion
 scripts through its privileged trust block but stop before that block's final default-locator
 call: the locator itself executes `br where`, so it must not precede executable admission.
-For a first entry only, refuse an existing `beads.db` or sidecar.
+Exact v0.3.2 `where --json` is authoritative for `database_path`: canonicalize its parent,
+require it to stay inside the standalone clone, and retain that exact path with the private
+snapshot. For a first entry only, refuse that database or any of its SQLite sidecars; do not
+assume the configured name is `beads.db`.
 That E1 companion-selection bootstrap is the sole pre-runner Git exception. After companion
 validation, all closure-procedure `br`, `jq`, and Git operations use E1's validated
 `BEADS_JSONL_RESOLVER` and `BEADS_GIT_RUNNER`; bare caller-shell tools are forbidden.
@@ -1333,17 +1375,44 @@ environment, and the E3 closure/selector consumers are explicit.
    E1's trusted git-clean
    `make-temp-dir`, `copy-file`, and `hash-file` to preserve the exact clean JSONL in a
    private file. Require source and copied hashes to agree immediately; record the hash and
-   require the private copy still has that hash before final comparison. Retain the private
-   directory until final proof succeeds, including across an incomplete/interrupted attempt;
-   it is a proof input, not a mutable state/recovery marker. Run
+   require the private copy still has that hash before final comparison. Once the
+   copy/hash/path snapshot is complete, retain its directory until final proof succeeds;
+   an interruption that leaves it incomplete abandons the clone and restarts fresh. It is a
+   proof input, not a mutable state/recovery marker. Once every proof and diff step
+   has succeeded, delete it: it holds a complete copy of the pre-close graph and nothing
+   will read it again. Remove exactly the artifacts the procedure wrote, by name, because a
+   resumed run is handed that directory by its caller and must not be a delete-anything
+   primitive; anything else in it survives and fails the removal. A stop or an abandon keeps
+   it, and a removal that itself fails still reports the completed closure — with the
+   retained path, a cleanup warning on stderr, and status zero — rather than downgrading a
+   proven close to `CLOSURE_INCOMPLETE`. Run
    `--pinned-br "$PRIVATE_BR" "$PRIVATE_BR_OID" --run-br
    --no-auto-import --no-auto-flush sync --import-only` once to initialize the
-   absent cache; require exit 0 and empty stderr. No production reconcile/status lifecycle
-   is permitted.
+   absent cache; require exit 0 and empty stderr. The recorded `database_path` is also the
+   only cache path classified on resume, and a changed path refuses rather than switching
+   stores. No production reconcile/status lifecycle is permitted.
 3. With `--pinned-br "$PRIVATE_BR" "$PRIVATE_BR_OID" --run-br
    --no-db --no-auto-import --no-auto-flush show ID --json`, require exactly
-   one open target with exactly its expected lane label: `executor-skills`,
-   `executor-rb-lite`, or `authority-human`. Use one full ID; batch close and `--force`
+   one open or `in_progress` target carrying exactly its expected classification. The
+   second state is the ordinary result of Step 1 resuming work and must close without a
+   synthetic reopen/status rewrite. `LANE_LABEL` takes one of four values: the three Beads
+   lane labels `executor-skills`, `executor-rb-lite`, and
+   `authority-human`, plus the internal fourth classification `generic-unlabeled`. The
+   fourth is **not** a Beads label and is never written to the graph; it names the row a
+   generic drain selected, which by that mode's own contract carries no recognized Drive
+   metadata at all. Without it the reviewed generic selector could start ordinary
+   unlabeled backlog work and then have no way to finish it. The user authorized exactly
+   this scope on 2026-08-23; it adds no new label, argument, or store field.
+   Every value is checked against the target, never trusted: for the three lane labels the
+   target's recognized lane set must be exactly that one label **and** the row must carry
+   `drive-open-issues`, since a named lane can only come from scoped selection and scoped
+   selection returns only rows carrying the scope label; for `generic-unlabeled`
+   the target must carry none of `drive-open-issues`, `executor-skills`,
+   `executor-rb-lite`, or `authority-human`. So a Drive-managed row cannot be laundered
+   through the generic value, a generic row cannot be closed under a named lane, an
+   out-of-scope row carrying only the lane label cannot be closed under it, and a
+   missing, multiple, or wrong classification refuses before the close. Use one full ID;
+   batch close and `--force`
    are forbidden. `CLOSE_REASON` is one nonempty line carrying the durable
    outcome identity: normally merged work-PR URL plus 40-lowercase-hex merge SHA;
    immutable decision/review-thread URL plus accepted comment/range/no-change identity for
@@ -1384,22 +1453,32 @@ environment, and the E3 closure/selector consumers are explicit.
    structural proof. Then run `./check.sh`, independent review, and metadata-PR flow.
 
 Any **pre-mutation close refusal** leaves status/comment unchanged. A later failure follows
-the retained-clone matrix; it does not promise rollback. On interruption, retain the
-standalone clone and private pre-close copy/hash; there is no state marker, recovery API, or
-rollback. Before any resumed operation, revalidate that exact clone and repeat the private
+the resume-or-abandon retained-clone matrix; it does not promise rollback. A pre-completion
+interruption is recoverable, but not always in the same clone: abandon an incomplete printed
+snapshot and restart fresh. Once the private pre-close copy/hash/path records are complete,
+retain them with the standalone clone; there is no state marker, recovery API, or rollback.
+Before any resumed operation, revalidate that exact clone and repeat the private
 tool path/identity/digest admission **before every execution**; repeat the exact no-auto
 version identity check; recover the JSONL through E1 `--allow-dirty` and require
-the exact path and recheck the retained snapshot hash. Classify DB/sidecar existence before
-any DB-mode command. If the DB is absent, inspect only with no-auto `--no-db show` and
+the exact JSONL and configured database paths and recheck the retained snapshot hash.
+Canonicalize a freshly created private directory before printing its recovery handle, so a
+resume can be handed back exactly the spelling it will accept. Before any output redirection
+or cleanup, require the printed retained path still be one
+canonical owner-held mode-0700 directory outside the clone and every known artifact name to
+be absent or an owner-held regular single-link file; symlink, nonregular, hard-linked
+outside-alias, and moved/private-directory replacements refuse before the pinned binary runs.
+Classify that database and its sidecars before any DB-mode command. If the DB is absent,
+inspect only with no-auto `--no-db show` and
 abandon as below; that branch never opens a cache. Only an existing-DB branch inspects both
 DB-mode and `--no-db show ID --json` with `--no-auto-import --no-auto-flush` against the
 snapshot and intended reason/comment:
 
-- DB absent and JSONL exactly matches the retained open snapshot: abandon this untouched
+- DB absent and JSONL exactly matches the retained pre-close snapshot: abandon this untouched
   clone and restart from a new fresh clone; do not initialize in place;
-- both exact-open with no intended evidence: abandon the clone and restart fresh; resumed
-  attempts never close;
-- DB exact-closed with intended reason/comment while JSONL is exact-open: flush only;
+- DB and JSONL both exactly match the target's retained open or `in_progress` state with no
+  intended evidence: abandon the clone and restart fresh; resumed attempts never close;
+- DB exact-closed with intended reason/comment while JSONL exactly matches the retained
+  pre-close state: flush only;
 - both exact-closed with intended reason/comment: rerun the strict idempotent flush once,
   then perform final proof (publication may have preceded anchor/metadata finalization);
 - anything else: stop for human repair.
@@ -1425,8 +1504,9 @@ It synchronizes exact-v0.3.2 compatibility in `skills/drive/SKILL.md`,
 `skills/orchestrating-with-rb-lite/references/harden-until-clean.md`, and `README.md`, and
 makes scheduler reads validate that identity before E1-runner `--no-db ready`. Preserve the
 historical v0.1.45 branch-reset corruption explanation as version-scoped evidence, not a
-current minimum. The exact-release probe's DB-absent `where --json` and `ready --no-db`
-scenarios are the real v0.3.2 evidence that locator/selector reads do not open a cache;
+current minimum. The exact-release probe's DB-absent `where --json`, `version --json`, and
+`ready --no-db` scenarios are the real v0.3.2 evidence that locator/identity/selector reads
+do not open a cache;
 extraction tests pin all four
 compatibility mirrors.
 E3 adds one callable owner already shared by both selective-install closures:
@@ -1459,7 +1539,14 @@ Before success it inspects every unresolved row and refuses generic-local select
 row carries `drive-open-issues`, `executor-skills`, `executor-rb-lite`, or `authority-human`;
 recognized metadata must use the scoped router, never generic local execution. Step 12
 repeats the same chosen mode with retained inputs (or prepares new inputs after resume).
-Neither step silently switches modes or treats generic unlabeled work as empty. Query the
+Neither step silently switches modes or treats generic unlabeled work as empty. Step 2 then
+reads the selected id through the same retained pinned prefix with `--no-db`, not a bare
+`--run-br show`: that form resolves `br` on the caller's PATH and answers out of a local
+cache the `--no-db` selection never consulted, so the body a task file is written from could
+be whatever a stale cache holds rather than the bead the selection authorized. E1's
+`--run-br` forwards `BEADS_*`/`BR_*` by design, so step 1's own shell clears that namespace
+once — keeping only the two runner paths — and every later step in the drain then reads the
+store selection was authorized against. Query the
 `executor-skills`, `executor-rb-lite`, and `authority-human` lanes separately, and route only
 the selected lane. The deterministic consumer test must prove that stale DB rows, caller-PATH
 `br`, and ready rows from another lane cannot drive BUILD or local execution.
@@ -1493,11 +1580,14 @@ Each lane's `ready`/`in_progress` arrays contain all scoped results in native or
 to exact keys `id` (nonempty string), `status` (respectively `open`/`in_progress`), `priority`
 (JSON integer 0..4), `issue_type` (nonempty string), and `labels` (unique string array
 containing `drive-open-issues` and exactly that lane label). IDs are unique and disjoint
-across all six arrays. A global scoped `list --status in_progress --all` is authoritative;
+across all six arrays. A global scoped `list --status in_progress --all --deferred` is
+authoritative;
 the three lane in-progress arrays must be an exact disjoint ID partition of it, so missing or
 multiple lane metadata refuses. `unresolved_count` is the checked sum of typed totals from
-scoped `list --status open --all` and that global in-progress result; `blocked_count` is the exact length of scoped
-`br blocked --limit 0`. Every ready call also uses `--limit 0`. Both counts are JSON
+scoped `list --status open --all --deferred` and that global in-progress result; `blocked_count` is the exact length of scoped
+`br blocked --limit 0`. Every ready call also uses `--limit 0` and never
+`--include-deferred`: deferred open work is counted as unresolved, so a deferred-only
+backlog is GRAPH rather than DONE, but it is never handed out as routable work. Both counts are JSON
 integers >=0, and zero
 unresolved requires every array/count to be zero. Simultaneously nonempty executor-skills and
 executor-rb-lite arrays are valid and independently routable; authority-human is report-only.
@@ -1506,14 +1596,17 @@ executor-rb-lite can authorize only external BUILD/delegation; any authority row
 automated routing for human action. With no ready/in-progress executable row, positive
 unresolved means GRAPH and zero unresolved means DONE only under the existing DRIVE-record
 precondition. Any command, validation, clean-locator, or parsing failure emits no stdout,
-nonempty fixed diagnostic stderr, and a nonzero status; callers do not parse or route.
+nonempty fixed diagnostic stderr, and a nonzero status; callers do not parse or route. That
+includes failing to remove its own private workspace: the selector buffers the object,
+completes cleanup, and only then writes the single line, because stdout cannot be retracted
+once a routing authorization has been printed.
 
 Generic mode uses the same exact `br`/OID envelope under schema
 `skills.drive.generic-ready.v1`, native-order `ready` and `in_progress` arrays with the same
 exact row keys and basic field types only: status is respectively `open`/`in_progress`, and
 the unique string `labels` array must exclude `drive-open-issues`, `executor-skills`,
 `executor-rb-lite`, and `authority-human`. No object permits extra keys. Integral
-`unresolved_count`/`blocked_count` are derived from explicit
+`unresolved_count`/`blocked_count` are derived from the same explicit deferral-counting
 open+in-progress list totals and `blocked --limit 0` under the same stable OID. Ready or
 in-progress work authorizes generic BUILD; no executable row with positive unresolved means
 GRAPH; zero unresolved/counts/arrays means DONE. It exits 0 with one LF object and empty
@@ -1532,14 +1625,22 @@ Create production `skills/rb-lite-backlog-drain/scripts/select-bead-lanes` and e
 fixed `# BEGIN NATIVE CLOSE` / `# END NATIVE CLOSE` markers in canonical Step 11; the first
 test extracts and executes that block against deterministic fixture binaries. The other
 three command-bearing consumers and A4b/B0 link to it rather than copying it.
-The first test covers exact identity, absent-cache
-`where` plus import, blocked close, close/flush order, snapshot/hash tampering, exact existing-comment
+The first test covers exact identity, configured-database containment and exact-path resume,
+absent-cache `where` plus import, open and in-progress closure, blocked close, close/flush order,
+snapshot/hash tampering, exact existing-comment
 multiset preservation plus exactly one addition (including canonical reordering),
 duplicate/empty/non-string IDs, row-count and
 key-presence changes including absent-versus-null, missing/empty/stale close/update timestamps,
 and full final structural proof. It also
-accepts each of the three exact lane labels and refuses missing/multiple/wrong lane labels;
-it
+accepts each of the three exact lane labels and refuses missing/multiple/wrong lane labels,
+including a row carrying the requested lane but not the scope label.
+It covers the fourth internal classification in both directions: `generic-unlabeled` closes
+a row carrying no recognized Drive metadata, and refuses a row carrying the scope label, a
+lane label, or both — while a row with no lane label is still refused under a named lane, so
+neither classification can stand in for the other. The accepted list is exactly four: a
+fifth value refuses at the accepted-value guard, before the block creates its private
+directory or executes the pinned binary once, so an unknown classification never reaches
+the cache-initializing import. It
 uses a hostile pre-admission PATH `br` to prove the fresh locator executes nothing before
 provenance; refuses an exact-identity liar and a verified archive paired with a different
 binary; proves the no-auto identity call changes no DB/JSONL bytes; swaps the private tool
@@ -1547,7 +1648,8 @@ between identity and import/close/flush and requires the next per-invocation che
 swaps the admitted
 binary before resume, injects retained-resume location overrides to prove they are cleared
 or refused before inspection, simulates death after import/before close and requires
-both-open abandon with zero close/flush calls, and simulates death after close and after
+retained-pre-close abandon for both open and in-progress origins with zero close/flush calls,
+and simulates death after close and after
 flush-before-proof; both resume fixtures prove no second close and no inspection-time
 mutation. The second extracts all four closure consumer paths, proves their stop conditions,
 executes the drive-status lane-mode and backlog Step-1/Step-12 caller fixtures, and
@@ -1576,12 +1678,15 @@ unknown/missing/duplicate/misordered option exits. No-argument drive-status fixt
 sentinel `br`, require zero calls/counts `n/a`, make a bead-metadata-only dirty tree report
 GRAPH, suppress blocked-only warnings, and prove only typed scoped input can select BUILD. It
 proves that the open A4b/B0 rows link to the fact owner without copying commands. Run
-`./install.test` and `./check.sh`. Hard-stop budgets are 350 lines of E3-owned consumer
-change, 450 lines for the shared selector executable, and 1,600 lines of new deterministic
-test code; the evidence probe is excluded. `drive-status` collection/`infer()` and its fixture
-delta count in those budgets. Crossing a budget
-triggers an explicit SHAPE/KISS scope review rather than forcing dense tests or automatically
-rejecting otherwise clear code.
+`./install.test` and `./check.sh`. Hard-stop budgets cover **production code only**: 350
+lines of E3-owned consumer change and 450 lines for the shared selector executable, with
+`drive-status` collection/`infer()` counted against the first. Deterministic tests and
+fixtures carry no line budget. The user adjudicated that on 2026-08-23: a test budget is
+met by deleting coverage, which is the opposite of the KISS property these stops exist to
+protect. Tests still ride the same review and the same gates, and must be relevant,
+maintainable, and mutation-sensitive; that is a review judgment, never a line count.
+Crossing a production budget triggers an explicit SHAPE/KISS scope review rather than
+automatically rejecting otherwise clear code.
 
 Selective-install fixtures for `codex`, `claude`, and `agents` targets must prove the shared
 selector plus pinned E1 companions are installed exactly where each caller expects, while

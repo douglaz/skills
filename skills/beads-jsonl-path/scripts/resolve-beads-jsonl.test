@@ -23,13 +23,13 @@ set_where_path() {
   jq -n --arg path "$path" '{jsonl_path: $path}' >"$base/where.out" || return
 }
 
-new_fixture() {
+new_fixture() {  # $1 = optional Git object format (sha1 by default)
   local base repo jsonl
   base=$(mktemp -d "$WORK/fixture.XXXXXX") || return
   repo="$base/repo"
   jsonl="$repo/.beads/issues.jsonl"
   mkdir -p "$repo/.beads" "$base/bin" || return
-  git init -q "$repo" || return
+  git init -q ${1:+--object-format="$1"} "$repo" || return
   git -C "$repo" symbolic-ref --short HEAD >"$base/initial-branch" || return
   git -C "$repo" config user.name 'Resolver Test' || return
   git -C "$repo" config user.email resolver@example.invalid || return
@@ -2814,6 +2814,209 @@ assert_refused 'an unknown option is refused' "$b" \
 t='an unknown option refuses before br is invoked'
 if [[ -e "$b/br.calls" ]]; then fail "$t" 'br ran for an unparsed command line'
 else pass "$t"; fi
+
+# --- the bounded --pinned-br prefix ---------------------------------------------------------
+# One caller-admitted executable instead of a PATH lookup, re-proved on every invocation.
+# Both object formats, because the object id in a consumer's schema has to be whatever
+# `git-clean hash-file` returns in THAT repository, not an assumed 40 hex digits.
+
+pinned_tool() {  # $1 = base; the same stub, placed OUTSIDE the driven worktree
+  local base=$1
+  mkdir -p "$base/tool" "$base/hostile" || return
+  cp "$base/bin/br" "$base/tool/br" || return
+  chmod +x "$base/tool/br" || return
+  # A caller-PATH `br` that must never run once a pinned one is named.
+  printf '#!/usr/bin/env bash\n: >"%s/hostile.ran"\nexit 0\n' "$base" >"$base/hostile/br" || return
+  chmod +x "$base/hostile/br" || return
+  printf '%s' "$base/tool/br"
+}
+pinned_oid() { git -C "$1/repo" hash-object --no-filters -- "$2"; }
+pinned_run() {  # $1 base, then resolver arguments; runs with the hostile br first on PATH
+  local base=$1
+  shift
+  (
+    cd "$base/repo" || exit 98
+    BR_CALLS="$base/br.calls" BR_MUTATION="$base/br.mutation" \
+      BR_OUTPUT="$base/where.out" BR_EXIT=0 \
+      PATH="$base/hostile:$base/bin:$SYSTEM_PATH" \
+      "$RESOLVER" "$@" >"$base/stdout" 2>"$base/stderr"
+  )
+}
+
+for format in sha1 sha256; do
+  b=$(new_fixture "$format")
+  tool=$(pinned_tool "$b")
+  oid=$(pinned_oid "$b" "$tool")
+  jsonl=$(<"$b/jsonl-path")
+  case $format in
+    sha1)   want_width=40 ;;
+    sha256) want_width=64 ;;
+  esac
+  t="a $format repository admits the pinned executable and its exact object id"
+  if [[ ${#oid} -ne $want_width ]]; then
+    fail "$t" "hash-file returned a ${#oid}-character object id"
+  elif ! pinned_run "$b" --pinned-br "$tool" "$oid"; then
+    fail "$t" "clean composition failed: $(<"$b/stderr")"
+  elif [[ "$(<"$b/stdout")" != "$jsonl" ]]; then
+    fail "$t" "clean composition printed $(<"$b/stdout")"
+  elif [[ -e "$b/hostile.ran" ]]; then
+    fail "$t" 'the caller-PATH br was executed anyway'
+  elif [[ $(<"$b/br.calls") != '--no-auto-flush --no-auto-import where --json' ]]; then
+    fail "$t" "the pinned binary saw: $(<"$b/br.calls")"
+  else
+    pass "$t"
+  fi
+
+  t="a $format repository composes the prefix with --allow-dirty and --run-br"
+  printf '%s\n' '{"id":"dirty"}' >>"$jsonl"
+  : >"$b/br.calls"
+  if ! pinned_run "$b" --pinned-br "$tool" "$oid" --allow-dirty; then
+    fail "$t" "--allow-dirty composition failed: $(<"$b/stderr")"
+  elif [[ "$(<"$b/stdout")" != "$jsonl" ]]; then
+    fail "$t" '--allow-dirty did not print the resolved path'
+  elif ! pinned_run "$b" --pinned-br "$tool" "$oid" --run-br sync --flush-only; then
+    fail "$t" "--run-br composition failed: $(<"$b/stderr")"
+  elif [[ $(tail -1 "$b/br.calls") != 'sync --flush-only' ]]; then
+    fail "$t" "--run-br passed: $(tail -1 "$b/br.calls")"
+  elif [[ -e "$b/hostile.ran" ]]; then
+    fail "$t" 'the caller-PATH br was executed anyway'
+  else
+    pass "$t"
+  fi
+done
+
+b=$(new_fixture)
+tool=$(pinned_tool "$b")
+oid=$(pinned_oid "$b" "$tool")
+t='an executable replaced between two calls is refused by the second'
+if ! pinned_run "$b" --pinned-br "$tool" "$oid"; then
+  fail "$t" "the first call failed: $(<"$b/stderr")"
+else
+  printf '# replaced\n' >>"$tool"
+  if pinned_run "$b" --pinned-br "$tool" "$oid"; then
+    fail "$t" 'the replaced executable was still admitted'
+  elif [[ -s "$b/stdout" ]]; then
+    fail "$t" 'a refused admission still printed a path'
+  elif ! grep -Fq 'pinned br object id does not match the executable' "$b/stderr"; then
+    fail "$t" "unexpected diagnostic: $(<"$b/stderr")"
+  else
+    pass "$t"
+  fi
+fi
+
+pinned_failures=""
+pinned_refusal() {  # $1 label, $2 base, $3 diagnostic, then resolver arguments
+  local label=$1 base=$2 diagnostic=$3
+  shift 3
+  if pinned_run "$base" "$@"; then
+    pinned_failures+="$label was admitted; "
+  elif [[ -s "$base/stdout" ]]; then
+    pinned_failures+="$label printed a path while refusing; "
+  elif ! grep -Fq "$diagnostic" "$base/stderr"; then
+    pinned_failures+="$label: $(<"$base/stderr"); "
+  elif [[ -e "$base/br.calls" ]]; then
+    pinned_failures+="$label executed a binary anyway; "
+  elif [[ -e "$base/hostile.ran" ]]; then
+    # The pinned stub records into `br.calls`; the caller-PATH `br` records nothing there,
+    # so without this marker check a refusal that quietly fell back to PATH looked clean.
+    pinned_failures+="$label fell back to the caller-PATH br; "
+  fi
+}
+pinned_path_case() {  # label, diagnostic, mutation
+  local label=$1 diagnostic=$2 mutation=$3 b tool oid
+  b=$(new_fixture); tool=$(pinned_tool "$b"); oid=$(pinned_oid "$b" "$tool")
+  case $mutation in
+    mismatch) oid=0000000000000000000000000000000000000000 ;;
+    empty) tool=; oid=0000000000000000000000000000000000000000 ;;
+    uppercase) oid=$(printf '%s' "$oid" | tr 'a-f' 'A-F') ;;
+    relative) tool=tool/br ;;
+    missing) rm -f "$tool" ;;
+    directory) rm -f "$tool"; mkdir -p "$tool" ;;
+    non-executable) chmod -x "$tool" ;;
+    symlink) mv "$tool" "$tool.real"; ln -s "$tool.real" "$tool" ;;
+    hard-link) ln "$tool" "$b/tool/br-alias" ;;
+  esac
+  pinned_refusal "$label" "$b" "$diagnostic" --pinned-br "$tool" "$oid"
+}
+pinned_path_case 'a mismatched object id' 'pinned br object id does not match the executable' mismatch
+pinned_path_case 'an empty path' 'pinned br path is not absolute' empty
+pinned_path_case 'an uppercase object id' 'pinned br object id is not a lowercase Git object id' uppercase
+pinned_path_case 'a relative path' 'pinned br path is not absolute' relative
+pinned_path_case 'a missing path' 'pinned br is not an admissible executable' missing
+pinned_path_case 'a directory' 'pinned br is not an admissible executable' directory
+pinned_path_case 'a non-executable file' 'pinned br is not an admissible executable' non-executable
+pinned_path_case 'a symbolic link' 'pinned br path is a symbolic link' symlink
+pinned_path_case 'a hard-linked executable' 'pinned br executable has multiple hard links' hard-link
+
+b=$(new_fixture)
+mkdir -p "$b/repo/tool" "$b/hostile"
+cp "$b/bin/br" "$b/repo/tool/br"; chmod +x "$b/repo/tool/br"
+printf '#!/usr/bin/env bash\n: >"%s/hostile.ran"\nexit 0\n' "$b" >"$b/hostile/br"; chmod +x "$b/hostile/br"
+pinned_refusal 'an executable inside the driven worktree' "$b" \
+  'pinned br resolves inside the current Git worktree' \
+  --pinned-br "$b/repo/tool/br" "$(pinned_oid "$b" "$b/repo/tool/br")"
+
+b=$(new_fixture); tool=$(pinned_tool "$b"); oid=$(pinned_oid "$b" "$tool")
+pinned_refusal 'the prefix with --recovery' "$b" 'usage: resolve-beads-jsonl' \
+  --pinned-br "$tool" "$oid" --recovery
+b=$(new_fixture); tool=$(pinned_tool "$b"); oid=$(pinned_oid "$b" "$tool")
+pinned_refusal 'the prefix with --run-jq' "$b" 'usage: resolve-beads-jsonl' \
+  --pinned-br "$tool" "$oid" --run-jq -e .
+b=$(new_fixture); tool=$(pinned_tool "$b")
+pinned_refusal 'the prefix missing its object id' "$b" 'usage: resolve-beads-jsonl' \
+  --pinned-br "$tool"
+b=$(new_fixture); tool=$(pinned_tool "$b"); oid=$(pinned_oid "$b" "$tool")
+pinned_refusal 'the prefix after the mode' "$b" 'usage: resolve-beads-jsonl' \
+  --allow-dirty --pinned-br "$tool" "$oid"
+# The two orderings that used to be admitted rather than refused: `--run-br`/`--run-jq`
+# consume everything after themselves, so an unconsumed prefix left the pinned flag unset
+# and `--run-br` went on to run the caller-PATH `br` with `--pinned-br PATH OID` as argv.
+b=$(new_fixture); tool=$(pinned_tool "$b"); oid=$(pinned_oid "$b" "$tool")
+pinned_refusal 'the prefix after --run-br' "$b" 'usage: resolve-beads-jsonl' \
+  --run-br --pinned-br "$tool" "$oid" version --json
+b=$(new_fixture); tool=$(pinned_tool "$b"); oid=$(pinned_oid "$b" "$tool")
+pinned_refusal 'the prefix late in --run-br argv' "$b" 'usage: resolve-beads-jsonl' \
+  --run-br version --json --pinned-br "$tool" "$oid"
+b=$(new_fixture); tool=$(pinned_tool "$b"); oid=$(pinned_oid "$b" "$tool")
+pinned_refusal 'the prefix after --run-jq' "$b" 'usage: resolve-beads-jsonl' \
+  --run-jq --pinned-br "$tool" "$oid" -e .
+
+t='every unadmissible pinned executable and misplaced prefix refuses without executing one'
+if [[ -n "$pinned_failures" ]]; then fail "$t" "$pinned_failures"; else pass "$t"; fi
+
+t='a pinned executable still runs in the sanitized environment, with no PATH lookup'
+b=$(new_fixture)
+tool=$(pinned_tool "$b")
+command cat >"$tool" <<'ENV_STUB'
+#!/usr/bin/env bash
+command env >"$BR_ENVDUMP"
+printf '%s\n' "$*" >>"$BR_CALLS"
+command cat "$BR_OUTPUT"
+ENV_STUB
+chmod +x "$tool"
+oid=$(pinned_oid "$b" "$tool")
+br() { : >"$HOSTILE_BR_FUNCTION_RAN"; }
+export -f br
+if (
+  cd "$b/repo" || exit 98
+  LD_PRELOAD=/nonexistent/evil.so BASH_ENV=/nonexistent/startup ENV=/nonexistent/startup \
+  HOSTILE_BR_FUNCTION_RAN="$b/hostile-function.ran" \
+  BR_ENVDUMP="$b/env.dump" BR_CALLS="$b/br.calls" BR_MUTATION="$b/br.mutation" \
+  BR_OUTPUT="$b/where.out" PATH="$b/hostile:$SYSTEM_PATH" \
+    "$RESOLVER" --pinned-br "$tool" "$oid" >"$b/stdout" 2>"$b/stderr"
+); then rc=0; else rc=$?; fi
+unset -f br
+if [[ $rc -ne 0 ]]; then
+  fail "$t" "exit $rc: $(<"$b/stderr")"
+elif [[ -e "$b/hostile.ran" || -e "$b/hostile-function.ran" ]]; then
+  fail "$t" 'a caller PATH entry or shell function was consulted'
+elif grep -qE '^(LD_PRELOAD|BASH_ENV|ENV)=' "$b/env.dump"; then
+  fail "$t" "loader or startup state survived: $(grep -E '^(LD_PRELOAD|BASH_ENV|ENV)=' "$b/env.dump")"
+elif [[ "$(grep -m1 '^PATH=' "$b/env.dump")" != "PATH=$(getconf PATH)" ]]; then
+  fail "$t" "the pinned binary inherited $(grep -m1 '^PATH=' "$b/env.dump")"
+else
+  pass "$t"
+fi
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [[ $FAIL -eq 0 ]]

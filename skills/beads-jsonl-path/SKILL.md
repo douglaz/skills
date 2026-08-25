@@ -272,6 +272,41 @@ between validation and lookup, stop rather than starting the audit.
 On failure, stop before any Beads write. Do not replace the owner with
 `git status`, porcelain parsing, or a hardcoded `.beads/issues.jsonl` path.
 
+## Pin one already-admitted `br` executable
+
+`--pinned-br <absolute-path> <git-object-id>` is an optional **first** prefix. It replaces
+the PATH lookup with one executable the caller has already established the provenance of
+out of band — a specific release binary, or a local release build of a specific commit —
+and re-proves that binary on every invocation:
+
+```bash
+"$BEADS_JSONL_RESOLVER" --pinned-br "$PRIVATE_BR" "$PRIVATE_BR_OID"                       # clean locator
+"$BEADS_JSONL_RESOLVER" --pinned-br "$PRIVATE_BR" "$PRIVATE_BR_OID" --allow-dirty         # post-write path
+"$BEADS_JSONL_RESOLVER" --pinned-br "$PRIVATE_BR" "$PRIVATE_BR_OID" --run-br <args...>    # every command
+```
+
+Those three are the whole composition set. The prefix must come first; `--recovery` and
+`--run-jq` refuse it, because neither launches the pinned binary and accepting it there
+would advertise an admission this owner does not perform.
+
+The path must be absolute, must not itself be a symbolic link, and goes through the same
+executable policy as a PATH-selected `br`: canonical, outside the driven worktree at every
+symlink hop, regular, executable, single hard link, and a safe interpreter chain. The
+object id must be exactly what `"$BEADS_GIT_RUNNER" hash-file <path>` returns for that
+file — 40 lowercase hex in a SHA-1 repository, 64 in a Git SHA-256 one — so the two
+interfaces name the same bytes. Nothing falls back to PATH: a mismatch, a replacement
+between two calls, an unadmissible path, or a prefix written after the mode instead of
+first refuses, and the caller's `br` is never consulted, not even as a second chance.
+
+`--run-br` still execs through the same sanitized environment as an unpinned run, and this
+owner still parses none of that command's output. It is an admission owner, not a wrapper
+around close, flush, or any read.
+
+The consumers are E3's native closure block
+([`rb-lite-backlog-drain`, step 11](../rb-lite-backlog-drain/SKILL.md#backlog-step-11)) and
+the shared lane selector `rb-lite-backlog-drain/scripts/select-bead-lanes`; both derive the
+path and object id from an admitted artifact rather than accepting a caller-supplied pair.
+
 ## Inspect dirty content without dropping path ownership
 
 The default mode refuses a dirty JSONL, which is exactly right before a write and wrong
@@ -321,12 +356,16 @@ occupant still refuses, as does a regular file with another hard-link alias. A
 path equal to or beneath `$GIT_DIR`, Git's common
 administrative directory, or `<worktree>/.git` also refuses, including a linked
 worktree's `.git` pointer file. Never use recovery mode before a `br` write.
-Read the symlink half at its measured width: on br 0.2.19 a `.beads/issues.jsonl` symlink
-whose target exists is already resolved to that target before this owner sees it, so the
+Read the symlink half at its measured width, which is the same on `br 0.2.19` and on the
+pinned `br v0.3.2`: a `.beads/issues.jsonl` symlink whose target exists is already resolved
+to that target before this owner sees it, so the
 refusal covers the dangling link and containment covers one pointing out of the worktree,
 while a live in-worktree link is inspected — and named — as the file `br` writes through
-it. Recovery still tells you where the bytes land; it does not vet the configuration that
-put them there.
+it. Re-measured on 2026-08-22 with `where --json --no-db --no-auto-import --no-auto-flush`
+in a scratch repo under each version: a live link reported the target path, a dangling link
+reported `.beads/issues.jsonl` unresolved, and both exited 0 with zero stderr bytes and no
+cache created. Recovery still tells you where the bytes land; it does not vet the
+configuration that put them there.
 Successful recovery resolution only names the artifact; it is not a safety gate that
 authorizes a subsequent Beads query, mutation, or flush. Follow the owning recovery
 procedure before any such command.

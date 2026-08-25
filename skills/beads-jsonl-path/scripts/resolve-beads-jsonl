@@ -42,9 +42,30 @@ die() {
   exit 1
 }
 
+# One usage string, because `--pinned-br` adds a second way to get the command line
+# wrong. It is the API fact owner for the prefix: first position only, and composable
+# with the default clean locator, `--allow-dirty`, and `--run-br` — nothing else.
+_bj_usage='usage: resolve-beads-jsonl [--allow-dirty|--recovery] | --run-{br|jq} <args...>; optional first prefix --pinned-br <absolute-path> <git-object-id> composes with the default clean locator, --allow-dirty, and --run-br'
+
 _bj_mode=clean
+_bj_pinned_br_set=false
+_bj_pinned_br=
+_bj_pinned_oid=
 _bj_run_br_arguments=()
 _bj_run_jq_arguments=()
+if [[ $# -ge 3 && $1 == --pinned-br ]]; then
+  _bj_pinned_br_set=true
+  _bj_pinned_br=$2
+  _bj_pinned_oid=$3
+  shift 3
+fi
+# The prefix is first position only. Scan every remaining argument after consuming that one
+# valid position: `--run-br` otherwise treats a late prefix as br argv and falls through to
+# the caller's unadmitted PATH binary. Malformed naming never gets a second chance via PATH.
+for _bj_argument in "$@"; do
+  [[ $_bj_argument != --pinned-br ]] || die "$_bj_usage"
+done
+unset _bj_argument
 if [[ $# -ge 2 && $1 == --run-br ]]; then
   _bj_mode=run-br
   shift
@@ -60,10 +81,19 @@ else
     case $1 in
       --allow-dirty) _bj_mode=allow-dirty ;;
       --recovery) _bj_mode=recovery ;;
-      *) die 'usage: resolve-beads-jsonl [--allow-dirty|--recovery] | --run-{br|jq} <args...>' ;;
+      *) die "$_bj_usage" ;;
     esac
     ;;
-    *) die 'usage: resolve-beads-jsonl [--allow-dirty|--recovery] | --run-{br|jq} <args...>' ;;
+    *) die "$_bj_usage" ;;
+  esac
+fi
+# `--recovery` names a damaged artifact and `--run-jq` never launches `br`, so neither
+# has a pinned executable to admit; accepting the prefix there would advertise an
+# admission this owner does not perform.
+if $_bj_pinned_br_set; then
+  case $_bj_mode in
+    clean|allow-dirty|run-br) ;;
+    *) die "$_bj_usage" ;;
   esac
 fi
 
@@ -332,8 +362,37 @@ if [[ $_bj_mode == run-jq ]]; then
   _bj_run_jq_rc=$?
   exit "$_bj_run_jq_rc"
 fi
-_bj_br=$(_bj_external_tool br 'br is required to resolve the beads JSONL') ||
-  die 'br is required to resolve the beads JSONL'
+# The pinned prefix admits one caller-named executable INSTEAD of a PATH lookup: the
+# caller has already established that binary's provenance out of band, and this owner's
+# job is to prove the same bytes are still there on this invocation. Same executable
+# policy as a PATH-selected tool (canonical, outside the driven worktree, regular,
+# executable, single-link, safe interpreter chain), plus an exact `git-clean hash-file`
+# object id. Revalidated per invocation, because a swap between two commands is exactly
+# the case a once-per-session check cannot see.
+if $_bj_pinned_br_set; then
+  [[ "$_bj_pinned_br" == /* ]] ||
+    die 'pinned br path is not absolute'
+  # Refused rather than followed, unlike a PATH lookup: `hash-file` refuses a symbolic
+  # link too, so a followed link would be admitted against an object id nothing can
+  # reproduce through the documented interface.
+  [[ ! -L "$_bj_pinned_br" ]] ||
+    die 'pinned br path is a symbolic link'
+  [[ "$_bj_pinned_oid" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]] ||
+    die 'pinned br object id is not a lowercase Git object id'
+  _bj_pinned_final=$(
+    _bj_validate_executable_path 'pinned br' \
+      'pinned br is not an admissible executable' "$_bj_pinned_br" 0
+  ) || die 'pinned br is not an admissible executable'
+  _bj_pinned_actual=$("$_bj_git" --no-replace-objects -c core.fsmonitor=false \
+    -C "$_bj_root" hash-object --no-filters -- "$_bj_pinned_final") ||
+    die 'cannot hash the pinned br executable'
+  [[ "$_bj_pinned_actual" == "$_bj_pinned_oid" ]] ||
+    die 'pinned br object id does not match the executable'
+  _bj_br=$_bj_pinned_final
+else
+  _bj_br=$(_bj_external_tool br 'br is required to resolve the beads JSONL') ||
+    die 'br is required to resolve the beads JSONL'
+fi
 if [[ $_bj_mode == run-br ]]; then
   "$_bj_env" "${_bj_br_environment[@]}" "$_bj_br" "${_bj_run_br_arguments[@]}"
   _bj_run_br_rc=$?

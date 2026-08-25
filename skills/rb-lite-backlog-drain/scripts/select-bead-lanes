@@ -1,0 +1,450 @@
+#!/bin/sh
+# select-bead-lanes — one nonmutating, strictly typed Beads work selection.
+#
+# A shebang cannot defend its own interpreter against LD_PRELOAD/DYLD injection: by the
+# time this first line runs, the kernel has already launched /bin/sh with whatever the
+# caller selected. Callers must therefore invoke this from the loader-cleared shell
+# `beads-jsonl-path` owns under "Resolve before writing" — the clearing below is only
+# what keeps that state from reaching the companions this launches.
+# Enter through a known Bash, not through `/usr/bin/env` and a caller PATH.
+POSIXLY_CORRECT=y
+export POSIXLY_CORRECT
+\unset -f command builtin exec unset 2>/dev/null || :
+_sbl_bash=$(command -p -v bash) || {
+  printf '%s\n' 'cannot locate a trusted Bash for the bead lane selector' >&2
+  exit 1
+}
+unset BASH_ENV ENV BASH_COMPAT BASH_LOADABLES_PATH BASH_XTRACEFD CDPATH GLOBIGNORE \
+  LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT LD_DEBUG LD_DEBUG_OUTPUT LD_PROFILE \
+  LD_ORIGIN_PATH LD_PRELOAD_32 LD_PRELOAD_64 DYLD_INSERT_LIBRARIES \
+  DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH \
+  DYLD_FALLBACK_FRAMEWORK_PATH LIBPATH SHLIB_PATH GCONV_PATH LOCPATH
+\exec "$_sbl_bash" --noprofile --norc -p -s -- "$@" <<'__SBL_TRUSTED_BASH__'
+command unset BASH_ENV ENV BASH_COMPAT BASH_LOADABLES_PATH BASH_XTRACEFD CDPATH \
+  GLOBIGNORE || {
+  printf '%s\n' 'cannot sanitize the bead lane selector shell environment' >&2
+  exit 1
+}
+while command builtin read -r _ _ _sbl_function; do
+  command unset -f -- "$_sbl_function" || {
+    printf '%s\n' 'cannot sanitize the bead lane selector shell environment' >&2
+    exit 1
+  }
+done < <(command builtin declare -F)
+unset _sbl_function
+
+set -uo pipefail
+
+# Every failure is nonzero, silent on stdout, and one fixed line on stderr: a caller
+# routes on the typed object or not at all, so a diagnostic must never be parseable
+# as a selection. That is also why every helper below either captures its stderr or
+# sends it to /dev/null: a jq parse error or a `cannot hash` line ahead of the fixed
+# line makes the refusal two lines of mixed wording, one of them a tool's.
+die() {
+  printf '%s\n' "$1" >&2
+  exit 1
+}
+
+_sbl_usage='usage: select-bead-lanes --scoped --scope-label drive-open-issues --br-path <absolute-path> --br-oid <git-object-id> | --generic --br-path <absolute-path> --br-oid <git-object-id>'
+# The exact release this selector is allowed to read through. Identity is re-proved on
+# every run, before any query, because a different build answers these questions
+# differently and the schema claims this one.
+_sbl_commit=4104c31e79bf806f53e2eba0a4cd2ba6c594f8b9
+
+# Exact argv, exact order, exact count. An unknown, missing, duplicated, or misordered
+# option is a caller that does not know which mode it is in; guessing one selects work.
+_sbl_mode=
+_sbl_scope=
+_sbl_br_path=
+_sbl_br_oid=
+case ${1-} in
+  --scoped)
+    [[ $# -eq 7 && $2 == --scope-label && $3 == drive-open-issues \
+       && $4 == --br-path && $6 == --br-oid ]] || die "$_sbl_usage"
+    _sbl_mode=scoped
+    _sbl_scope=$3
+    _sbl_br_path=$5
+    _sbl_br_oid=$7
+    ;;
+  --generic)
+    [[ $# -eq 5 && $2 == --br-path && $4 == --br-oid ]] || die "$_sbl_usage"
+    _sbl_mode=generic
+    _sbl_scope=
+    _sbl_br_path=$3
+    _sbl_br_oid=$5
+    ;;
+  *) die "$_sbl_usage" ;;
+esac
+[[ -n "$_sbl_br_path" && -n "$_sbl_br_oid" ]] || die "$_sbl_usage"
+
+# Beads location overrides redirect the store this reads; Git overrides redirect the
+# worktree the companion admission below is measured against. Neither is an input to a
+# selection about THIS worktree, so remove both namespaces rather than allowlisting.
+for _sbl_variable in ${!BEADS_@} ${!BR_@} ${!GIT@}; do
+  command unset -- "$_sbl_variable" ||
+    die 'cannot clear the Beads and Git location overrides'
+done
+unset _sbl_variable
+
+_sbl_git=$(command -p -v git) &&
+  _sbl_cmp=$(command -p -v cmp) &&
+  _sbl_stat=$(command -p -v stat) &&
+  _sbl_grep=$(command -p -v grep) &&
+  _sbl_unlink=$(command -p -v unlink) &&
+  _sbl_rmdir=$(command -p -v rmdir) ||
+  die 'cannot locate the trusted utilities for the bead lane selector'
+
+_sbl_link_count() {
+  local path=$1 count
+  if count=$("$_sbl_stat" -c %h "$path" 2>/dev/null) && [[ $count =~ ^[0-9]+$ ]]; then
+    :
+  elif count=$("$_sbl_stat" -f %l "$path" 2>/dev/null) && [[ $count =~ ^[0-9]+$ ]]; then
+    :
+  else
+    return 1
+  fi
+  [[ "$count" == 1 ]]
+}
+
+_sbl_canonical_dir() {
+  (
+    CDPATH=
+    export CDPATH
+    cd -P -- "$1" 2>/dev/null && pwd -P
+  )
+}
+
+_sbl_root_raw=$("$_sbl_git" --no-replace-objects -c core.fsmonitor=false \
+  rev-parse --show-toplevel 2>/dev/null) ||
+  die 'cannot resolve the current Git worktree'
+_sbl_root=$(_sbl_canonical_dir "$_sbl_root_raw") ||
+  die 'cannot canonicalize the current Git worktree'
+
+# Scoped routing is authorized by the active Drive record, not by argv or by the rows the
+# label happens to select. Parse the one canonical field with Bash builtins so caller-PATH
+# grep/sed implementations cannot manufacture a declaration.
+if [[ $_sbl_mode == scoped ]]; then
+  [[ -f "$_sbl_root/DRIVE.md" ]] ||
+    die 'DRIVE.md is absent, so no Scope-Label is declared — scoped selection refused'
+  _sbl_scope_lines=0
+  _sbl_declared_scope=
+  _sbl_scope_malformed=false
+  while IFS= command builtin read -r _sbl_line || [[ -n $_sbl_line ]]; do
+    case $_sbl_line in
+      '**Scope-Label:**'*)
+        ((_sbl_scope_lines += 1))
+        if [[ $_sbl_line =~ ^\*\*Scope-Label:\*\*[[:space:]]+\`([A-Za-z0-9._-]+)\`[[:space:]]*$ ]]; then
+          _sbl_declared_scope=${BASH_REMATCH[1]}
+        else
+          _sbl_scope_malformed=true
+        fi
+        ;;
+    esac
+  done <"$_sbl_root/DRIVE.md"
+  [[ $_sbl_scope_lines == 1 ]] ||
+    die 'DRIVE.md must declare exactly one **Scope-Label:** line'
+  [[ $_sbl_scope_malformed == false && -n $_sbl_declared_scope ]] ||
+    die 'the DRIVE.md **Scope-Label:** line is malformed'
+  [[ $_sbl_declared_scope == "$_sbl_scope" ]] ||
+    die 'the requested scope label is not the one DRIVE.md declares'
+fi
+
+# Same admission rules as beads-jsonl-path's own locator: a companion that is a symbolic
+# link, multiply linked, not a regular executable, or entered through a different
+# interpreter is not the reviewed script.
+_sbl_admissible() {
+  local path=$1 shebang
+  [[ -x "$path" && ! -L "$path" && -f "$path" ]] || return 1
+  _sbl_link_count "$path" || return 1
+  IFS= command builtin read -r shebang <"$path" || return 1
+  [[ "$shebang" == '#!/bin/sh' ]]
+}
+
+[[ -n "${HOME-}" ]] || die 'beads-jsonl-path companion unavailable'
+BEADS_JSONL_RESOLVER=
+BEADS_GIT_RUNNER=
+for _sbl_dir in "$HOME/.claude/skills/beads-jsonl-path" \
+  "${CODEX_HOME:-$HOME/.codex}/skills/beads-jsonl-path" \
+  "$HOME/.agents/skills/beads-jsonl-path"; do
+  [[ "$_sbl_dir" == /* ]] || die 'installed beads-jsonl-path target is not absolute'
+  [[ -x "$_sbl_dir/scripts/resolve-beads-jsonl" ]] || continue
+  _sbl_scripts=$(_sbl_canonical_dir "$_sbl_dir/scripts") ||
+    die 'cannot canonicalize the installed beads-jsonl-path target'
+  # The driven worktree must not be able to supply its own companion: this selector runs
+  # inside it, and a repository-relative copy is whatever that repository planted.
+  case $_sbl_root:$_sbl_scripts in
+    /:/*|*:"$_sbl_root"|*:"$_sbl_root"/*)
+      die 'installed beads-jsonl-path target is inside the current Git worktree'
+      ;;
+  esac
+  _sbl_admissible "$_sbl_scripts/resolve-beads-jsonl" &&
+    _sbl_admissible "$_sbl_scripts/git-clean" ||
+    die 'installed beads-jsonl-path companion is not admissible'
+  if [[ -z "$BEADS_JSONL_RESOLVER" ]]; then
+    BEADS_JSONL_RESOLVER=$_sbl_scripts/resolve-beads-jsonl
+    BEADS_GIT_RUNNER=$_sbl_scripts/git-clean
+  elif ! "$_sbl_cmp" -s "$BEADS_JSONL_RESOLVER" "$_sbl_scripts/resolve-beads-jsonl" \
+         2>/dev/null ||
+       ! "$_sbl_cmp" -s "$BEADS_GIT_RUNNER" "$_sbl_scripts/git-clean" 2>/dev/null; then
+    die 'installed beads-jsonl-path companions disagree'
+  fi
+done
+[[ -n "$BEADS_JSONL_RESOLVER" ]] || die 'beads-jsonl-path companion unavailable'
+
+_sbl_work=$("$BEADS_GIT_RUNNER" make-temp-dir select-bead-lanes 2>/dev/null) ||
+  die 'cannot create the bead lane selector workspace'
+_sbl_cleanup() {
+  local path rc=0
+  # The utilities' own stderr is suppressed: a caller distinguishes a refusal from a
+  # selection by the one fixed diagnostic line, and coreutils' wording is not that line.
+  for path in "$_sbl_work"/*; do
+    [[ -e "$path" ]] || continue
+    "$_sbl_unlink" "$path" 2>/dev/null || rc=1
+  done
+  "$_sbl_rmdir" "$_sbl_work" 2>/dev/null || rc=1
+  return "$rc"
+}
+_sbl_on_exit() {
+  local status=$?
+  if ! _sbl_cleanup && [[ $status -eq 0 ]]; then
+    printf '%s\n' 'cannot remove the bead lane selector workspace' >&2
+    status=1
+  fi
+  trap - EXIT
+  exit "$status"
+}
+trap _sbl_on_exit EXIT
+
+# Every br invocation goes back through the pinned admission owner, so a tool swapped
+# between two queries is refused by the next one rather than answering it.
+_sbl_query() {
+  local name=$1
+  shift
+  "$BEADS_JSONL_RESOLVER" --pinned-br "$_sbl_br_path" "$_sbl_br_oid" --run-br \
+    --no-db --no-auto-import --no-auto-flush "$@" \
+    >"$_sbl_work/$name.json" 2>"$_sbl_work/$name.err" ||
+    die 'a pinned no-db Beads query failed'
+  [[ ! -s "$_sbl_work/$name.err" ]] ||
+    die 'a pinned no-db Beads query wrote to stderr'
+}
+
+"$BEADS_JSONL_RESOLVER" --pinned-br "$_sbl_br_path" "$_sbl_br_oid" --run-br \
+  --no-auto-import --no-auto-flush version --json \
+  >"$_sbl_work/version.json" 2>"$_sbl_work/version.err" ||
+  die 'the pinned br identity call failed'
+[[ ! -s "$_sbl_work/version.err" ]] ||
+  die 'the pinned br identity call wrote to stderr'
+"$BEADS_JSONL_RESOLVER" --run-jq -e --arg commit "$_sbl_commit" \
+  '.version == "0.3.2" and .build == "release" and .commit == $commit' \
+  <"$_sbl_work/version.json" >/dev/null 2>/dev/null ||
+  die 'the pinned br is not the exact v0.3.2 release build'
+
+# The locator runs `br where`, so it comes after identity, never before it. Its object id
+# is taken here and required again after the last read: a JSONL edited mid-selection would
+# otherwise produce one object mixing two generations of the graph.
+_sbl_jsonl=$("$BEADS_JSONL_RESOLVER" --pinned-br "$_sbl_br_path" "$_sbl_br_oid" \
+  2>"$_sbl_work/locator-before.err") ||
+  die 'the clean beads JSONL locator refused'
+[[ ! -s "$_sbl_work/locator-before.err" ]] ||
+  die 'the clean beads JSONL locator wrote to stderr'
+_sbl_oid=$("$BEADS_GIT_RUNNER" hash-file "$_sbl_jsonl" 2>/dev/null) ||
+  die 'cannot hash the beads JSONL'
+[[ "$_sbl_oid" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]] ||
+  die 'the beads JSONL object id is not a lowercase Git object id'
+
+# Measured, not inferred: the deferred open row is in `list --status open --all` with AND
+# without `--deferred`, so a deferred-only backlog is GRAPH, never DONE. The flag is the
+# probe-pinned argv; `ready` must not take `--include-deferred` — counted, never routed.
+_sbl_lanes=( executor-skills executor-rb-lite authority-human )
+if [[ $_sbl_mode == scoped ]]; then
+  for _sbl_lane in "${_sbl_lanes[@]}"; do
+    _sbl_query "ready-$_sbl_lane" ready --limit 0 \
+      --label "$_sbl_scope" --label "$_sbl_lane" --json
+    _sbl_query "progress-$_sbl_lane" list --label "$_sbl_scope" --label "$_sbl_lane" \
+      --status in_progress --all --deferred --json
+  done
+  _sbl_query open list --label "$_sbl_scope" --status open --all --deferred --json
+  _sbl_query progress-all list --label "$_sbl_scope" --status in_progress --all \
+    --deferred --json
+  _sbl_query blocked blocked --limit 0 --label "$_sbl_scope" --json
+else
+  _sbl_query ready ready --limit 0 --json
+  _sbl_query open list --status open --all --deferred --json
+  _sbl_query progress-all list --status in_progress --all --deferred --json
+  _sbl_query blocked blocked --limit 0 --json
+fi
+
+_sbl_jsonl_after=$("$BEADS_JSONL_RESOLVER" --pinned-br "$_sbl_br_path" "$_sbl_br_oid" \
+  2>"$_sbl_work/locator-after.err") ||
+  die 'the clean beads JSONL locator refused after the reads'
+[[ ! -s "$_sbl_work/locator-after.err" ]] ||
+  die 'the clean beads JSONL locator wrote to stderr after the reads'
+[[ "$_sbl_jsonl_after" == "$_sbl_jsonl" ]] ||
+  die 'the beads JSONL path changed during the reads'
+_sbl_oid_after=$("$BEADS_GIT_RUNNER" hash-file "$_sbl_jsonl" 2>/dev/null) ||
+  die 'cannot hash the beads JSONL after the reads'
+[[ "$_sbl_oid_after" == "$_sbl_oid" ]] ||
+  die 'the beads JSONL changed during the reads'
+
+# One jq program owns every type, count, label, and partition decision, so a row that
+# does not match the published schema cannot reach stdout in any mode. `--slurpfile`
+# makes malformed JSON a jq failure rather than a silently empty result.
+_sbl_jq_common='
+def lane_names: ["executor-skills", "executor-rb-lite", "authority-human"];
+def recognized: ["drive-open-issues"] + lane_names;
+def one($documents):
+  if ($documents | length) == 1 then $documents[0] else error("document") end;
+def array($value):
+  if ($value | type) == "array" then $value else error("array") end;
+def envelope($value):
+  if ($value | type) == "object"
+     and ($value.issues | type) == "array"
+     and ($value.total | type) == "number"
+     and ($value.total | floor) == $value.total
+     and $value.total == ($value.issues | length)
+     and $value.has_more == false
+  then $value else error("envelope") end;
+def label_list($row):
+  if ($row | has("labels")) and $row.labels != null then
+    (if ($row.labels | type) == "array"
+        and ([$row.labels[] | select(type == "string")] | length)
+            == ($row.labels | length)
+        and ($row.labels | unique | length) == ($row.labels | length)
+     then $row.labels else error("labels") end)
+  else [] end;
+def row($value; $status):
+  if ($value | type) == "object"
+     and ($value.id | type) == "string" and ($value.id | length) > 0
+     and $value.status == $status
+     and ($value.priority | type) == "number"
+     and ($value.priority | floor) == $value.priority
+     and $value.priority >= 0 and $value.priority <= 4
+     and ($value.issue_type | type) == "string" and ($value.issue_type | length) > 0
+  then {id: $value.id, status: $value.status, priority: $value.priority,
+        issue_type: $value.issue_type, labels: label_list($value)}
+  else error("row") end;
+def ids($rows):
+  ([$rows[] | if (.id | type) == "string" and (.id | length) > 0
+              then .id else error("id") end]) as $list
+  | if ($list | unique | length) == ($list | length) then $list else error("id") end;
+def counts($unresolved; $blocked; $rows):
+  if ($unresolved | floor) == $unresolved and $unresolved >= 0
+     and $blocked >= 0
+     and ($unresolved > 0 or ($blocked == 0 and $rows == 0))
+  then . else error("counts") end;
+'
+_sbl_jq_scoped=$_sbl_jq_common'
+def scoped_row($value; $status; $lane):
+  row($value; $status) as $projected
+  | if ($projected.labels | index($scope)) != null
+       and ([$projected.labels[] | select(. as $label | lane_names | index($label))]
+            | length) == 1
+       and ($projected.labels | index($lane)) != null
+    then $projected else error("labels") end;
+envelope(one($open)) as $open_envelope
+| envelope(one($progress_all)) as $progress_envelope
+| array(one($blocked)) as $blocked_rows
+| (array(one($ready_skills))
+   | map(scoped_row(.; "open"; "executor-skills"))) as $ready_skills_rows
+| (array(one($ready_rb)) | map(scoped_row(.; "open"; "executor-rb-lite"))) as $ready_rb_rows
+| (array(one($ready_human))
+   | map(scoped_row(.; "open"; "authority-human"))) as $ready_human_rows
+| (envelope(one($progress_skills)).issues
+   | map(scoped_row(.; "in_progress"; "executor-skills"))) as $progress_skills_rows
+| (envelope(one($progress_rb)).issues
+   | map(scoped_row(.; "in_progress"; "executor-rb-lite"))) as $progress_rb_rows
+| (envelope(one($progress_human)).issues
+   | map(scoped_row(.; "in_progress"; "authority-human"))) as $progress_human_rows
+| (ids($ready_skills_rows) + ids($ready_rb_rows) + ids($ready_human_rows)
+   + ids($progress_skills_rows) + ids($progress_rb_rows)
+   + ids($progress_human_rows)) as $all_ids
+| (ids($progress_skills_rows) + ids($progress_rb_rows)
+   + ids($progress_human_rows)) as $lane_progress_ids
+| if ($all_ids | unique | length) != ($all_ids | length) then error("id") else . end
+| if ($lane_progress_ids | sort) != (ids($progress_envelope.issues) | sort)
+  then error("partition") else . end
+| counts($open_envelope.total + $progress_envelope.total;
+         $blocked_rows | length; $all_ids | length)
+| {schema: "skills.drive.bead-lanes.v1",
+   scope_label: $scope,
+   br: {version: "0.3.2", build: "release", commit: $commit},
+   jsonl_oid: $oid,
+   unresolved_count: ($open_envelope.total + $progress_envelope.total),
+   blocked_count: ($blocked_rows | length),
+   lanes: {"executor-skills": {ready: $ready_skills_rows,
+                               in_progress: $progress_skills_rows},
+           "executor-rb-lite": {ready: $ready_rb_rows, in_progress: $progress_rb_rows},
+           "authority-human": {ready: $ready_human_rows,
+                               in_progress: $progress_human_rows}}}
+'
+_sbl_jq_generic=$_sbl_jq_common'
+def generic_row($value; $status):
+  row($value; $status) as $projected
+  | if ([$projected.labels[] | select(. as $label | recognized | index($label))]
+        | length) == 0
+    then $projected else error("DRIVE_MANAGED_LABELS") end;
+envelope(one($open)) as $open_envelope
+| envelope(one($progress_all)) as $progress_envelope
+| array(one($blocked)) as $blocked_rows
+| if any(($open_envelope.issues + $progress_envelope.issues)[];
+         [label_list(.)[] | select(. as $label | recognized | index($label))] | length > 0)
+  then error("DRIVE_MANAGED_LABELS") else . end
+| (array(one($ready)) | map(generic_row(.; "open"))) as $ready_rows
+| ($progress_envelope.issues | map(generic_row(.; "in_progress"))) as $progress_rows
+| (ids($ready_rows) + ids($progress_rows)) as $all_ids
+| if ($all_ids | unique | length) != ($all_ids | length) then error("id") else . end
+| counts($open_envelope.total + $progress_envelope.total;
+         $blocked_rows | length; $all_ids | length)
+| {schema: "skills.drive.generic-ready.v1",
+   br: {version: "0.3.2", build: "release", commit: $commit},
+   jsonl_oid: $oid,
+   unresolved_count: ($open_envelope.total + $progress_envelope.total),
+   blocked_count: ($blocked_rows | length),
+   ready: $ready_rows,
+   in_progress: $progress_rows}
+'
+
+_sbl_jq_arguments=( -n -c --arg scope "$_sbl_scope" --arg oid "$_sbl_oid"
+  --arg commit "$_sbl_commit"
+  --slurpfile open "$_sbl_work/open.json"
+  --slurpfile progress_all "$_sbl_work/progress-all.json"
+  --slurpfile blocked "$_sbl_work/blocked.json" )
+if [[ $_sbl_mode == scoped ]]; then
+  _sbl_jq_arguments+=(
+    --slurpfile ready_skills "$_sbl_work/ready-executor-skills.json"
+    --slurpfile ready_rb "$_sbl_work/ready-executor-rb-lite.json"
+    --slurpfile ready_human "$_sbl_work/ready-authority-human.json"
+    --slurpfile progress_skills "$_sbl_work/progress-executor-skills.json"
+    --slurpfile progress_rb "$_sbl_work/progress-executor-rb-lite.json"
+    --slurpfile progress_human "$_sbl_work/progress-authority-human.json"
+    "$_sbl_jq_scoped" )
+else
+  _sbl_jq_arguments+=( --slurpfile ready "$_sbl_work/ready.json" "$_sbl_jq_generic" )
+fi
+if ! "$BEADS_JSONL_RESOLVER" --run-jq "${_sbl_jq_arguments[@]}" \
+    >"$_sbl_work/selection.json" 2>"$_sbl_work/selection.err" </dev/null; then
+  if "$_sbl_grep" -Fq -- DRIVE_MANAGED_LABELS "$_sbl_work/selection.err"; then
+    die 'Drive-managed labels require scoped routing'
+  fi
+  die 'cannot validate the bead selection'
+fi
+
+_sbl_selection=
+{
+  IFS= command builtin read -r _sbl_selection ||
+    die 'the bead selection is not one line'
+  if IFS= command builtin read -r _sbl_extra; then
+    die 'the bead selection is not one line'
+  fi
+} <"$_sbl_work/selection.json"
+[[ -n "$_sbl_selection" ]] || die 'the bead selection is empty'
+
+# Publish only once the workspace is gone. The buffered object is a routing authorization,
+# and the EXIT trap cannot retract a line already on stdout: cleaning up afterwards would
+# leave a failed invocation printing a parseable selection. Disarm the trap first so a
+# cleanup that fails here refuses through `die` — one fixed line, no stdout — instead of
+# being reported twice.
+trap - EXIT
+_sbl_cleanup || die 'cannot remove the bead lane selector workspace'
+printf '%s\n' "$_sbl_selection"
+__SBL_TRUSTED_BASH__

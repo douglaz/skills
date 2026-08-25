@@ -49,10 +49,16 @@ loop:
 - The exact `beads-jsonl-path` companion is available. Run it before section 3; it
   diagnoses host dependencies such as `jq` and refuses any JSONL state that is not clean,
   tracked, and owned by this worktree before the first `"$BEADS_JSONL_RESOLVER" --run-br create` can flush.
-- `br` is **≥ 0.1.45**. Older versions corrupt their DB after branch resets:
-  `"$BEADS_JSONL_RESOLVER" --run-br update`/`"$BEADS_JSONL_RESOLVER" --run-br close` start returning `ISSUE_NOT_FOUND` while `"$BEADS_JSONL_RESOLVER" --run-br show` and
-  `"$BEADS_JSONL_RESOLVER" --run-br list` keep working, which hides the problem until you have lost bead state.
-  This loop resets branches constantly, so it hits that bug hard.
+- `br` is the **exact release `v0.3.2`**, commit `4104c31e79bf806f53e2eba0a4cd2ba6c594f8b9`,
+  release build. Existing maintenance commands resolve it through E1's sanitized PATH;
+  bead selection and closure use a private pinned copy and re-prove that identity before
+  every command on those two paths
+  ([exact companion skill `rb-lite-backlog-drain`, step 1](../../rb-lite-backlog-drain/SKILL.md#backlog-step-1)
+  and [step 11](../../rb-lite-backlog-drain/SKILL.md#backlog-step-11)).
+  Version-scoped history, not a current minimum: on `br` **< 0.1.45** a branch reset
+  corrupted the DB, after which `update`/`close` returned `ISSUE_NOT_FOUND` while
+  `show`/`list` kept working and hid the loss. This loop resets branches constantly, so it
+  hit that bug hard. The pin above is stricter than that floor and supersedes it.
 
 Set up once, before iteration 1:
 
@@ -468,16 +474,22 @@ unset _bjp_candidate
 BEADS_JSONL=$("$BEADS_JSONL_RESOLVER") || exit 1
 ```
 
-If the owner refuses, resolve the reported state first — recovery case (a) in
-[exact companion skill `rb-lite-backlog-drain`, step 11](../../rb-lite-backlog-drain/SKILL.md#backlog-step-11). After the first flush the choice
-is gone.
+If the owner refuses, resolve the reported state first. After the first flush the choice is
+gone: every `br` write re-exports the whole gitignored cache over the tracked JSONL, so a
+cache holding a stale copy of any body silently reverts it
+([exact companion skill `rb-lite-backlog-drain`, step 11](../../rb-lite-backlog-drain/SKILL.md#backlog-step-11)
+records the measured 0.2.19 loss).
 
 **Start a replay manifest before minting.** Section 3 runs one `"$BEADS_JSONL_RESOLVER" --run-br create` per finding,
-each auto-flushing, and the damage check comes after all of them. If it fires,
-[exact companion skill `rb-lite-backlog-drain`, step 11 recovery](../../rb-lite-backlog-drain/SKILL.md#backlog-step-11) deletes the cache
-and requires every intended mutation replayed — so record the
-`br` commands with their generated ids and field values as you go. Without it, restoring
-the good JSONL discards the whole iteration's legitimate bead additions.
+each auto-flushing, and the damage check comes after all of them — so record the `br`
+commands with their generated ids and field values as you go. This mode runs in a live
+worktree rather than a disposable clone, so recovery here is a real procedure, not an
+abandon: restore the good JSONL from git, **then delete the stale cache and re-import from
+the restored file BEFORE replaying anything** — replaying first lets the still-stale cache
+auto-flush over what you just restored — and finally replay the complete manifest. Check
+each step's exit status: `rm -f` is silent on a permissions failure, and a surviving cache
+makes the import skip equal-timestamp records and report success. Without the manifest,
+restoring the good JSONL discards the whole iteration's legitimate bead additions.
 
 ## 3. Mint one bead per real finding
 
@@ -587,7 +599,9 @@ field-level changes: a full re-serialization with every id on both sides is
 normal; ids on only one side, or a `description` this iteration did not write, is
 the tell. Never hand-edit the JSONL — that is what makes the cache stale, since a
 hand edit does not advance `updated_at`. Recovery is in
-[exact companion skill `rb-lite-backlog-drain`, step 11](../../rb-lite-backlog-drain/SKILL.md#backlog-step-11).
+[exact companion skill `rb-lite-backlog-drain`, step 11](../../rb-lite-backlog-drain/SKILL.md#backlog-step-11-recovery)
+— this mode writes in a live worktree, so that repair applies here rather than the
+disposable-clone abandon the closure procedure itself uses.
 
 If the iteration ran degraded, say which reviewer was missing in that commit
 message. Months later it explains why iteration N looks thin.
@@ -597,19 +611,21 @@ message. Months later it explains why iteration N looks thin.
 Hand off to exact companion skill
 [`rb-lite-backlog-drain`](../../rb-lite-backlog-drain/SKILL.md) and follow it exactly:
 one bead, one branch, one rb-lite run, local gates, one **work** PR, one
-squash merge, one `"$BEADS_JSONL_RESOLVER" --run-br close`. (Closing the last bead in a scope needs its own small
-metadata PR — that is bookkeeping, not a second work PR, and the rule still holds.) Nothing about draining changes here.
+squash merge, one native close on its own standalone metadata clone. (That closure PR is
+bookkeeping, not a second work PR, and the rule still holds.) Nothing about draining
+changes here.
 
 Two rules from the drain workflow matter more in this mode than usual:
 
 - **Serialize.** Do not start bead B's run while bead A is open. Two long-lived
   branches merging into the same base is where conflicts live.
-- **Evidence-first closure.** The closure has to say which merge satisfied the bead:
-  put the merge SHA and PR number in the **closure commit message**. `"$BEADS_JSONL_RESOLVER" --run-br close` also
-  takes `--reason`, but the drain path closes with `"$BEADS_JSONL_RESOLVER" --run-br update <id> -s closed` for the
-  flush behaviour that
+- **Evidence-first closure.** The closure has to say which merge satisfied the bead, and
+  the native path puts it *in the bead*: `CLOSE_REASON` is the merged work-PR URL plus its
+  40-lowercase-hex merge SHA, and `CLOSE_EVIDENCE` is the reviewed note that becomes the
+  one added transition comment. Run the fenced production block in
   [exact companion skill `rb-lite-backlog-drain`, step 11](../../rb-lite-backlog-drain/SKILL.md#backlog-step-11)
-  explains — so the commit message is where this evidence reliably lands. A bead closed
+  rather than restating its commands; put the same merge SHA and PR number in the closure
+  commit message too, so a reader of the git history sees it. A bead closed
   without the merged fix just reappears in the next review, and you will not know why.
   The `bead-closure: <bead-id>` marker is a SEPARATE obligation and does not move here:
   [exact companion skill `rb-lite-backlog-drain`, step 12 recovery](../../rb-lite-backlog-drain/SKILL.md#backlog-step-12) reads each
