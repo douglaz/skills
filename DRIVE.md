@@ -2,13 +2,10 @@
 
 **Scope:** exactly the 29 GitHub issues in the #30–#66 set enumerated by
 `docs/specs/backlog-execution-plan.md`; the Beads graph is the only work. Current focus is
-E3 (`skills-dhm`). GitHub #67 is deliberately OUT of this scope — it postdates the set and
+the E3a/E3b split replacing E3 (`skills-dhm`). GitHub #67 is deliberately OUT of this scope — it postdates the set and
 is a bounded follow-on after F1, not a silent expansion of a fixed 29-issue drive.
 **Scope-Label:** `drive-open-issues`
-**Baseline:** 510 lines — 45 pinned resolver + 220 shared selector + 50 drive-status
-delegate + 130 native closure block + 65 consumer/API/document/wiring
-**Do-NOT-build:** closure wrapper/helper, recovery marker or API, rollback/compensation/reopen, SQLite parser, reconciliation/status lifecycle, lock service, general scheduler or routing framework, linked-worktree support, batch/force close, downloader/updater or multi-version fallback, caller-PATH fallback, retries/daemon/config knobs, duplicate selector/parser, reverse install dependency, recurring release probe, carry-forward closure, DB-mode scheduler reads, second close on resume, pre-close note/status mutation, third new test file, graph mutation
-**Phase:** BUILD · **Bead:** `skills-dhm` · **Branch:** `feat/skills-dhm-native-close`
+**Phase:** SHAPE · **Bead:** E3 split · **Branch:** `shape/e3a-e3b-split`
 **Pending:** —
 **Gate:** `./check.sh` · repository-gate environment: GNU Bash 5.3.15 (non-POSIX),
 Git 2.55.0, installed `br` 0.2.19; last green 2026-08-25 on `master` at `935c3ac`
@@ -269,25 +266,32 @@ separate exact-`v0.3.2` Linux probe is one-time evidence, not this gate.
 
 ## Now
 
-E3 (`skills-dhm`) is the only ready bead; the other 31 are blocked on it. Its SHAPE
-work landed as PR #72. Guard 2 is armed from the smallest reviewed E3 implementation:
-510 production lines and a derived 1,530-line BUILD budget; tests and fixtures are
-uncapped but remain required and mutation-sensitive. BUILD is starting on
-`feat/skills-dhm-native-close`, round 0 of maximum 4.
+SHAPE is splitting E3 into E3a exact `br` admission/typed lane selection and E3b
+native closure/consumers. E3b retains `skills-dhm` and its 15 final-barrier
+dependents; graph transfer will create P0 `executor-skills` E3a (closed E1
+`skills-iog`, issue #65 fragment `#plan-row-e3a`) and make `skills-dhm` depend on
+it. The 510 estimate is retired: it was neither reused nor divided.
+
+- E3a fresh baseline/budget: resolver prefix/order/validation/dispatch 42;
+  git-clean admit-executable 16; selector trusted entry/argv 34;
+  sibling/temp/cleanup 24; identity/stable locator/OID helpers 32; query capture
+  22; scoped validation/output 70; generic validation/output 42; final stream
+  handling 14; drive-status no-br/inference 19; API/consumer/compatibility/plan/
+  gate wiring 82 = 397 production lines; exact budget 1,191.
+- E3b fresh baseline/budget: privileged clean-Bash entry 27;
+  input/standalone/override/evidence guards 23; pinned execution/identity/dynamic
+  where helpers 31; snapshot/import/target preflight 29; native close + strict
+  flush 9; strict proof/no-DB show/literal diff 59; retained-clone resume
+  classifier 37; Step-11 contract 28; three consumer amendments 9; versioned ADR
+  15; E1 consumer note 3; concise plan/global/table update 15; gate wiring 1 =
+  286 production lines; exact budget 858.
 
 ## Next
 
-Build the reviewed medium E3 delta: pin native `br v0.3.2` identity, migrate the four
-live consumers and ADR 0003, and add the two bounded deterministic tests while retaining
-the one-time real-release probe evidence. Land its work PR, then close E3 through the
-standalone-clone native metadata procedure before resuming the highest-priority ready lane.
-
-Before C2 or F3 BUILD, re-read their acceptance criteria against what PR #73 landed.
-Both were written before the convergence guards existed and now conflict with them:
-C2 as written regenerates a `--reviewers-file`, which replaces rb-lite's built-in panel
-wholesale and drops the skeptical reviewer; F3 asks for a separate test LOC budget class,
-which the standing decision below refuses. Their bead descriptions are amended; this note
-records why.
+Transition reviewed spec → graph transfer. Create E3a only, transfer its E1 edge
+and retained `skills-dhm`→E3a edge, leave all 15 existing `skills-dhm` dependents
+unchanged, then confirm E3a alone is ready. Do not edit Beads during this SHAPE
+pass or start normal scheduling between E3a and E3b.
 
 ## Standing decisions
 
