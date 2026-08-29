@@ -254,43 +254,74 @@ The E3b native-close behavior and exact release provenance are recorded in
    `testing-with-rb-lite` when the deliverable itself is a test or live gate.
 6. A reviewer finding is a hypothesis. Reproduce it before accepting it.
 7. Run at most one `executor-skills` bead at a time, regardless of how many the
-   ready query returns. Before selecting it, atomically create a lane reservation
-   directory under the Git common directory containing the exact bead ID, branch,
-   coordinator identity, and start time; an existing live or unknown reservation
-   blocks dispatch, and stale recovery requires explicit evidence rather than PID
-   age. Hold that reservation through work-PR merge or explicit abandonment and
-   verified cleanup, including the corresponding closure metadata PR merge. The
-   external `executor-rb-lite` lane may run concurrently
-   once ready because it owns another repository; authority beads are reported,
-   never implemented speculatively. After recorded human authorization, any mechanical
-   skills-repository authority action must acquire the same durable common-directory
-   reservation with its exact bead/branch/coordinator/start records; unknown or stale
-   occupants fail closed, and the reservation is held through publication and closure
-   metadata PR merge. It changes no Beads status/assignee merely to claim the work. This
-   serialization is intentional: current
-   ready rows share installer, reviewer-panel, and skill files in ways that are not
-   faithfully representable as semantic dependency edges.
-8. Bootstrap the P0 Beads safety owners before normal scheduling. GRAPH may perform
-   its reviewed in-place graph update only as one coordinator-owned, fail-closed
-   transaction: use E1 to resolve the exact clean tracked JSONL path; save its exact
-   bytes and hash in E1's private trusted location; make the no-auto mutation; explicitly
-   flush; re-resolve; structurally compare every ID and every field against the saved
-   graph, allowing only the reviewed intended changes; and render a literal Git diff for
-   human review. A path, hash, flush, re-resolution, structural-diff, or literal-diff
-   failure stops the transaction. E1 lands and closes first. E3a then admits exact v0.3.2
-   and installs the typed selector from latest clean `master`; E3b then consumes that admission
-   for its native Step-11 close and closure metadata branch. Merge E3b's metadata PR and
-   refresh clean `master` before normal scheduling. Until E3a and then E3b complete, make no
-   other live skills-store Beads query or mutation. Thereafter scheduler reads use E3a's
-   typed `--no-db` result against the clean tracked JSONL. Outside GRAPH's reviewed graph
-   transaction, every later execution, accepted-decision/no-change, and authority-publication
-   closure uses E3b's standalone-clone procedure.
-9. Permit at most one outstanding Beads closure metadata branch/PR. It starts from
-   latest clean `master`, owns exactly one bead's closure evidence/status plus the
-   matching `DRIVE.md` transition, and remains exclusive through merge, abandonment,
-   or explicit human repair. This is coordinator serialization across separate standalone
-   clones, not a second process lock or recovery protocol: native `br` locks
-   only participants in one clone/workspace for its database and export operations.
+    ready query returns. Before selecting it, atomically create a lane reservation
+    directory under the Git common directory containing the exact bead ID, branch,
+    coordinator identity, and start time; an existing live or unknown reservation
+    blocks dispatch, and stale recovery requires explicit evidence rather than PID
+    age. Hold that reservation through work-PR merge or explicit abandonment and
+    verified cleanup. The
+    external `executor-rb-lite` lane may run concurrently
+    once ready because it owns another repository; authority beads are reported,
+    never implemented speculatively. After recorded human authorization, any mechanical
+    skills-repository authority action must acquire the same durable common-directory
+    reservation with its exact bead/branch/coordinator/start records; unknown or stale
+    occupants fail closed, and the reservation is held through publication. It changes
+    no Beads status/assignee merely to claim the work. This
+    serialization is intentional: current
+    ready rows share installer, reviewer-panel, and skill files in ways that are not
+    faithfully representable as semantic dependency edges.
+8. Ordering only: E1 closes first; then E3a work and its rule-9 closure merge; then
+   E3b work and its rule-9 closure merge; only then may normal scheduling begin.
+   Every closure, including either bootstrap closure, delegates to rule 9.
+9. **Metadata-closure lifecycle (sole normative owner).** At most one closure
+   branch/PR is outstanding. On entry or resume, search the self and parent forge
+   repositories for the exact `bead-closure: <id>` marker, deduplicate results by
+   URL, and fail closed on saturated or partial queries. An open closure PR resumes;
+   a merged one refreshes clean `master` and verifies the closed row. If no marker
+   exists, distinguish merged/open work PRs from genuinely unstarted work.
+
+   In one standalone transaction, clone latest clean `master`, require `.git` to be
+   a directory, create exactly one `metadata/close-<id>` branch, and snapshot the
+   exact clean JSONL bytes and the target's open row. Provider selection is exclusive:
+   E3a's one-time coordinator bootstrap invokes E3a's admitted `br` directly after
+   E3a work merges; once E3b merges, canonical Step 11 is the production provider
+   for every closure, including E3b's own.
+
+   `reason` and transition evidence are opaque, trimmed nonempty single-line inputs:
+   no CR/LF or leading/trailing C-locale whitespace; internal spaces are allowed.
+   Step 11 does not parse provider, URL, key, hash, or field-order formats. It must
+   prove the exact ID set is preserved; every bystander row is structurally equal;
+   and the target changes only `status`, `closed_at`, `close_reason`, `updated_at`,
+   and `comments`. The target becomes `closed`, its reason equals the supplied input
+   exactly, prior comments remain exact, exactly one comment contains the supplied
+   evidence, and pinned `--no-db show` agrees with JSONL. Render the literal Git diff
+   for review.
+
+   The branch contains only that closure and its matching `DRIVE.md` transition.
+   Open its PR with `bead-closure: <id>`; after GitHub assigns a number, amend
+   `DRIVE.md` to `Pending: metadata PR owner/repo#N`, rerun `./check.sh` and the
+   independent panel on the amended tree, force-push the owned branch with
+   `--force-with-lease`, pass normal PR gates, merge, refresh clean `master`, and
+   verify persistence.
+
+   On interruption, classify only the retained clone's current JSONL bytes: if they
+   exactly equal the intended closed result, run idempotent strict flush/proof only;
+   if they exactly equal the saved open bytes, abandon the disposable clone and
+   restart fresh; any third state stops for human repair. Do not inspect DB/sidecar
+   combinations, close a second time, reopen, roll back, or add a recovery marker or
+   second closure lock.
+
+   | Consumer | Kind | `reason` semantics | Transition evidence | Provider |
+   |---|---|---|---|---|
+   | E3a bootstrap | One-time coordinator path | E3a work PR URL and full merge SHA | Gate and independent-panel outcomes | Rule-9 bootstrap |
+   | E3b | Production provider and ordinary work consumer | E3b work PR URL and full merge SHA | Gate and panel outcomes | Its merged Step 11 |
+   | A4b | Spec-only mapping | No-change: immutable review-thread URL; changed: work PR URL/SHA | Inspected ranges and conclusion, or formatting gates | Step 11 |
+   | B0 | Spec-only authority mapping | Immutable decision-thread identity | Exact accepted decision; silence never qualifies | Step 11 |
+   | F2 | Spec-only cross-repository mapping | Upstream work PR URL and full merge SHA | Three named upstream gates and observed statuses | Step 11 |
+   | F2r | Spec-only authority mapping | Release URL, immutable tag, and full commit | Human authorization reference plus supervised probe | Step 11 |
+   | Drive LAND | Production consumer | Merged work PR URL and full merge SHA | Panel, bots, gate, and disposition evidence | Link to Step 11 |
+   | Backlog drain | Production owner/consumer | Same generic work mapping | Same generic work evidence | Step 11 owns lifecycle and native block |
+   | Harden handoff | Production consumer | Same generic work mapping | Harden/review/gate evidence | Link to Step 11 |
 
 ## Workstream A — merge and admission integrity
 
@@ -405,8 +436,11 @@ churn those blocks merely to satisfy stale wording. If the linked finding
 identifies a remaining indented example, own only that block plus its exact
 new extraction check added to `install.test`; convert only block style and require
 byte-identical command text before/after. Otherwise close this bead through
-`skills/rb-lite-backlog-drain/SKILL.md#backlog-step-11`
-with the thread URL, inspected ranges, and no-change evidence.
+global rule 9 and
+`skills/rb-lite-backlog-drain/SKILL.md#backlog-step-11`: for a no-change result,
+the immutable review-thread URL is `reason` and inspected ranges plus conclusion
+are transition evidence; for a changed result, use the work PR URL/SHA and the
+formatting-gate outcomes. This is a semantic mapping only; rule 9 owns closure.
 Do not execute the examples
 or add the G2 harness here. If any file changes, run `./install.test` and
 `./check.sh`.
@@ -422,10 +456,11 @@ refuse unsupported dirty delegated paths and use a disposable worktree. B1d
 stays blocked until this bead records the answer; the bead never treats silence
 as approval.
 
-B0 may close only if the human accepts the planned fail-closed refusal boundary, and then
-only through `skills/rb-lite-backlog-drain/SKILL.md#backlog-step-11` with the immutable
-decision-thread identity and accepted decision in its
-reason/evidence.
+B0 may close only if the human accepts the planned fail-closed refusal boundary.
+Its semantic mapping for global rule 9 and
+`skills/rb-lite-backlog-drain/SKILL.md#backlog-step-11` is immutable
+decision-thread identity as `reason` and the exact accepted decision as transition
+evidence; silence never qualifies. Rule 9 owns closure.
 If the human chooses full dirty in-scope preservation, leave B0 open, return the
 drive to SHAPE, specify and review that larger preservation mechanism, then amend
 the scope of B1d and re-audit the graph. The choice never makes B1d or B1 ready
@@ -1183,220 +1218,138 @@ with #47's fact-ownership policy.
 
 **Priority:** P0. **Effort:** medium. **Depends on:** closed E1 (`skills-iog`).
 
-E3a is the only admission and read-routing owner. It admits exact
+E3a is the admission and read-routing owner only. It admits exact
 `Dicklesworthstone/beads_rust` `v0.3.2`, commit
-`4104c31e79bf806f53e2eba0a4cd2ba6c594f8b9`, to one E1-private absolute path and
-Git object ID, and binds every E3a-owned locator, no-DB read, create, and flush
-command to that admitted pair. The v0.3.2 Linux probe remains one-time release
-provenance evidence, never a normal gate. E3a does not install `br`, mutate the
-Beads graph, close a bead, schedule work, or add a wrapper/recovery API/lock
-service/recurring probe.
+`4104c31e79bf806f53e2eba0a4cd2ba6c594f8b9`, at one E1-private absolute path
+and Git object ID. It neither installs `br`, mutates the graph, schedules work,
+nor owns a closure lifecycle. After E3a work merges, its sole non-production
+closure provider is the rule-9 coordinator bootstrap using E3a's admitted binary
+directly; no checked-in helper or lifecycle copy is created.
 
-#### Admission, ownership, and threat model
+#### Admission and selector contract
 
-Start from the pinned evidenced Linux asset or a local release build from the
-exact commit; record its digest, then use E1's trusted private-file helpers to
-copy it outside the worktree as `br` and record its E1 `hash-file` OID. Extend
-E1's resolver with the exact ordered grammar
-`--pinned-br ABSOLUTE_PATH GIT_OBJECT_ID --run-br BR_ARG...`; a leading
-`--run-br`, a duplicate, unknown, short, or misordered prefix refuses before any
-PATH lookup or `br` execution. The resolver validates an absolute private,
-regular, non-symlink executable and its OID on every invocation, then executes
-only that path through E1's clean environment. It captures locator stderr and
-fails closed rather than leaking it into a successful result. `--run-jq` is not a
-pin mechanism and gets no special pin-composition surface.
-
-The resolver validates exact version `0.3.2`, build `release`, and the pinned
-commit before any E3a read. All E3a harden-until-clean locator/read/create/flush
-uses carry the admitted `--pinned-br ... --run-br` prefix; no bare `br` or
-caller-PATH fallback remains. E1's clean locator resolves the clone's tracked
-JSONL before and after the reads, and E3a requires a stable clean OID. Location
-overrides, dirty/staged JSONL, an identity liar, a replaced tool, a changed OID,
-a locator error/stderr, or a changing JSONL refuse with no route output.
-
-Install one shared selector at
-`skills/beads-jsonl-path/scripts/select-bead-lanes`, because
-`beads-jsonl-path` is already installed by Drive and rb-lite. Before any consumer
-executes it, E1 adds the small git-clean `admit-executable` operation: canonical
-selector path outside the driven worktree, regular/non-symlink/executable file,
-and link count exactly one, authenticated by its path/inode before `exec`.
-This is the executable-admission boundary; the selector need not probe its own
-trusted companions for shebang or link count. The threat model is a driven
-worktree or caller PATH/override/tool replacement attempting to supply routing
-logic or stale Beads facts, not a compromise of the installed trusted companion
-directory itself.
-
-#### Selector contract and consumers
-
-`select-bead-lanes` is the sole `Scope-Label` parser and accepts exactly these
-forms:
+The resolver admits exactly these two pinned forms, and no others:
 
 ```text
---scoped --scope-label LABEL --br-path ABSOLUTE_PATH --br-oid GIT_OBJECT_ID
---generic --br-path ABSOLUTE_PATH --br-oid GIT_OBJECT_ID
+resolve-beads-jsonl --pinned-br ABSOLUTE_PATH OID
+resolve-beads-jsonl --pinned-br ABSOLUTE_PATH OID --run-br BR_ARG...
 ```
 
-Scoped mode reads exactly one valid `**Scope-Label:** \`LABEL\`` from current
-`DRIVE.md`, requires it to equal argv, and never infers a label from Beads rows.
-Generic mode refuses if any unresolved row bears a Drive scope or any executor /
-authority lane label. Both modes clear supported location overrides, use the
-admitted E1 runner only with `--no-db --no-auto-import --no-auto-flush`, capture
-every locator/query stderr, and require the same clean JSONL OID after the last
-read. They parse only the measured scoped/generic `ready`, `list`, and `blocked`
-forms into exact typed schemas: `skills.drive.bead-lanes.v1` for scoped lanes and
-`skills.drive.generic-ready.v1` for generic work. Rows have typed id/status/
-priority/issue_type/unique-label fields; scoped rows have exactly their declared
-scope and one lane; counts, global in-progress partition, native order, and
-unique/disjoint IDs are checked. Success is one stable LF JSON object on stdout
-and empty stderr. Failure is nonzero, fixed diagnostic stderr, and no stdout.
-Only that typed output is route authority: local BUILD requires
-`executor-skills`, rb-lite routes externally, and authority rows stop for a
-human.
+The first is the authenticated clean locator; the second executes native `br`.
+Pinned `--allow-dirty`, `--recovery`, and `--run-jq` refuse. Admission validates
+the release, build, and commit once; thereafter the recorded OID authenticates
+the exact bytes on every invocation. The resolver validates an absolute private,
+regular, non-symlink executable and its OID, clears supported location overrides,
+captures locator/query stderr, and fails closed on a dirty or changing JSONL. It
+has no generic pin-composition parser or caller-PATH fallback.
 
-Drive and rb-lite Step 1/12 call the admitted selector directly. There is no
-`drive-status` selector delegate and no trusted-Bash wrapper there: selector
-execution is already authenticated by `admit-executable`. No-argument
-`drive-status` makes zero `br` calls, reports Beads counts `n/a`, preserves only
-non-Beads diagnostics, and cannot infer BUILD or DONE from Beads; missing typed
-selection fails closed. The root Drive/phases and harden consumer use selector
-output rather than copied parsers, probes, or raw commands. `install.test` is the
-sole owner of consumer link-presence checks.
+Selector authentication and execution are one atomic E1 runner operation:
 
-**Exact file lock.** Production code/wiring:
+```text
+git-clean admit-executable select-bead-lanes -- <selector argv...>
+```
+
+It validates and executes only the fixed installed sibling: outside the worktree,
+regular, non-symlink, executable, single-link, with device/inode rechecked
+immediately before `exec`; it returns no pathname ticket. The trusted companion
+directory is outside this threat model. There is no selector wrapper, self-probe,
+second parser, or `drive-status` delegate.
+
+`select-bead-lanes` remains the sole `Scope-Label` parser. Its scoped and generic
+modes use only the admitted pinned read path, capture streams, require the clean
+locator/OID snapshot before and after their queries, validate the bounded lane
+schemas, and emit one typed LF JSON result or a fixed failure with no stdout.
+`drive-status` without an explicit typed selection makes zero `br` calls, reports
+Beads counts `n/a`, and cannot infer BUILD or DONE. Drive, backlog Steps 1/12,
+orchestration, and harden consume selector output rather than raw `br` commands.
+
+**Exact file lock.** Production:
 
 - `skills/beads-jsonl-path/scripts/resolve-beads-jsonl`;
 - `skills/beads-jsonl-path/scripts/git-clean`;
 - new `skills/beads-jsonl-path/scripts/select-bead-lanes`;
-- `skills/drive/scripts/drive-status`; and
-- `check.sh`.
+- `skills/drive/scripts/drive-status`;
+- selector-only portions of `skills/drive/SKILL.md`,
+  `skills/drive/references/phases.md`,
+  `skills/rb-lite-backlog-drain/SKILL.md` Steps 1/12,
+  `skills/orchestrating-with-rb-lite/SKILL.md`, and
+  `skills/orchestrating-with-rb-lite/references/harden-until-clean.md`;
+- `skills/beads-jsonl-path/SKILL.md`, `README.md`, this plan's E3a/rule/table/
+  frontier portions, and `check.sh`.
 
-Production documentation:
-
-- `skills/beads-jsonl-path/SKILL.md`;
-- `skills/drive/SKILL.md`;
-- `skills/drive/references/phases.md`;
-- `skills/rb-lite-backlog-drain/SKILL.md` (Steps 1/12 only);
-- `skills/orchestrating-with-rb-lite/SKILL.md`;
-- `skills/orchestrating-with-rb-lite/references/harden-until-clean.md`;
-- `README.md`; and
-- this plan's E3a/global-rule/table/frontier text.
-
-Tests:
-
-- `skills/beads-jsonl-path/scripts/resolve-beads-jsonl.test`;
-- new `skills/beads-jsonl-path/scripts/select-bead-lanes.test`;
-- `skills/drive/scripts/drive-status.test`; and
-- `install.test`.
-
-`DRIVE.md` and the tracked Beads JSONL are reviewed coordinator bookkeeping
-exemptions, not production LOC. Any other path requires a return to SHAPE.
-**Do-NOT-build:** no closure block, native close, graph mutation, second
-selector/parser/delegate, special `--pinned-br`/`--run-jq` mechanism, selector
-companion probe, recovery/rollback/reopen API, or recurring real-release probe.
+Tests are `skills/beads-jsonl-path/scripts/resolve-beads-jsonl.test`, new
+`skills/beads-jsonl-path/scripts/select-bead-lanes.test`,
+`skills/drive/scripts/drive-status.test`, and `install.test`. `DRIVE.md` and
+tracked JSONL are bookkeeping exclusions. **Do-NOT-build:** closure block or
+lifecycle copy; pinned dirty/recovery/`--run-jq` compositions; generic pin parser;
+selector wrapper, second parser, or `drive-status` delegate; scheduler, graph
+mutation, or closure code; downloader/installer/recurring probe; lock service,
+recovery API, or daemon.
 
 #### E3a evidence, tests, and budget
 
-Named direct tests are
-`skills/beads-jsonl-path/scripts/resolve-beads-jsonl.test`,
-`skills/beads-jsonl-path/scripts/select-bead-lanes.test`, and the existing
-Drive/harden fixture owners; aggregate evidence is `./install.test` and
-`./check.sh`. Test the selector's exact argv rejection, clean admitted entry,
-hard-link refusal, stable locator/OID, captured stderr, typed scoped and generic
-schemas, per-lane dispatch, stale DB/PATH/override/dirty/mid-read refusal, and
-no-argument drive-status zero calls/`n/a`/no BUILD-or-DONE inference. Run one
-production mutation per claimed property and read the assertion-named red result:
-misorder the resolver prefix; hard-link the selector; replace the admitted tool;
-change one locator OID; loosen Scope-Label handling; corrupt each scoped/generic
-schema; and reintroduce a no-argument `br`/Beads phase inference. Fixtures and
-DRIVE/tracked Beads JSONL are excluded, but ordinary production docs and wiring
-are counted.
+Test the two-form resolver refusals, binary identity/OID and clean-locator
+snapshots, atomic selector admission/argv, private temporary lifecycle, scoped and
+generic typed output, and zero-`br`/no-inference `drive-status`. Mutate one
+production property at a time and read its assertion-named red result. Fixtures
+and bookkeeping are excluded; ordinary production docs and wiring are counted.
 
-Fresh E3a baseline, derived only from this outcome and current HEAD: resolver
-prefix/order/validation/dispatch 42; git-clean `admit-executable` 16; selector
-trusted entry/argv 34; sibling/temp/cleanup 24; identity/stable locator/OID
-helpers 32; query capture helpers 22; scoped validation/output 70; generic
-validation/output 42; final stream handling 14; drive-status no-br/inference 19;
-API/consumer/compatibility/plan/gate wiring 82: **397 production lines**. The
-exact E3a BUILD budget is **1,191 production lines** (3 × 397); crossing it
-returns to reduction, split, or SHAPE rather than raising it.
+Fresh E3a outcome itemization: two-form resolver parsing/refusal 22; pinned binary
+validation/identity/OID/dispatch 32; atomic fixed-sibling selector admission/exec
+18; selector entry/argv/private temp lifecycle 30; clean locator/OID snapshot/query
+capture 32; scoped lane validation/typed output 56; generic validation/typed output
+34; `drive-status` zero-`br`/no-inference 17; production API/consumer docs 36;
+plan/global/table/frontier sync 23; gate wiring 2 = **302 production lines**.
+The exact BUILD budget is **906 production lines** (`3 × 302`); crossing it returns
+to reduction, split, or SHAPE.
 
 ### E3b. Native closure and consumers — issue #65 (`skills-dhm`)
 
 **Priority:** P0. **Effort:** medium. **Depends on:** E3a. **Identity:** retain
 `skills-dhm`; its existing 15 dependents remain the final bootstrap barrier.
 
-E3b consumes E3a admission unchanged and owns no scheduling. Its only command
-owner is one privileged, startup-file-free fenced Bash block in canonical
-`skills/rb-lite-backlog-drain/SKILL.md` Step 11, marked `BEGIN/END NATIVE CLOSE`.
-A clean Bash entry rejects inherited functions and clears startup/location
-overrides before the block uses shell guards, so hostile caller functions cannot
-bypass the standalone or artifact checks. Do not create a wrapper file.
+E3b owns the reusable production provider: the one privileged, startup-file-free
+fenced Bash block in canonical `skills/rb-lite-backlog-drain/SKILL.md` Step 11,
+marked `BEGIN/END NATIVE CLOSE`. It consumes E3a admission unchanged and owns no
+scheduling. Rule 9 is the sole lifecycle contract: Step 11 implements its clean
+entry, standalone/pinned `where`/import/target preflight, opaque input guards,
+native close plus strict flush, snapshot/no-DB structural and literal proof,
+two-state retained-clone resume, forge discovery, and reviewed landing. Its own
+ordinary closure uses the same provider after E3b work merges. The provider uses
+no DB/sidecar classifier, second close, rollback, reopen, reconciliation, recovery
+marker, second closure lock, or provider-specific reason grammar.
 
-The block uses a fresh standalone clone (`.git` is a directory), admitted E3a
-path/OID, and a dynamic `jsonl_path` and `database_path` from pinned `where`;
-it never assumes `.beads/issues.jsonl`. It snapshots the clean JSONL, imports and
-preflights exactly one full open ID/lane, runs exactly one native
-`close ID --reason ... --transition-comment ...`, then strict `sync --flush-only`.
-It proves the result with no-DB show and a literal/structural diff: only the
-one row's allowed status, reason, timestamp, and exactly one comment changes;
-IDs, all other fields, and preserved comments remain exact. It retains the proof
-clone for a bounded resume classifier: before-close abandons with no close; after
-close or after flush resumes proof/flush only and never closes a second time.
-There is no rollback, reopen, recovery API, lock service, graph mutation, third
-new E3 test, or recurring probe.
+Root Drive, Drive LAND phases, and harden-until-clean link to rule 9 and Step 11
+rather than copy commands. Update E1's consumer note and versioned ADR 0003 for the
+pinned native source; the one-time probe remains evidence only.
 
-The other three command-bearing consumers—root Drive, Drive LAND phases, and
-harden-until-clean—link to Step 11 rather than copying commands. Update ADR 0003
-with versioned source citations for `v0.3.2`
-`4104c31e79bf806f53e2eba0a4cd2ba6c594f8b9`; update E1's consumer note to state
-that its admitted runner is consumed unchanged. The one-time
-`docs/specs/e3-native-br-v0.3.2-probe.sh` remains evidence only.
+**Exact file lock.** Production:
 
-**Exact file lock.** Production code/wiring is only `check.sh`. Production
-documentation/procedure:
+- Step 11 and closure-resume portions of `skills/rb-lite-backlog-drain/SKILL.md`
+  Steps 11–12;
+- closure-link portions of `skills/drive/SKILL.md`,
+  `skills/drive/references/phases.md`, and
+  `skills/orchestrating-with-rb-lite/references/harden-until-clean.md`;
+- the `skills/beads-jsonl-path/SKILL.md` consumer note;
+- `docs/adr/0003-bead-closure-stays-post-merge.md`;
+- this plan's E3b/rule/consumer/table portions; and `check.sh`.
 
-- `skills/rb-lite-backlog-drain/SKILL.md` (Step 11/native block only);
-- `skills/drive/SKILL.md` (closure consumer only);
-- `skills/drive/references/phases.md` (closure consumer only);
-- `skills/orchestrating-with-rb-lite/references/harden-until-clean.md`
-  (closure consumer only);
-- `skills/beads-jsonl-path/SKILL.md` (consumer/API note only);
-- `docs/adr/0003-bead-closure-stays-post-merge.md`; and
-- this plan's E3b/global-rule/table/frontier text.
+Tests are only new `skills/rb-lite-backlog-drain/scripts/native-close.test` and
+existing `install.test`. `DRIVE.md` and tracked JSONL are bookkeeping exclusions.
+**Do-NOT-build:** admission/selector changes; wrapper/helper skill/third Bead/new
+state DB; provider-specific reason parser or grammar fixtures; DB/sidecar
+classifier; rollback/reopen/reconciliation/recovery marker; second closure lock;
+consumer command copies; `closure-consumers.test` or another new E3 test; recurring
+probe.
 
-Tests are the new
-`skills/rb-lite-backlog-drain/scripts/native-close.test` and existing
-`install.test`. `DRIVE.md` and the tracked Beads JSONL are reviewed coordinator
-bookkeeping exemptions, not production LOC. Any other path requires a return to
-SHAPE. **Threat model:** hostile inherited shell state, non-default Beads layout,
-stale/changed JSONL, failed import/flush, and interrupted closure must not
-execute another binary, close twice, or falsely prove persistence.
-**Do-NOT-build:** selector/admission work, a closure wrapper, recovery/rollback/
-reopen, lock service, graph mutation, `closure-consumers.test` or any other
-third new E3 test, or a recurring probe.
-
-The named direct test is
-`skills/rb-lite-backlog-drain/scripts/native-close.test`; it extracts the
-canonical block and checks the absence of copied consumer commands, while
-`install.test` alone owns link presence. Its Python/JSON substitutions fail
-closed and fixture-created private tool/snapshot directories are cleaned.
-Aggregate evidence is `./install.test` and `./check.sh`. Mutate one production
-property at a time and read its named red assertion: permit caller function
-startup, hardcode the default path, omit the pin/dynamic `where`, change
-close/flush order, weaken literal structural proof, permit a second resume
-close, copy a consumer command, unversion an ADR citation, or make a
-test-substitution failure pass.
-
-Fresh E3b baseline, independently derived only from this outcome and E3a/E1
-public seams: privileged clean-Bash entry 27; input/standalone/override/evidence
-guards 23; pinned execution/identity/dynamic where helpers 31; snapshot/import/
-target preflight 29; native close + strict flush 9; strict proof/no-DB show/
-literal diff 59; retained-clone resume classifier 37; Step-11 contract 28; three
-consumer amendments 9; versioned ADR 15; E1 consumer note 3; concise plan/global/
-table update 15; gate wiring 1: **286 production lines**. The exact E3b BUILD
-budget is **858 production lines** (3 × 286). Tests/fixtures and DRIVE/tracked
-Beads JSONL are excluded; ordinary production documentation/wiring is included.
-Crossing the budget returns to reduction, split, or SHAPE.
+Fresh E3b outcome itemization: clean Bash entry/opaque input guards 18;
+standalone/pinned-where/import/target preflight 26; native close/strict flush 6;
+snapshot/no-DB/structural/literal proof 38; two-state retained-clone resume 12;
+Step-11 branch/Pending/review/lease/merge procedure 24; forge resume discovery 28;
+Drive/LAND/harden consumer links 12; E1 consumer note 3; versioned ADR 12;
+plan/global/consumer/table sync 28; gate wiring 1 = **208 production lines**.
+The exact BUILD budget is **624 production lines** (`3 × 208`); crossing it returns
+to reduction, split, or SHAPE.
 
 ## Workstream F — Drive/rb-lite controller and convergence
 
@@ -1507,26 +1460,11 @@ terminal JSON records the configured deadline and whether cleanup escalated.
 The hook does not parse a Drive contract, persist a
 state database, poll logs, reset/cut the diff, or learn BUILD/HARDEN/LAND.
 
-The coordinating skills agent verifies the upstream PR URL, merge SHA, and all
-three gate exit codes. It then records and closes F2 only through the dedicated
-reviewed metadata transaction: create a standalone clone from current `master`, then
-`metadata/close-f2-checkpoint` inside it; follow E3b's exact private-tool/native-close/strict-
-flush procedure with the work PR URL+merge SHA and gate evidence; make only the F2 closure
-JSONL change plus the `DRIVE.md` Done/Now/Next update; push and open a PR whose body
-contains `bead-closure: <F2-bead-id>`; once GitHub assigns `N`, amend `DRIVE.md`
-to `Pending: metadata PR douglaz/skills#N`; rerun the skills gate and panel on
-the amended tree; force-push with lease; and merge that PR. Do not combine this
-metadata with another execution row or record DONE while other scoped rows
-remain.
-
-Do not mutate the skills Beads store from the rb-lite checkout, on an active
-unrelated skills branch, or directly on skills `master`.
-
-Here `F2` means the resolved generated bead ID, not the plan alias. Close it only
-through E3b's native single-ID procedure: the merged PR URL and merge SHA are the
-close reason, the upstream checkpoint evidence is the transition comment, and the
-explicit strict flush and `--no-db` proof must both succeed. Do not run a preceding
-notes/status update or rely on best-effort auto-flush.
+The coordinating skills agent verifies the upstream PR URL, full merge SHA, and
+all three gate exit codes. F2's semantic mapping for global rule 9 and Step 11
+is that URL/SHA as `reason` and the three named gate outcomes as transition
+evidence. Do not mutate the skills Beads store from the rb-lite checkout, an
+unrelated skills branch, or directly on `master`; rule 9 owns closure.
 
 Publishing the required upstream release is a separate human-authority
 checkpoint recorded in `DRIVE.md`; local controller BUILD remains blocked until
@@ -1546,18 +1484,17 @@ authorization it stays open, unclaimed, and is reported only through the
 coordinating skills agent—not a generic implementation drain—claims F2r only in the
 exact global-rule-7 Git-common-directory reservation (zero `br`/JSONL/status/assignee
 mutation), revalidates its four records before each external side effect, holds it through
-release and closure metadata PR merge, and
-performs the mechanical release publication, probe, and reviewed metadata
-record. The authority label remains because the prohibited action is still
+publication, and performs the mechanical release publication and probe. The
+authority label remains because the prohibited action is still
 governed by that record; it does not mean the human must execute release tooling.
 Publication follows the rb-lite repository's release instructions and is the
 only external side effect authorized by this bead.
 An existing live/unknown reservation refuses; stale recovery requires the exact rule-7
 evidence and cleanup, never PID age.
 
-The authorization record and immutable version/commit go in both the bead's closure
-transition comment and `DRIVE.md`. Publication is not complete until the released artifact itself
-exists and passes. Record the GitHub release URL, immutable tag, and full commit.
+Record the authorization, GitHub release URL, immutable tag, and full commit in
+`DRIVE.md`. Publication is not complete until the released artifact itself exists
+and passes.
 Require `gh release view <tag> -R douglaz/rb-lite` to report a published,
 non-draft release, and require both the tag ref and its peeled annotated-tag ref
 (when present) from `git ls-remote` to resolve to the recorded commit. A mismatch,
@@ -1650,17 +1587,11 @@ captures the one output path, and probes that realized executable; it never
 requires Nix itself to be silent. Preserve and cite the private log on failure,
 and remove the private wrapper directory only after successful metadata capture.
 
-After publication and the supervised probe succeed, record F2r through a dedicated
-reviewed skills metadata transaction. Create a standalone clone from current `master`,
-then `metadata/close-f2r-release` inside it; enter E3b at companion selection and executable
-admission, letting E3b's later clean locator prove the JSONL; make only the F2r authorization/
-release closure change plus the `DRIVE.md` Done/Now/Next update; map the immutable release URL, tag,
-and commit to `--reason` and the human authorization plus capability-probe evidence to
-`--transition-comment`; the explicit flush and `--no-db` proof must then succeed. Push and open a PR whose body contains `bead-closure: <F2r-bead-id>`; once GitHub
-assigns `N`, amend `DRIVE.md` to `Pending: metadata PR douglaz/skills#N`; rerun
-`./check.sh` and the independent panel on the amended tree; force-push with lease;
-then merge. Do not mutate directly on `master`, combine this metadata with F3, or
-make F3 ready before this reviewed closure lands.
+After publication and the supervised probe succeed, F2r's semantic mapping for
+global rule 9 and Step 11 is the immutable release URL, tag, and full commit as
+`reason`, and the human authorization reference plus supervised-probe result as
+transition evidence. Do not mutate directly on `master`, combine this metadata
+with F3, or make F3 ready before rule-9 closure lands.
 
 ### F3. Foreground Drive controller — issues #48, #30, #31, #35
 
@@ -1950,6 +1881,15 @@ After review, update the existing graph in place into:
 - the decision/publication evidence named for B0 and F2r instead of an
   implementation gate; and
 - the exact priority and executor labels in the table.
+
+This GRAPH transfer creates exactly one new P0 `executor-skills`,
+`drive-open-issues` E3a bead, `Exact br admission and typed lane selection`, with
+the closed E1 `skills-iog` dependency. It changes `skills-dhm` only to depend on
+that new E3a bead instead of E1, retaining its identity and all 15 dependents.
+Only descriptions change for `skills-dta` (A4b), `skills-xfd` (B0),
+`skills-qmi` (F2), and `skills-rrk` (F2r), plus the new E3a and E3b
+`skills-dhm` descriptions; no other Bead description, edge, field, or graph row
+changes.
 
 Before any execution state changes, the exact scoped ready set is only E1 in the
 `executor-skills` lane; both other lanes are empty. After E1's work and closure
