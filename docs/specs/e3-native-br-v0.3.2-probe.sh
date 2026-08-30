@@ -7,7 +7,9 @@ ASSET=${2:?usage: probe br tarball}
 CANDIDATE_JSONL=${3:?usage: probe br tarball candidate-issues.jsonl}
 SAFE_PATH=$(command -p getconf PATH)
 [[ $PATH == "$SAFE_PATH" ]]
-ROOT=$(mktemp -d /tmp/e3-native-br.XXXXXX)
+TMP_PARENT=${TMPDIR:-/tmp}
+[[ $TMP_PARENT == /* && -d $TMP_PARENT && ! -L $TMP_PARENT ]]
+ROOT=$(mktemp -d "$TMP_PARENT/e3-native-br.XXXXXX")
 cleanup() {
   rc=$?
   trap - EXIT
@@ -33,11 +35,12 @@ PYTHON_VERSION=$(python3 --version 2>&1)
 KERNEL_VERSION=$(uname -srm)
 printf 'PROBE_ENV=Bash=%s Git=%s Python=%s Kernel=%s\n' \
   "$BASH_VERSION" "$GIT_VERSION" "$PYTHON_VERSION" "$KERNEL_VERSION"
+[[ $(uname -s) == Linux && $(uname -m) == x86_64 ]]
 # Authoritative release asset and checksum listing:
 # https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.3.2/br-0.3.2-linux_x86_64.tar.gz
 # https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.3.2/SHA256SUMS
 python3 -I - "$ASSET" "$BR" "$CANDIDATE_JSONL" <<'PYHASH'
-import hashlib, sys
+import hashlib, sys, tarfile
 expected = {
     "ARCHIVE": "e67c560e77e912490e44a65e3e9c13205210d171e729c5d801072ee508207288",
     "BINARY": "590aebae292bca9d36bf90d3219dcb27a3536f402864841b2a11d5c07c4c6c63",
@@ -57,6 +60,17 @@ for label, path in zip(("ARCHIVE", "BINARY", "CANDIDATE_JSONL"), sys.argv[1:]):
     print(f"{label}_SHA256={digest}")
     if digest != expected[label]:
         raise SystemExit(f"unexpected {label.lower()} digest")
+with tarfile.open(sys.argv[1], "r:gz") as archive:
+    members = [member for member in archive.getmembers()
+               if member.name == "br" and member.isfile()]
+    if len(members) != 1:
+        raise SystemExit("release archive does not contain exactly one regular br")
+    archived_br = archive.extractfile(members[0]).read()
+with open(sys.argv[2], "rb") as stream:
+    admitted_br = stream.read()
+if archived_br != admitted_br:
+    raise SystemExit("admitted binary does not match the release archive")
+print("ARCHIVE_BINARY_MATCH=1")
 PYHASH
 VERSION_JSON=$("$BR" --no-auto-import --no-auto-flush version --json)
 printf 'VERSION_JSON=%s\n' "$VERSION_JSON"
@@ -101,7 +115,7 @@ printf 'COMPAT_IMPORT_RC=%s IMPORT_STDOUT_BYTES=%s IMPORT_STDERR_BYTES=%s FLUSH_
 seed=$ROOT/seed; clone=$ROOT/clone; mkdir "$seed"; cd "$seed"
 git init -q; git config user.email probe@example.invalid; git config user.name Probe; mkdir .beads
 "$BR" init --prefix p --quiet
-A=$("$BR" create alpha --silent); B=$("$BR" create beta --silent); C=$("$BR" create gamma --silent); D=$("$BR" create delta-in-progress --silent); E=$("$BR" create outside-scope-decoy --silent); F=$("$BR" create scoped-closed-decoy --status closed --silent)
+A=$("$BR" create alpha --silent); B=$("$BR" create beta --silent); C=$("$BR" create gamma --silent); D=$("$BR" create delta-in-progress --silent); E=$("$BR" create outside-scope-decoy --silent); F=$("$BR" create scoped-closed-decoy --status closed --silent); G=$("$BR" create scoped-deferred --silent)
 "$BR" --no-auto-import --no-auto-flush label add "$A" --label executor-skills >/dev/null
 "$BR" --no-auto-import --no-auto-flush label add "$A" --label drive-open-issues >/dev/null
 "$BR" --no-auto-import --no-auto-flush label add "$B" --label executor-rb-lite >/dev/null
@@ -113,7 +127,9 @@ A=$("$BR" create alpha --silent); B=$("$BR" create beta --silent); C=$("$BR" cre
 "$BR" --no-auto-import --no-auto-flush label add "$E" --label executor-rb-lite >/dev/null
 "$BR" --no-auto-import --no-auto-flush label add "$F" --label executor-skills >/dev/null
 "$BR" --no-auto-import --no-auto-flush label add "$F" --label drive-open-issues >/dev/null
+"$BR" --no-auto-import --no-auto-flush label add "$G" --label drive-open-issues >/dev/null
 "$BR" --no-auto-import --no-auto-flush update "$D" --status in_progress >/dev/null
+"$BR" --no-auto-import --no-auto-flush update "$G" --status deferred >/dev/null
 "$BR" --no-auto-import --no-auto-flush dep add "$B" "$A" --quiet
 "$BR" --no-auto-import --no-auto-flush dep add "$E" "$A" --quiet
 "$BR" --no-auto-import --no-auto-flush comments add "$C" --message a-preserved >/dev/null
@@ -141,23 +157,24 @@ set +e
 "$BR" --no-db --no-auto-import --no-auto-flush ready --limit 0 --label drive-open-issues --label executor-skills --json >ready-skills.json 2>ready-skills.err; ready_skills_rc=$?
 "$BR" --no-db --no-auto-import --no-auto-flush ready --limit 0 --label drive-open-issues --label executor-rb-lite --json >ready-rb.json 2>ready-rb.err; ready_rb_rc=$?
 "$BR" --no-db --no-auto-import --no-auto-flush ready --limit 0 --label drive-open-issues --label authority-human --json >ready-human.json 2>ready-human.err; ready_human_rc=$?
-"$BR" --no-db --no-auto-import --no-auto-flush list --label drive-open-issues --status open --all --json >list-open.json 2>list-open.err; list_open_rc=$?
-"$BR" --no-db --no-auto-import --no-auto-flush list --label drive-open-issues --status in_progress --all --json >progress-all.json 2>progress-all.err; progress_all_rc=$?
-"$BR" --no-db --no-auto-import --no-auto-flush list --label drive-open-issues --label executor-skills --status in_progress --all --json >progress-skills.json 2>progress-skills.err; progress_skills_rc=$?
-"$BR" --no-db --no-auto-import --no-auto-flush list --label drive-open-issues --label executor-rb-lite --status in_progress --all --json >progress-rb.json 2>progress-rb.err; progress_rb_rc=$?
-"$BR" --no-db --no-auto-import --no-auto-flush list --label drive-open-issues --label authority-human --status in_progress --all --json >progress-human.json 2>progress-human.err; progress_human_rc=$?
+"$BR" --no-db --no-auto-import --no-auto-flush list --label drive-open-issues --status open --limit 0 --json >list-open.json 2>list-open.err; list_open_rc=$?
+"$BR" --no-db --no-auto-import --no-auto-flush list --label drive-open-issues --status in_progress --limit 0 --json >progress-all.json 2>progress-all.err; progress_all_rc=$?
+"$BR" --no-db --no-auto-import --no-auto-flush list --label drive-open-issues --status deferred --limit 0 --json >deferred-all.json 2>deferred-all.err; deferred_all_rc=$?
+"$BR" --no-db --no-auto-import --no-auto-flush list --label drive-open-issues --label executor-skills --status in_progress --limit 0 --json >progress-skills.json 2>progress-skills.err; progress_skills_rc=$?
+"$BR" --no-db --no-auto-import --no-auto-flush list --label drive-open-issues --label executor-rb-lite --status in_progress --limit 0 --json >progress-rb.json 2>progress-rb.err; progress_rb_rc=$?
+"$BR" --no-db --no-auto-import --no-auto-flush list --label drive-open-issues --label authority-human --status in_progress --limit 0 --json >progress-human.json 2>progress-human.err; progress_human_rc=$?
 "$BR" --no-db --no-auto-import --no-auto-flush blocked --limit 0 --label drive-open-issues --json >blocked-all.json 2>blocked-all.err; blocked_all_rc=$?
 set -e
-python3 -I - "$E" "$F" "$ready_skills_rc" "$ready_rb_rc" "$ready_human_rc" "$list_open_rc" "$progress_all_rc" "$progress_skills_rc" "$progress_rb_rc" "$progress_human_rc" "$blocked_all_rc" <<'PY'
+python3 -I - "$E" "$F" "$ready_skills_rc" "$ready_rb_rc" "$ready_human_rc" "$list_open_rc" "$progress_all_rc" "$deferred_all_rc" "$progress_skills_rc" "$progress_rb_rc" "$progress_human_rc" "$blocked_all_rc" <<'PY'
 import json,sys
 decoys=set(sys.argv[1:3])
-names=('ready-skills','ready-rb','ready-human','list-open','progress-all','progress-skills','progress-rb','progress-human','blocked-all')
-expected=(1,0,1,3,1,1,0,0,1)
+names=('ready-skills','ready-rb','ready-human','list-open','progress-all','deferred-all','progress-skills','progress-rb','progress-human','blocked-all')
+expected=(1,0,1,3,1,1,1,0,0,1)
 projection={}
 for name,want,rc in zip(names,expected,sys.argv[3:]):
     payload=json.load(open(name+'.json'))
     stderr=open(name+'.err','rb').read()
-    if name.startswith('list-') or name.startswith('progress-'):
+    if name.startswith(('list-', 'progress-', 'deferred-')):
         if not isinstance(payload,dict) or not isinstance(payload.get('issues'),list) or \
            type(payload.get('total')) is not int or payload.get('total') != want or \
            payload.get('has_more') is not False:

@@ -2,9 +2,10 @@
 
 ## Status
 
-**Current:** E3 is split in SHAPE into E3a exact `br` admission/typed selection and
-E3b native closure/consumers; `DRIVE.md` is the live phase/review record. Historical E3
-clearance narrative below is not clearance of either current split tip.
+**Current:** E3 is in SHAPE with a user-approved reduced split: E3a exact `br`
+admission/typed selection and E3b native closure/consumers. `DRIVE.md` is the
+live phase/review record. Historical E3 clearance narrative below is not
+clearance of either current split tip.
 
 SHAPE had cleared on 2026-08-12 after the first post-amendment GRAPH polish.
 The first pinned Codex xhigh
@@ -234,6 +235,40 @@ The E3b native-close behavior and exact release provenance are recorded in
 `docs/specs/e3-native-br-v0.3.2-probe.sh`; E3a owns admitted typed reads. The older
 `sync --status` schema is not an E3 interface.
 
+The reduced E3a probe was measured on 2026-08-30 with Bash 5.3.15, Git 2.55.0,
+Python 3.14.6, and Linux 7.1.6 x86-64. The candidate was reconstructed from
+repository history, and stdout/stderr were captured separately:
+
+```bash
+candidate=$(mktemp /dev/shm/e3-candidate.XXXXXX)
+stdout=$(mktemp /dev/shm/e3-probe-stdout.XXXXXX)
+stderr=$(mktemp /dev/shm/e3-probe-stderr.XXXXXX)
+git show 93c5155e10a397b120ab40327e928dfcb59d30e2:.beads/issues.jsonl \
+  >"$candidate"
+env -i \
+  PATH=/run/current-system/sw/bin:/bin:/usr/bin:/nix/var/nix/profiles/default/bin \
+  TMPDIR=/dev/shm LC_ALL=C TZ=UTC \
+  /run/current-system/sw/bin/bash --noprofile --norc \
+  docs/specs/e3-native-br-v0.3.2-probe.sh \
+  /tmp/br-v0.3.2-bin/br \
+  /tmp/br-v0.3.2-bin/br-0.3.2-linux_x86_64.tar.gz \
+  "$candidate" >"$stdout" 2>"$stderr"
+probe_rc=$?
+```
+
+Observed `probe_rc=0`, 1,614 stdout bytes, zero stderr bytes,
+`ARCHIVE_BINARY_MATCH=1`, no fresh-clone DB, and
+`NO_DB_SELECTOR_PROJECTION={"blocked-all":1,"deferred-all":1,"list-open":3,
+"progress-all":1,"progress-human":0,"progress-rb":0,"progress-skills":1,
+"ready-human":1,"ready-rb":0,"ready-skills":1}`. The authenticated archive,
+binary, and historical-candidate SHA-256 values are respectively
+`e67c560e77e912490e44a65e3e9c13205210d171e729c5d801072ee508207288`,
+`590aebae292bca9d36bf90d3219dcb27a3536f402864841b2a11d5c07c4c6c63`, and
+`7269d4e17a3be4b19f957b4084001e0f529db7453cf667fef84b6e89a85a98eb`.
+For this SHA-1 repository, `git hash-object --no-filters` over the admitted
+binary returned `3bbfef05435c9f3aefba9cb2931a5d74ff45f237`; admission recomputes the
+appropriate 40- or 64-hex OID in the consuming repository.
+
 ## Priority definitions
 
 - **P0:** a trust boundary can admit unreviewed work or destroy/misapply user
@@ -254,31 +289,46 @@ The E3b native-close behavior and exact release provenance are recorded in
    `testing-with-rb-lite` when the deliverable itself is a test or live gate.
 6. A reviewer finding is a hypothesis. Reproduce it before accepting it.
 7. Run at most one `executor-skills` bead at a time, regardless of how many the
-    ready query returns. Before selecting it, atomically create a lane reservation
-    directory under the Git common directory containing the exact bead ID, branch,
-    coordinator identity, and start time; an existing live or unknown reservation
-    blocks dispatch, and stale recovery requires explicit evidence rather than PID
-    age. Hold that reservation through work-PR merge or explicit abandonment and
-    verified cleanup. The
-    external `executor-rb-lite` lane may run concurrently
-    once ready because it owns another repository; authority beads are reported,
-    never implemented speculatively. After recorded human authorization, any mechanical
-    skills-repository authority action must acquire the same durable common-directory
-    reservation with its exact bead/branch/coordinator/start records; unknown or stale
-    occupants fail closed, and the reservation is held through publication. It changes
-    no Beads status/assignee merely to claim the work. This
-    serialization is intentional: current
-    ready rows share installer, reviewer-panel, and skill files in ways that are not
-    faithfully representable as semantic dependency edges.
+   ready query returns. Before selecting it, atomically create a lane reservation
+   directory under the Git common directory containing the exact bead ID, branch,
+   coordinator identity, and start time; an existing live or unknown reservation
+   blocks dispatch, and stale recovery requires explicit evidence rather than PID
+   age. When this rule applies, hold its reservation until the bead's rule-9
+   lifecycle completes, or until explicit pre-closure abandonment and verified
+   cleanup. The reservation is not a closure lock.
+
+   The external `executor-rb-lite` lane may run concurrently because its work owns
+   another repository; authority beads are reported, never implemented
+   speculatively. After recorded human authorization, any mechanical skills-repository
+   authority action must acquire the same reservation through publication. Merely
+   claiming work changes no Beads status or assignee. Rule 9's independent
+   single-coordinator precondition applies to every metadata closure, including
+   reservation-exempt work.
 8. Ordering only: E1 closes first; then E3a work and its rule-9 closure merge; then
    E3b work and its rule-9 closure merge; only then may normal scheduling begin.
    Every closure, including either bootstrap closure, delegates to rule 9.
-9. **Metadata-closure lifecycle (sole normative owner).** At most one closure
-   branch/PR is outstanding. On entry or resume, search the self and parent forge
-   repositories for the exact `bead-closure: <id>` marker, deduplicate results by
-   URL, and fail closed on saturated or partial queries. An open closure PR resumes;
-   a merged one refreshes clean `master` and verifies the closed row. If no marker
-   exists, distinguish merged/open work PRs from genuinely unstarted work.
+9. **Metadata-closure lifecycle (sole normative owner).** Exactly one authorized
+   coordinator operates this lifecycle across the skills store. Concurrent
+   coordinators and concurrent retained clones are unsupported; this organizational
+   precondition is independent of rule 7 and is not presented as a forge lock. The
+   caller has already established the target work merge and its evidence. Rule 9
+   neither rediscovers work PRs nor decides whether implementation started.
+
+   On every entry, enumerate `url`, `state`, `mergedAt`, `body`, and head branch for
+   all PRs in the self and, when configured, parent repositories by following
+   100-row pagination until `hasNextPage` is false. Extract only exact full lines
+   `bead-closure: <id>`,
+   deduplicate by canonical URL, and refuse a PR with multiple closure-marker lines.
+   Any API failure, incomplete page, failed configured-parent lookup, or unfinished
+   pagination stops for human resolution.
+
+   Any CLOSED-unmerged marker, any OPEN marker for another ID, more than one OPEN
+   marker, or more than one attempt for the target ID stops for human resolution.
+   One exact-ID OPEN marker resumes only that PR's existing review and merge
+   lifecycle. One exact-ID MERGED marker refreshes clean `master` and verifies the
+   row is closed. Historical merged markers for other IDs are ignored rather than
+   aggregated or superseded. With no target marker or outstanding blocker, start a
+   fresh transaction.
 
    In one standalone transaction, clone latest clean `master`, require `.git` to be
    a directory, create exactly one `metadata/close-<id>` branch, and snapshot the
@@ -297,19 +347,22 @@ The E3b native-close behavior and exact release provenance are recorded in
    evidence, and pinned `--no-db show` agrees with JSONL. Render the literal Git diff
    for review.
 
-   The branch contains only that closure and its matching `DRIVE.md` transition.
-   Open its PR with `bead-closure: <id>`; after GitHub assigns a number, amend
-   `DRIVE.md` to `Pending: metadata PR owner/repo#N`, rerun `./check.sh` and the
-   independent panel on the amended tree, force-push the owned branch with
-   `--force-with-lease`, pass normal PR gates, merge, refresh clean `master`, and
-   verify persistence.
+   Save the open bytes at `.git/closure-open.jsonl`. Immediately after a successful
+   close, flush, and proof, save the intended closed bytes at
+   `.git/closure-intended.jsonl`. The branch contains only that closure and its
+   matching `DRIVE.md` transition. Open its PR with exactly one
+   `bead-closure: <id>` line; after GitHub assigns a number, record
+   `Pending: metadata PR owner/repo#N` in an ordinary forward commit and push.
+   Rerun `./check.sh` and the independent panel on that final tree, pass normal PR
+   gates, merge, refresh clean `master`, and verify persistence.
 
-   On interruption, classify only the retained clone's current JSONL bytes: if they
-   exactly equal the intended closed result, run idempotent strict flush/proof only;
-   if they exactly equal the saved open bytes, abandon the disposable clone and
-   restart fresh; any third state stops for human repair. Do not inspect DB/sidecar
-   combinations, close a second time, reopen, roll back, or add a recovery marker or
-   second closure lock.
+   On interruption, print and retain the clone path. Classify only its current JSONL
+   bytes against the two named snapshots: exact intended-closed bytes rerun strict
+   flush/proof only; exact saved-open bytes abandon that clone and restart fresh; a
+   missing intended snapshot with changed bytes, or any third state, stops for human
+   repair. Do not inspect DB/sidecar combinations, close a second time, replace or
+   reopen a PR, reuse a branch for another attempt, roll back, or add a recovery
+   marker or second closure lock.
 
    | Consumer | Kind | `reason` semantics | Transition evidence | Provider |
    |---|---|---|---|---|
@@ -1218,12 +1271,14 @@ with #47's fact-ownership policy.
 
 **Priority:** P0. **Effort:** medium. **Depends on:** closed E1 (`skills-iog`).
 
-E3a is the admission and read-routing owner only. It admits exact
-`Dicklesworthstone/beads_rust` `v0.3.2`, commit
-`4104c31e79bf806f53e2eba0a4cd2ba6c594f8b9`, at one E1-private absolute path
-and Git object ID. It neither installs `br`, mutates the graph, schedules work,
-nor owns a closure lifecycle. After E3a work merges, its sole non-production
-closure provider is the rule-9 coordinator bootstrap using E3a's admitted binary
+E3a is the admission and read-routing owner only. This milestone supports only
+the evidenced Linux x86-64 prebuilt for exact `Dicklesworthstone/beads_rust`
+`v0.3.2`, commit `4104c31e79bf806f53e2eba0a4cd2ba6c594f8b9`; other
+platforms stop and defer. The coordinator supplies its canonical absolute path
+in one trusted private companion directory outside the driven worktree. E3a
+neither downloads or installs `br`, mutates the graph, schedules work, nor owns
+a closure lifecycle. After E3a work merges, its sole non-production closure
+provider is the rule-9 coordinator bootstrap using this admitted binary
 directly; no checked-in helper or lifecycle copy is created.
 
 #### Admission and selector contract
@@ -1236,37 +1291,74 @@ resolve-beads-jsonl --pinned-br ABSOLUTE_PATH OID --run-br BR_ARG...
 ```
 
 The first is the authenticated clean locator; the second executes native `br`.
-Pinned `--allow-dirty`, `--recovery`, and `--run-jq` refuse. Admission validates
-the release, build, and commit once; thereafter the recorded OID authenticates
-the exact bytes on every invocation. The resolver validates an absolute private,
-regular, non-symlink executable and its OID, clears supported location overrides,
-captures locator/query stderr, and fails closed on a dirty or changing JSONL. It
-has no generic pin-composition parser or caller-PATH fallback.
+Pinned `--allow-dirty`, `--recovery`, and `--run-jq` refuse. Controlled admission
+first proves Linux x86-64, the release archive and extracted binary SHA-256, exact
+`version --json` version/build/commit, and the private executable's repository
+object ID. Thereafter the resolver recomputes that 40- or 64-hex OID before every
+dispatch. It validates an absolute regular non-symlink executable, clears
+supported location overrides, captures stderr, and fails closed on a dirty or
+changing JSONL. The private companion directory is trusted against concurrent
+replacement; there is no inode choreography, generic pin parser, admission
+registry, or caller-PATH fallback.
 
-Selector authentication and execution are one atomic E1 runner operation:
+The fixed installed sibling has exactly two selector forms:
 
 ```text
-git-clean admit-executable select-bead-lanes -- <selector argv...>
+select-bead-lanes --generic --pinned-br ABSOLUTE_PATH OID
+select-bead-lanes --scoped --pinned-br ABSOLUTE_PATH OID
 ```
 
-It validates and executes only the fixed installed sibling: outside the worktree,
-regular, non-symlink, executable, single-link, with device/inode rechecked
-immediately before `exec`; it returns no pathname ticket. The trusted companion
-directory is outside this threat model. There is no selector wrapper, self-probe,
-second parser, or `drive-status` delegate.
+`select-bead-lanes` is the sole `Scope-Label` parser. Scoped mode requires
+exactly one nonempty root-`DRIVE.md` value; there is no duplicate
+`--scope-label` argument. Both modes use the admitted resolver, require the clean
+locator/OID snapshot before and after all reads, and run only
+`--no-db --no-auto-import --no-auto-flush` queries. Scoped mode runs three
+lane-specific `ready --limit 0 --json` queries, one each for
+`executor-skills`, `executor-rb-lite`, and `authority-human`; generic mode runs
+one unlabelled ready query. Each mode also runs `list --status STATUS --limit 0
+--json` for `open`, `in_progress`, and `deferred`, plus `blocked --limit 0
+--json`; scoped mode adds its scope label to every query.
 
-`select-bead-lanes` remains the sole `Scope-Label` parser. Its scoped and generic
-modes use only the admitted pinned read path, capture streams, require the clean
-locator/OID snapshot before and after their queries, validate the bounded lane
-schemas, and emit one typed LF JSON result or a fixed failure with no stdout.
-`drive-status` without an explicit typed selection makes zero `br` calls, reports
-Beads counts `n/a`, and cannot infer BUILD or DONE. Drive, backlog Steps 1/12,
-orchestration, and harden consume selector output rather than raw `br` commands.
+Every query must exit zero with empty stderr and complete JSON. List envelopes
+provide a list-valued `issues`, integral `total` equal to its length, and
+`has_more:false`; ready and blocked results are arrays. Validate only routing
+facts: nonempty unique string IDs, status-list disjointness, ready IDs as an
+ordered subset of open IDs, and labels used for routing. Every scoped open or
+in-progress row has exactly one recognized lane; deferred rows are not
+dispatchable and need no lane. Generic mode refuses any unresolved row carrying
+a recognized lane or the active root-Drive scope label. Missing, duplicated, or
+malformed consumed fields refuse; cosmetic title, type, priority, label-order,
+or unrelated-field differences do not.
+
+Success is one LF-terminated object with exactly one of these shapes; arrays
+contain IDs in native order:
+
+```json
+{"schema":"skills.drive.bead-lanes.v1","scope_label":"drive-open-issues",
+ "br_oid":"40-or-64-lowercase-hex",
+ "outstanding":{"open":0,"in_progress":0,"deferred":0,"blocked":0},
+ "lanes":{"executor-skills":{"ready":[],"in_progress":[]},
+          "executor-rb-lite":{"ready":[],"in_progress":[]},
+          "authority-human":{"ready":[],"in_progress":[]}},
+ "deferred":[]}
+{"schema":"skills.drive.generic-ready.v1","scope_label":null,
+ "br_oid":"40-or-64-lowercase-hex",
+ "outstanding":{"open":0,"in_progress":0,"deferred":0,"blocked":0},
+ "ready":[],"in_progress":[],"deferred":[]}
+```
+
+Failure is nonzero with no stdout and one fixed diagnostic. `unresolved_count`
+is the sum of `open`, `in_progress`, and `deferred`; blocked is a subset, not an
+additional unresolved row. `drive-status --bead-selection FILE` accepts only
+these typed shapes and makes zero `br` calls. Without an explicit valid
+selection it reports Beads counts `n/a` and cannot freshly infer BUILD or DONE.
+With one, ready/in-progress routes by lane, deferred or blocked-only remainder
+routes to GRAPH, and only all-three-status zero can support DONE. Drive, backlog
+Steps 1/12, orchestration, and harden consume this owner rather than raw `br`.
 
 **Exact file lock.** Production:
 
 - `skills/beads-jsonl-path/scripts/resolve-beads-jsonl`;
-- `skills/beads-jsonl-path/scripts/git-clean`;
 - new `skills/beads-jsonl-path/scripts/select-bead-lanes`;
 - `skills/drive/scripts/drive-status`;
 - selector-only portions of `skills/drive/SKILL.md`,
@@ -1279,29 +1371,37 @@ orchestration, and harden consume selector output rather than raw `br` commands.
 
 Tests are `skills/beads-jsonl-path/scripts/resolve-beads-jsonl.test`, new
 `skills/beads-jsonl-path/scripts/select-bead-lanes.test`,
-`skills/drive/scripts/drive-status.test`, and `install.test`. `DRIVE.md` and
-tracked JSONL are bookkeeping exclusions. **Do-NOT-build:** closure block or
-lifecycle copy; pinned dirty/recovery/`--run-jq` compositions; generic pin parser;
-selector wrapper, second parser, or `drive-status` delegate; scheduler, graph
-mutation, or closure code; downloader/installer/recurring probe; lock service,
-recovery API, or daemon.
+`skills/drive/scripts/drive-status.test`, `install.test`, and retained
+`docs/specs/e3-native-br-v0.3.2-probe.sh`. `DRIVE.md`, tests, fixtures, evidence,
+and tracked JSONL are budget exclusions. **Do-NOT-build:** `git-clean`
+admission mode; selector launcher/wrapper or pathname ticket; duplicate
+`--scope-label` or second parser; pinned dirty/recovery/`--run-jq` compositions;
+generic binary/version framework; cosmetic row validation; scheduler, graph
+mutation, or closure code; downloader/installer/updater/recurring probe;
+admission registry, lock, daemon, or recovery API.
 
 #### E3a evidence, tests, and budget
 
-Test the two-form resolver refusals, binary identity/OID and clean-locator
-snapshots, atomic selector admission/argv, private temporary lifecycle, scoped and
-generic typed output, and zero-`br`/no-inference `drive-status`. Mutate one
-production property at a time and read its assertion-named red result. Fixtures
-and bookkeeping are excluded; ordinary production docs and wiring are counted.
+Test the two resolver forms, platform/identity/OID admission, per-dispatch swaps,
+clean snapshots, exact query argv/streams, both typed schemas, lane refusals,
+deferred-only GRAPH, all-status-empty DONE, >50-row no truncation, and
+zero-`br`/no-inference `drive-status`. Mutate one production property at a time
+and read the assertion that fails. The retained probe must reconstruct its
+candidate with `git show
+93c5155e10a397b120ab40327e928dfcb59d30e2:.beads/issues.jsonl`, authenticate
+the release
+archive, extract its sole regular `br` member, prove those bytes equal the
+admitted binary, and exercise exact `--limit 0` open/in-progress/deferred queries
+in an explicit sanitized environment.
 
-Fresh E3a outcome itemization: two-form resolver parsing/refusal 22; pinned binary
-validation/identity/OID/dispatch 32; atomic fixed-sibling selector admission/exec
-18; selector entry/argv/private temp lifecycle 30; clean locator/OID snapshot/query
-capture 32; scoped lane validation/typed output 56; generic validation/typed output
-34; `drive-status` zero-`br`/no-inference 17; production API/consumer docs 36;
-plan/global/table/frontier sync 23; gate wiring 2 = **302 production lines**.
-The exact BUILD budget is **906 production lines** (`3 × 302`); crossing it returns
-to reduction, split, or SHAPE.
+Fresh E3a outcome itemization: pinned resolver forms plus platform and identity
+admission 22; per-dispatch OID and sanitized absolute dispatch 14; selector modes
+and sole Scope-Label parser 12; read-query capture and cleanup 20; minimal
+envelope/lane validation and typed projection 26; explicit-selection
+`drive-status` and zero-`br` fallback 18; API and consumer docs 18; plan,
+table/frontier, and gate wiring 10 = **140 production lines**. The exact BUILD
+budget is **420 production lines** (`3 × 140`); crossing it returns to reduction,
+split, or SHAPE.
 
 ### E3b. Native closure and consumers — issue #65 (`skills-dhm`)
 
@@ -1312,12 +1412,14 @@ E3b owns the reusable production provider: the one privileged, startup-file-free
 fenced Bash block in canonical `skills/rb-lite-backlog-drain/SKILL.md` Step 11,
 marked `BEGIN/END NATIVE CLOSE`. It consumes E3a admission unchanged and owns no
 scheduling. Rule 9 is the sole lifecycle contract: Step 11 implements its clean
-entry, standalone/pinned `where`/import/target preflight, opaque input guards,
-native close plus strict flush, snapshot/no-DB structural and literal proof,
-two-state retained-clone resume, forge discovery, and reviewed landing. Its own
-ordinary closure uses the same provider after E3b work merges. The provider uses
-no DB/sidecar classifier, second close, rollback, reopen, reconciliation, recovery
-marker, second closure lock, or provider-specific reason grammar.
+entry, complete forge enumeration and strict stop/resume matrix, standalone
+pinned-`where`/import/target preflight, opaque input guards, native close plus
+strict flush, snapshot/no-DB structural and literal proof, two-state retained
+clone resume, and reviewed landing. Its own ordinary closure uses the same
+provider after E3b work merges. The provider uses no work-PR discovery, cross-ID
+aggregation, DB/sidecar classifier, second close, replacement/reopen, branch
+reuse, rollback/reconciliation, recovery marker, closure lock, or
+provider-specific reason grammar.
 
 Root Drive, Drive LAND phases, and harden-until-clean link to rule 9 and Step 11
 rather than copy commands. Update E1's consumer note and versioned ADR 0003 for the
@@ -1337,19 +1439,20 @@ pinned native source; the one-time probe remains evidence only.
 Tests are only new `skills/rb-lite-backlog-drain/scripts/native-close.test` and
 existing `install.test`. `DRIVE.md` and tracked JSONL are bookkeeping exclusions.
 **Do-NOT-build:** admission/selector changes; wrapper/helper skill/third Bead/new
-state DB; provider-specific reason parser or grammar fixtures; DB/sidecar
-classifier; rollback/reopen/reconciliation/recovery marker; second closure lock;
-consumer command copies; `closure-consumers.test` or another new E3 test; recurring
-probe.
+state DB; work-PR discovery; cross-ID aggregation/supersession; replacement,
+reopen, branch reuse, or force-update recovery; provider-specific reason parser;
+DB/sidecar classifier; rollback/reconciliation/recovery marker; closure lock;
+consumer command copies; `closure-consumers.test` or another new E3 test;
+recurring probe.
 
-Fresh E3b outcome itemization: clean Bash entry/opaque input guards 18;
-standalone/pinned-where/import/target preflight 26; native close/strict flush 6;
-snapshot/no-DB/structural/literal proof 38; two-state retained-clone resume 12;
-Step-11 branch/Pending/review/lease/merge procedure 24; forge resume discovery 28;
-Drive/LAND/harden consumer links 12; E1 consumer note 3; versioned ADR 12;
-plan/global/consumer/table sync 28; gate wiring 1 = **208 production lines**.
-The exact BUILD budget is **624 production lines** (`3 × 208`); crossing it returns
-to reduction, split, or SHAPE.
+Fresh E3b outcome itemization: startup-file-free entry and opaque guards 12;
+complete forge enumeration and strict state matrix 22; fresh clone/branch,
+pinned preflight, and open snapshot 18; native close plus strict flush 5;
+ID/bystander/field/comment/no-DB/literal proof 28; retained-clone two-state
+resume 9; Pending/review/merge/master-refresh lifecycle 18; consumer links,
+ADR, plan/table, and gate wiring 16 = **128 production lines**. The exact BUILD
+budget is **384 production lines** (`3 × 128`); crossing it returns to reduction,
+split, or SHAPE.
 
 ## Workstream F — Drive/rb-lite controller and convergence
 
@@ -1858,8 +1961,7 @@ Constraints:
 
   ```bash
   "$SELECT_BEAD_LANES" \
-    --scoped --scope-label drive-open-issues \
-    --br-path "$PRIVATE_BR" --br-oid "$PRIVATE_BR_OID"
+    --scoped --pinned-br "$PRIVATE_BR" "$PRIVATE_BR_OID"
   ```
 
   The first lane runs in this repository, the second routes to the
