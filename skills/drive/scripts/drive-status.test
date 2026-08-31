@@ -691,6 +691,102 @@ record '**Phase:** BUILD
 check_field "a zero-padded baseline normalizes" baseline_lines 8
 check_field "and derives its budget" budget_lines 24
 
+# The 2026-08-30 run wrote "**Baseline:** E3a 140 production lines" — a bead label, then the
+# number, then the qualifier the whole feature is named for. It read as obviously well-formed
+# and parsed as nothing, so Guard 2 sat unarmed across three commits and five days while the
+# driver committed a message titled "arm E3 production budget". The number is now located by
+# the `lines` it counts rather than by sitting first.
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 140 production lines — pinned admission and typed selector
+**Do-NOT-build:** rollback'
+check_field "a qualifier between the number and lines still parses" baseline_lines 140
+check_field "and arms the guard" guard2_armed true
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** E3a 140 production lines — pinned admission
+**Do-NOT-build:** rollback'
+check_field "a leading bead label still parses" baseline_lines 140
+check_field "and its budget derives from the right number" budget_lines 420
+
+# The label may itself contain digits; E3a must not be read as a baseline of 3.
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** E3a lines of work
+**Do-NOT-build:** rollback'
+check_field "a digit inside the label is not a baseline" guard2_armed false
+
+# Real records wrap. A line-at-a-time read truncated this list at "downloader," and reported
+# a well-formed-looking JSON field naming half the forbidden work — the failure mode that
+# makes a truncating parser worse than one that plainly fails.
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 140 production lines — j
+**Do-NOT-build:** selector launcher, downloader,
+admission registry, scheduler code.'
+check_field "a wrapped do-not-build list keeps its continuation" \
+  do_not_build "selector launcher, downloader, admission registry, scheduler code."
+
+# The continuation stops at the next field; it must not swallow the rest of the header.
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 140 production lines — j
+**Do-NOT-build:** rollback,
+locks.
+**Gate:** ./check.sh'
+check_field "continuation stops at the next bold field" do_not_build "rollback, locks."
+
+# A continuation may legitimately OPEN with emphasis. Treating every bold line as a field
+# boundary drops the rest and reports the truncated remainder as well-formed -- the same
+# silent-truncation failure, moved one line down.
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 140 production lines — j
+**Do-NOT-build:** selector launcher,
+**especially** the downloader and the scheduler.
+**Gate:** ./check.sh'
+check_field "a continuation opening with emphasis is not a boundary" \
+  do_not_build "selector launcher, **especially** the downloader and the scheduler."
+
+# --check-record is what the gate calls. Present-but-unparseable must fail; absent outside
+# BUILD must not, because a record that never claimed a budget is not a record that lost one.
+check_record() {
+  local desc="$1" want="$2" rc=0
+  ( cd "$REPO" && PATH="$WORK/bin:$PATH" FIX="$FIX" "$DS" --check-record ) >/dev/null 2>&1 || rc=$?
+  if [[ "$rc" == "$want" ]]; then
+    PASS=$((PASS + 1)); printf '  ok   %-48s (exit=%s)\n' "$desc" "$rc"
+  else
+    FAIL=$((FAIL + 1)); printf '  FAIL %-48s (exit=%s want=%s)\n' "$desc" "$rc" "$want"
+  fi
+}
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** E3a 140 production lines — pinned admission
+**Do-NOT-build:** rollback'
+check_record "a parseable armed record passes the gate" 0
+
+new_repo; add_code
+record '**Phase:** SHAPE
+**Baseline:** E3a lines of work
+**Do-NOT-build:** rollback'
+check_record "a baseline that parses to nothing fails the gate" 1
+
+new_repo; add_code
+record '**Phase:** SHAPE
+**Baseline:** 140 production lines — j
+**Do-NOT-build:** none'
+check_record "a placeholder do-not-build fails the gate" 1
+
+new_repo; add_code
+record '**Phase:** SHAPE'
+check_record "no budget fields outside BUILD is not a gate failure" 0
+
+new_repo; add_code
+record '**Phase:** BUILD'
+check_record "but BUILD with no budget fields fails the gate" 1
+
 echo
 echo "passed $PASS, failed $FAIL"
 [[ "$FAIL" -eq 0 ]]

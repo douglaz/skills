@@ -1,7 +1,7 @@
 # Convergence guards for the implement/review loop
 
-**Status:** proposed, 2026-08-24. **Owner:** unassigned. **Surfaces:** `~/.config/tau/harness.yaml`,
-`~/p/rb-lite`, `~/p/skills`.
+**Status:** shipped 2026-08-24, measured 2026-08-31 — see "Outcome". **Surfaces:**
+`~/.config/tau/harness.yaml`, `~/p/rb-lite`, `~/p/skills`.
 
 ## Problem
 
@@ -168,6 +168,47 @@ LOC budget but inside review. Tests are outside the budget per S1.
 
 Max 4 rb-lite rounds. If a round trips exit 14 on this spec's own branch, that is the correct
 outcome and the spec has failed its own test.
+
+## Outcome
+
+Re-run of the same backlog task, 2026-08-25 → 08-31, against the 2026-08-11 baseline:
+
+| | rerun | baseline |
+| --- | --- | --- |
+| Inference requests | 482 | 13,581 |
+| Notional cost | $41 | $1,089 |
+| Launches relaying a findings list | **0** | 152/206 (73%) |
+| Findings declined | **51** across 8 rb-lite runs | 0 |
+| Budgets, derived per task | 30 / 84 / 129 / 1530 | absent |
+| rb-lite runs | 8 | 0 on the three worst days |
+
+RC1–RC4 hold. Budgets spanning 30 to 1530 lines are being derived per task rather than
+typed from habit, and exit 14 never fired — the budget bound behaviour without tripping, most
+visibly when an implementer chose a ragged source line over a paragraph refill because
+refilling "would put the diff at 31 or 32 added lines against a cap of 30 that this correction
+may not raise".
+
+Three failures the original spec did not anticipate, all fixed 2026-08-31:
+
+- **The skeptic was a veto, not counter-pressure.** Its prompt hardcodes `P2`, R2 put it in
+  the default panel, and the default floor is `P2` — so it could never let a run converge. The
+  panel went clean in **0 of 8 runs**; every run ended at max-rounds and escalated to a human.
+  Fixed in rb-lite 0.4.0: `review_has_findings` skips the skeptic's index. It informs rounds
+  the defect reviewers keep alive and never starts one.
+- **RC5 recurred through format, not absence.** S1 checked that `Baseline:` was *present*; the
+  parser then rejected `140 production lines` — the plainest way to write the quantity it
+  measures. Guard 2 sat unarmed across three commits and five days, one titled "arm E3
+  production budget". Fixed by locating the number via the `lines` it counts, and by
+  `drive-status --check-record` in `check.sh`: a gate every commit already runs.
+- **Stops cost more than the loop.** **88% of the rerun's 123 wall-clock hours** was idle
+  waiting for a human, across four stops — four of five human turns were answered `yes` with
+  no amendment. The loop converged; the process did not. Addressed in the driver contract and
+  the drive skill: stop partially rather than totally, ratchet unamended approvals into
+  standing decisions, and escalate with findings verbatim after a prose escalation dropped the
+  one P3 that mattered.
+
+The through-line: every one of these is a guard that fired correctly and was then read wrong,
+or a guard that could not fire and said nothing. Detection was never the weak part.
 
 ## Deferred
 

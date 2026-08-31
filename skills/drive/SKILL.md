@@ -83,6 +83,27 @@ Everything else is yours to decide.
 When you hit one, state the fork in a few sentences, give your recommendation first, and
 ask one question. Then resume the moment it is answered.
 
+### Asking costs more than it looks
+
+In the 2026-08-25..30 drive, **88% of 123 wall-clock hours was spent idle waiting for a
+human**, across four stops — and four of the five human turns were answered `yes` or
+`Proceed` with no amendment. A stop that gets rubber-stamped was never a decision point;
+it was a permission ritual, and it cost days. Three rules follow.
+
+- **Stop partially, not totally.** Do everything the answer cannot change before you ask.
+  If you are proposing six items and only two turn on the open question, apply the other
+  four and ask about the two. A stop should narrow the open question, not freeze the run.
+- **Ratchet the standing decisions.** When a human authorizes something *without amending
+  it*, generalize that answer into `DRIVE.md` "Standing decisions" before continuing, so
+  the same class of question is never asked twice. The set of things needing approval must
+  only ever shrink.
+- **Escalate with the findings verbatim.** Paste the outstanding findings from the run dir
+  — every one, with severity and disposition, including the ones you judge minor. Never
+  summarize them in prose. A 2026-08-30 prose escalation dropped a P3 and an unverified
+  QUESTION; the dropped P3 said the itemization no longer matched the requirement set,
+  while the recommendation it accompanied preserved exactly those numbers. A summary that
+  drops findings is how a human becomes necessary.
+
 ## Phase 0 — Orient (always run first)
 
 ```bash
