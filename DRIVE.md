@@ -4,7 +4,7 @@
 `docs/specs/backlog-execution-plan.md`; the Beads graph is the only work. GitHub
 #67 is out of scope.
 **Scope-Label:** `drive-open-issues`
-**Baseline:** E3a 140 production lines — pinned admission, minimal typed selector,
+**Baseline:** E3a 142 production lines — pinned admission, minimal typed selector,
 zero-`br` Drive handoff, consumer docs, and gate wiring.
 **Do-NOT-build:** selector launcher/second parser, downloader/installer, admission
 registry, scheduler/closure code, cosmetic row validation, locks/daemon/recovery API.
@@ -30,14 +30,22 @@ registry, scheduler/closure code, cosmetic row validation, locks/daemon/recovery
 ## Now
 
 E3a fresh baseline: admission 22; dispatch 14; selector modes/parser 12; query
-capture 20; typed projection 26; Drive handoff 18; consumer docs 18; plan/gate 10
-= **140 production lines**; exact BUILD budget **420** (`3 × 140`).
+capture 20; typed projection with ready ⊆ open containment 28; Drive handoff 18;
+consumer docs 18; plan/gate 10 = **142 production lines**; exact BUILD budget
+**426** (`3 × 142`). E3a does not sort ready IDs — every routing outcome is
+order-independent, so native order ships and sorting waits for a consumer that
+demonstrably cannot pick without it.
 
-E3b fresh baseline: entry/guards 12; forge state matrix 22; clone/preflight 18;
-close/flush 5; proof 28; retained-clone resume 9; PR lifecycle 18; links/ADR/
-plan/gate 16 = **128 production lines**; exact BUILD budget **384** (`3 × 128`).
+E3b fresh baseline: entry/guards 12; forge state matrix with head-in-self on both
+sides 24; clone/preflight 18; close/flush 5; multiset-comment proof 29;
+retained-clone resume 9; PR lifecycle 18; links/ADR/plan/gate 16 = **131
+production lines**; exact BUILD budget **393** (`3 × 131`).
 It resumes one exact-ID OPEN closure only; cross-ID, CLOSED-unmerged, partial, or
 ambiguous attempts stop for human resolution.
+
+Both itemizations are re-derived when the requirement set changes, never carried
+across it. A stop computed from a stale itemization is how `select-bead-lanes`
+reached exactly 450 lines against a 450-line stop.
 
 ## Next
 

@@ -314,10 +314,11 @@ appropriate 40- or 64-hex OID in the consuming repository.
    caller has already established the target work merge and its evidence. Rule 9
    neither rediscovers work PRs nor decides whether implementation started.
 
-   On every entry, enumerate `url`, `state`, `mergedAt`, `body`, and head branch for
+   On every entry, enumerate `url`, `state`, `mergedAt`, `body`, and
+   `headRepository.nameWithOwner` for
    all PRs in the self and, when configured, parent repositories by following
    100-row pagination until `hasNextPage` is false. Extract only exact full lines
-   `bead-closure: <id>`,
+   `bead-closure: <id>` from PRs whose head repository equals self,
    deduplicate by canonical URL, and refuse a PR with multiple closure-marker lines.
    Any API failure, incomplete page, failed configured-parent lookup, or unfinished
    pagination stops for human resolution.
@@ -343,15 +344,22 @@ appropriate 40- or 64-hex OID in the consuming repository.
    prove the exact ID set is preserved; every bystander row is structurally equal;
    and the target changes only `status`, `closed_at`, `close_reason`, `updated_at`,
    and `comments`. The target becomes `closed`, its reason equals the supplied input
-   exactly, prior comments remain exact, exactly one comment contains the supplied
-   evidence, and pinned `--no-db show` agrees with JSONL. Render the literal Git diff
-   for review.
+   exactly, prior comments remain exact, and the comment multiset gains exactly one
+   entry whose `text` equals the evidence. The proof states no position: the retained
+   v0.3.2 probe raises `fixture did not exercise canonical insertion order` when
+   `after == before + remaining` and records `probe_rc=0`, so v0.3.2 does not append
+   last, and a tail assertion would fail rule 9 into human resolution mid-bootstrap on
+   any target holding a later-sorting comment. Pinned `--no-db show`
+   agrees with JSONL; render the literal Git diff.
 
    Save the open bytes at `.git/closure-open.jsonl`. Immediately after a successful
    close, flush, and proof, save the intended closed bytes at
    `.git/closure-intended.jsonl`. The branch contains only that closure and its
-   matching `DRIVE.md` transition. Open its PR with exactly one
-   `bead-closure: <id>` line; after GitHub assigns a number, record
+   matching `DRIVE.md` transition. Open its PR from a head branch in the authenticated
+   self repository, with exactly one `bead-closure: <id>` line. A fork head would be
+   filtered out by the consuming side's own head-in-self test, so the multiple-attempt
+   guard never fires and the next entry starts a second transaction for an ID already
+   in flight. After GitHub assigns a number, record
    `Pending: metadata PR owner/repo#N` in an ordinary forward commit and push.
    Rerun `./check.sh` and the independent panel on that final tree, pass normal PR
    gates, merge, refresh clean `master`, and verify persistence.
@@ -1322,8 +1330,10 @@ one unlabelled ready query. Each mode also runs `list --status STATUS --limit 0
 Every query must exit zero with empty stderr and complete JSON. List envelopes
 provide a list-valued `issues`, integral `total` equal to its length, and
 `has_more:false`; ready and blocked results are arrays. Validate only routing
-facts: nonempty unique string IDs, status-list disjointness, ready IDs as an
-ordered subset of open IDs, and labels used for routing. Every scoped open or
+facts: nonempty unique string IDs, status-list disjointness, ready IDs a subset of
+open IDs, and routing labels. Containment, not order: `ready` and `open` are separate
+queries whose orders need not agree, and no consumed decision depends on either.
+Every scoped open or
 in-progress row has exactly one recognized lane; deferred rows are not
 dispatchable and need no lane. Generic mode refuses any unresolved row carrying
 a recognized lane or the active root-Drive scope label. Missing, duplicated, or
@@ -1331,7 +1341,10 @@ malformed consumed fields refuse; cosmetic title, type, priority, label-order,
 or unrelated-field differences do not.
 
 Success is one LF-terminated object with exactly one of these shapes; arrays
-contain IDs in native order:
+contain IDs in native order. E3a does not sort: every routing outcome — lane
+assignment, GRAPH/BUILD/DONE, `outstanding` counts — is order-independent, and the
+execution-bead table below is the authoritative priority source. Add sorting when a
+consumer demonstrably cannot pick without it.
 
 ```json
 {"schema":"skills.drive.bead-lanes.v1","scope_label":"drive-open-issues",
@@ -1347,8 +1360,8 @@ contain IDs in native order:
  "ready":[],"in_progress":[],"deferred":[]}
 ```
 
-Failure is nonzero with no stdout and one fixed diagnostic. `unresolved_count`
-is the sum of `open`, `in_progress`, and `deferred`; blocked is a subset, not an
+Failure is nonzero with no stdout and one fixed diagnostic. Unresolved sums
+`outstanding`'s open, in_progress, and deferred; blocked is a subset, not an
 additional unresolved row. `drive-status --bead-selection FILE` accepts only
 these typed shapes and makes zero `br` calls. Without an explicit valid
 selection it reports Beads counts `n/a` and cannot freshly infer BUILD or DONE.
@@ -1384,7 +1397,8 @@ admission registry, lock, daemon, or recovery API.
 
 Test the two resolver forms, platform/identity/OID admission, per-dispatch swaps,
 clean snapshots, exact query argv/streams, both typed schemas, lane refusals,
-deferred-only GRAPH, all-status-empty DONE, >50-row no truncation, and
+a ready ID absent from open refusing, deferred-only GRAPH, all-status-empty DONE,
+>50-row no truncation, and
 zero-`br`/no-inference `drive-status`. Mutate one production property at a time
 and read the assertion that fails. The retained probe must reconstruct its
 candidate with `git show
@@ -1396,12 +1410,15 @@ in an explicit sanitized environment.
 
 Fresh E3a outcome itemization: pinned resolver forms plus platform and identity
 admission 22; per-dispatch OID and sanitized absolute dispatch 14; selector modes
-and sole Scope-Label parser 12; read-query capture and cleanup 20; minimal
-envelope/lane validation and typed projection 26; explicit-selection
-`drive-status` and zero-`br` fallback 18; API and consumer docs 18; plan,
-table/frontier, and gate wiring 10 = **140 production lines**. The exact BUILD
-budget is **420 production lines** (`3 × 140`); crossing it returns to reduction,
-split, or SHAPE.
+and sole Scope-Label parser 12; read-query capture and cleanup 20; envelope/lane
+validation with ready ⊆ open containment and typed projection 28;
+explicit-selection `drive-status` and zero-`br` fallback 18; API and consumer docs
+18; plan, table/frontier, and gate wiring 10 = **142 production lines**. The exact
+BUILD budget is **426 production lines** (`3 × 142`); crossing it returns to
+reduction, split, or SHAPE.
+
+Projection moved 26 → 28 for the containment check. Both itemizations are
+re-derived when the requirement set changes, never carried across it.
 
 ### E3b. Native closure and consumers — issue #65 (`skills-dhm`)
 
@@ -1438,6 +1455,9 @@ pinned native source; the one-time probe remains evidence only.
 
 Tests are only new `skills/rb-lite-backlog-drain/scripts/native-close.test` and
 existing `install.test`. `DRIVE.md` and tracked JSONL are bookkeeping exclusions.
+`native-close.test` pins foreign-head marker rejection beside equal-head acceptance,
+refusal to open a closure PR from a head outside self, and a comment proof that
+holds when the new comment is not last.
 **Do-NOT-build:** admission/selector changes; wrapper/helper skill/third Bead/new
 state DB; work-PR discovery; cross-ID aggregation/supersession; replacement,
 reopen, branch reuse, or force-update recovery; provider-specific reason parser;
@@ -1446,13 +1466,18 @@ consumer command copies; `closure-consumers.test` or another new E3 test;
 recurring probe.
 
 Fresh E3b outcome itemization: startup-file-free entry and opaque guards 12;
-complete forge enumeration and strict state matrix 22; fresh clone/branch,
-pinned preflight, and open snapshot 18; native close plus strict flush 5;
-ID/bystander/field/comment/no-DB/literal proof 28; retained-clone two-state
-resume 9; Pending/review/merge/master-refresh lifecycle 18; consumer links,
-ADR, plan/table, and gate wiring 16 = **128 production lines**. The exact BUILD
-budget is **384 production lines** (`3 × 128`); crossing it returns to reduction,
-split, or SHAPE.
+forge enumeration, head-in-self on both the consuming and producing sides, strict
+state matrix 24; fresh clone/branch, pinned preflight, and open snapshot 18; native
+close plus strict flush 5; ID/bystander/field/multiset-comment/no-DB/literal proof
+29; retained-clone two-state resume 9; Pending/review/merge/master-refresh
+lifecycle 18; consumer links, ADR, plan/table, and gate wiring 16 = **131
+production lines**. The exact BUILD budget is **393 production lines** (`3 × 131`);
+crossing it returns to reduction, split, or SHAPE.
+
+Enumeration moved 22 → 24: one comparison admitting only markers headed in self,
+one assertion that the closure PR is opened from self. The enumerated field set is
+unchanged — `headRepository.nameWithOwner` replaced an unconsumed head-branch
+field. Proof moved 28 → 29 for the multiset comparison.
 
 ## Workstream F — Drive/rb-lite controller and convergence
 
@@ -1940,10 +1965,6 @@ the body. Every row gets label `drive-open-issues`; B0 and F2r get
 Constraints:
 
 - Only one owner edits the delegated-edit or panel-runner file set at a time.
-- The direct E3b edges on otherwise-root rows are deliberate final bootstrap
-  barriers, not semantic implementation prerequisites. E3a alone becomes ready after
-  E1; E3b (`skills-dhm`) depends on E3a; retain the 15 existing E3b dependent edges
-  until E3b closes so the tracked scheduler agrees with global rule 8.
 - B2c remains a consumer-level #34 integration regression after C1 owns the
   lifecycle; E3b remains the native Step-11 close/strict-flush fact owner consumed by
   harden-until-clean
@@ -1957,20 +1978,7 @@ Constraints:
   human input even when their graph prerequisites are satisfied.
 - The upstream F2 implementation/PR may proceed before F2r authorization.
 - The shared selector queries each lane separately because repeated label filters use
-  AND semantics. Scheduler consumers invoke only the typed owner:
-
-  ```bash
-  "$SELECT_BEAD_LANES" \
-    --scoped --pinned-br "$PRIVATE_BR" "$PRIVATE_BR_OID"
-  ```
-
-  The first lane runs in this repository, the second routes to the
-  cross-repository procedure above, and the third is reported for human action
-  but never sent to an implementer. The helper's internal pinned read-only JSONL calls apply after
-  the E1→E3a→E3b bootstrap sequence in global rule 8; before then, normal lane
-  scheduling is forbidden. The helper owns the clean-locator/OID-before-and-after snapshot,
-  validates and launches the pinned binary, and uses `--no-db`; consumers never copy its raw
-  `br` commands. The earlier measured repeated-label evidence establishes AND semantics only.
+  AND semantics.
 
 ## Beads graph to update
 
@@ -1993,13 +2001,8 @@ Only descriptions change for `skills-dta` (A4b), `skills-xfd` (B0),
 `skills-dhm` descriptions; no other Bead description, edge, field, or graph row
 changes.
 
-Before any execution state changes, the exact scoped ready set is only E1 in the
-`executor-skills` lane; both other lanes are empty. After E1's work and closure
-metadata PRs merge, E3a alone is ready. After E3a merges, E3b (`skills-dhm`) alone
-is ready; normal scheduling must not start between them. After E3b's work and
-closure metadata PRs merge, the normal frontier opens to A1, A4a, A4b, B0, B2a,
-B2b, B2e, C1, D1, E2a, E2c, F1, G1, and G2 in their table lanes; rule 7 still
-permits only one active `executor-skills` bead. Every later table row must appear when all its
+Immediately after transfer, closed E1 leaves only E3a ready; E3a work and its
+rule-9 closure make E3b ready, and every later table row becomes ready as its
 prerequisites close. B1d must close before B1 can enter BUILD. F2 must record
 its upstream issue/PR URL before it can become in progress.
 
