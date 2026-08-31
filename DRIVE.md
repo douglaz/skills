@@ -61,3 +61,13 @@ after E3b work and its rule-9 closure merge.
   gate.
 - When rule 7 applies, its reservation is held until rule 9 completes. Rule 9
   independently requires one authorized coordinator; it is not a forge lock.
+- Reductions the skeptic asks for are pre-authorized: cutting an unconsumed
+  contract clause, deleting prose a fact owner already states, and dropping a
+  requirement no routing decision reads need no approval. Adding a mechanism to
+  replace one still does.
+- SHAPE-phase spec corrections that leave the Beads graph, BUILD, push, and PR
+  untouched are pre-authorized. Report them; do not ask first.
+- Itemizations are re-derived when the requirement set changes. Adjusting a
+  baseline and its `3 ×` stop to match what is actually being built is
+  bookkeeping, not a budget increase, and needs no approval — raising a stop
+  without a matching requirement change does.

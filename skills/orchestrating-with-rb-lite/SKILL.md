@@ -99,6 +99,10 @@ argue for adding. A `--reviewers-file` **replaces** the panel wholesale — rb-l
 injects the skeptic into a panel you supplied — so overriding it silently returns the loop to
 a configuration that can only ratchet.
 
+From 0.4.0 the skeptic is **advisory** — it informs rounds the defect reviewers keep alive
+and never starts one. On 0.3.x its hardcoded `P2` against a `P2` floor could not let a run
+converge: one 2026-08 drive went clean in 0 of 8 runs.
+
 To override deliberately, take both commands from § Customizing the panel (the single
 copy), carry a skeptic among them, and write them to a `mktemp` path passed via
 `--reviewers-file` — never `cat >.rb-lite-reviewers` in the repo root, which destroys an
@@ -696,10 +700,10 @@ actively. This is a primary failure mode, not a nicety.
   floor to chase nits. The judgment call is *when low-severity polish turns into
   gold-plating* (hardening past the goal, edge cases beyond the threat model): at
   that point stop feeding it and merge. A verified minimal bead beats an ever-deeper
-  one. **Do not reach for `--min-findings-severity P1` to stop gold-plating**: the skeptic
-  tags every finding `P2`, so a P1 floor filters out the one reviewer arguing to cut, right
-  when you need it. rb-lite warns when a floor silences it. Stop feeding the loop and merge
-  instead, or use `--no-skeptic` if you truly want no counter-pressure.
+  one. **Do not reach for `--min-findings-severity P1` to stop gold-plating**: it silences the
+  defect reviewers' P2s, where real should-fix findings live, and buys nothing against
+  over-building. rb-lite warns. Stop feeding the loop and merge instead, or `--no-skeptic`
+  for no counter-pressure.
 - **Proxies flag, analysis confirms.** A climbing **round count** and a **line count**
   far past comparable beads raise the alarm, but both mislead — a hard bead earns its
   rounds, a verbose module earns its lines. Treat them as the cue to **re-read the GOAL
