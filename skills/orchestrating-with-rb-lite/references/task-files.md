@@ -101,7 +101,8 @@ discarded wholesale. Bound these from the **first** run, not after they blow up:
   lands — those are often real improvements worth keeping. P3-only findings are not
   relayed by default; inspect them manually, or lower the floor to P3 only when the
   user explicitly wants to chase nits. `--min-findings-severity P1` is not the tool for
-  gold-plating — it also filters out the skeptic, which tags every finding `P2`. Stop
+  gold-plating — it silences the defect reviewers' P2s, where real should-fix findings
+  live. Stop
   feeding the loop and merge instead.
 - **Re-scope before re-running.** If a bead is too big to bound, it's too big — split
   the secondary concern into its own bead and run only the core. (One reconcile bead

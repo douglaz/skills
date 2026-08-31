@@ -21,6 +21,10 @@ set -o pipefail; claude -p "Review the diff vs $BASE for OVER-SPECIFICATION, not
 (my-linter --json || true) | wrap-as-p-tags
 ```
 
+A skeptic in a supplied panel is **not** advisory. rb-lite identifies the skeptic only in
+the panel it composed itself; here it is just another reviewer, so its findings gate rounds
+and can drive the run to `consensus_failure` (13) even with every defect reviewer clean.
+
 The skeptical reviewer is the practical form of "add a third reviewer for
 counter-pressure" above: its `CUT` / `SIMPLIFY` / `DEFER` findings tell the
 implementer to *remove* surface, balancing the two panel reviewers that only

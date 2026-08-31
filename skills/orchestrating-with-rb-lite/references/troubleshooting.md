@@ -9,8 +9,10 @@ a hang, or a flag the docs say exists being rejected.
 - **Reviewers keep finding nits past round 5.** That's reviewer ratchet.
   Check the latest review file: if findings are P3-only, something is
   wrong with the severity floor (it should have stopped). Otherwise,
-  stop manually and apply the remaining items. Raising the floor to P1 would
-  also silence the skeptic, so it is not the fix here.
+  stop manually and apply the remaining items. Raising the floor to P1 silences the
+  defect reviewers' P2s, where real should-fix findings live, so it is not the fix
+  here. (On rb-lite 0.3.x it also filtered out the built-in skeptic; from 0.4.0 that
+  reviewer is matched off-floor and is unaffected.)
 - **Implementer "stabilized at iteration 1" repeatedly.** The implementer is
   declining to act. The consensus-failure stop catches it after
   `--max-noop-rounds` (default 2) — exit 13. Before overriding, read *why* it

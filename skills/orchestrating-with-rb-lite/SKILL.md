@@ -99,9 +99,16 @@ argue for adding. A `--reviewers-file` **replaces** the panel wholesale — rb-l
 injects the skeptic into a panel you supplied — so overriding it silently returns the loop to
 a configuration that can only ratchet.
 
-From 0.4.0 the skeptic is **advisory** — it informs rounds the defect reviewers keep alive
-and never starts one. On 0.3.x its hardcoded `P2` against a `P2` floor could not let a run
-converge: one 2026-08 drive went clean in 0 of 8 runs.
+From 0.4.0 the **built-in** skeptic is advisory — it informs rounds the defect reviewers
+keep alive and never starts one. On 0.3.x its hardcoded `P2` against a `P2` floor could not
+let a run converge: one 2026-08 drive went clean in 0 of 8 runs.
+
+This is scoped to the built-in panel and does not transfer. rb-lite knows which member is
+the skeptic only when it composed the panel itself; members of a `--reviewers-file` are
+opaque to it, so a skeptic you carry in is treated as a defect reviewer and its `CUT` /
+`SIMPLIFY` / `DEFER` findings **do** gate rounds. A verified run with clean defect reviewers
+and one custom skeptic reached `consensus_failure` (13) after two no-op rounds. Budget for
+that before overriding, or keep the built-in panel.
 
 To override deliberately, take both commands from [references/reviewer-panel.md](references/reviewer-panel.md)
 (the single copy), carry a skeptic among them, and write them to a `mktemp` path passed via
@@ -707,7 +714,8 @@ rb-lite run \
 # CHECKPOINT to assess and (if the code is sound) relaunch — not a finish. Leave the
 # default severity so real P2 polish lands; P3 is manual/inspection-only unless you
 # deliberately lower the floor. Do NOT add --min-findings-severity P1 to curb
-# gold-plating: it filters out the skeptic too. Watch each round as it lands.
+# gold-plating: it silences the defect reviewers' P2s, where real should-fix findings
+# live. Watch each round as it lands.
 rb-lite run \
   --implementer claude,codex \
   --task-file .rb-lite/tasks/bead-<id>.md \
@@ -723,7 +731,9 @@ rb-lite run \
 RB_REVIEWERS=$(mktemp)   # never `cat >.rb-lite-reviewers` in the repo root
 # Paste BOTH claude lines from references/reviewer-panel.md into it. An EMPTY file is treated
 # as no file at all, so rb-lite falls back to the built-in panel and codex is NOT
-# disabled; a file without a skeptic leaves the run with no counter-pressure.
+# disabled; a file without a skeptic leaves the run with no counter-pressure. A skeptic
+# carried in here is NOT advisory -- rb-lite cannot identify it -- so its P2s gate rounds
+# and can reach consensus_failure (13). Raise --max-noop-rounds or drop it if that bites.
 cat >"$RB_REVIEWERS" <<'EOF'
 <defect reviewer line>
 <skeptic line>

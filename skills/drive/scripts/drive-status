@@ -2,7 +2,9 @@
 # drive-status — print the signals needed to infer a project's lifecycle phase.
 # Read-only. Never mutates the repo. Exits 0 even when signals are missing.
 #
-# Usage: drive-status [--json]
+# Usage: drive-status [--json | --check-record]
+#   --check-record  assert only the DRIVE.md budget fields and exit non-zero if a field is
+#                   present but unparseable, or BUILD is entered with Guard 2 unarmed.
 
 set -uo pipefail
 
@@ -60,21 +62,37 @@ if [[ -f DRIVE.md ]]; then
       # continuation opening with emphasis, "**especially** the downloader" -- would
       # otherwise end the field and silently drop the rest, recreating the truncation
       # this read exists to prevent.
-      found { if ($0 ~ /^\*\*[^*]+:\*\*/ || $0 ~ /^[[:space:]]*$/) exit; print }
+      found { if ($0 ~ /^\*\*[^*]+:\*\*/ || $0 ~ /^[[:space:]]*$/ || $0 ~ /^[[:space:]]*```/) exit; print }
     ' DRIVE.md 2>/dev/null | tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g; s/[[:space:]]+$//'
   }
   # The baseline must carry a NUMBER of lines — "small" is not a baseline, and a budget is
   # derived from it as 3x. A bare label would parse and then bound nothing.
   # `~` is accepted because the docs' own examples write "~15 lines"; a parser that
   # rejects the form its documentation teaches leaves the guard unarmed with no hint why.
-  # The number is located by the `lines` it counts, not by sitting first: the 2026-08-30 run
-  # wrote "**Baseline:** E3a 140 production lines", which a human reads as obviously
-  # well-formed and the old anchored pattern rejected, leaving Guard 2 silently unarmed for
-  # three commits. A leading label and up to two qualifier words are now accepted, because
-  # "140 production lines" is the plainest way to write the very quantity this measures.
+  # The 2026-08-30 run wrote "**Baseline:** E3a 140 production lines", which a human reads
+  # as obviously well-formed and the old number-first pattern rejected, leaving Guard 2
+  # silently unarmed for three commits. So a leading label and up to two qualifier words are
+  # accepted -- "140 production lines" is the plainest way to write the very quantity this
+  # measures.
+  #
+  # But the phrase is anchored to the START of the field, because a free scan is worse than
+  # the strictness it replaced. Unanchored, "E3 production lines: 140" armed the guard at
+  # BASELINE=3 (the digit in the bead label, followed by the qualifier) for a budget of 9 --
+  # a spurious exit 14 on the first BUILD round, against a stop the docs say must never be
+  # relaunched past. `lines` is required plural for the same reason: it stops "1 command
+  # line tool, 140 production lines" reading as a baseline of 1.
+  #
+  # Known limit: the first number-lines phrase wins, so a field written as prose
+  # ("3000 lines of context; new work is 40 lines") reads 3000. That is deterministic and
+  # visible in --json rather than silently wrong, and the field is documented as a count,
+  # not a sentence.
+  #
+  # -i throughout: the pre-2026-08-31 parser was case-insensitive, and an existing record
+  # spelling "15 Lines" must not start failing the gate over capitalization.
   DRIVE_BASELINE=$(drive_field baseline \
-    | grep -oE '~?[0-9]+[[:space:]]+([A-Za-z]+[[:space:]]+){0,2}lines?([^[:alnum:]]|$)' \
-    | head -1 | grep -oE '[0-9]+' | head -1 || echo "")
+    | grep -oiE '^([A-Za-z][A-Za-z0-9._-]*[[:space:]]+)?~?[0-9]+[[:space:]]+([A-Za-z]+[[:space:]]+){0,2}lines([^[:alnum:]]|$)' \
+    | head -1 | grep -oE '[0-9]+[[:space:]]+([A-Za-z]+[[:space:]]+){0,2}[Ll]?[iI]?' | head -1 \
+    | grep -oE '^[0-9]+' | head -1 || echo "")
   # Strip leading zeros before any use: `00` would fail a string compare against "0" and
   # arm the guard with a zero budget, and `08` makes the later $((BASELINE * 3)) an octal
   # parse error. A baseline of zero bounds nothing — rb-lite rejects

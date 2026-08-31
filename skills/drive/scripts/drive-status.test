@@ -787,6 +787,43 @@ new_repo; add_code
 record '**Phase:** BUILD'
 check_record "but BUILD with no budget fields fails the gate" 1
 
+# Review found the loosened matcher scanning into prose. Anchoring it to the start of the
+# field is what keeps "the number this field is about" from meaning "any number near a
+# `lines`". Each case below was a real misparse, not a hypothetical.
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** E3 production lines: 140
+**Do-NOT-build:** rollback'
+# Read the bead label's own digit, then the qualifier: BASELINE=3, budget 9, and a spurious
+# exit 14 on the first BUILD round -- against a stop the docs say never to relaunch past.
+check_field "a number after the lines phrase is not a baseline" guard2_armed false
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 1 command line tool, 140 production lines
+**Do-NOT-build:** rollback'
+# "line tool" is why `lines` is required plural.
+check_field "a singular line inside prose is not a baseline" guard2_armed false
+
+# The pre-2026-08-31 parser was case-insensitive; an existing record must not start failing
+# the gate over capitalization.
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 15 Lines — br close plus strict flush
+**Do-NOT-build:** rollback'
+check_field "a capitalized Lines still parses" baseline_lines 15
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 140 production lines — j
+**Do-NOT-build:** rollback,
+```
+locks
+```'
+# A fence closes the field: without this the continuation swallowed the closing ``` and
+# reported it as part of the forbidden-work list.
+check_field "a fence ends the continuation" do_not_build "rollback,"
+
 echo
 echo "passed $PASS, failed $FAIL"
 [[ "$FAIL" -eq 0 ]]

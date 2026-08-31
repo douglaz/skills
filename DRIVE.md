@@ -4,7 +4,7 @@
 `docs/specs/backlog-execution-plan.md`; the Beads graph is the only work. GitHub
 #67 is out of scope.
 **Scope-Label:** `drive-open-issues`
-**Baseline:** E3a 142 production lines — pinned admission, minimal typed selector,
+**Baseline:** E3a 140 production lines — pinned admission, minimal typed selector,
 zero-`br` Drive handoff, consumer docs, and gate wiring.
 **Do-NOT-build:** selector launcher/second parser, downloader/installer, admission
 registry, scheduler/closure code, cosmetic row validation, locks/daemon/recovery API.
@@ -30,9 +30,10 @@ registry, scheduler/closure code, cosmetic row validation, locks/daemon/recovery
 ## Now
 
 E3a fresh baseline: admission 22; dispatch 14; selector modes/parser 12; query
-capture 20; typed projection with ready ⊆ open containment 28; Drive handoff 18;
-consumer docs 18; plan/gate 10 = **142 production lines**; exact BUILD budget
-**426** (`3 × 142`). E3a does not sort ready IDs — every routing outcome is
+capture 20; typed projection 26; Drive handoff 18; consumer docs 18; plan/gate 10
+= **140 production lines**; exact BUILD budget **420** (`3 × 140`). Unchanged from
+the prior contract on purpose: `ordered subset` → `subset` drops an obligation, so
+there is nothing to add. E3a does not sort ready IDs — every routing outcome is
 order-independent, so native order ships and sorting waits for a consumer that
 demonstrably cannot pick without it.
 

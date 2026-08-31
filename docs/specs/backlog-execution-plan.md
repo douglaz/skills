@@ -1410,15 +1410,19 @@ in an explicit sanitized environment.
 
 Fresh E3a outcome itemization: pinned resolver forms plus platform and identity
 admission 22; per-dispatch OID and sanitized absolute dispatch 14; selector modes
-and sole Scope-Label parser 12; read-query capture and cleanup 20; envelope/lane
-validation with ready ⊆ open containment and typed projection 28;
-explicit-selection `drive-status` and zero-`br` fallback 18; API and consumer docs
-18; plan, table/frontier, and gate wiring 10 = **142 production lines**. The exact
-BUILD budget is **426 production lines** (`3 × 142`); crossing it returns to
-reduction, split, or SHAPE.
+and sole Scope-Label parser 12; read-query capture and cleanup 20; minimal
+envelope/lane validation and typed projection 26; explicit-selection
+`drive-status` and zero-`br` fallback 18; API and consumer docs 18; plan,
+table/frontier, and gate wiring 10 = **140 production lines**. The exact BUILD
+budget is **420 production lines** (`3 × 140`); crossing it returns to reduction,
+split, or SHAPE.
 
-Projection moved 26 → 28 for the containment check. Both itemizations are
-re-derived when the requirement set changes, never carried across it.
+E3a's itemization is unchanged, and that is the derivation, not an omission: the
+projection already owed an `ordered subset of open IDs` check, so stating it as
+containment without the order claim removes an obligation rather than adding one.
+An itemization is re-derived when the requirement set changes and left alone when
+it does not; moving a number because the surrounding prose moved is the same error
+as carrying one across a change that did.
 
 ### E3b. Native closure and consumers — issue #65 (`skills-dhm`)
 
