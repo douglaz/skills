@@ -737,6 +737,18 @@ locks.
 **Gate:** ./check.sh'
 check_field "continuation stops at the next bold field" do_not_build "rollback, locks."
 
+# A continuation may legitimately OPEN with emphasis. Treating every bold line as a field
+# boundary drops the rest and reports the truncated remainder as well-formed -- the same
+# silent-truncation failure, moved one line down.
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 140 production lines — j
+**Do-NOT-build:** selector launcher,
+**especially** the downloader and the scheduler.
+**Gate:** ./check.sh'
+check_field "a continuation opening with emphasis is not a boundary" \
+  do_not_build "selector launcher, **especially** the downloader and the scheduler."
+
 # --check-record is what the gate calls. Present-but-unparseable must fail; absent outside
 # BUILD must not, because a record that never claimed a budget is not a record that lost one.
 check_record() {

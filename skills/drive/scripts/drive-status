@@ -56,7 +56,11 @@ if [[ -f DRIVE.md ]]; then
         if ($0 != "") print
         next
       }
-      found { if ($0 ~ /^\*\*/ || $0 ~ /^[[:space:]]*$/) exit; print }
+      # Stop at a real **Header:** only. Any line merely STARTING with bold -- a
+      # continuation opening with emphasis, "**especially** the downloader" -- would
+      # otherwise end the field and silently drop the rest, recreating the truncation
+      # this read exists to prevent.
+      found { if ($0 ~ /^\*\*[^*]+:\*\*/ || $0 ~ /^[[:space:]]*$/) exit; print }
     ' DRIVE.md 2>/dev/null | tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g; s/[[:space:]]+$//'
   }
   # The baseline must carry a NUMBER of lines — "small" is not a baseline, and a budget is
