@@ -103,8 +103,8 @@ From 0.4.0 the skeptic is **advisory** — it informs rounds the defect reviewer
 and never starts one. On 0.3.x its hardcoded `P2` against a `P2` floor could not let a run
 converge: one 2026-08 drive went clean in 0 of 8 runs.
 
-To override deliberately, take both commands from § Customizing the panel (the single
-copy), carry a skeptic among them, and write them to a `mktemp` path passed via
+To override deliberately, take both commands from [references/reviewer-panel.md](references/reviewer-panel.md)
+(the single copy), carry a skeptic among them, and write them to a `mktemp` path passed via
 `--reviewers-file` — never `cat >.rb-lite-reviewers` in the repo root, which destroys an
 existing panel or leaves an untracked file that trips LAND's clean-tree gate.
 
@@ -142,44 +142,13 @@ is running is silently destroyed, and rb-lite runs `codex review` inside every r
 round — so for the length of a run the repo is not yours to touch. The loss surfaces as
 `nothing to commit, working tree clean` on a commit you expected to carry work, with the
 content absent from the file *and* from `HEAD`. Wait for the run to exit before editing
-anything, and when you commit the accepted diff (step 10.5), check both things that
-message hides:
+anything, then commit by the procedure in
+[references/verifying-the-diff.md](references/verifying-the-diff.md): a clean `git status`
+is not a check — it reads identically whether the work was committed or reverted
+underneath you.
 
-```bash
-git add -- <every path this change touched>   # NOT `git add -A`: on a dirty tree that
-                                             # stages unrelated work. Even by name, a path
-                                             # already dirty brings the other agent's hunks.
-git diff --cached                            # read-only review of what you just staged;
-                                             # since staging a path that was already
-                                             # dirty takes the other agent's hunks too
-git commit -m "<msg>" || { echo "commit produced nothing"; exit 1; }
-git show --stat --format= HEAD               # all the paths you meant, and only those
-```
-
-Then confirm the *content* landed, per file, by the check that fits it — a file that
-gained content must contain a distinctive new phrase; a file you removed lines from must
-still exist **and** hold the expected remaining count of the deleted phrase; a deleted path
-must be absent. A file that BOTH gained and lost content needs both of the first two — the
-added phrase passing says nothing about whether the removal survived. One does not
-substitute for another, and each has a way to
-lie: `grep` defaults to regex (use `-Fq --`), `git show ... | grep` returns 141 under
-`pipefail` when grep exits early (capture to a file first), `grep -c` counts lines rather
-than occurrences, and demanding *zero* occurrences rejects a correct partial removal.
-
-```bash
-_chk=$(mktemp) || { echo "cannot create the scratch file — do NOT report the commit verified"; exit 1; }
-trap 'rm -f "$_chk"' EXIT
-# ...the three loops, using `grep -Fq --` / `grep -Fo | wc -l || true` on a captured file.
-```
-
-`git commit` with nothing staged exits **1**, so the `||` catches a total loss however
-reassuring the message reads; the `grep` catches a partial one, which commits cleanly at
-exit 0 carrying only some of the change. A clean `git status` is neither check — it reads
-identically whether the work was committed or reverted underneath you. Detail, including
-the probe design that gives a false all-clear, is in
-[multi-reviewer-loop/references/reviewer-panel.md](../multi-reviewer-loop/references/reviewer-panel.md).
-
-"Customizing the panel" below shows the same two commands alongside OPTIONAL extras — a
+[references/reviewer-panel.md](references/reviewer-panel.md) shows the same two commands
+alongside OPTIONAL extras — a
 skeptical third reviewer and a `my-linter --json | wrap-as-p-tags` placeholder — which are
 illustrative, not prerequisites. Pasting that block wholesale puts a command-not-found
 reviewer in the panel and every round carries its failure.
@@ -400,12 +369,12 @@ ready bead if the queue is not empty, and the exact reason the loop stopped.
 
 9. **Read the JSON summary.** rb-lite always prints a single-line JSON
    object as the last line of stdout, on success and failure. Pipe to
-   `jq` if available; otherwise grep the line. The schema is in the
-   "Exit codes and JSON schema" section below.
+   `jq` if available; otherwise grep the line. The schema is in
+   [references/exit-codes-and-artifacts.md](references/exit-codes-and-artifacts.md).
 
 10. **Diagnose by exit code.** Don't pattern-match on the human-readable
     line; match on the JSON `status` and `exit_code`. The mapping is
-    fixed (see the table below).
+    fixed (see [references/exit-codes-and-artifacts.md](references/exit-codes-and-artifacts.md)).
 
 10.5 **Verify the landed diff yourself (do not skip).** rb-lite's `clean` is the
     panel's verdict, not ground truth, and the panel is often degraded. The diff is
@@ -446,66 +415,30 @@ when rb-lite runs for more than a quick pass:
 
 ## Verify the landed diff
 
-The single most important habit when driving rb-lite for real work: **`clean`
-means "no surviving reviewer raised a P0/P1/P2," not "correct."** Five things
-dogfooding made concrete:
+The single most important habit when driving rb-lite for real work: **`clean` means "no
+surviving reviewer raised a P0/P1/P2," not "correct."** The diff is left **uncommitted**;
+commit it yourself only after checking it.
 
-- **The diff is uncommitted.** rb-lite leaves the final accepted changes in the
-  working tree (it does not commit on your behalf). Always inspect with `git
-  status` / `git diff` and commit the intentional changes yourself — and watch
-  for stray scratch files (e.g. a `tmp_*` debug test the implementer created and
-  forgot to remove).
-- **The panel degrades silently.** The panel succeeds with as few as one exit-0
-  reviewer (a missing CLI, an expired/free-tier auth, or an 1800s reviewer
-  timeout drops the others). So a `clean` run can rest on a single reviewer's
-  read. Confirm the real panel strength in `log.txt` (`round N review panel
-  proceeded with partial failures: K of M reviewers succeeded`) and the
-  `review-round-*.md` status headers. The thinner the panel, the more the next
-  two steps matter.
-- **Independent verification is the gate, not the panel.** Re-run the project's
-  own contract (its test suites, byte-identical golden/digest checks,
-  `fmt`/`clippy`) on the landed diff yourself. For high-stakes or finding-shaped
-  work, also run a **separate adversarial result-review** with a second model
-  over the committed diff — phrased to attack: *is the result genuine, was
-  anything tuned to pass the panel, is the claim honestly scoped?* Treat the
-  panel's `clean` as one input into your own PASS decision.
-- **Verify the comments, not just the code.** Agent loops can *corrupt a correct
-  comment* to placate a reviewer: read every load-bearing correctness/safety/
-  invariant comment in the landed diff and confirm each is TRUE per the code —
-  following the invariant across files when its guarantee lives outside the diff.
-  Then reconcile the **commit message's claims against the shipped comments** (a
-  commit that says "conservative lower bound" over a comment that says the opposite
-  is a tell). Observed: a reviewer asserted a false out-of-diff fee premise, the
-  implementer rewrote a correct invariant docstring to agree, and two more
-  reviewers then echoed the corrupted comment — a self-reinforcing loop that only
-  broke on reading the unchanged cap code. Tests passing does not catch this;
-  reading the claims against the code does.
-- **A green suite does not prove the diff is covered.** Re-running gates that
-  already passed cannot tell you whether the loop shipped a behavior no test
-  pins. For each load-bearing behavior the diff *introduces* — a new invariant,
-  an ordering, a clock or lock choice — **invert it in the working tree, confirm
-  a test FAILS, then revert.** Read the failure: it has to be *the assertion that
-  pins that behavior*, not merely something going red.
+Five checks, in [references/verifying-the-diff.md](references/verifying-the-diff.md) —
+read it in full at step 10.5:
 
-  **Isolate the run if the gate touches anything live.** A feature's regression gate
-  can drive a real database, a running service, or real funds, and an inverted
-  behavior may PERFORM the harmful operation before any assertion notices — the
-  mutation is not a dry run. Use a disposable environment, pick a non-destructive
-  mutation, or say plainly that the check could not be done safely. Never run a
-  deliberately broken build against live state; this applies here and in
-  [exact companion skill `rb-lite-backlog-drain`, step 7](../rb-lite-backlog-drain/SKILL.md#backlog-step-7), not only where
-  the deliverable is a test. A behavior mutation can
-  trip an initialization error, a panic, or an unrelated assertion long before
-  the intended check runs, and taking that as proof of coverage certifies a
-  behavior nothing tests. If nothing fails, the loop wrote code the panel
-  described and the suite ignores. Observed: a nine-round run ended `clean` with
-  every gate green — `fmt`, `clippy -D warnings`, 685 workspace tests, three
-  demos, a 16/16 adversarial suite, and CI on a dedicated runner — and swapping a
-  single argument at one call site (the mapping anchoring a security deadline)
-  still left all 498 lib tests passing. Nine rounds of reading missed it; one
-  mutation found it. Keep it scoped to the handful of behaviors the diff
-  introduces — each check is one edit, one targeted test, one revert — and treat
-  it as the cheapest thing that separates "tests pass" from "tests would notice."
+1. The diff is uncommitted — inspect it, and watch for stray scratch files.
+2. The panel degrades silently — it succeeds on one exit-0 reviewer, so confirm real
+   panel strength before trusting `clean`.
+3. Independent verification is the gate, not the panel.
+4. Verify the comments, not just the code — a loop can corrupt a correct invariant
+   comment to placate a reviewer, and tests never catch it.
+5. **A green suite does not prove the diff is covered.** Invert each load-bearing
+   behavior the diff introduces and confirm the assertion pinning it goes red. Isolate
+   the run first if the gate touches anything live — the mutation is not a dry run.
+
+Check 5 is the one a green suite cannot substitute for: one observed nine-round run
+ended `clean` with 685 tests, three demos, a 16/16 adversarial suite and CI all green,
+and swapping a single argument at one call site still left all 498 lib tests passing.
+
+That reference also carries the commit procedure — how to stage and confirm the content
+actually landed, since `git commit` on a tree another agent touched can report success
+while carrying only part of your change.
 
 ## Backlog-drain workflow
 
@@ -569,84 +502,24 @@ The load-bearing points, if you read nothing else:
 
 ## Backlog task template
 
-The task file for a bead should be self-contained and narrow:
+Nontrivial work goes in a `--task-file`, not a `--task` string. The template, its
+load-bearing scope guard, how to bound a bead that could sprawl, and how to file
+dogfood findings are in [references/task-files.md](references/task-files.md).
 
-```markdown
-# Bead <id>: <one-line goal>
+The parts that decide whether a run stays in its lane:
 
-## Problem description
-<2-4 paragraphs explaining what and why; reference the bead's acceptance
-criteria.>
-
-## Required changes
-<Numbered list of concrete edits: paths, functions, behaviors, expected
-shape of the change.>
-
-## Tests
-<3-7 specific test cases the implementer should add or update. Use behavior
-phrases like "X happens when Y", not only test function names.>
-- Test through the REAL code path. A test that exercises a test-only shortcut
-  (env-gated early return, fake injected above the seam being fixed) stays green
-  whether or not the fix works. Inject fakes *below* the seam you care about.
-- The new test must actually RUN under the repo's default test command. Verify
-  by running it and grepping the output for the new test name — a test file
-  outside the runner's glob is dead coverage that reads as a gate.
-
-## Scope guard
-- Do not refactor unrelated code.
-- Do not broaden this bead into adjacent backlog items.
-- Build the SIMPLEST correct thing for this bead. Do NOT build: <non-goals —
-  defensive edge cases beyond the threat model, config knobs, new abstractions,
-  retry/scheduling machinery>. Target ~N lines / one focused module; if you are
-  writing materially more, stop and simplify.
-- Do not run `rb-lite` itself, send signals to your own process tree, or
-  otherwise interfere with the surrounding orchestration.
-- Treat `.rb-lite/`, `.ralph-burning/`, `.git/ralph-burning-live/`, and
-  `.beads/` as orchestration/state directories, not product code to review.
-  That is a *reviewing* scope rule, not an editing licence — nobody, implementer
-  or operator, hand-edits `.beads/issues.jsonl`; bead text is written with
-  `"$BEADS_JSONL_RESOLVER" --run-br update <id> --description "<full body>"` or it gets silently reverted by the next flush
-  ([exact companion skill `rb-lite-backlog-drain`, step 11](../rb-lite-backlog-drain/SKILL.md#backlog-step-11)).
-  This does NOT forbid ordinary git usage: **`git add` any new SOURCE file you
-  create** so it appears in the reviewed diff (`git diff <base>` omits untracked
-  files — an unstaged new module reads to reviewers as "missing, won't compile").
-  Staging a source file is not the prohibited editing of `.git/` internals.
-- **Never weaken, invert, or delete a correctness/safety/invariant comment or
-  assertion to satisfy a review finding without first verifying it against the
-  actual code and citing `file:line`.** A correctness-comment edit is NOT a cheap
-  doc fix — it carries the same evidence burden as a behavior change. If a reviewer
-  says an invariant claim is wrong, either prove it (fix code + comment together)
-  or refute the finding with code evidence and keep the comment. Be especially wary
-  of findings about invariants whose guarantee lives in a file the diff does not
-  show.
-
-## Acceptance criteria
-- <Acceptance criteria copied from `"$BEADS_JSONL_RESOLVER" --run-br show <id>`.>
-- <What must KEEP working — name the legitimate cases the change must preserve.
-  Criteria that only describe what to block get signed off, and the breakage
-  they cause comes back as its own bead later.>
-- The repo's local gate set passes on the final tree.
-```
-
-The scope guard is load-bearing. Without it, reviewer rounds can ratchet into
-adjacent beads or rb-lite's own run artifacts.
-
-## Backlog dogfooding
-
-Running rb-lite across a queue exposes workflow bugs. Capture them as beads
-while the evidence is fresh:
-
-- If rb-lite fails for a reason unrelated to the bead (tool crash, reviewer
-  panel failure, auth/config breakage, task parser bug, ignored-files problem,
-  or implementer self-interference), file a fresh bead with
-  `"$BEADS_JSONL_RESOLVER" --run-br create -t bug -p <0|1|2> -l dogfood,rb-lite "..." -d "..."`. Include
-  observed behavior, repro trace, expected behavior, likely fix options, and
-  acceptance criteria.
-- If the dogfood bead is P0 or P1, interrupt the queue and fix it next. Since
-  rb-lite is stateless, record the interrupted bead id, branch, run dir, and
-  JSON status; after the dogfood fix lands, restart rb-lite on that bead with
-  the same task file.
-- If the dogfood bead is P2 or lower, file it and keep moving.
+- **The scope guard is load-bearing.** Without it, reviewer rounds ratchet into
+  adjacent beads and into rb-lite's own run artifacts.
+- **Lock the files on a high-blast-radius bead.** Naming the exact file(s) the
+  implementer may create or modify — and forbidding all others — is a far stronger
+  brake than a generic "don't refactor unrelated code," because it names the boundary.
+  One unbounded run reached 25 rounds and a 3600-line module that also rewrote four
+  already-merged files, and had to be discarded wholesale.
+- **Acceptance criteria name what must KEEP working**, not only what is broken.
+  Criteria that only describe what to block get signed off, and the breakage comes
+  back as its own bead later.
+- **Watch the run.** Active supervision is the control; `--max-rounds` is a checkpoint
+  to assess and relaunch, not a finish.
 
 ## Constructing a good task
 
@@ -678,7 +551,7 @@ each round. A few rules from observed dogfood failures:
   unrelated files."
 - **Lock the files on high-blast-radius beads.** If the bead sits next to modules
   the implementer might rewrite, name the exact file(s) it may create/modify and
-  forbid all others — see "Bounding a high-blast-radius bead."
+  forbid all others — see [references/task-files.md](references/task-files.md).
 
 ## Guard against overengineering
 
@@ -747,240 +620,49 @@ been clean for several rounds.
   credulity in reverse), then re-verify the core is intact with no dangling
   references to anything you removed.
 
-## Bounding a high-blast-radius bead
-
-Some beads invite sprawl: the core is genuinely hard, or it sits next to several
-modules the implementer could "helpfully" rewrite. Left unbounded, the loop treats
-every adjacent file as fair game. One real run ballooned to 25 rounds and a
-3600-line module that also rewrote four already-merged files — it had to be
-discarded wholesale. Bound these from the **first** run, not after they blow up:
-
-- **Lock the files.** Put a hard file constraint at the TOP of the task: "Create
-  EXACTLY these file(s): `<paths>`. Do NOT modify any other file. If you believe you
-  need to touch another file, the design is wrong — STOP and restructure to use the
-  existing public seams as they are." This is the single most effective brake on
-  cross-bead contamination — much stronger than the scope guard's generic "don't
-  refactor unrelated code," because it names the boundary.
-- **Keep the bead self-contained.** If the work needs a small piece of an adjacent
-  module's behavior, have the task do that small piece inline against the existing
-  public API — do NOT let it reach in and "factor out" a shared helper. Reaching
-  across the seam is exactly how one bead's run ends up rewriting three other beads.
-- **Watch the run; don't fire-and-forget.** Active supervision is the real control —
-  the caps below are backstops, not the method. Tail each round's diff and review
-  output as it lands (`git diff` on the branch, the latest `review-round-*.md`), and
-  intervene the moment the code starts degrading: edits creeping outside the locked
-  files, speculative abstractions, a "simple" module ballooning. Catching a bad round
-  as it happens is far cheaper than discarding 25 of them.
-- **Treat `--max-rounds` as a checkpoint, not a finish.** A low cap (e.g. `6`) forces
-  a pause to assess rather than ending the work. At the checkpoint, read what actually
-  changed: if the findings were legitimate and the code is sound and still converging,
-  relaunch for another batch (6 or more) to finish; if it's sprawling or gold-plating,
-  stop and re-scope instead. The cap buys you a decision point, not a verdict.
-- **Don't pre-cap finding severity.** Leave the default (`P2`) so genuine P2 polish
-  lands — those are often real improvements worth keeping. P3-only findings are not
-  relayed by default; inspect them manually, or lower the floor to P3 only when the
-  user explicitly wants to chase nits. `--min-findings-severity P1` is not the tool for
-  gold-plating — it also filters out the skeptic, which tags every finding `P2`. Stop
-  feeding the loop and merge instead.
-- **Re-scope before re-running.** If a bead is too big to bound, it's too big — split
-  the secondary concern into its own bead and run only the core. (One reconcile bead
-  shed its "downtime credit" half into a separate bead; the core then fit a single
-  ~800-line module that bounded cleanly.)
-
-**The recovery playbook when one blows up anyway:** do NOT just relaunch the same
-run unchanged — it will blow up the same way. (1) Discard the wreckage back to the
-saved pre-run state (`git reset`/`checkout`/`clean`, or apply your pre-run snapshot).
-(2) Re-scope: split off the secondary concern as its own bead. (3) Re-run with the
-file-lock and a low `--max-rounds` checkpoint, watching each round — keep the default
-severity so real P2 polish still lands, raising the floor only if remaining P2s turn
-into gold-plating. (4) At each checkpoint, decide: if the remaining findings are legitimate
-and the code is sound, relaunch for more rounds to finish; if only a P1 or two are
-left and another full pass isn't worth it, apply those fixes yourself, re-run the
-repo's gates, and commit. A bounded run not closing every finding in one go is
-expected — finishing the last mile by hand or with one more batch is normal, not a
-failure.
-
 ## Customizing the panel
 
 rb-lite's built-in panel is `codex review` + a `claude` defect reviewer + a `claude`
-skeptic, and this skill uses it as-is. Override only for a reason you can name. The block
-below is a **menu**, not a file to paste — the last entry is a placeholder that exists on no
-PATH, and a pasted panel that omits a skeptic returns the loop to add-only pressure:
+skeptic, and this skill uses it as-is. Override only for a reason you can name: a
+`--reviewers-file` **replaces** the panel wholesale — rb-lite never injects the skeptic
+into a panel you supplied — so overriding silently returns the loop to add-only pressure.
 
-```bash
-# .rb-lite-reviewers
-codex review --base "$BASE" -c 'model="gpt-5.6-sol"'
-set -o pipefail; claude -p "Review the diff vs $BASE. Before asserting the diff violates or overstates an invariant, or any claim about behavior in code the diff does not show, verify it by reading that code and cite file:line, else mark it a QUESTION not a finding. Tag findings P0/P1/P2/P3. Output 'No findings.' if clean." --model claude-opus-5 --output-format json --allowedTools "Read,Glob,Grep" --disallowedTools "Edit,Write,NotebookEdit,Bash" | jq -er 'if .is_error then error(.result // "claude reviewer returned is_error") else (.result // empty) end'
-# Skeptical reviewer: hunts over-specification instead of bugs, so the panel has counter-pressure against scope creep
-set -o pipefail; claude -p "Review the diff vs $BASE for OVER-SPECIFICATION, not bugs. Flag any mechanism, handling, config, or abstraction that is NOT required for correctness, security, or data-safety and could be cut, simplified, or deferred. For each, give: what it is, why it isn't strictly required (what already covers the case), and a recommendation. Tag each finding 'P2: CUT', 'P2: SIMPLIFY', or 'P2: DEFER'. Do not flag missing behavior or bugs; another reviewer owns that. Output 'No findings.' if the diff is already minimal for its goal." --model claude-opus-5 --output-format json --allowedTools "Read,Glob,Grep" --disallowedTools "Edit,Write,NotebookEdit,Bash" | jq -er 'if .is_error then error(.result // "skeptic reviewer returned is_error") else (.result // empty) end'
-(my-linter --json || true) | wrap-as-p-tags
-```
+The reviewer commands, the OPTIONAL extras menu, the verify-before-asserting rule every
+custom prompt needs, and the strict reviewer contract (findings on stdout with a severity
+tag near the line start; exit 0 = real review, non-zero = tool failure; a linter that
+exits non-zero must be wrapped `mylinter || true`) are in
+[references/reviewer-panel.md](references/reviewer-panel.md).
 
-The skeptical reviewer is the practical form of "add a third reviewer for
-counter-pressure" above: its `CUT` / `SIMPLIFY` / `DEFER` findings tell the
-implementer to *remove* surface, balancing the two panel reviewers that only
-ever push to add. Worth adding for any non-trivial bead; skip it for a tiny,
-already-bounded one.
-
-**Put the verify-before-asserting rule in every custom reviewer prompt**: *"Before
-asserting the diff violates or overstates an invariant — or any claim about
-behavior in code the diff does not show — verify it by reading that code and cite
-`file:line`; if you cannot, mark it a QUESTION, not a finding."* Reviewers see only
-the diff, so a confidently-wrong claim about an invariant guaranteed in an
-unchanged file will otherwise get an implementer to corrupt a correct comment, then
-echo through later rounds. The **claude** reviewer carries this
-rule; **`codex review`** cannot — `codex review` rejects a custom
-`[PROMPT]` together with `--base` (they are mutually exclusive), so codex stays
-diff-blind to out-of-diff invariants. Lean on the implementer guard (do not weaken
-invariant comments without code proof) and the landed-diff comment-truth check as
-the backstop for codex's findings; or replace the default codex reviewer with a
-`codex exec`-based one in `.rb-lite-reviewers` if you want the guard on it (at the
-cost of `codex review`'s structured output).
-
-Reviewer commands run **concurrently**, get `BASE`/`RUN_DIR`/`ROUND`/
-`REVIEWER_INDEX` in env, and have stdin closed. The panel succeeds with
-at least one exit-0 reviewer; failed reviewers are noted but don't abort
-the run.
-
-The reviewer contract is strict:
-- Findings on stdout, prefixed near the start of the line with the
-  severity tag (`P2:`, `[P2]`, `**P2**:`, `Issue 1 (P2):`, …).
-- Successful reviewer stderr is treated as tool noise and is not fed back to
-  the implementer; failed reviewer stderr gets a tail in that reviewer's
-  markdown file.
-- Exit 0 = real review; exit non-zero = tool failure (output may be
-  partial). Findings detection ignores non-zero reviewers, and failed reviewer
-  files are not included in `REVIEW_FILES` for the next implementer round. A
-  linter that exits non-zero on findings must be wrapped: `mylinter || true`.
+Do not `cat >.rb-lite-reviewers` in the repo root — that destroys an existing panel or
+leaves an untracked file that trips LAND's clean-tree gate. Write to a `mktemp` path and
+pass `--reviewers-file`.
 
 ## Exit codes and JSON schema
 
-| Code | Status | Meaning | What to do |
-|---|---|---|---|
-| `0` | `clean` | Reviewers had no P0/P1/P2 findings (P3-only is also clean by default) | Verify the landed diff yourself, rerun the repo's gates, then ship if they pass; check `latest reviewer message in run-dir` for any leftover P3 nits worth addressing |
-| `2` | `usage_error` | Bad CLI args, incl. no implementer selected (`--implementer` and `--implement-cmd` both absent) | Fix the invocation; the JSON line is still emitted with `run_dir: null` |
-| `3` | `env_error` | Not in a git repo, missing tool, unsupported `timeout`, branch creation failure, run-dir setup failure | Fix the env; rerun |
-| `10` | `implementer_failed` | Implementer subprocess returned non-zero (incl. timeout 124/137) or hit max-iters before stabilizing | Look at `implementer-round-N-iter-K.stderr` for the most recent iter |
-| `11` | `review_panel_failed` | No **defect** reviewer exited 0 — either none succeeded, or only the skeptic did (it cannot report defects, so its lone vote is not a review) | Check `reviewer-round-N-K.stderr` for all reviewers; usually missing CLI/auth or `jq` failure |
-| `12` | `max_rounds_hit` | Burned all `--max-rounds` without convergence | Inspect the latest review files; either bump `--max-rounds` or address the remaining findings manually. Do **not** raise `--min-findings-severity` to skip nits — it filters out the skeptic, which tags every finding `P2` |
-| `13` | `consensus_failure` | Implementer kept declining to act on findings for `--max-noop-rounds` consecutive rounds | Read the latest review **and the implementer's recorded reasons** — it's signaling it disagrees. If its rejections are evidence-backed (false positives or over-specification), this is a legitimate stop, not a failure. Apply the fix manually if you side with reviewers, or accept the run if you side with the implementer |
-| `14` | `budget_exceeded` | Added production lines passed `--max-production-lines` | Stop and re-shape the change, or re-derive the baseline with the user. Never relaunch with a bigger number — the run has told you the change is wrong-shaped |
-| `70` | `internal_error` | Internal invariant violation or unhandled shell failure | Read `log.txt` and the most recent stderr files; this is rare |
+The full table, the JSON summary schema, and the per-run artifact list are in
+[references/exit-codes-and-artifacts.md](references/exit-codes-and-artifacts.md).
+Match on the JSON `status` and `exit_code`, never on the human-readable line.
 
-The JSON schema (every exit, last stdout line):
+The ones you will actually meet: `0 clean` (verify it anyway), `11 review_panel_failed`
+(no *defect* reviewer exited 0 — the skeptic's lone vote is not a review), `12
+max_rounds_hit`, `13 consensus_failure` (the implementer is declining findings — read
+its reasons before overriding; evidence-backed rejections make this a legitimate stop),
+and `14 budget_exceeded` (a **stop, not a retry target** — re-shape the change, never
+relaunch with a bigger number).
 
-```json
-{
-  "run_dir": "string | null",
-  "exit_code": "integer",
-  "status": "clean | usage_error | env_error | implementer_failed | review_panel_failed | max_rounds_hit | consensus_failure | budget_exceeded | internal_error",
-  "rounds": "integer",
-  "implementer_iterations": "integer",
-  "noop_rounds_streak": "integer",
-  "findings_accepted": "integer",
-  "findings_declined": "integer",
-  "findings_deferred": "integer",
-  "rejections_total": "integer",
-  "rejections_by_round": "array of integer",
-  "production_lines_added": "integer",
-  "duration_secs": "integer",
-  "config": {
-    "max_rounds": "integer",
-    "max_iters": "integer",
-    "max_noop_rounds": "integer",
-    "max_production_lines": "integer | null",
-    "min_findings_severity": "string",
-    "implement_timeout_secs": "integer | null",
-    "reviewer_timeout_secs": "integer | null"
-  }
-}
-```
+When something looks off, read `log.txt` → the latest `review-round-*.md` →
+the relevant `*.stderr`.
 
 ## When the loop misbehaves
 
-- **Reviewers keep finding nits past round 5.** That's reviewer ratchet.
-  Check the latest review file: if findings are P3-only, something is
-  wrong with the severity floor (it should have stopped). Otherwise,
-  stop manually and apply the remaining items. Raising the floor to P1 would
-  also silence the skeptic, so it is not the fix here.
-- **Implementer "stabilized at iteration 1" repeatedly.** The implementer is
-  declining to act. The consensus-failure stop catches it after
-  `--max-noop-rounds` (default 2) — exit 13. Before overriding, read *why* it
-  declined: a stuck implementer and one legitimately rejecting findings as false
-  positives or over-specification both look like a no-op round, but only the first
-  is a problem. If the latest `review-round-*.md` plus the implementer's own
-  output show documented, evidence-backed rejections, exit 13 is the right
-  outcome, not a failure to force past. Don't lower `--max-noop-rounds` unless you
-  understand the trade-off.
-- **Implementer dies (exit 10) — rogue self-terminate or transient API
-  failure.** Two recurring causes: the implementer signals/kills its own
-  process tree (exit 143 / SIGTERM, with a self-experimentation note in
-  `implementer-round-*-iter-*.stderr` — the "self-destruct" mode the task's
-  scope guard is meant to prevent), or a transient provider error (429
-  rate-limit / 529 overload). Both leave a partial, unreliable working tree.
-  Recovery: restore only to the saved pre-run state (reset/delete the rb-lite
-  impl branch if it created one; otherwise apply the pre-run commit/stash/patch
-  you made before launch). Do not blindly run `git checkout -- .` or remove all
-  new files on a branch that may have had user work before rb-lite started.
-  Then **relaunch leading with the OTHER implementer** — swap the round-1 preset
-  (`--implementer claude,codex` ↔ `codex,claude`). A per-implementer failure
-  (one provider overloaded, or one CLI's self-experiment habit) usually doesn't
-  recur when the other leads round 1.
-- **Whole run dies mid-round with a signal and ~no output (exit 143 / 137, status
-  `internal_error`).** If you have more than one rb-lite run going (across sessions
-  or projects), this is almost always *another* session's broad `pkill -f rb-lite`
-  collateral-killing yours — not a fault in rb-lite, the box, or the task. Just
-  relaunch the same run; it'll usually complete. (Distinct from the exit-10
-  implementer self-terminate above: that's the implementer's own subprocess; this is
-  your entire run getting a signal from outside.) **Corollary for stopping your OWN
-  run:** never `pkill -f rb-lite` (or `-f <some-runword>`) — the pattern matches your
-  own shell (exit 144 self-kill) AND every other session's run. Stop the tracked
-  background task (TaskStop), or send SIGTERM to the exact wrapper PID
-  (`pgrep`/`kill <pid>`). Current rb-lite forwards TERM/INT/HUP/QUIT to the active
-  child process. If you used SIGKILL, or if implementer/reviewer children remain
-  after TERM/INT/HUP/QUIT forwarding, kill the exact orphaned child PIDs separately.
-  **No launch trick saves you from this case.** A `pkill -f rb-lite` matches
-  rb-lite's own argv regardless of how it was launched. A resource scope
-  (`systemd-run --scope`, a cgroup) can help with lifecycle and resource
-  containment, but it is not protection from a same-user broad `pkill`, direct
-  PID kill, or OOM kill. For a determined
-  name/PID/OOM sweep, recoverability (relaunch — the run is resumable, the diff is
-  in the tree) is the real defense; stronger isolation means a separate user, PID
-  namespace/container, or tighter operational discipline.
-- **A run balloons — many rounds, a huge module, edits sprawling into other files.**
-  This bead was high-blast-radius and ran unsupervised. Don't keep relaying findings;
-  discard and apply the re-scope + file-lock + watch-each-round recovery playbook in
-  "Bounding a high-blast-radius bead." (Better: catch it live next time — watch the
-  rounds and intervene before it balloons.)
-- **Run hangs.** rb-lite has a default 14400s (4 hour) per-iteration
-  timeout — far longer than any realistic iteration. If it actually
-  needs to be lower, pass `--implement-timeout SECS`. (Reviewers have their
-  own 1800s timeout; a timed-out reviewer is dropped from the panel — see
-  "Verify the landed diff" on degraded panels.)
-- **`nix run` fails with HTTP 404.** The repo went private, or the user
-  doesn't have access. Confirm
-  https://github.com/douglaz/rb-lite is public and try again.
-- **rb-lite rejects a flag the docs say exists.** You're on a cached revision.
-  Rerun with `nix run --refresh github:douglaz/rb-lite -- ...` (or
-  `nix profile upgrade`) before concluding the build predates the feature.
+Symptom-to-cause list in [references/troubleshooting.md](references/troubleshooting.md):
+nits past round 5, an implementer that keeps stabilizing at iteration 1, a dead
+implementer (exit 10), a whole run killed by a stray signal, a ballooning bead, a hang,
+`nix run` 404s, and flags rejected by a stale cached revision.
 
-## Run artifacts to know
-
-Inside `<run-dir>/`:
-
-- `log.txt` — timestamped status lines (round/iter/panel transitions).
-- `implementer-round-N-iter-K.{stdout,stderr}` — every implementer call.
-- `reviewer-round-N-K.{stdout,stderr}` — raw output from each reviewer.
-- `review-round-N-K.md` — per-reviewer markdown the implementer reads
-  on the next round (with status header and stderr-tail for failed
-  reviewers).
-- `challenges-round-N.md` — the round's decision record: one line per finding, each
-  starting `ACCEPTED`, `DECLINED`, or `DEFERRED`. rb-lite counts these; read them when the
-  summary shows rejections, and when it shows none for several rounds.
-- `skeptic-diff-round-N.patch` — the diff handed to the skeptical reviewer.
-
-When something looks off, read these in order: `log.txt` → the latest
-`review-round-*.md` files → the relevant `*.stderr`.
+One rule worth carrying without looking it up: **never `pkill -f rb-lite`.** The pattern
+matches your own shell — exit 144, self-kill — *and* every other session's run. Stop the
+tracked background task, or SIGTERM the exact wrapper PID.
 
 ## Quick recipes
 
@@ -1021,7 +703,7 @@ rb-lite run \
 
 ```bash
 # The task file pins EXACTLY the file(s) the implementer may create/modify and
-# forbids all others (see "Bounding a high-blast-radius bead"). --max-rounds is a
+# forbids all others (see references/task-files.md). --max-rounds is a
 # CHECKPOINT to assess and (if the code is sound) relaunch — not a finish. Leave the
 # default severity so real P2 polish lands; P3 is manual/inspection-only unless you
 # deliberately lower the floor. Do NOT add --min-findings-severity P1 to curb
@@ -1039,7 +721,7 @@ rb-lite run \
 
 ```bash
 RB_REVIEWERS=$(mktemp)   # never `cat >.rb-lite-reviewers` in the repo root
-# Paste BOTH claude lines from § Customizing the panel into it. An EMPTY file is treated
+# Paste BOTH claude lines from references/reviewer-panel.md into it. An EMPTY file is treated
 # as no file at all, so rb-lite falls back to the built-in panel and codex is NOT
 # disabled; a file without a skeptic leaves the run with no counter-pressure.
 cat >"$RB_REVIEWERS" <<'EOF'
