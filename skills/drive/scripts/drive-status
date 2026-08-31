@@ -15,6 +15,117 @@ ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || {
 }
 cd "$ROOT" || exit 0
 
+# All four initialised unconditionally: the parses below happen inside the `-f DRIVE.md`
+# branch, but the comparisons that read them do not, and `set -u` turns the no-DRIVE.md
+# case — the common one, and every first run — into a hard crash instead of an empty value.
+DRIVE_MD="absent"; DRIVE_PHASE=""; DRIVE_CLEARED=""; DRIVE_PENDING=""; DRIVE_CLEARED_BASE=""
+DRIVE_PENDING_REPO=""
+DRIVE_BASELINE=""; DRIVE_DO_NOT_BUILD=""
+if [[ -f DRIVE.md ]]; then
+  DRIVE_MD="present"
+  # Case-insensitive and non-alpha-tolerant on purpose: `**Phase:** build` is a plausible
+  # hand edit, and extracting nothing there would be indistinguishable from a DRIVE.md with
+  # no phase line at all — the record would be discarded with no warning. Capture whatever
+  # token is present, uppercase it, and let the validity check below decide.
+  DRIVE_PHASE=$(grep -m1 -oiE '\*\*Phase:\*\*[[:space:]]*[A-Za-z_-]+' DRIVE.md 2>/dev/null \
+    | sed -E 's/.*\*\*[[:space:]]*//' | tr '[:lower:]' '[:upper:]' || echo "")
+  # `Pending: metadata PR #N` — a `DONE` record conditional on a PR that has to be queried.
+  # Stays in the COMMITTED record on purpose: it must reach a fresh clone, which is the one
+  # thing that cannot be derived from a checkout.
+  _PENDING_RAW=$(grep -m1 -oiE '\*\*Pending:\*\*[^#]*#[0-9]+' DRIVE.md 2>/dev/null || echo "")
+  DRIVE_PENDING=$(printf '%s' "$_PENDING_RAW" | grep -oE '[0-9]+$' || echo "")
+  # A bare `#N` cannot say WHERE. On a fork the metadata PR may live in the parent or in
+  # the fork, and the same number identifies unrelated PRs in both — so a resumed clone
+  # querying the wrong one reads another PR's state as this drive's. `owner/repo#N` is the
+  # qualified form; the bare form is still accepted because records already exist in it,
+  # and it resolves against base_repo with the usual fork caveat.
+  DRIVE_PENDING_REPO=$(printf '%s' "$_PENDING_RAW" \
+    | grep -oE '[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#[0-9]+$' | sed 's/#.*//' || echo "")
+  # Guard 2's two halves, as record fields rather than prose. Both were absent for the whole
+  # of the 2026-08-18 ratchet and no phase objected, which is the reason they are parsed here
+  # at all: a brake the driver can silently skip writing is not a brake.
+  # Both fields wrap across source lines in real records, so read a field as its first line
+  # plus every continuation up to the next **Header:** or blank line. A line-at-a-time grep
+  # silently truncated a two-line Do-NOT-build list to its first half, which is worse than
+  # not parsing it at all: the JSON looked well-formed and named half the forbidden work.
+  drive_field() {
+    awk -v want="$1" '
+      !found && tolower($0) ~ "^\\*\\*" want ":\\*\\*" {
+        found = 1
+        sub(/^\*\*[^*]*\*\*[[:space:]]*/, "")
+        if ($0 != "") print
+        next
+      }
+      found { if ($0 ~ /^\*\*/ || $0 ~ /^[[:space:]]*$/) exit; print }
+    ' DRIVE.md 2>/dev/null | tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g; s/[[:space:]]+$//'
+  }
+  # The baseline must carry a NUMBER of lines — "small" is not a baseline, and a budget is
+  # derived from it as 3x. A bare label would parse and then bound nothing.
+  # `~` is accepted because the docs' own examples write "~15 lines"; a parser that
+  # rejects the form its documentation teaches leaves the guard unarmed with no hint why.
+  # The number is located by the `lines` it counts, not by sitting first: the 2026-08-30 run
+  # wrote "**Baseline:** E3a 140 production lines", which a human reads as obviously
+  # well-formed and the old anchored pattern rejected, leaving Guard 2 silently unarmed for
+  # three commits. A leading label and up to two qualifier words are now accepted, because
+  # "140 production lines" is the plainest way to write the very quantity this measures.
+  DRIVE_BASELINE=$(drive_field baseline \
+    | grep -oE '~?[0-9]+[[:space:]]+([A-Za-z]+[[:space:]]+){0,2}lines?([^[:alnum:]]|$)' \
+    | head -1 | grep -oE '[0-9]+' | head -1 || echo "")
+  # Strip leading zeros before any use: `00` would fail a string compare against "0" and
+  # arm the guard with a zero budget, and `08` makes the later $((BASELINE * 3)) an octal
+  # parse error. A baseline of zero bounds nothing — rb-lite rejects
+  # `--max-production-lines 0` as a usage error — so it must read as unarmed.
+  DRIVE_BASELINE=$(printf '%s' "$DRIVE_BASELINE" | sed -E 's/^0+//')
+  [[ -z "$DRIVE_BASELINE" ]] && DRIVE_BASELINE=""
+  # Any non-empty list, but `none` is rejected: "we will not decline to build anything" is
+  # the state this field exists to make someone type out deliberately.
+  DRIVE_DO_NOT_BUILD=$(drive_field do-not-build || echo "")
+  # `tr`, not ${VAR,,}: case conversion is a bash 4.0 feature and macOS ships /bin/bash
+  # 3.2, where it is a syntax error that aborts the whole detector.
+  _DNB_LOWER=$(printf '%s' "$DRIVE_DO_NOT_BUILD" | tr '[:upper:]' '[:lower:]')
+  if [[ "$_DNB_LOWER" == "none" || "$_DNB_LOWER" == "-" \
+     || "$_DNB_LOWER" == "—" || "$_DNB_LOWER" == "–" || "$_DNB_LOWER" == "n/a" ]]; then
+    DRIVE_DO_NOT_BUILD=""
+  fi
+fi
+
+# BUILD spends the budget, so BUILD is where the budget has to already exist. Reported as a
+# blocker rather than enforced by exit status: drive-status is a detector, and the phase
+# skills decide what to refuse.
+GUARD2_ARMED=false
+[[ -n "$DRIVE_BASELINE" && -n "$DRIVE_DO_NOT_BUILD" ]] && GUARD2_ARMED=true
+
+# --check-record asserts only the DRIVE.md record and exits. It runs here, before any git or
+# forge work, so the gate that calls it needs no network: the failure it exists to catch is a
+# malformed field, which is decided by this file alone. Guard 2 drifted silently across three
+# commits and five days in the 2026-08-30 run because nothing asserted the record until a
+# human went looking, and the gate is the one thing every commit already has to pass.
+if [[ "${1:-}" == "--check-record" ]]; then
+  _rc=0
+  if [[ ! -f DRIVE.md ]]; then
+    echo "drive-record: no DRIVE.md; nothing to check"
+    exit 0
+  fi
+  # Present-but-unparseable is the failure. Absent is legitimate outside BUILD, so a field
+  # that was never written is not an error here -- only one that was written and does not read.
+  if grep -qiE '^\*\*Baseline:\*\*' DRIVE.md && [[ -z "$DRIVE_BASELINE" ]]; then
+    echo "drive-record: **Baseline:** is present but has no usable line count" >&2
+    echo "  write the number immediately before the word it counts, e.g. '140 production lines'" >&2
+    _rc=1
+  fi
+  if grep -qiE '^\*\*Do-NOT-build:\*\*' DRIVE.md && [[ -z "$DRIVE_DO_NOT_BUILD" ]]; then
+    echo "drive-record: **Do-NOT-build:** is present but empty or a placeholder" >&2
+    _rc=1
+  fi
+  # BUILD spends the budget, so at BUILD both halves must exist, not merely parse if written.
+  if [[ "$DRIVE_PHASE" == "BUILD" ]] && ! $GUARD2_ARMED; then
+    echo "drive-record: phase is BUILD but Guard 2 is unarmed (needs **Baseline:** and **Do-NOT-build:**)" >&2
+    _rc=1
+  fi
+  [[ $_rc -eq 0 ]] && echo "drive-record: ok (phase ${DRIVE_PHASE:-none}, guard2_armed $GUARD2_ARMED)"
+  exit $_rc
+fi
+
 BRANCH=$(git branch --show-current 2>/dev/null || echo "")
 # The PR's own base outranks every heuristic below: a PR can target a release or stacked
 # branch rather than the repo default, and validating freshness against the wrong base
@@ -598,65 +709,6 @@ else
   fi
 fi
 
-# All four initialised unconditionally: the parses below happen inside the `-f DRIVE.md`
-# branch, but the comparisons that read them do not, and `set -u` turns the no-DRIVE.md
-# case — the common one, and every first run — into a hard crash instead of an empty value.
-DRIVE_MD="absent"; DRIVE_PHASE=""; DRIVE_CLEARED=""; DRIVE_PENDING=""; DRIVE_CLEARED_BASE=""
-DRIVE_PENDING_REPO=""
-DRIVE_BASELINE=""; DRIVE_DO_NOT_BUILD=""
-if [[ -f DRIVE.md ]]; then
-  DRIVE_MD="present"
-  # Case-insensitive and non-alpha-tolerant on purpose: `**Phase:** build` is a plausible
-  # hand edit, and extracting nothing there would be indistinguishable from a DRIVE.md with
-  # no phase line at all — the record would be discarded with no warning. Capture whatever
-  # token is present, uppercase it, and let the validity check below decide.
-  DRIVE_PHASE=$(grep -m1 -oiE '\*\*Phase:\*\*[[:space:]]*[A-Za-z_-]+' DRIVE.md 2>/dev/null \
-    | sed -E 's/.*\*\*[[:space:]]*//' | tr '[:lower:]' '[:upper:]' || echo "")
-  # `Pending: metadata PR #N` — a `DONE` record conditional on a PR that has to be queried.
-  # Stays in the COMMITTED record on purpose: it must reach a fresh clone, which is the one
-  # thing that cannot be derived from a checkout.
-  _PENDING_RAW=$(grep -m1 -oiE '\*\*Pending:\*\*[^#]*#[0-9]+' DRIVE.md 2>/dev/null || echo "")
-  DRIVE_PENDING=$(printf '%s' "$_PENDING_RAW" | grep -oE '[0-9]+$' || echo "")
-  # A bare `#N` cannot say WHERE. On a fork the metadata PR may live in the parent or in
-  # the fork, and the same number identifies unrelated PRs in both — so a resumed clone
-  # querying the wrong one reads another PR's state as this drive's. `owner/repo#N` is the
-  # qualified form; the bare form is still accepted because records already exist in it,
-  # and it resolves against base_repo with the usual fork caveat.
-  DRIVE_PENDING_REPO=$(printf '%s' "$_PENDING_RAW" \
-    | grep -oE '[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#[0-9]+$' | sed 's/#.*//' || echo "")
-  # Guard 2's two halves, as record fields rather than prose. Both were absent for the whole
-  # of the 2026-08-18 ratchet and no phase objected, which is the reason they are parsed here
-  # at all: a brake the driver can silently skip writing is not a brake.
-  # The baseline must carry a NUMBER of lines — "small" is not a baseline, and a budget is
-  # derived from it as 3x. A bare label would parse and then bound nothing.
-  # `~` is accepted because the docs' own examples write "~15 lines"; a parser that
-  # rejects the form its documentation teaches leaves the guard unarmed with no hint why.
-  DRIVE_BASELINE=$(grep -m1 -oiE '\*\*Baseline:\*\*[[:space:]]*~?[0-9]+[[:space:]]*lines?([^[:alnum:]]|$)' DRIVE.md 2>/dev/null \
-    | grep -oE '[0-9]+' || echo "")
-  # Strip leading zeros before any use: `00` would fail a string compare against "0" and
-  # arm the guard with a zero budget, and `08` makes the later $((BASELINE * 3)) an octal
-  # parse error. A baseline of zero bounds nothing — rb-lite rejects
-  # `--max-production-lines 0` as a usage error — so it must read as unarmed.
-  DRIVE_BASELINE=$(printf '%s' "$DRIVE_BASELINE" | sed -E 's/^0+//')
-  [[ -z "$DRIVE_BASELINE" ]] && DRIVE_BASELINE=""
-  # Any non-empty list, but `none` is rejected: "we will not decline to build anything" is
-  # the state this field exists to make someone type out deliberately.
-  DRIVE_DO_NOT_BUILD=$(grep -m1 -oiE '\*\*Do-NOT-build:\*\*[[:space:]]*[^[:space:]].*' DRIVE.md 2>/dev/null \
-    | sed -E 's/^\*\*[^*]*\*\*[[:space:]]*//' | sed -E 's/[[:space:]]+$//' || echo "")
-  # `tr`, not ${VAR,,}: case conversion is a bash 4.0 feature and macOS ships /bin/bash
-  # 3.2, where it is a syntax error that aborts the whole detector.
-  _DNB_LOWER=$(printf '%s' "$DRIVE_DO_NOT_BUILD" | tr '[:upper:]' '[:lower:]')
-  if [[ "$_DNB_LOWER" == "none" || "$_DNB_LOWER" == "-" \
-     || "$_DNB_LOWER" == "—" || "$_DNB_LOWER" == "–" || "$_DNB_LOWER" == "n/a" ]]; then
-    DRIVE_DO_NOT_BUILD=""
-  fi
-fi
-
-# BUILD spends the budget, so BUILD is where the budget has to already exist. Reported as a
-# blocker rather than enforced by exit status: drive-status is a detector, and the phase
-# skills decide what to refuse.
-GUARD2_ARMED=false
-[[ -n "$DRIVE_BASELINE" && -n "$DRIVE_DO_NOT_BUILD" ]] && GUARD2_ARMED=true
 
 # --- volatile per-checkout state (ADR 0001 sites it, ADR 0002 derives LAND from it) ---
 # Clearance is a claim about a panel run in THIS checkout against THIS tree, so it is never
