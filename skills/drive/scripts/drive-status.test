@@ -861,6 +861,60 @@ record '**Phase:** BUILD
 **Do-NOT-build:** rollback'
 check_field "a colon after the label parses" baseline_lines 140
 
+# A fenced `**Baseline:**` earlier in the file used to win, silently, with --check-record
+# green. drive/SKILL.md's own DRIVE.md template is a fenced block containing a Baseline line,
+# so a record that quotes the template ahead of its live header read the template.
+new_repo; add_code
+record '**Phase:** BUILD
+```
+**Baseline:** 999 lines
+```
+**Baseline:** 140 lines
+**Do-NOT-build:** rollback'
+check_field "a fenced decoy does not win" baseline_lines 140
+
+# `E3a-140` is ambiguous -- label `E3a-140`, or `E3a` and a count? `skills-di6` proves the
+# whole-token reading has to stay available, so the glued form is refused, not guessed.
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** E3a-140 production lines
+**Do-NOT-build:** rollback'
+check_field "a count glued to the label is refused" guard2_armed false
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 99999999999999999999 lines
+**Do-NOT-build:** rollback'
+# 20 digits wrapped the 3x budget negative in bash and printed 3E+20 in the JSON.
+check_field "an absurd count is refused rather than wrapped" guard2_armed false
+
+# The gate's presence test must be WIDER than the parser. Sharing its anchored pattern made
+# the gate blind to exactly the malformed fields it exists to report.
+new_repo; add_code
+record '**Phase:** SHAPE
+**Baseline**: 140 lines
+**Do-NOT-build:** rollback'
+check_record "a colon outside the bold is reported, not treated as absent" 1
+
+new_repo; add_code
+record '**Phase:** SHAPE
+- **Baseline:** 140 lines
+**Do-NOT-build:** rollback'
+check_record "a list-item field is reported, not treated as absent" 1
+
+# The separator used to be a multibyte bracket class, so the same record armed Guard 2 in a
+# UTF-8 shell and read null under LC_ALL=C -- the locale decided whether the brake existed.
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** E3a — 140 production lines
+**Do-NOT-build:** rollback'
+_lc=$( cd "$REPO" && PATH="$WORK/bin:$PATH" FIX="$FIX" LC_ALL=C "$DS" --json | jq -r .baseline_lines )
+if [[ "$_lc" == "140" ]]; then
+  PASS=$((PASS + 1)); printf '  ok   %-48s (LC_ALL=C baseline_lines=%s)\n' "an em-dash parses in a C locale too" "$_lc"
+else
+  FAIL=$((FAIL + 1)); printf '  FAIL %-48s want 140 got %s\n' "an em-dash parses in a C locale too" "$_lc"
+fi
+
 echo
 echo "passed $PASS, failed $FAIL"
 [[ "$FAIL" -eq 0 ]]

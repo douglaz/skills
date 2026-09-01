@@ -19,9 +19,12 @@ that omits the skeptic returns the loop to add-only pressure:
 # .rb-lite-reviewers  (gating: the codex and claude defect reviewers)
 codex review --base "$BASE" -c 'model="gpt-5.6-sol"'
 set -o pipefail; claude -p "Review the diff vs $BASE. Before asserting the diff violates or overstates an invariant, or any claim about behavior in code the diff does not show, verify it by reading that code and cite file:line, else mark it a QUESTION not a finding. Tag findings P0/P1/P2/P3. Output 'No findings.' if clean." --model claude-opus-5 --output-format json --allowedTools "Read,Glob,Grep" --disallowedTools "Edit,Write,NotebookEdit,Bash" | jq -er 'if .is_error then error(.result // "claude reviewer returned is_error") else (.result // empty) end'
+# a linter is a DEFECT reviewer: it belongs on the gating axis, above the marker below
+(my-linter --json || true) | wrap-as-p-tags
+
+# ---- everything BELOW this line goes in .rb-lite-skeptics, not the file above ----
 # .rb-lite-skeptics  (advisory) -- hunts over-specification instead of bugs, so the panel has counter-pressure against scope creep
 set -o pipefail; claude -p "Review the diff vs $BASE for OVER-SPECIFICATION, not bugs. Flag any mechanism, handling, config, or abstraction that is NOT required for correctness, security, or data-safety and could be cut, simplified, or deferred. For each, give: what it is, why it isn't strictly required (what already covers the case), and a recommendation. Tag each finding 'P2: CUT', 'P2: SIMPLIFY', or 'P2: DEFER'. Do not flag missing behavior or bugs; another reviewer owns that. Output 'No findings.' if the diff is already minimal for its goal." --model claude-opus-5 --output-format json --allowedTools "Read,Glob,Grep" --disallowedTools "Edit,Write,NotebookEdit,Bash" | jq -er 'if .is_error then error(.result // "skeptic reviewer returned is_error") else (.result // empty) end'
-(my-linter --json || true) | wrap-as-p-tags
 ```
 
 Put a skeptic in `.rb-lite-skeptics`, never in `.rb-lite-reviewers`. A skeptic listed as a
@@ -72,9 +75,10 @@ The reviewer contract is strict:
 `AGENTS.md` requires a claim about tool behaviour to carry a run rather than a recollection,
 so the fallback rules above are recorded rather than asserted. Measured 2026-09-01 against
 `rb-lite 0.5.0` (`rb-lite --version`), in a throwaway git repo with every reviewer replaced
-by a stub on `PATH` — `gate1`/`skep` print one line, the `claude` stub appends its argv to a
-file outside the repo so the built-in skeptic's invocation is countable, and streams are
-separated by redirection:
+by a stub on `PATH` — `gate1`/`skep`/`codex` print one line, the `claude` stub appends its
+argv to a file outside the repo so the built-in skeptic's invocation is countable, `jq` is
+the real one, and streams are separated by redirection. "present" means a file holding the
+single line `gate1` (or `skep`):
 
 ```bash
 rb-lite run --task t --max-rounds 1 --max-iters 2 \
@@ -93,6 +97,21 @@ rb-lite run --task t --max-rounds 1 --max-iters 2 \
 | present | comments only | 0 | 2 | 1 |
 
 Row 2 is the one that changed in 0.5.0: a supplied gating panel keeps its counter-pressure.
-Rows 5 and 6 show the empty/comments-only fallback. What this does NOT show is *why* any row
-behaves as it does, and it says nothing about 0.3.x/0.4.x, which were not run here — on those
-versions a reviewers file replaces the whole panel.
+Rows 5 and 6 show the empty/comments-only fallback.
+
+The older versions were measured too, same harness, each `bin/rb-lite` taken straight from
+its commit (`git show f1ea3f6:bin/rb-lite`, `2a79791`, `08f94cb`):
+
+| rb-lite | `.rb-lite-reviewers` | exit | panel | built-in skeptic prompted |
+| --- | --- | --- | --- | --- |
+| 0.3.0 | absent | 0 | 3 | 1 |
+| 0.3.0 | present | 0 | **1** | **0** |
+| 0.4.0 | absent | 0 | 3 | 1 |
+| 0.4.0 | present | 0 | **1** | **0** |
+| 0.5.0 | absent | 0 | 3 | 1 |
+| 0.5.0 | present | 0 | **2** | **1** |
+
+So "a reviewers file replaces the whole panel on 0.3.x/0.4.x" is measured, not inferred: the
+panel drops to the one supplied command and the skeptic is never invoked. What none of this
+shows is *why* any row behaves as it does — a rerun gives the exit code and the streams,
+never the cause.

@@ -52,7 +52,11 @@ if [[ -f DRIVE.md ]]; then
   # not parsing it at all: the JSON looked well-formed and named half the forbidden work.
   drive_field() {
     awk -v want="$1" '
-      !found && tolower($0) ~ "^\\*\\*" want ":\\*\\*" {
+      # Track fences: a header inside one is an example or a quoted record, not the field.
+      # A fence also ENDS a field in progress -- toggling without that swallowed the closing
+      # fence and the lines after it into the value.
+      /^[[:space:]]*(```|~~~)/ { if (found) exit; fence = !fence; next }
+      !found && !fence && tolower($0) ~ "^\\*\\*" want ":\\*\\*" {
         found = 1
         sub(/^\*\*[^*]*\*\*[[:space:]]*/, "")
         if ($0 != "") print
@@ -75,32 +79,47 @@ if [[ -f DRIVE.md ]]; then
   # accepted -- "140 production lines" is the plainest way to write the very quantity this
   # measures.
   #
-  # But the phrase is anchored to the START of the field, because a free scan is worse than
-  # the strictness it replaced. Unanchored, "E3 production lines: 140" armed the guard at
-  # BASELINE=3 (the digit in the bead label, followed by the qualifier) for a budget of 9 --
-  # a spurious exit 14 on the first BUILD round, against a stop the docs say must never be
-  # relaunched past. `lines` is required plural for the same reason: it stops "1 command
-  # line tool, 140 production lines" reading as a baseline of 1.
+  # `lines` must be plural and must be its own token: that is what stops "1 command line
+  # tool, 140 production lines" reading as a baseline of 1.
   #
-  # Known limit: the first number-lines phrase wins, so a field written as prose
+  # Known limit: the first count-then-lines run wins, so a field written as prose
   # ("3000 lines of context; new work is 40 lines") reads 3000. That is deterministic and
   # visible in --json rather than silently wrong, and the field is documented as a count,
   # not a sentence.
   #
-  # -i throughout: the pre-2026-08-31 parser was case-insensitive, and an existing record
-  # spelling "15 Lines" must not start failing the gate over capitalization.
-  # Two stages, and the SECOND must be anchored too. Anchoring only the first left the
-  # extraction free to scan inside the phrase it returned, so a label ending in a digit --
-  # `E3`, the un-split bead's own name, or a bead ID like `skills-di6` -- gave baseline 3
-  # and 6: the same silent wrong budget the anchoring was added to prevent, one label shape
-  # over. Stage 2 therefore removes the label it already matched rather than searching past
-  # it. The label may be backticked and may be followed by `:` or a dash, because that is
-  # how this repo writes bead IDs everywhere else.
-  DRIVE_BASELINE=$(drive_field baseline \
-    | grep -oiE '^(`?[A-Za-z][A-Za-z0-9._-]*`?[[:space:]]*[:—–-]?[[:space:]]*)?~?[0-9]+[[:space:]]+([A-Za-z]+[[:space:]]+){0,2}lines([^[:alnum:]]|$)' \
-    | head -1 \
-    | sed -E 's/^`?[A-Za-z][A-Za-z0-9._-]*`?[[:space:]]*[:—–-]?[[:space:]]*//; s/^~//' \
-    | grep -oE '^[0-9]+' | head -1 || echo "")
+  # Case-insensitive on the unit word, because the pre-2026-08-31 parser was and an existing
+  # record spelling "15 Lines" must not start failing the gate over capitalization.
+  # Tokenised, not pattern-matched. Three successive regex pipelines got this wrong in three
+  # different ways -- an unanchored search read the label's digit (`E3 140 lines` -> 3), a
+  # greedy strip disagreed with the match it was stripping, and a `[:—–-]` bracket class is
+  # multibyte, so under LC_ALL=C it matched one byte of a three-byte dash and the same record
+  # armed Guard 2 in one locale and not the other. Splitting on whitespace and walking the
+  # tokens is longer and has no such failure mode: every comparison is a whole-token string
+  # compare, so the dash forms are byte-exact and locale-independent.
+  #
+  # Grammar: [label] [separator] ~?COUNT [qualifier]{0,2} lines
+  # A label is one token starting with a letter. The count is its own token -- `E3a-140` is
+  # ambiguous (label `E3a-140`, or `E3a` plus 140?) and `skills-di6` proves the first reading
+  # has to be available, so a glued form is refused rather than guessed. Counts are capped at
+  # 9 digits; a 20-digit value wrapped the 3x budget negative in bash.
+  DRIVE_BASELINE=$(drive_field baseline | awk '
+    { gsub(/`/, ""); n = split($0, t, /[ \t]+/); i = 1; cnt = ""
+      if (i <= n && t[i] !~ /^~?[0-9]+$/) {
+        if (t[i] ~ /^[A-Za-z][A-Za-z0-9._-]*:?$/) i++          # one label token
+        else exit
+      }
+      if (i <= n && (t[i] == "-" || t[i] == ":" || t[i] == "—" || t[i] == "–")) i++
+      if (i > n || t[i] !~ /^~?[0-9]+$/) exit
+      cnt = t[i]; sub(/^~/, "", cnt); i++
+      if (length(cnt) > 9) exit
+      for (q = 0; q <= 2; q++) {
+        if (i > n) exit
+        w = tolower(t[i]); sub(/[^a-z]+$/, "", w)
+        if (w == "lines") { print cnt; exit }
+        if (t[i] !~ /^[A-Za-z]+$/) exit
+        i++
+      }
+    }' || echo "")
   # Strip leading zeros before any use: `00` would fail a string compare against "0" and
   # arm the guard with a zero budget, and `08` makes the later $((BASELINE * 3)) an octal
   # parse error. A baseline of zero bounds nothing — rb-lite rejects
@@ -138,12 +157,19 @@ if [[ "${1:-}" == "--check-record" ]]; then
   fi
   # Present-but-unparseable is the failure. Absent is legitimate outside BUILD, so a field
   # that was never written is not an error here -- only one that was written and does not read.
-  if grep -qiE '^\*\*Baseline:\*\*' DRIVE.md && [[ -z "$DRIVE_BASELINE" ]]; then
+  #
+  # The presence test is deliberately LOOSER than the parser. Sharing the parser's anchored
+  # pattern made the gate blind to exactly what it exists to catch: `**Baseline**: 140 lines`
+  # (colon outside the bold, the common markdown variant), a list-item `- **Baseline:**`, and
+  # an indented field all read as null AND passed the gate, because a header the parser
+  # cannot see was also a header the gate could not see. Wider here means a malformed field
+  # is reported rather than treated as absent.
+  if grep -qiE '\*\*[[:space:]]*Baseline' DRIVE.md && [[ -z "$DRIVE_BASELINE" ]]; then
     echo "drive-record: **Baseline:** is present but has no usable line count" >&2
     echo "  write the number immediately before the word it counts, e.g. '140 production lines'" >&2
     _rc=1
   fi
-  if grep -qiE '^\*\*Do-NOT-build:\*\*' DRIVE.md && [[ -z "$DRIVE_DO_NOT_BUILD" ]]; then
+  if grep -qiE '\*\*[[:space:]]*Do-NOT-build' DRIVE.md && [[ -z "$DRIVE_DO_NOT_BUILD" ]]; then
     echo "drive-record: **Do-NOT-build:** is present but empty or a placeholder" >&2
     _rc=1
   fi
