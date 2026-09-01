@@ -1,9 +1,10 @@
 # Customizing the reviewer panel
 
 Read this **only** when overriding rb-lite's built-in panel for a reason you can name.
-The default (codex + a claude defect reviewer + a claude skeptic) is the recommended path;
-`--reviewers-file` replaces it wholesale and costs you the skeptic unless you carry one in.
-Also documents the reviewer contract every custom command must satisfy.
+The default (codex + a claude defect reviewer + a claude skeptic) is the recommended path.
+From rb-lite 0.5.0, `--reviewers-file` replaces only the **gating** reviewers; declare
+advisory ones in `.rb-lite-skeptics` / `--skeptics-file`, where they stay advisory. Also
+documents the reviewer contract every custom command must satisfy.
 
 ## Customizing the panel
 
@@ -21,9 +22,10 @@ set -o pipefail; claude -p "Review the diff vs $BASE for OVER-SPECIFICATION, not
 (my-linter --json || true) | wrap-as-p-tags
 ```
 
-A skeptic in a supplied panel is **not** advisory. rb-lite identifies the skeptic only in
-the panel it composed itself; here it is just another reviewer, so its findings gate rounds
-and can drive the run to `consensus_failure` (13) even with every defect reviewer clean.
+Put a skeptic in `.rb-lite-skeptics`, never in `.rb-lite-reviewers`. A skeptic listed as a
+gating reviewer is treated as one: its findings start rounds, and with every defect reviewer
+clean it drives the run to `consensus_failure` (13). On rb-lite 0.3.x/0.4.x there was no
+second file and that was unavoidable — the reason the split exists.
 
 The skeptical reviewer is the practical form of "add a third reviewer for
 counter-pressure" above: its `CUT` / `SIMPLIFY` / `DEFER` findings tell the
