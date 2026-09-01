@@ -131,8 +131,10 @@ Resolve `rb-lite` the way `orchestrating-with-rb-lite` does — PATH first, then
 wrapper. Do not hardcode a local checkout path; most installs will not have one.
 
 **Do not write `.rb-lite-reviewers`.** rb-lite >= 0.3.0 defaults to codex + claude + a
-claude **skeptic** that hunts over-specification; a reviewers file replaces that panel
-wholesale and costs you the only member that can argue for cutting something. The old
+claude **skeptic** that hunts over-specification. From rb-lite 0.5.0 a reviewers file
+replaces only the gating reviewers, and skeptics live in `.rb-lite-skeptics`; on 0.3.x/0.4.x
+it replaces the panel wholesale and costs you the only member that can argue for cutting
+something. The old
 instruction to override existed because the default once included a Gemini reviewer run
 through `npx -y`; that reviewer is gone, so the reason is too. See
 `orchestrating-with-rb-lite` § Tool dependencies.

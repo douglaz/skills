@@ -89,9 +89,17 @@ if [[ -f DRIVE.md ]]; then
   #
   # -i throughout: the pre-2026-08-31 parser was case-insensitive, and an existing record
   # spelling "15 Lines" must not start failing the gate over capitalization.
+  # Two stages, and the SECOND must be anchored too. Anchoring only the first left the
+  # extraction free to scan inside the phrase it returned, so a label ending in a digit --
+  # `E3`, the un-split bead's own name, or a bead ID like `skills-di6` -- gave baseline 3
+  # and 6: the same silent wrong budget the anchoring was added to prevent, one label shape
+  # over. Stage 2 therefore removes the label it already matched rather than searching past
+  # it. The label may be backticked and may be followed by `:` or a dash, because that is
+  # how this repo writes bead IDs everywhere else.
   DRIVE_BASELINE=$(drive_field baseline \
-    | grep -oiE '^([A-Za-z][A-Za-z0-9._-]*[[:space:]]+)?~?[0-9]+[[:space:]]+([A-Za-z]+[[:space:]]+){0,2}lines([^[:alnum:]]|$)' \
-    | head -1 | grep -oE '[0-9]+[[:space:]]+([A-Za-z]+[[:space:]]+){0,2}[Ll]?[iI]?' | head -1 \
+    | grep -oiE '^(`?[A-Za-z][A-Za-z0-9._-]*`?[[:space:]]*[:—–-]?[[:space:]]*)?~?[0-9]+[[:space:]]+([A-Za-z]+[[:space:]]+){0,2}lines([^[:alnum:]]|$)' \
+    | head -1 \
+    | sed -E 's/^`?[A-Za-z][A-Za-z0-9._-]*`?[[:space:]]*[:—–-]?[[:space:]]*//; s/^~//' \
     | grep -oE '^[0-9]+' | head -1 || echo "")
   # Strip leading zeros before any use: `00` would fail a string compare against "0" and
   # arm the guard with a zero budget, and `08` makes the later $((BASELINE * 3)) an octal

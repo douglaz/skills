@@ -10,7 +10,7 @@ description: >-
   into beads". Use `testing-with-rb-lite` instead when the deliverable is a test or
   live verification gate that must be independently executed. Do not use for
   cross-project orchestration, open-ended planning, or tiny one-shot edits.
-compatibility: Requires `rb-lite` on `PATH` or `nix run --refresh github:douglaz/rb-lite -- ...` (use `--refresh` at least once per session so Nix does not reuse an hour-stale cached revision). rb-lite itself has no default implementer, so pass `--implementer` with one preset or a comma-separated cycle, or use `--implement-cmd`; this skill defaults to `--implementer claude,codex` unless the user pins another choice. `codex` and `claude` must be installed and authenticated; the default Claude reviewer needs `jq`, and normal timeout-enabled runs need a compatible `timeout`, either from the host shell for source installs or from the Nix wrapper for Nix installs. This skill uses rb-lite's built-in panel (codex + a claude defect reviewer + a claude skeptic) and does NOT write `.rb-lite-reviewers`; requires rb-lite >= 0.3.0 for the skeptic, the per-round disposition counts, and `--max-production-lines`; >= 0.5.0 for advisory skeptics and the separate `.rb-lite-skeptics` axis. Backlog-drain mode also requires `br` (>= 0.1.45), `gh`, and the repo's normal local verification tools; harden-until-clean mode additionally needs `codex` and `claude` for the outer review panel.
+compatibility: Requires `rb-lite` on `PATH` or `nix run --refresh github:douglaz/rb-lite -- ...` (use `--refresh` at least once per session so Nix does not reuse an hour-stale cached revision). rb-lite itself has no default implementer, so pass `--implementer` with one preset or a comma-separated cycle, or use `--implement-cmd`; this skill defaults to `--implementer claude,codex` unless the user pins another choice. `codex` and `claude` must be installed and authenticated; the default Claude reviewer needs `jq`, and normal timeout-enabled runs need a compatible `timeout`, either from the host shell for source installs or from the Nix wrapper for Nix installs. This skill uses rb-lite's built-in panel (codex + a claude defect reviewer + a claude skeptic) and does NOT write `.rb-lite-reviewers`; requires rb-lite >= 0.3.0 for the skeptic, the per-round disposition counts, and `--max-production-lines`; >= 0.5.0 for declared skeptics and the separate `.rb-lite-skeptics` axis (the built-in skeptic is advisory from 0.4.0). Backlog-drain mode also requires `br` (>= 0.1.45), `gh`, and the repo's normal local verification tools; harden-until-clean mode additionally needs `codex` and `claude` for the outer review panel.
 ---
 
 Use `rb-lite` as the default lightweight implement → review loop for
@@ -88,8 +88,10 @@ If neither path works, stop and tell the user to install `rb-lite` (e.g.
 **Preflight, once per run:** `rb-lite --version` must be >= 0.3.0 (older builds have no
 skeptic and reject `--max-production-lines` as an unknown flag — with the Nix fallback, pass
 `--refresh`). And check for an existing `.rb-lite-reviewers` in the repo root: rb-lite loads
-it automatically, so a file left over from before the skeptic silently replaces the panel.
-Rename it aside for the run, or add a skeptic to it.
+it automatically, so a file left over from an earlier run silently replaces the gating
+panel. Rename it aside for the run. On 0.5.0+ also check `.rb-lite-skeptics`, and if the
+stale reviewers file carries a skeptic line, move it there — listed as a gating reviewer it
+starts rounds. rb-lite warns when it spots one, but only after the run has begun.
 
 **Use rb-lite's built-in panel.** The default is `codex review`, a `claude` defect reviewer,
 and a `claude` **skeptic** that hunts over-specification and tags findings `CUT` / `SIMPLIFY`
@@ -174,9 +176,11 @@ implementer and reviewer timeouts are enabled by default. If rb-lite is resolved
 setup just because the host shell cannot find `jq` or GNU `timeout`; the upstream wrapper
 supplies those to the rb-lite process. For source/path installs, check the host shell.
 
-Skipping the file is now the recommended path: you get codex, the claude defect reviewer,
-and the skeptic, all pinned, with no `npx`. Writing a file is the deliberate choice, and it
-costs the skeptic unless you carry one in yourself.
+Skipping both files is the simplest path: you get codex, the claude defect reviewer, and
+the skeptic, all pinned, with no `npx`. On 0.5.0+ writing a reviewers file no longer costs
+you the skeptic — it is a separate axis. On 0.3.x/0.4.x it does, and carrying one back into
+the reviewers file makes it gating, so on those versions the honest choice is to keep the
+built-in panel.
 
 **Companion unavailable: stop, rerun the same installer command once, reload it, and do
 not improvise this procedure.** This applies to every exact companion handoff below.
@@ -637,9 +641,10 @@ been clean for several rounds.
 ## Customizing the panel
 
 rb-lite's built-in panel is `codex review` + a `claude` defect reviewer + a `claude`
-skeptic, and this skill uses it as-is. Override only for a reason you can name: a
-`--reviewers-file` **replaces** the panel wholesale — rb-lite never injects the skeptic
-into a panel you supplied — so overriding silently returns the loop to add-only pressure.
+skeptic, and this skill uses it as-is. Override only for a reason you can name. On 0.5.0+
+`--reviewers-file` replaces only the **gating** reviewers and skeptics keep coming from
+their own axis; on 0.3.x/0.4.x it replaces the whole panel, so overriding there silently
+returns the loop to add-only pressure.
 
 The reviewer commands, the OPTIONAL extras menu, the verify-before-asserting rule every
 custom prompt needs, and the strict reviewer contract (findings on stdout with a severity
@@ -735,6 +740,8 @@ rb-lite run \
 **Run with a custom panel that disables the codex reviewer:**
 
 ```bash
+# Requires rb-lite >= 0.5.0. On 0.3.x/0.4.x a reviewers file replaces the WHOLE panel, so
+# this exact form would drop the skeptic silently — check `rb-lite --version` first.
 RB_REVIEWERS=$(mktemp)   # never `cat >.rb-lite-reviewers` in the repo root
 # Only the DEFECT reviewer goes here. The skeptic stays on its own axis and is still added
 # from .rb-lite-skeptics (or the built-in one), so this disables codex without costing you

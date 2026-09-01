@@ -575,9 +575,9 @@ overran is raising the ceiling to fit what was built — the exact move this gua
 to prevent. Never relaunch with a larger number.
 
 Keep `--min-findings-severity` at its P2 default — P2/P3 are often genuine polish, and a
-P1 floor also filters out rb-lite's skeptical reviewer, which tags every finding `P2`.
-Raising it to curb gold-plating removes the one reviewer arguing to cut. Stop the loop and
-merge instead. `--max-rounds` is a
+P1 floor silences the defect reviewers' P2s, where real should-fix findings live. Raising it
+to curb gold-plating buys nothing: from rb-lite 0.4.0 the skeptic is matched off-floor and is
+unaffected (on 0.3.x it was filtered out too). Stop the loop and merge instead. `--max-rounds` is a
 checkpoint to assess and relaunch, not a finish line. (See
 `references/autonomy-contract.md` § 4.)
 

@@ -31,9 +31,9 @@ registry, scheduler/closure code, cosmetic row validation, locks/daemon/recovery
 
 E3a fresh baseline: admission 22; dispatch 14; selector modes/parser 12; query
 capture 20; typed projection 26; Drive handoff 18; consumer docs 18; plan/gate 10
-= **140 production lines**; exact BUILD budget **420** (`3 × 140`). Unchanged from
-the prior contract on purpose: `ordered subset` → `subset` drops an obligation, so
-there is nothing to add. E3a does not sort ready IDs — every routing outcome is
+= **140 production lines**; exact BUILD budget **420** (`3 × 140`). Corrected from
+142: the +2 was charged for a containment check the projection owed either way, and
+relaxing it from an ordered subset asks for less work, not more. E3a does not sort ready IDs — every routing outcome is
 order-independent, so native order ships and sorting waits for a consumer that
 demonstrably cannot pick without it.
 

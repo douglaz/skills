@@ -824,6 +824,43 @@ locks
 # reported it as part of the forbidden-work list.
 check_field "a fence ends the continuation" do_not_build "rollback,"
 
+# Anchoring stage 1 was not enough: stage 2 scanned inside the phrase stage 1 returned, so
+# a label ending in a digit read as the count. `E3` is the un-split bead's own name and
+# `skills-di6` is this repo's bead ID format, so both are the label a driver would actually
+# type -- the same silent wrong budget, one label shape over from the case already fixed.
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** E3 140 production lines — pinned admission
+**Do-NOT-build:** rollback'
+check_field "a label ending in a digit is not the count" baseline_lines 140
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** skills-di6 140 lines
+**Do-NOT-build:** rollback'
+check_field "a bead-ID label with a trailing digit parses" baseline_lines 140
+check_field "and derives the right budget" budget_lines 420
+
+# House style writes bead IDs in backticks, and the field itself separates with an em-dash;
+# a parser that rejects the notation its own record uses fails loudly but pointlessly.
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** `skills-di6` 140 lines
+**Do-NOT-build:** rollback'
+check_field "a backticked label parses" baseline_lines 140
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** E3a — 140 production lines
+**Do-NOT-build:** rollback'
+check_field "an em-dash after the label parses" baseline_lines 140
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** E3a: 140 production lines
+**Do-NOT-build:** rollback'
+check_field "a colon after the label parses" baseline_lines 140
+
 echo
 echo "passed $PASS, failed $FAIL"
 [[ "$FAIL" -eq 0 ]]
