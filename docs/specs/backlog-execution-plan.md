@@ -1410,15 +1410,22 @@ in an explicit sanitized environment.
 
 Fresh E3a outcome itemization: pinned resolver forms plus platform and identity
 admission 22; per-dispatch OID and sanitized absolute dispatch 14; selector modes
-and sole Scope-Label parser 12; read-query capture and cleanup 20; envelope/lane
-validation with ready ⊆ open containment and typed projection 28;
-explicit-selection `drive-status` and zero-`br` fallback 18; API and consumer docs
-18; plan, table/frontier, and gate wiring 10 = **142 production lines**. The exact
-BUILD budget is **426 production lines** (`3 × 142`); crossing it returns to
-reduction, split, or SHAPE.
+and sole Scope-Label parser 12; read-query capture and cleanup 20; minimal
+envelope/lane validation and typed projection 26; explicit-selection
+`drive-status` and zero-`br` fallback 18; API and consumer docs 18; plan,
+table/frontier, and gate wiring 10 = **140 production lines**. The exact BUILD
+budget is **420 production lines** (`3 × 140`); crossing it returns to reduction,
+split, or SHAPE.
 
-Projection moved 26 → 28 for the containment check. Both itemizations are
-re-derived when the requirement set changes, never carried across it.
+Projection is re-derived to 26, correcting the 28 this file carried. The +2 was
+charged for the ready-in-open containment check, but the projection must validate
+that membership either way, and stating it without an order claim asks for less work
+than stating it with one -- a requirement was relaxed, not added, so nothing was owed
+for it. (The pre-squash drafts of douglaz/skills#75 cost the same check at 26 while it
+was still the stronger `ordered subset`; that history is not reachable from `master`,
+so the derivation above stands on the current text rather than on those commits.)
+An itemization is re-derived when the requirement set changes; moving a number because
+the surrounding prose moved is the same error as carrying one across a change that did.
 
 ### E3b. Native closure and consumers — issue #65 (`skills-dhm`)
 

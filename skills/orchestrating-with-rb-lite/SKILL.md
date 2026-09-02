@@ -10,7 +10,7 @@ description: >-
   into beads". Use `testing-with-rb-lite` instead when the deliverable is a test or
   live verification gate that must be independently executed. Do not use for
   cross-project orchestration, open-ended planning, or tiny one-shot edits.
-compatibility: Requires `rb-lite` on `PATH` or `nix run --refresh github:douglaz/rb-lite -- ...` (use `--refresh` at least once per session so Nix does not reuse an hour-stale cached revision). rb-lite itself has no default implementer, so pass `--implementer` with one preset or a comma-separated cycle, or use `--implement-cmd`; this skill defaults to `--implementer claude,codex` unless the user pins another choice. `codex` and `claude` must be installed and authenticated; the default Claude reviewer needs `jq`, and normal timeout-enabled runs need a compatible `timeout`, either from the host shell for source installs or from the Nix wrapper for Nix installs. This skill uses rb-lite's built-in panel (codex + a claude defect reviewer + a claude skeptic) and does NOT write `.rb-lite-reviewers`; requires rb-lite >= 0.3.0 for the skeptic, the per-round disposition counts, and `--max-production-lines`. Backlog-drain mode also requires `br` (>= 0.1.45), `gh`, and the repo's normal local verification tools; harden-until-clean mode additionally needs `codex` and `claude` for the outer review panel.
+compatibility: Requires `rb-lite` on `PATH` or `nix run --refresh github:douglaz/rb-lite -- ...` (use `--refresh` at least once per session so Nix does not reuse an hour-stale cached revision). rb-lite itself has no default implementer, so pass `--implementer` with one preset or a comma-separated cycle, or use `--implement-cmd`; this skill defaults to `--implementer claude,codex` unless the user pins another choice. `codex` and `claude` must be installed and authenticated; the default Claude reviewer needs `jq`, and normal timeout-enabled runs need a compatible `timeout`, either from the host shell for source installs or from the Nix wrapper for Nix installs. This skill uses rb-lite's built-in panel (codex + a claude defect reviewer + a claude skeptic) and does NOT write `.rb-lite-reviewers`; requires rb-lite >= 0.3.0 for the skeptic, the per-round disposition counts, and `--max-production-lines`; >= 0.5.0 for declared skeptics and the separate `.rb-lite-skeptics` axis (the built-in skeptic is advisory from 0.4.0). Backlog-drain mode also requires `br` (>= 0.1.45), `gh`, and the repo's normal local verification tools; harden-until-clean mode additionally needs `codex` and `claude` for the outer review panel.
 ---
 
 Use `rb-lite` as the default lightweight implement → review loop for
@@ -88,25 +88,49 @@ If neither path works, stop and tell the user to install `rb-lite` (e.g.
 **Preflight, once per run:** `rb-lite --version` must be >= 0.3.0 (older builds have no
 skeptic and reject `--max-production-lines` as an unknown flag — with the Nix fallback, pass
 `--refresh`). And check for an existing `.rb-lite-reviewers` in the repo root: rb-lite loads
-it automatically, so a file left over from before the skeptic silently replaces the panel.
-Rename it aside for the run, or add a skeptic to it.
+it automatically, so a file left over from an earlier run silently replaces the gating
+panel. Rename it aside for the run. On 0.5.0+ also check `.rb-lite-skeptics`. If the stale
+reviewers file carries a skeptic line, that line is a gating reviewer and starts rounds —
+move it onto the advisory axis, but into a `mktemp` file passed via `--skeptics-file`, not
+into a repo-root `.rb-lite-skeptics`. Creating that file makes config migration part of the
+task's own diff and leaves an untracked path that trips LAND's clean-tree gate, which is the
+same rule as the override guidance below. rb-lite warns at preflight when it spots one,
+before any implementer runs,
+and warns whether or not you passed `--no-skeptic` — that flag stops the skeptics file from
+being read, never the reviewers file, so a skeptic line left there still gates. The match is
+a guess (it looks for `OVER-SPECIFICATION`), so a reworded skeptic goes unmentioned: check
+the file yourself rather than treating silence as an all-clear.
 
-**Use rb-lite's built-in panel. Do not write a reviewers file.** As of rb-lite 0.3.0 the
-default panel is `codex review`, a `claude` defect reviewer, and a `claude` **skeptic** that
-hunts over-specification and tags findings `CUT` / `SIMPLIFY` / `DEFER`. The skeptic is the
-only panel member that can argue for removing something; the other two structurally can only
-argue for adding. A `--reviewers-file` **replaces** the panel wholesale — rb-lite never
-injects the skeptic into a panel you supplied — so overriding it silently returns the loop to
-a configuration that can only ratchet.
+**Use rb-lite's built-in panel.** The default is `codex review`, a `claude` defect reviewer,
+and a `claude` **skeptic** that hunts over-specification and tags findings `CUT` / `SIMPLIFY`
+/ `DEFER`. The skeptic is the only panel member that can argue for removing something; the
+other two structurally can only argue for adding.
 
-From 0.4.0 the skeptic is **advisory** — it informs rounds the defect reviewers keep alive
-and never starts one. On 0.3.x its hardcoded `P2` against a `P2` floor could not let a run
-converge: one 2026-08 drive went clean in 0 of 8 runs.
+Skeptics are **advisory** — they inform rounds the defect reviewers keep alive and never
+start one. On rb-lite 0.3.x the skeptic's hardcoded `P2` against a `P2` floor could not let a
+run converge at all: one 2026-08 drive went clean in 0 of 8 runs, every one ending at
+max-rounds and escalating to a human.
 
-To override deliberately, take both commands from [references/reviewer-panel.md](references/reviewer-panel.md)
-(the single copy), carry a skeptic among them, and write them to a `mktemp` path passed via
-`--reviewers-file` — never `cat >.rb-lite-reviewers` in the repo root, which destroys an
-existing panel or leaves an untracked file that trips LAND's clean-tree gate.
+From **0.5.0 the panel is two files**, because rb-lite cannot tell a skeptic from a defect
+reviewer by looking at it — both are opaque shell commands emitting severity-tagged lines,
+so the role has to be declared:
+
+| file | role | findings |
+| --- | --- | --- |
+| `.rb-lite-reviewers` | gating | start rounds |
+| `.rb-lite-skeptics` | advisory | inform rounds that happen; never start one |
+
+Each falls back to its built-in default when absent or empty, so **overriding the gating
+panel keeps your counter-pressure**, and a skeptic you declare is advisory exactly like the
+built-in one. On 0.3.x/0.4.x one file held both: `--reviewers-file` deleted the skeptic with
+the panel, and carrying one back in made it *gating*, which drove runs with clean defect
+reviewers to `consensus_failure` (13). If you are on those versions, that trade is still
+live — check `rb-lite --version` before overriding.
+
+To override, write to a `mktemp` path passed via `--reviewers-file` / `--skeptics-file` —
+never `cat >.rb-lite-reviewers` in the repo root, which destroys an existing panel or leaves
+an untracked file that trips LAND's clean-tree gate. Commands are in
+[references/reviewer-panel.md](references/reviewer-panel.md).
 
 Every reviewer must be READ-ONLY: `Edit`/`Write` plus `acceptEdits` would let one panel
 member mutate the worktree while another reads it, so the two review different trees, and
@@ -160,9 +184,11 @@ implementer and reviewer timeouts are enabled by default. If rb-lite is resolved
 setup just because the host shell cannot find `jq` or GNU `timeout`; the upstream wrapper
 supplies those to the rb-lite process. For source/path installs, check the host shell.
 
-Skipping the file is now the recommended path: you get codex, the claude defect reviewer,
-and the skeptic, all pinned, with no `npx`. Writing a file is the deliberate choice, and it
-costs the skeptic unless you carry one in yourself.
+Skipping both files is the simplest path: you get codex, the claude defect reviewer, and
+the skeptic, all pinned, with no `npx`. On 0.5.0+ writing a reviewers file no longer costs
+you the skeptic — it is a separate axis. On 0.3.x/0.4.x it does, and carrying one back into
+the reviewers file makes it gating, so on those versions the honest choice is to keep the
+built-in panel.
 
 **Companion unavailable: stop, rerun the same installer command once, reload it, and do
 not improvise this procedure.** This applies to every exact companion handoff below.
@@ -608,10 +634,10 @@ been clean for several rounds.
   accepted every finding for several rounds, it's probably being too credulous
   and the change is over-built. That's the cue to run a skeptical pass.
 - **Keep the skeptic in the panel.** Defect reviewers hunt *what's wrong*, which is
-  to say *what to add*; the skeptic hunts *what's over-built*. It ships in rb-lite's
-  built-in panel, so the way to have it is to not pass `--reviewers-file` — a supplied
-  file replaces the panel wholesale. Drop it with `--no-skeptic` only for a small,
-  already-bounded bead.
+  to say *what to add*; the skeptic hunts *what's over-built*. From rb-lite 0.5.0 it
+  survives a custom gating panel (separate file), so the only way to lose it is
+  `--no-skeptic` — worth it only for a small, already-bounded bead. On 0.3.x/0.4.x a
+  supplied `--reviewers-file` silently took it with them.
 - **Periodic skeptical audit.** When the fractal tail shows up, or before merging
   a large run, stop relaying and run one inverted audit yourself: walk what the run
   added and label each mechanism *required-for-correctness* versus
@@ -623,9 +649,10 @@ been clean for several rounds.
 ## Customizing the panel
 
 rb-lite's built-in panel is `codex review` + a `claude` defect reviewer + a `claude`
-skeptic, and this skill uses it as-is. Override only for a reason you can name: a
-`--reviewers-file` **replaces** the panel wholesale — rb-lite never injects the skeptic
-into a panel you supplied — so overriding silently returns the loop to add-only pressure.
+skeptic, and this skill uses it as-is. Override only for a reason you can name. On 0.5.0+
+`--reviewers-file` replaces only the **gating** reviewers and skeptics keep coming from
+their own axis; on 0.3.x/0.4.x it replaces the whole panel, so overriding there silently
+returns the loop to add-only pressure.
 
 The reviewer commands, the OPTIONAL extras menu, the verify-before-asserting rule every
 custom prompt needs, and the strict reviewer contract (findings on stdout with a severity
@@ -707,7 +734,8 @@ rb-lite run \
 # CHECKPOINT to assess and (if the code is sound) relaunch — not a finish. Leave the
 # default severity so real P2 polish lands; P3 is manual/inspection-only unless you
 # deliberately lower the floor. Do NOT add --min-findings-severity P1 to curb
-# gold-plating: it filters out the skeptic too. Watch each round as it lands.
+# gold-plating: it silences the defect reviewers' P2s, where real should-fix findings
+# live. Watch each round as it lands.
 rb-lite run \
   --implementer claude,codex \
   --task-file .rb-lite/tasks/bead-<id>.md \
@@ -720,13 +748,15 @@ rb-lite run \
 **Run with a custom panel that disables the codex reviewer:**
 
 ```bash
+# Requires rb-lite >= 0.5.0. On 0.3.x/0.4.x a reviewers file replaces the WHOLE panel, so
+# this exact form would drop the skeptic silently — check `rb-lite --version` first.
 RB_REVIEWERS=$(mktemp)   # never `cat >.rb-lite-reviewers` in the repo root
-# Paste BOTH claude lines from references/reviewer-panel.md into it. An EMPTY file is treated
-# as no file at all, so rb-lite falls back to the built-in panel and codex is NOT
-# disabled; a file without a skeptic leaves the run with no counter-pressure.
+# Only the DEFECT reviewer goes here. The skeptic stays on its own axis and is still added
+# from .rb-lite-skeptics (or the built-in one), so this disables codex without costing you
+# counter-pressure. An EMPTY file is treated as no file at all, so rb-lite would fall back
+# to the built-in panel and codex would NOT be disabled.
 cat >"$RB_REVIEWERS" <<'EOF'
 <defect reviewer line>
-<skeptic line>
 EOF
 rb-lite run --implementer claude,codex --task "..." --base origin/main --reviewers-file "$RB_REVIEWERS"
 rm -f "$RB_REVIEWERS"

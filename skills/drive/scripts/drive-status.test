@@ -787,6 +787,274 @@ new_repo; add_code
 record '**Phase:** BUILD'
 check_record "but BUILD with no budget fields fails the gate" 1
 
+# Review found the loosened matcher scanning into prose. Anchoring it to the start of the
+# field is what keeps "the number this field is about" from meaning "any number near a
+# `lines`". Each case below was a real misparse, not a hypothetical.
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** E3 production lines: 140
+**Do-NOT-build:** rollback'
+# Read the bead label's own digit, then the qualifier: BASELINE=3, budget 9, and a spurious
+# exit 14 on the first BUILD round -- against a stop the docs say never to relaunch past.
+check_field "a number after the lines phrase is not a baseline" guard2_armed false
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 1 command line tool, 140 production lines
+**Do-NOT-build:** rollback'
+# "line tool" is why `lines` is required plural.
+check_field "a singular line inside prose is not a baseline" guard2_armed false
+
+# The pre-2026-08-31 parser was case-insensitive; an existing record must not start failing
+# the gate over capitalization.
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 15 Lines — br close plus strict flush
+**Do-NOT-build:** rollback'
+check_field "a capitalized Lines still parses" baseline_lines 15
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 140 production lines — j
+**Do-NOT-build:** rollback,
+```
+locks
+```'
+# A fence closes the field: without this the continuation swallowed the closing ``` and
+# reported it as part of the forbidden-work list.
+check_field "a fence ends the continuation" do_not_build "rollback,"
+
+# Anchoring stage 1 was not enough: stage 2 scanned inside the phrase stage 1 returned, so
+# a label ending in a digit read as the count. `E3` is the un-split bead's own name and
+# `skills-di6` is this repo's bead ID format, so both are the label a driver would actually
+# type -- the same silent wrong budget, one label shape over from the case already fixed.
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** E3 140 production lines — pinned admission
+**Do-NOT-build:** rollback'
+check_field "a label ending in a digit is not the count" baseline_lines 140
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** skills-di6 140 lines
+**Do-NOT-build:** rollback'
+check_field "a bead-ID label with a trailing digit parses" baseline_lines 140
+check_field "and derives the right budget" budget_lines 420
+
+# House style writes bead IDs in backticks, and the field itself separates with an em-dash;
+# a parser that rejects the notation its own record uses fails loudly but pointlessly.
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** `skills-di6` 140 lines
+**Do-NOT-build:** rollback'
+check_field "a backticked label parses" baseline_lines 140
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** E3a — 140 production lines
+**Do-NOT-build:** rollback'
+check_field "an em-dash after the label parses" baseline_lines 140
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** E3a: 140 production lines
+**Do-NOT-build:** rollback'
+check_field "a colon after the label parses" baseline_lines 140
+
+# A fenced `**Baseline:**` earlier in the file used to win, silently, with --check-record
+# green. drive/SKILL.md's own DRIVE.md template is a fenced block containing a Baseline line,
+# so a record that quotes the template ahead of its live header read the template.
+new_repo; add_code
+record '**Phase:** BUILD
+```
+**Baseline:** 999 lines
+```
+**Baseline:** 140 lines
+**Do-NOT-build:** rollback'
+check_field "a fenced decoy does not win" baseline_lines 140
+
+# `E3a-140` is ambiguous -- label `E3a-140`, or `E3a` and a count? `skills-di6` proves the
+# whole-token reading has to stay available, so the glued form is refused, not guessed.
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** E3a-140 production lines
+**Do-NOT-build:** rollback'
+check_field "a count glued to the label is refused" guard2_armed false
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 99999999999999999999 lines
+**Do-NOT-build:** rollback'
+# 20 digits wrapped the 3x budget negative in bash and printed 3E+20 in the JSON.
+check_field "an absurd count is refused rather than wrapped" guard2_armed false
+
+# The gate's presence test must be WIDER than the parser. Sharing its anchored pattern made
+# the gate blind to exactly the malformed fields it exists to report.
+new_repo; add_code
+record '**Phase:** SHAPE
+**Baseline**: 140 lines
+**Do-NOT-build:** rollback'
+check_record "a colon outside the bold is reported, not treated as absent" 1
+
+new_repo; add_code
+record '**Phase:** SHAPE
+- **Baseline:** 140 lines
+**Do-NOT-build:** rollback'
+check_record "a list-item field is reported, not treated as absent" 1
+
+# The separator used to be a multibyte bracket class, so the same record armed Guard 2 in a
+# UTF-8 shell and read null under LC_ALL=C -- the locale decided whether the brake existed.
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** E3a — 140 production lines
+**Do-NOT-build:** rollback'
+_lc=$( cd "$REPO" && PATH="$WORK/bin:$PATH" FIX="$FIX" LC_ALL=C "$DS" --json | jq -r .baseline_lines )
+if [[ "$_lc" == "140" ]]; then
+  PASS=$((PASS + 1)); printf '  ok   %-48s (LC_ALL=C baseline_lines=%s)\n' "an em-dash parses in a C locale too" "$_lc"
+else
+  FAIL=$((FAIL + 1)); printf '  FAIL %-48s want 140 got %s\n' "an em-dash parses in a C locale too" "$_lc"
+fi
+
+# ...and WIDER must not mean "any bold mention anywhere". check.sh runs --check-record on
+# every commit, so a SHAPE record that merely quotes the template or bolds the word had no
+# way to go green except by deleting legitimate text. Fences and header shape are separate
+# axes: loose on the second, identical to the parser on the first.
+new_repo; add_code
+record '**Phase:** SHAPE
+
+```markdown
+**Baseline:** 40 lines
+**Do-NOT-build:** the thing
+```
+
+Still shaping.'
+check_record "a fenced template is not a present field" 0
+
+new_repo; add_code
+record '**Phase:** SHAPE
+Remember to write the **Baseline** once the shape is settled.'
+check_record "an inline bold mention is not a present field" 0
+
+new_repo; add_code
+record '**Phase:** SHAPE
+## **Baseline assumptions**
+Not a field.'
+check_record "a bold heading is not a present field" 0
+
+# Pins the colon requirement itself. Without this the rule could be deleted and every other
+# fixture here would still pass -- the inline-mention case is rejected by the line anchor, not
+# by the colon, so it cannot stand in for this one.
+new_repo; add_code
+record '**Phase:** SHAPE
+**Baseline**
+Not a field either.'
+check_record "own-line bold with no colon is not a field" 0
+
+# A field header plus an indented continuation. The leading space this leaves broke the two
+# halves of Guard 2 in OPPOSITE directions, and only the first was reported: the tokeniser
+# split it into an empty first token and parsed nothing (fail closed), while do-not-build
+# compared " none" against "none" and armed the guard on a placeholder (fail OPEN).
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:**
+  140 production lines
+**Do-NOT-build:** rollback'
+check_field "an indented continuation still carries the count" baseline_lines 140
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 140 production lines
+**Do-NOT-build:**
+  none'
+check_field "an indented placeholder is still a placeholder" guard2_armed false
+
+# A boolean fence flag reopens the document on the inner ``` of a ````-wrapped block, which
+# is the standard way to quote a fenced example -- so the quoted decoy read as live and won.
+# Silent: --check-record reported ok while Guard 2 enforced 2997 instead of 420.
+new_repo; add_code
+record '**Phase:** BUILD
+
+````markdown
+```
+**Baseline:** 999 lines
+**Do-NOT-build:** the wrong thing
+```
+````
+
+**Baseline:** 140 production lines
+**Do-NOT-build:** the real list'
+check_field "a nested fence does not reopen the document" baseline_lines 140
+
+# Both fence readers accept `~~~`, and every other fixture uses backticks -- so the tilde
+# branch of both regexes could be deleted with nothing going red.
+new_repo; add_code
+record '**Phase:** BUILD
+
+~~~markdown
+**Baseline:** 999 lines
+~~~
+
+**Baseline:** 140 production lines
+**Do-NOT-build:** the real list'
+check_field "a tilde fence hides a decoy too" baseline_lines 140
+
+new_repo; add_code
+record '**Phase:** SHAPE
+
+~~~markdown
+**Baseline:** 40 lines
+~~~
+
+Still shaping.'
+check_record "a tilde-fenced template is not a present field" 0
+
+# CommonMark: a closing fence may be followed only by whitespace, so "```not-a-close" is
+# CONTENT. Stripping the suffix before testing the delimiter closed the block early and let
+# the quoted record go live again -- the third variant of the same decoy.
+new_repo; add_code
+record '**Phase:** BUILD
+
+```markdown
+```not-a-close
+**Baseline:** 999 lines
+**Do-NOT-build:** the wrong thing
+```
+
+**Baseline:** 140 production lines
+**Do-NOT-build:** the real list'
+check_field "a fence with trailing text is content" baseline_lines 140
+
+# The phase read was fence-blind while the two fields it demands were fence-aware, and the
+# DRIVE.md template in this skill carries `**Phase:** BUILD` beside its budget lines. So a
+# SHAPE record quoting the template read phase BUILD with its fields correctly hidden, and
+# the gate failed it for being in BUILD with Guard 2 unarmed -- the very shape the fence
+# handling was added to accept.
+# The template comes FIRST on purpose. With the real phase line ahead of it, `grep -m1`
+# finds the right answer whether or not it understands fences, and the fixture passes against
+# the very bug it is meant to pin -- which is what the mutation run caught it doing.
+new_repo; add_code
+record 'Quoting the template before the record:
+
+```markdown
+**Phase:** BUILD
+**Baseline:** 40 lines
+**Do-NOT-build:** the thing
+```
+
+**Phase:** SHAPE
+
+Still shaping.'
+check_field "the phase comes from the record, not the template" recorded_phase SHAPE
+check_record "a quoted template does not put the record in BUILD" 0
+
+# The presence test names three header forms it exists to report; two were pinned and the
+# indented one was not, so the leading [[:space:]]* could be deleted with the suite green.
+new_repo; add_code
+record '**Phase:** SHAPE
+  **Baseline:** small
+**Do-NOT-build:** rollback'
+check_record "an indented field is reported, not treated as absent" 1
+
 echo
 echo "passed $PASS, failed $FAIL"
 [[ "$FAIL" -eq 0 ]]

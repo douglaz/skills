@@ -2,7 +2,9 @@
 # drive-status — print the signals needed to infer a project's lifecycle phase.
 # Read-only. Never mutates the repo. Exits 0 even when signals are missing.
 #
-# Usage: drive-status [--json]
+# Usage: drive-status [--json | --check-record]
+#   --check-record  assert only the DRIVE.md budget fields and exit non-zero if a field is
+#                   present but unparseable, or BUILD is entered with Guard 2 unarmed.
 
 set -uo pipefail
 
@@ -23,11 +25,56 @@ DRIVE_PENDING_REPO=""
 DRIVE_BASELINE=""; DRIVE_DO_NOT_BUILD=""
 if [[ -f DRIVE.md ]]; then
   DRIVE_MD="present"
+  # Fenced blocks are stripped ONCE, here, and every read below works on the result. Three
+  # separate reads used to decide for themselves what a fence was: two hand-rolled the same
+  # tracking (and disagreed with CommonMark in a different way each round -- a toggle that
+  # reopened on a nested fence, then a close that accepted trailing text), and the phase read
+  # never considered fences at all. That last one is what made the split visible: the DRIVE.md
+  # template in this skill contains `**Phase:** BUILD` beside its Baseline and Do-NOT-build
+  # lines, so a SHAPE record quoting the template had its FIELDS correctly hidden while its
+  # PHASE came from inside the fence -- and the gate then failed the record for being in BUILD
+  # with Guard 2 unarmed, which is the exact shape the fence handling was added to accept.
+  # One implementation, one place to be wrong, and all three reads agree by construction.
+  #
+  # A fenced block is replaced by a BLANK line rather than deleted: a blank line already
+  # terminates a field, so a field followed by a fence cannot run on into what comes after it.
+  #
+  # `\`\`\`+` rather than `\`{3,}`: ERE brace intervals are not supported by mawk 1.3.4-2020
+  # (Ubuntu 22.04's default awk) or by macOS awk before 20200816, and this script targets that
+  # platform elsewhere (the bash 3.2 note below). There the braces would be literal, no fence
+  # would ever match, and both readers would silently fall back to fence-blind -- restoring the
+  # decoy bug on exactly the hosts nobody tests on. `+` is portable and says the same thing.
+  _drive_live() {
+    awk '
+      {
+        m = $0; sub(/^[[:space:]]*/, "", m)
+        isfence = 0
+        if (m ~ /^```+/ || m ~ /^~~~+/) {
+          d = m; sub(/[^`~].*$/, "", d)
+          rest = substr(m, length(d) + 1)
+          isfence = 1
+        }
+        if (!fence) {
+          if (isfence) { fence = 1; fch = substr(d, 1, 1); flen = length(d); print ""; next }
+          print; next
+        }
+        # Inside a fence, a delimiter line closes it only if it matches the opener AND is
+        # followed by nothing but whitespace. CommonMark treats "```not-a-close" as content,
+        # and reading it as a close let a quoted record end the block early and go live.
+        if (isfence && substr(d, 1, 1) == fch && length(d) >= flen && rest ~ /^[[:space:]]*$/) {
+          fence = 0
+        }
+        next
+      }
+    ' DRIVE.md 2>/dev/null
+  }
+  _DRIVE_LIVE=$(_drive_live)
   # Case-insensitive and non-alpha-tolerant on purpose: `**Phase:** build` is a plausible
   # hand edit, and extracting nothing there would be indistinguishable from a DRIVE.md with
   # no phase line at all — the record would be discarded with no warning. Capture whatever
   # token is present, uppercase it, and let the validity check below decide.
-  DRIVE_PHASE=$(grep -m1 -oiE '\*\*Phase:\*\*[[:space:]]*[A-Za-z_-]+' DRIVE.md 2>/dev/null \
+  DRIVE_PHASE=$(printf '%s\n' "$_DRIVE_LIVE" \
+    | grep -m1 -oiE '\*\*Phase:\*\*[[:space:]]*[A-Za-z_-]+' 2>/dev/null \
     | sed -E 's/.*\*\*[[:space:]]*//' | tr '[:lower:]' '[:upper:]' || echo "")
   # `Pending: metadata PR #N` — a `DONE` record conditional on a PR that has to be queried.
   # Stays in the COMMITTED record on purpose: it must reach a fresh clone, which is the one
@@ -48,8 +95,16 @@ if [[ -f DRIVE.md ]]; then
   # plus every continuation up to the next **Header:** or blank line. A line-at-a-time grep
   # silently truncated a two-line Do-NOT-build list to its first half, which is worse than
   # not parsing it at all: the JSON looked well-formed and named half the forbidden work.
+  # LEADING whitespace is stripped as well as trailing, and both halves of Guard 2 depend on
+  # it. A field written as a header line plus an indented continuation ("**Baseline:**" then
+  # "  140 production lines") reaches the callers with one leading space, and that space broke
+  # them in OPPOSITE directions: the baseline tokeniser split it into an empty first token and
+  # parsed nothing (guard silently unarmed, gate red on a record master accepted), while
+  # Do-NOT-build compared " none" against "none", missed the placeholder, and armed the guard
+  # on the very value that exists to be typed out deliberately. Only the first was reported;
+  # the fail-open sibling was found by looking for other users of this return value.
   drive_field() {
-    awk -v want="$1" '
+    printf '%s\n' "$_DRIVE_LIVE" | awk -v want="$1" '
       !found && tolower($0) ~ "^\\*\\*" want ":\\*\\*" {
         found = 1
         sub(/^\*\*[^*]*\*\*[[:space:]]*/, "")
@@ -60,21 +115,62 @@ if [[ -f DRIVE.md ]]; then
       # continuation opening with emphasis, "**especially** the downloader" -- would
       # otherwise end the field and silently drop the rest, recreating the truncation
       # this read exists to prevent.
+      # No fence clause here any more: _drive_live has already replaced each fenced block with
+      # a blank line, which this same rule terminates on.
       found { if ($0 ~ /^\*\*[^*]+:\*\*/ || $0 ~ /^[[:space:]]*$/) exit; print }
-    ' DRIVE.md 2>/dev/null | tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g; s/[[:space:]]+$//'
+    ' 2>/dev/null | tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g; s/^[[:space:]]+//; s/[[:space:]]+$//'
   }
   # The baseline must carry a NUMBER of lines — "small" is not a baseline, and a budget is
   # derived from it as 3x. A bare label would parse and then bound nothing.
   # `~` is accepted because the docs' own examples write "~15 lines"; a parser that
   # rejects the form its documentation teaches leaves the guard unarmed with no hint why.
-  # The number is located by the `lines` it counts, not by sitting first: the 2026-08-30 run
-  # wrote "**Baseline:** E3a 140 production lines", which a human reads as obviously
-  # well-formed and the old anchored pattern rejected, leaving Guard 2 silently unarmed for
-  # three commits. A leading label and up to two qualifier words are now accepted, because
-  # "140 production lines" is the plainest way to write the very quantity this measures.
-  DRIVE_BASELINE=$(drive_field baseline \
-    | grep -oE '~?[0-9]+[[:space:]]+([A-Za-z]+[[:space:]]+){0,2}lines?([^[:alnum:]]|$)' \
-    | head -1 | grep -oE '[0-9]+' | head -1 || echo "")
+  # The 2026-08-30 run wrote "**Baseline:** E3a 140 production lines", which a human reads
+  # as obviously well-formed and the old number-first pattern rejected, leaving Guard 2
+  # silently unarmed for three commits. So a leading label and up to two qualifier words are
+  # accepted -- "140 production lines" is the plainest way to write the very quantity this
+  # measures.
+  #
+  # `lines` must be plural and must be its own token: that is what stops "1 command line
+  # tool, 140 production lines" reading as a baseline of 1.
+  #
+  # Known limit: the first count-then-lines run wins, so a field written as prose
+  # ("3000 lines of context; new work is 40 lines") reads 3000. That is deterministic and
+  # visible in --json rather than silently wrong, and the field is documented as a count,
+  # not a sentence.
+  #
+  # Case-insensitive on the unit word, because the pre-2026-08-31 parser was and an existing
+  # record spelling "15 Lines" must not start failing the gate over capitalization.
+  # Tokenised, not pattern-matched. Three successive regex pipelines got this wrong in three
+  # different ways -- an unanchored search read the label's digit (`E3 140 lines` -> 3), a
+  # greedy strip disagreed with the match it was stripping, and a `[:—–-]` bracket class is
+  # multibyte, so under LC_ALL=C it matched one byte of a three-byte dash and the same record
+  # armed Guard 2 in one locale and not the other. Splitting on whitespace and walking the
+  # tokens is longer and has no such failure mode: every comparison is a whole-token string
+  # compare, so the dash forms are byte-exact and locale-independent.
+  #
+  # Grammar: [label] [separator] ~?COUNT [qualifier]{0,2} lines
+  # A label is one token starting with a letter. The count is its own token -- `E3a-140` is
+  # ambiguous (label `E3a-140`, or `E3a` plus 140?) and `skills-di6` proves the first reading
+  # has to be available, so a glued form is refused rather than guessed. Counts are capped at
+  # 9 digits; a 20-digit value wrapped the 3x budget negative in bash.
+  DRIVE_BASELINE=$(drive_field baseline | awk '
+    { gsub(/`/, ""); n = split($0, t, /[ \t]+/); i = 1; cnt = ""
+      if (i <= n && t[i] !~ /^~?[0-9]+$/) {
+        if (t[i] ~ /^[A-Za-z][A-Za-z0-9._-]*:?$/) i++          # one label token
+        else exit
+      }
+      if (i <= n && (t[i] == "-" || t[i] == ":" || t[i] == "—" || t[i] == "–")) i++
+      if (i > n || t[i] !~ /^~?[0-9]+$/) exit
+      cnt = t[i]; sub(/^~/, "", cnt); i++
+      if (length(cnt) > 9) exit
+      for (q = 0; q <= 2; q++) {
+        if (i > n) exit
+        w = tolower(t[i]); sub(/[^a-z]+$/, "", w)
+        if (w == "lines") { print cnt; exit }
+        if (t[i] !~ /^[A-Za-z]+$/) exit
+        i++
+      }
+    }' || echo "")
   # Strip leading zeros before any use: `00` would fail a string compare against "0" and
   # arm the guard with a zero budget, and `08` makes the later $((BASELINE * 3)) an octal
   # parse error. A baseline of zero bounds nothing — rb-lite rejects
@@ -112,13 +208,47 @@ if [[ "${1:-}" == "--check-record" ]]; then
   fi
   # Present-but-unparseable is the failure. Absent is legitimate outside BUILD, so a field
   # that was never written is not an error here -- only one that was written and does not read.
-  if grep -qiE '^\*\*Baseline:\*\*' DRIVE.md && [[ -z "$DRIVE_BASELINE" ]]; then
-    echo "drive-record: **Baseline:** is present but has no usable line count" >&2
-    echo "  write the number immediately before the word it counts, e.g. '140 production lines'" >&2
+  #
+  # The presence test is looser than the parser on HEADER SYNTAX and identical to it on
+  # FENCES. Those are two separate axes, and conflating them broke this check in both
+  # directions on successive passes:
+  #   too narrow (shared the parser's anchored pattern): `**Baseline**: 140 lines` (colon
+  #     outside the bold, the common markdown variant), a list-item `- **Baseline:**`, and an
+  #     indented field all read as null AND passed the gate -- a header the parser could not
+  #     see was one the gate could not see either, which is the blindness this check exists
+  #     to remove.
+  #   too wide (a bare `grep '\*\*[[:space:]]*Baseline'`): any bold mention anywhere counted,
+  #     so a SHAPE record quoting the DRIVE.md template inside a fence, or one writing the
+  #     prose "write the **Baseline** once shaped", failed a gate that check.sh runs on every
+  #     commit -- with no way to get green except deleting legitimate text.
+  # So: skip fences exactly as drive_field does, and require the bold to CLOSE at the field
+  # name with a colon on one side or the other. `## **Baseline assumptions**` and an inline
+  # mention are then not fields, while every hand-written variant of the real header is.
+  drive_field_present() {
+    # Same fence-stripped view as drive_field and the phase read, so the gate cannot be blind
+    # to a decoy the parser sees, or fire on one the parser correctly ignored.
+    printf '%s\n' "$_DRIVE_LIVE" | awk -v want="$1" '
+      # A colon on ONE side or the other is required, not optional on both: a bare
+      # `**Baseline**` on its own line is prose emphasis, and accepting it would put back a
+      # slice of the over-wide match this function replaced.
+      tolower($0) ~ "^[[:space:]]*([-*+][[:space:]]*)?\\*\\*[[:space:]]*" want "([[:space:]]*:[[:space:]]*\\*\\*|[[:space:]]*\\*\\*[[:space:]]*:)" { found = 1; exit }
+      END { exit !found }
+    ' 2>/dev/null
+  }
+  if drive_field_present baseline && [[ -z "$DRIVE_BASELINE" ]]; then
+    # Names BOTH causes, because the gate deliberately accepts header forms the parser does
+    # not: `**Baseline**: 140 lines` reaches here with the number already immediately before
+    # the word it counts, and a message naming only the count sends the reader to fix the one
+    # thing that is not wrong. The gap between the two patterns is the point of the wider
+    # presence test, so the message has to describe it.
+    echo "drive-record: **Baseline:** is present but did not parse" >&2
+    echo "  the header must be exactly '**Baseline:**' at the start of the line," >&2
+    echo "  and the value must put the number immediately before the word it counts," >&2
+    echo "  e.g. '**Baseline:** 140 production lines'" >&2
     _rc=1
   fi
-  if grep -qiE '^\*\*Do-NOT-build:\*\*' DRIVE.md && [[ -z "$DRIVE_DO_NOT_BUILD" ]]; then
-    echo "drive-record: **Do-NOT-build:** is present but empty or a placeholder" >&2
+  if drive_field_present do-not-build && [[ -z "$DRIVE_DO_NOT_BUILD" ]]; then
+    echo "drive-record: **Do-NOT-build:** is present but did not parse (bad header, empty, or a placeholder)" >&2
     _rc=1
   fi
   # BUILD spends the budget, so at BUILD both halves must exist, not merely parse if written.

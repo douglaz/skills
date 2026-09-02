@@ -73,8 +73,9 @@ implement → review loop for each bead.
    rejects a non-positive budget as a usage error. Repair the `DRIVE.md` field first
    rather than running unbounded. Outside a Drive lane, derive it the same way: state the
    smallest implementation that satisfies the bead's outcome, then take 3x.
-   Do not pass `--reviewers-file`: rb-lite's built-in panel carries the skeptic, and
-   a supplied file replaces the panel wholesale. Check the repo root for a leftover
+   Prefer rb-lite's built-in panel. From 0.5.0 `--reviewers-file` replaces only the
+   gating reviewers and skeptics come from `.rb-lite-skeptics`; on 0.3.x/0.4.x a supplied
+   file replaces the whole panel and takes the skeptic with it. Check the repo root for a leftover
    `.rb-lite-reviewers` first — rb-lite loads it automatically.
 
    If using the nix fallback, prefix the same `run ...` arguments with
