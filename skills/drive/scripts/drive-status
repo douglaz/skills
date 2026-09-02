@@ -50,6 +50,14 @@ if [[ -f DRIVE.md ]]; then
   # plus every continuation up to the next **Header:** or blank line. A line-at-a-time grep
   # silently truncated a two-line Do-NOT-build list to its first half, which is worse than
   # not parsing it at all: the JSON looked well-formed and named half the forbidden work.
+  # LEADING whitespace is stripped as well as trailing, and both halves of Guard 2 depend on
+  # it. A field written as a header line plus an indented continuation ("**Baseline:**" then
+  # "  140 production lines") reaches the callers with one leading space, and that space broke
+  # them in OPPOSITE directions: the baseline tokeniser split it into an empty first token and
+  # parsed nothing (guard silently unarmed, gate red on a record master accepted), while
+  # Do-NOT-build compared " none" against "none", missed the placeholder, and armed the guard
+  # on the very value that exists to be typed out deliberately. Only the first was reported;
+  # the fail-open sibling was found by looking for other users of this return value.
   drive_field() {
     awk -v want="$1" '
       # Track fences: a header inside one is an example or a quoted record, not the field.
@@ -67,7 +75,7 @@ if [[ -f DRIVE.md ]]; then
       # otherwise end the field and silently drop the rest, recreating the truncation
       # this read exists to prevent.
       found { if ($0 ~ /^\*\*[^*]+:\*\*/ || $0 ~ /^[[:space:]]*$/ || $0 ~ /^[[:space:]]*```/) exit; print }
-    ' DRIVE.md 2>/dev/null | tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g; s/[[:space:]]+$//'
+    ' DRIVE.md 2>/dev/null | tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g; s/^[[:space:]]+//; s/[[:space:]]+$//'
   }
   # The baseline must carry a NUMBER of lines — "small" is not a baseline, and a budget is
   # derived from it as 3x. A bare label would parse and then bound nothing.
@@ -158,18 +166,38 @@ if [[ "${1:-}" == "--check-record" ]]; then
   # Present-but-unparseable is the failure. Absent is legitimate outside BUILD, so a field
   # that was never written is not an error here -- only one that was written and does not read.
   #
-  # The presence test is deliberately LOOSER than the parser. Sharing the parser's anchored
-  # pattern made the gate blind to exactly what it exists to catch: `**Baseline**: 140 lines`
-  # (colon outside the bold, the common markdown variant), a list-item `- **Baseline:**`, and
-  # an indented field all read as null AND passed the gate, because a header the parser
-  # cannot see was also a header the gate could not see. Wider here means a malformed field
-  # is reported rather than treated as absent.
-  if grep -qiE '\*\*[[:space:]]*Baseline' DRIVE.md && [[ -z "$DRIVE_BASELINE" ]]; then
+  # The presence test is looser than the parser on HEADER SYNTAX and identical to it on
+  # FENCES. Those are two separate axes, and conflating them broke this check in both
+  # directions on successive passes:
+  #   too narrow (shared the parser's anchored pattern): `**Baseline**: 140 lines` (colon
+  #     outside the bold, the common markdown variant), a list-item `- **Baseline:**`, and an
+  #     indented field all read as null AND passed the gate -- a header the parser could not
+  #     see was one the gate could not see either, which is the blindness this check exists
+  #     to remove.
+  #   too wide (a bare `grep '\*\*[[:space:]]*Baseline'`): any bold mention anywhere counted,
+  #     so a SHAPE record quoting the DRIVE.md template inside a fence, or one writing the
+  #     prose "write the **Baseline** once shaped", failed a gate that check.sh runs on every
+  #     commit -- with no way to get green except deleting legitimate text.
+  # So: skip fences exactly as drive_field does, and require the bold to CLOSE at the field
+  # name with a colon on one side or the other. `## **Baseline assumptions**` and an inline
+  # mention are then not fields, while every hand-written variant of the real header is.
+  drive_field_present() {
+    awk -v want="$1" '
+      /^[[:space:]]*(```|~~~)/ { fence = !fence; next }
+      fence { next }
+      # A colon on ONE side or the other is required, not optional on both: a bare
+      # `**Baseline**` on its own line is prose emphasis, and accepting it would put back a
+      # slice of the over-wide match this function replaced.
+      tolower($0) ~ "^[[:space:]]*([-*+][[:space:]]*)?\\*\\*[[:space:]]*" want "([[:space:]]*:[[:space:]]*\\*\\*|[[:space:]]*\\*\\*[[:space:]]*:)" { found = 1; exit }
+      END { exit !found }
+    ' DRIVE.md 2>/dev/null
+  }
+  if drive_field_present baseline && [[ -z "$DRIVE_BASELINE" ]]; then
     echo "drive-record: **Baseline:** is present but has no usable line count" >&2
     echo "  write the number immediately before the word it counts, e.g. '140 production lines'" >&2
     _rc=1
   fi
-  if grep -qiE '\*\*[[:space:]]*Do-NOT-build' DRIVE.md && [[ -z "$DRIVE_DO_NOT_BUILD" ]]; then
+  if drive_field_present do-not-build && [[ -z "$DRIVE_DO_NOT_BUILD" ]]; then
     echo "drive-record: **Do-NOT-build:** is present but empty or a placeholder" >&2
     _rc=1
   fi

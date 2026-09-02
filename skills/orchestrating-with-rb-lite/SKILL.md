@@ -91,7 +91,11 @@ skeptic and reject `--max-production-lines` as an unknown flag — with the Nix 
 it automatically, so a file left over from an earlier run silently replaces the gating
 panel. Rename it aside for the run. On 0.5.0+ also check `.rb-lite-skeptics`, and if the
 stale reviewers file carries a skeptic line, move it there — listed as a gating reviewer it
-starts rounds. rb-lite warns when it spots one, but only after the run has begun.
+starts rounds. rb-lite warns at preflight when it spots one, before any implementer runs,
+and warns whether or not you passed `--no-skeptic` — that flag stops the skeptics file from
+being read, never the reviewers file, so a skeptic line left there still gates. The match is
+a guess (it looks for `OVER-SPECIFICATION`), so a reworded skeptic goes unmentioned: check
+the file yourself rather than treating silence as an all-clear.
 
 **Use rb-lite's built-in panel.** The default is `codex review`, a `claude` defect reviewer,
 and a `claude` **skeptic** that hunts over-specification and tags findings `CUT` / `SIMPLIFY`

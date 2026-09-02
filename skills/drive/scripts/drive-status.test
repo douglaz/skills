@@ -915,6 +915,59 @@ else
   FAIL=$((FAIL + 1)); printf '  FAIL %-48s want 140 got %s\n' "an em-dash parses in a C locale too" "$_lc"
 fi
 
+# ...and WIDER must not mean "any bold mention anywhere". check.sh runs --check-record on
+# every commit, so a SHAPE record that merely quotes the template or bolds the word had no
+# way to go green except by deleting legitimate text. Fences and header shape are separate
+# axes: loose on the second, identical to the parser on the first.
+new_repo; add_code
+record '**Phase:** SHAPE
+
+```markdown
+**Baseline:** 40 lines
+**Do-NOT-build:** the thing
+```
+
+Still shaping.'
+check_record "a fenced template is not a present field" 0
+
+new_repo; add_code
+record '**Phase:** SHAPE
+Remember to write the **Baseline** once the shape is settled.'
+check_record "an inline bold mention is not a present field" 0
+
+new_repo; add_code
+record '**Phase:** SHAPE
+## **Baseline assumptions**
+Not a field.'
+check_record "a bold heading is not a present field" 0
+
+# Pins the colon requirement itself. Without this the rule could be deleted and every other
+# fixture here would still pass -- the inline-mention case is rejected by the line anchor, not
+# by the colon, so it cannot stand in for this one.
+new_repo; add_code
+record '**Phase:** SHAPE
+**Baseline**
+Not a field either.'
+check_record "own-line bold with no colon is not a field" 0
+
+# A field header plus an indented continuation. The leading space this leaves broke the two
+# halves of Guard 2 in OPPOSITE directions, and only the first was reported: the tokeniser
+# split it into an empty first token and parsed nothing (fail closed), while do-not-build
+# compared " none" against "none" and armed the guard on a placeholder (fail OPEN).
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:**
+  140 production lines
+**Do-NOT-build:** rollback'
+check_field "an indented continuation still carries the count" baseline_lines 140
+
+new_repo; add_code
+record '**Phase:** BUILD
+**Baseline:** 140 production lines
+**Do-NOT-build:**
+  none'
+check_field "an indented placeholder is still a placeholder" guard2_armed false
+
 echo
 echo "passed $PASS, failed $FAIL"
 [[ "$FAIL" -eq 0 ]]

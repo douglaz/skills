@@ -99,6 +99,35 @@ rb-lite run --task t --max-rounds 1 --max-iters 2 \
 Row 2 is the one that changed in 0.5.0: a supplied gating panel keeps its counter-pressure.
 Rows 5 and 6 show the empty/comments-only fallback.
 
+Those rows measure *which panel gets built*, which is not the claim this split exists to
+make. The load-bearing one is about **outcome**: the same finding is gating in one file and
+advisory in the other. Measured separately, with one stub `emit-p2` printing a single line
+(`P2: CUT the retry wrapper`) and the other axis held clean, so the command, the severity and
+the text are identical across rows and only the filename differs:
+
+```bash
+# The tree must be CLEAN and the run dir must live OUTSIDE the repo. Left inside, the growing
+# run dir is an untracked change the implementer is credited with every iteration, so the run
+# never stabilizes and every row returns exit 10 `implementer_failed` before a panel runs --
+# which looks like a result and is only a broken harness.
+printf 'emit-p2\n' > .rb-lite-reviewers; printf 'clean\n' > .rb-lite-skeptics
+git add -A && git commit -qm panel
+rb-lite run --task t --max-rounds 2 --max-iters 2 \
+  --implement-cmd impl --base master --run-dir "$OUT/run" >"$OUT/out" 2>"$OUT/err"
+# rounds:   grep -c 'review panel starting' "$OUT/run/log.txt"
+# advisory: grep -c 'skeptic findings are advisory' "$OUT/run/log.txt"
+```
+
+| where the `P2` comes from | exit | status | rounds | advisory line |
+| --- | --- | --- | --- | --- |
+| `.rb-lite-reviewers` | **13** | `consensus_failure` | 2 | 0 |
+| `.rb-lite-skeptics` | **0** | `clean` | 1 | 1 |
+| neither (control) | 0 | `clean` | 1 | 0 |
+
+Row 1 is the pre-0.5.0 trap in miniature: a skeptic on the gating axis starts a round, finds
+the same thing again, and walks the run to exit 13 with nothing wrong. Row 2 is the same
+opinion, read and logged, extending nothing.
+
 The older versions were measured too, same harness, each `bin/rb-lite` taken straight from
 its commit (`git show f1ea3f6:bin/rb-lite`, `2a79791`, `08f94cb`):
 
