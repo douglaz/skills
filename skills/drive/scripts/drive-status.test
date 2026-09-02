@@ -1008,6 +1008,53 @@ record '**Phase:** SHAPE
 Still shaping.'
 check_record "a tilde-fenced template is not a present field" 0
 
+# CommonMark: a closing fence may be followed only by whitespace, so "```not-a-close" is
+# CONTENT. Stripping the suffix before testing the delimiter closed the block early and let
+# the quoted record go live again -- the third variant of the same decoy.
+new_repo; add_code
+record '**Phase:** BUILD
+
+```markdown
+```not-a-close
+**Baseline:** 999 lines
+**Do-NOT-build:** the wrong thing
+```
+
+**Baseline:** 140 production lines
+**Do-NOT-build:** the real list'
+check_field "a fence with trailing text is content" baseline_lines 140
+
+# The phase read was fence-blind while the two fields it demands were fence-aware, and the
+# DRIVE.md template in this skill carries `**Phase:** BUILD` beside its budget lines. So a
+# SHAPE record quoting the template read phase BUILD with its fields correctly hidden, and
+# the gate failed it for being in BUILD with Guard 2 unarmed -- the very shape the fence
+# handling was added to accept.
+# The template comes FIRST on purpose. With the real phase line ahead of it, `grep -m1`
+# finds the right answer whether or not it understands fences, and the fixture passes against
+# the very bug it is meant to pin -- which is what the mutation run caught it doing.
+new_repo; add_code
+record 'Quoting the template before the record:
+
+```markdown
+**Phase:** BUILD
+**Baseline:** 40 lines
+**Do-NOT-build:** the thing
+```
+
+**Phase:** SHAPE
+
+Still shaping.'
+check_field "the phase comes from the record, not the template" recorded_phase SHAPE
+check_record "a quoted template does not put the record in BUILD" 0
+
+# The presence test names three header forms it exists to report; two were pinned and the
+# indented one was not, so the leading [[:space:]]* could be deleted with the suite green.
+new_repo; add_code
+record '**Phase:** SHAPE
+  **Baseline:** small
+**Do-NOT-build:** rollback'
+check_record "an indented field is reported, not treated as absent" 1
+
 echo
 echo "passed $PASS, failed $FAIL"
 [[ "$FAIL" -eq 0 ]]
