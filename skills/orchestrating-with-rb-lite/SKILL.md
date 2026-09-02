@@ -89,9 +89,13 @@ If neither path works, stop and tell the user to install `rb-lite` (e.g.
 skeptic and reject `--max-production-lines` as an unknown flag — with the Nix fallback, pass
 `--refresh`). And check for an existing `.rb-lite-reviewers` in the repo root: rb-lite loads
 it automatically, so a file left over from an earlier run silently replaces the gating
-panel. Rename it aside for the run. On 0.5.0+ also check `.rb-lite-skeptics`, and if the
-stale reviewers file carries a skeptic line, move it there — listed as a gating reviewer it
-starts rounds. rb-lite warns at preflight when it spots one, before any implementer runs,
+panel. Rename it aside for the run. On 0.5.0+ also check `.rb-lite-skeptics`. If the stale
+reviewers file carries a skeptic line, that line is a gating reviewer and starts rounds —
+move it onto the advisory axis, but into a `mktemp` file passed via `--skeptics-file`, not
+into a repo-root `.rb-lite-skeptics`. Creating that file makes config migration part of the
+task's own diff and leaves an untracked path that trips LAND's clean-tree gate, which is the
+same rule as the override guidance below. rb-lite warns at preflight when it spots one,
+before any implementer runs,
 and warns whether or not you passed `--no-skeptic` — that flag stops the skeptics file from
 being read, never the reviewers file, so a skeptic line left there still gates. The match is
 a guess (it looks for `OVER-SPECIFICATION`), so a reworded skeptic goes unmentioned: check

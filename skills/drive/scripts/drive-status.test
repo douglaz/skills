@@ -968,6 +968,46 @@ record '**Phase:** BUILD
   none'
 check_field "an indented placeholder is still a placeholder" guard2_armed false
 
+# A boolean fence flag reopens the document on the inner ``` of a ````-wrapped block, which
+# is the standard way to quote a fenced example -- so the quoted decoy read as live and won.
+# Silent: --check-record reported ok while Guard 2 enforced 2997 instead of 420.
+new_repo; add_code
+record '**Phase:** BUILD
+
+````markdown
+```
+**Baseline:** 999 lines
+**Do-NOT-build:** the wrong thing
+```
+````
+
+**Baseline:** 140 production lines
+**Do-NOT-build:** the real list'
+check_field "a nested fence does not reopen the document" baseline_lines 140
+
+# Both fence readers accept `~~~`, and every other fixture uses backticks -- so the tilde
+# branch of both regexes could be deleted with nothing going red.
+new_repo; add_code
+record '**Phase:** BUILD
+
+~~~markdown
+**Baseline:** 999 lines
+~~~
+
+**Baseline:** 140 production lines
+**Do-NOT-build:** the real list'
+check_field "a tilde fence hides a decoy too" baseline_lines 140
+
+new_repo; add_code
+record '**Phase:** SHAPE
+
+~~~markdown
+**Baseline:** 40 lines
+~~~
+
+Still shaping.'
+check_record "a tilde-fenced template is not a present field" 0
+
 echo
 echo "passed $PASS, failed $FAIL"
 [[ "$FAIL" -eq 0 ]]

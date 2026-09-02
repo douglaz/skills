@@ -63,7 +63,20 @@ if [[ -f DRIVE.md ]]; then
       # Track fences: a header inside one is an example or a quoted record, not the field.
       # A fence also ENDS a field in progress -- toggling without that swallowed the closing
       # fence and the lines after it into the value.
-      /^[[:space:]]*(```|~~~)/ { if (found) exit; fence = !fence; next }
+      #
+      # MATCHED close, not a toggle. A boolean flipped by any fence-looking line reopens the
+      # document on the inner ``` of a ````-wrapped block -- the standard way to quote a
+      # fenced example, and exactly what a record quoting the DRIVE.md template in this
+      # skill contains. The decoy inside then read as live: a quoted `**Baseline:** 999 lines`
+      # ahead of the real 140 gave a 2997-line budget with --check-record reporting ok.
+      # CommonMark: close only on the same character, at least as long as the opener.
+      /^[[:space:]]*(`{3,}|~{3,})/ {
+        if (found) exit
+        m = $0; sub(/^[[:space:]]*/, "", m); sub(/[^`~].*$/, "", m)
+        if (!fence) { fence = 1; fch = substr(m, 1, 1); flen = length(m) }
+        else if (substr(m, 1, 1) == fch && length(m) >= flen) { fence = 0 }
+        next
+      }
       !found && !fence && tolower($0) ~ "^\\*\\*" want ":\\*\\*" {
         found = 1
         sub(/^\*\*[^*]*\*\*[[:space:]]*/, "")
@@ -183,7 +196,14 @@ if [[ "${1:-}" == "--check-record" ]]; then
   # mention are then not fields, while every hand-written variant of the real header is.
   drive_field_present() {
     awk -v want="$1" '
-      /^[[:space:]]*(```|~~~)/ { fence = !fence; next }
+      # Same matched-close rule as drive_field. The two must agree on fences or the gate goes
+      # blind to exactly the decoy the parser just fell for.
+      /^[[:space:]]*(`{3,}|~{3,})/ {
+        m = $0; sub(/^[[:space:]]*/, "", m); sub(/[^`~].*$/, "", m)
+        if (!fence) { fence = 1; fch = substr(m, 1, 1); flen = length(m) }
+        else if (substr(m, 1, 1) == fch && length(m) >= flen) { fence = 0 }
+        next
+      }
       fence { next }
       # A colon on ONE side or the other is required, not optional on both: a bare
       # `**Baseline**` on its own line is prose emphasis, and accepting it would put back a
@@ -193,12 +213,19 @@ if [[ "${1:-}" == "--check-record" ]]; then
     ' DRIVE.md 2>/dev/null
   }
   if drive_field_present baseline && [[ -z "$DRIVE_BASELINE" ]]; then
-    echo "drive-record: **Baseline:** is present but has no usable line count" >&2
-    echo "  write the number immediately before the word it counts, e.g. '140 production lines'" >&2
+    # Names BOTH causes, because the gate deliberately accepts header forms the parser does
+    # not: `**Baseline**: 140 lines` reaches here with the number already immediately before
+    # the word it counts, and a message naming only the count sends the reader to fix the one
+    # thing that is not wrong. The gap between the two patterns is the point of the wider
+    # presence test, so the message has to describe it.
+    echo "drive-record: **Baseline:** is present but did not parse" >&2
+    echo "  the header must be exactly '**Baseline:**' at the start of the line," >&2
+    echo "  and the value must put the number immediately before the word it counts," >&2
+    echo "  e.g. '**Baseline:** 140 production lines'" >&2
     _rc=1
   fi
   if drive_field_present do-not-build && [[ -z "$DRIVE_DO_NOT_BUILD" ]]; then
-    echo "drive-record: **Do-NOT-build:** is present but empty or a placeholder" >&2
+    echo "drive-record: **Do-NOT-build:** is present but did not parse (bad header, empty, or a placeholder)" >&2
     _rc=1
   fi
   # BUILD spends the budget, so at BUILD both halves must exist, not merely parse if written.

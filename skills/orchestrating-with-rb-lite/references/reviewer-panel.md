@@ -74,7 +74,9 @@ The reviewer contract is strict:
 
 `AGENTS.md` requires a claim about tool behaviour to carry a run rather than a recollection,
 so the fallback rules above are recorded rather than asserted. Measured 2026-09-01 against
-`rb-lite 0.5.0` (`rb-lite --version`), in a throwaway git repo with every reviewer replaced
+`rb-lite 0.5.0` (`rb-lite --version`) — built from the branch that introduces it, which at
+the time of measurement was not yet on `douglaz/rb-lite` main; the harness ran `bin/rb-lite`
+from that checkout, not an installed build. In a throwaway git repo with every reviewer replaced
 by a stub on `PATH` — `gate1`/`skep`/`codex` print one line, the `claude` stub appends its
 argv to a file outside the repo so the built-in skeptic's invocation is countable, `jq` is
 the real one, and streams are separated by redirection. "present" means a file holding the
