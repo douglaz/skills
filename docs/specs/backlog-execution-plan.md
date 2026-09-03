@@ -2,10 +2,10 @@
 
 ## Status
 
-**Current:** E3 is in SHAPE with a user-approved reduced split: E3a exact `br`
-admission/typed selection and E3b native closure/consumers. `DRIVE.md` is the
-live phase/review record. Historical E3 clearance narrative below is not
-clearance of either current split tip.
+**Current:** The user-approved E3a exact-`br` admission/typed-selection and E3b
+native-closure/consumer split has cleared SHAPE and GRAPH and is landing in
+PR #78. `DRIVE.md` is the live operational phase record. Historical E3
+clearance narrative below is not clearance of either current split tip.
 
 SHAPE had cleared on 2026-08-12 after the first post-amendment GRAPH polish.
 The first pinned Codex xhigh

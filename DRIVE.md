@@ -17,9 +17,10 @@ registry, scheduler/closure code, cosmetic row validation, locks/daemon/recovery
 - E1 (`skills-iog`) is closed; it is the prerequisite for the new E3a admission
   bead.
 - The user-approved reduced shape splits E3 into E3a exact `br`
-  admission/typed selection and E3b native closure/consumers. Current-tip review
-  is pending. Rule 9 is the sole metadata-closure lifecycle owner; E3a has only
-  its one-time coordinator bootstrap, and merged E3b supplies reusable Step 11.
+  admission/typed selection and E3b native closure/consumers. Its SHAPE and GRAPH
+  gates are complete. Rule 9 is the sole metadata-closure lifecycle owner; E3a
+  has only its one-time coordinator bootstrap, and merged E3b supplies reusable
+  Step 11.
 - Exact v0.3.2 evidence now covers deferred selection, authenticated-archive
   extraction, byte-identical admitted `br`, and a history-reconstructed candidate.
 - Pinned Codex CLI 0.149.0 with `gpt-5.6-sol`/xhigh reviewed `a32cb9f`
