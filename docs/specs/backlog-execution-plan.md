@@ -378,7 +378,7 @@ appropriate 40- or 64-hex OID in the consuming repository.
    close, flush, and proof, save the intended closed bytes at
    `.git/closure-intended.jsonl`. The branch contains only that closure and its
    matching `DRIVE.md` transition. Open its PR from a head branch in the
-   authenticated self repository, never a fork, with exactly one
+   authenticated self repository, never a head outside authenticated self, with exactly one
    `bead-closure: <id>` line. After GitHub assigns a number, record
    `Pending: metadata PR owner/repo#N` in an ordinary forward commit and push.
    Rerun `./check.sh` and the independent panel on that final tree, pass normal PR
