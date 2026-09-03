@@ -4,57 +4,56 @@
 `docs/specs/backlog-execution-plan.md`; the Beads graph is the only work. GitHub
 #67 is out of scope.
 **Scope-Label:** `drive-open-issues`
-**Baseline:** E3a 140 production lines — pinned admission, minimal typed selector,
+**Baseline:** E3a 141 production lines — pinned admission, minimal typed selector,
 zero-`br` Drive handoff, consumer docs, and gate wiring.
 **Do-NOT-build:** selector launcher/second parser, downloader/installer, admission
 registry, scheduler/closure code, cosmetic row validation, locks/daemon/recovery API.
-**Phase:** SHAPE · **Bead:** E3 split · **Branch:** `shape/e3a-e3b-split`
+**Phase:** HARDEN · **Bead:** E3a (`skills-uay`) · **Branch:** `shape/e3-final-reconciliation`
 **Pending:** —
-**Gate:** `./check.sh`
+**Gate:** `./check.sh` · last green 2026-09-03 after final GRAPH polish (exit 0)
 
 ## Done
 
 - E1 (`skills-iog`) is closed; it is the prerequisite for the new E3a admission
   bead.
 - The user-approved reduced shape splits E3 into E3a exact `br`
-  admission/typed selection and E3b native closure/consumers. Current-tip review
-  is pending. Rule 9 is the sole metadata-closure lifecycle owner; E3a has only
-  its one-time coordinator bootstrap, and merged E3b supplies reusable Step 11.
+  admission/typed selection and E3b native closure/consumers. Its SHAPE and GRAPH
+  gates are complete. Rule 9 is the sole metadata-closure lifecycle owner; E3a
+  has only its one-time coordinator bootstrap, and merged E3b supplies reusable
+  Step 11.
 - Exact v0.3.2 evidence now covers deferred selection, authenticated-archive
   extraction, byte-identical admitted `br`, and a history-reconstructed candidate.
-- The planned GRAPH delta is bounded: create E3a depending on closed E1; change
-  `skills-dhm` to depend on E3a; retain its identity and all 15 dependents; update
-  descriptions only for `skills-dta`, `skills-xfd`, `skills-qmi`, `skills-rrk`,
-  new E3a, and E3b `skills-dhm`. Do not edit Beads in this SHAPE pass.
+- Pinned Codex CLI 0.149.0 with `gpt-5.6-sol`/xhigh reviewed `a32cb9f`
+  against `cddc78b` with no P0/P1; two P2 observations remain visible in the
+  E3a/E3b bodies. The exact-tree gate exited 0.
+- GRAPH created E3a `skills-uay` depending on closed E1, rewired
+  `skills-dhm` to depend on E3a, retained its 15 dependents, and updated only
+  the six approved description bodies.
+- Five deterministic polish passes confirm 34 unique rows, complete executable
+  P0/P1 bodies, an acyclic 38-edge graph, sole-ready E3a, and all 15 E3b
+  dependents. The exact-tree repository gate exited 0 after final polish.
+- The authorized extra full-panel audit kept the graph topology clear but returned
+  CONDITIONAL PASS: B0/F2r generic authority wording weakens their exact
+  conjunctions, and rule 7 lacked the reservation's exact directory identity.
+- Rule 7 now fixes `drive-executor-skills.reservation`, its four-file record,
+  fail-closed acquisition/cleanup, and human-authorized partial-state repair.
+  Pinned `gpt-5.6-sol`/xhigh SHAPE review exited 0 with no P0/P1. Its one P2
+  observation about truncated partial metadata remains nonblocking and visible.
+- Final full-panel graph audit completed on fingerprint
+  `f0b3eeedd79d83f015a0ecb914dcee18785db42f`: Codex PASS; Claude's proposed
+  F2r→C1 edge was rejected from the authoritative table and current F2→C2→C1
+  dependency semantics; reconciled verdict PASS.
 
 ## Now
 
-E3a fresh baseline: admission 22; dispatch 14; selector modes/parser 12; query
-capture 20; typed projection 26; Drive handoff 18; consumer docs 18; plan/gate 10
-= **140 production lines**; exact BUILD budget **420** (`3 × 140`). Corrected from
-142: the +2 was charged for a containment check the projection owed either way, and
-relaxing it from an ordered subset asks for less work, not more.
-E3a does not sort ready IDs — every routing outcome is
-order-independent, so native order ships and sorting waits for a consumer that
-demonstrably cannot pick without it.
-
-E3b fresh baseline: entry/guards 12; forge state matrix with head-in-self on both
-sides 24; clone/preflight 18; close/flush 5; multiset-comment proof 29;
-retained-clone resume 9; PR lifecycle 18; links/ADR/plan/gate 16 = **131
-production lines**; exact BUILD budget **393** (`3 × 131`).
-It resumes one exact-ID OPEN closure only; cross-ID, CLOSED-unmerged, partial, or
-ambiguous attempts stop for human resolution.
-
-Both itemizations are re-derived when the requirement set changes, never carried
-across it. A stop computed from a stale itemization is how `select-bead-lanes`
-reached exactly 450 lines against a 450-line stop.
+Land the reviewed SHAPE/GRAPH branch through the normal CI and bot-review PR.
+This planning PR does not implement or close E3a.
 
 ## Next
 
-Transition reviewed spec → graph transfer: create E3a only, transfer its closed-E1
-edge and `skills-dhm`→E3a edge, keep all 15 `skills-dhm` dependents unchanged, and
-confirm E3a alone is ready. Then E3b alone is ready; normal scheduling starts only
-after E3b work and its rule-9 closure merge.
+After the planning PR merges, refresh clean `master`, create E3a's one-bead
+BUILD branch, acquire the exact rule-7 reservation, and run rb-lite with
+baseline 141 and budget 423.
 
 ## Standing decisions
 
