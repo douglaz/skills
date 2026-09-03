@@ -8,7 +8,7 @@
 zero-`br` Drive handoff, consumer docs, and gate wiring.
 **Do-NOT-build:** selector launcher/second parser, downloader/installer, admission
 registry, scheduler/closure code, cosmetic row validation, locks/daemon/recovery API.
-**Phase:** GRAPH · **Bead:** E3a (`skills-uay`) · **Branch:** `shape/e3-final-reconciliation`
+**Phase:** HARDEN · **Bead:** E3a (`skills-uay`) · **Branch:** `shape/e3-final-reconciliation`
 **Pending:** —
 **Gate:** `./check.sh` · last green 2026-09-03 after final GRAPH polish (exit 0)
 
@@ -38,17 +38,21 @@ registry, scheduler/closure code, cosmetic row validation, locks/daemon/recovery
   fail-closed acquisition/cleanup, and human-authorized partial-state repair.
   Pinned `gpt-5.6-sol`/xhigh SHAPE review exited 0 with no P0/P1. Its one P2
   observation about truncated partial metadata remains nonblocking and visible.
+- Final full-panel graph audit completed on fingerprint
+  `f0b3eeedd79d83f015a0ecb914dcee18785db42f`: Codex PASS; Claude's proposed
+  F2r→C1 edge was rejected from the authoritative table and current F2→C2→C1
+  dependency semantics; reconciled verdict PASS.
 
 ## Now
 
-Transfer the reviewed rule-7 reservation citation and exact B0/F2r authority
-conjunctions into only `skills-uay`, `skills-xfd`, and `skills-rrk`. Prove the
-three-row description-only delta, polish, and rerun the full graph audit.
+Land the reviewed SHAPE/GRAPH branch through the normal CI and bot-review PR.
+This planning PR does not implement or close E3a.
 
 ## Next
 
-Enter BUILD for E3a `skills-uay` only after an unqualified graph-audit PASS,
-at baseline 141 and budget 423.
+After the planning PR merges, refresh clean `master`, create E3a's one-bead
+BUILD branch, acquire the exact rule-7 reservation, and run rb-lite with
+baseline 141 and budget 423.
 
 ## Standing decisions
 
