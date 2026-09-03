@@ -314,11 +314,11 @@ appropriate 40- or 64-hex OID in the consuming repository.
    caller has already established the target work merge and its evidence. Rule 9
    neither rediscovers work PRs nor decides whether implementation started.
 
-   On every entry, enumerate `url`, `state`, `mergedAt`, `body`, and
-   `headRepository.nameWithOwner` for
-   all PRs in the self and, when configured, parent repositories by following
-   100-row pagination until `hasNextPage` is false. Extract only exact full lines
-   `bead-closure: <id>` from PRs whose head repository equals self,
+   On every entry, use `gh api graphql` to enumerate `url`, `state`, `mergedAt`,
+   `body`, and `headRepository { nameWithOwner }` for all PRs in the self and,
+   when configured, parent repositories by following 100-row pagination until
+   `hasNextPage` is false. Extract only exact full lines `bead-closure: <id>`
+   from PRs whose head repository equals self,
    deduplicate by canonical URL, and refuse a PR with multiple closure-marker lines.
    Any API failure, incomplete page, failed configured-parent lookup, or unfinished
    pagination stops for human resolution.
@@ -344,22 +344,17 @@ appropriate 40- or 64-hex OID in the consuming repository.
    prove the exact ID set is preserved; every bystander row is structurally equal;
    and the target changes only `status`, `closed_at`, `close_reason`, `updated_at`,
    and `comments`. The target becomes `closed`, its reason equals the supplied input
-   exactly, prior comments remain exact, and the comment multiset gains exactly one
-   entry whose `text` equals the evidence. The proof states no position: the retained
-   v0.3.2 probe raises `fixture did not exercise canonical insertion order` when
-   `after == before + remaining` and records `probe_rc=0`, so v0.3.2 does not append
-   last, and a tail assertion would fail rule 9 into human resolution mid-bootstrap on
-   any target holding a later-sorting comment. Pinned `--no-db show`
-   agrees with JSONL; render the literal Git diff.
+   exactly, prior comments remain exact, and the after-comment multiset equals the
+   before-comment multiset plus exactly one object whose `text` equals the evidence,
+   without a positional requirement. Pinned `--no-db show` agrees with JSONL;
+   render the literal Git diff.
 
    Save the open bytes at `.git/closure-open.jsonl`. Immediately after a successful
    close, flush, and proof, save the intended closed bytes at
    `.git/closure-intended.jsonl`. The branch contains only that closure and its
-   matching `DRIVE.md` transition. Open its PR from a head branch in the authenticated
-   self repository, with exactly one `bead-closure: <id>` line. A fork head would be
-   filtered out by the consuming side's own head-in-self test, so the multiple-attempt
-   guard never fires and the next entry starts a second transaction for an ID already
-   in flight. After GitHub assigns a number, record
+   matching `DRIVE.md` transition. Open its PR from a head branch in the
+   authenticated self repository, never a fork, with exactly one
+   `bead-closure: <id>` line. After GitHub assigns a number, record
    `Pending: metadata PR owner/repo#N` in an ordinary forward commit and push.
    Rerun `./check.sh` and the independent panel on that final tree, pass normal PR
    gates, merge, refresh clean `master`, and verify persistence.
@@ -1330,21 +1325,21 @@ one unlabelled ready query. Each mode also runs `list --status STATUS --limit 0
 Every query must exit zero with empty stderr and complete JSON. List envelopes
 provide a list-valued `issues`, integral `total` equal to its length, and
 `has_more:false`; ready and blocked results are arrays. Validate only routing
-facts: nonempty unique string IDs, status-list disjointness, ready IDs a subset of
-open IDs, and routing labels. Containment, not order: `ready` and `open` are separate
-queries whose orders need not agree, and no consumed decision depends on either.
+facts: nonempty unique string IDs, status-list disjointness, integral ready
+priorities, ready IDs as a subset of open IDs with matching priorities, and
+routing labels. `ready` and `open` are separate queries whose orders need not
+agree.
 Every scoped open or
 in-progress row has exactly one recognized lane; deferred rows are not
 dispatchable and need no lane. Generic mode refuses any unresolved row carrying
 a recognized lane or the active root-Drive scope label. Missing, duplicated, or
-malformed consumed fields refuse; cosmetic title, type, priority, label-order,
+malformed consumed fields refuse; cosmetic title, type, label-order,
 or unrelated-field differences do not.
 
-Success is one LF-terminated object with exactly one of these shapes; arrays
-contain IDs in native order. E3a does not sort: every routing outcome — lane
-assignment, GRAPH/BUILD/DONE, `outstanding` counts — is order-independent, and the
-execution-bead table below is the authoritative priority source. Add sorting when a
-consumer demonstrably cannot pick without it.
+Success is one LF-terminated object with exactly one of these shapes.
+Ready-array entries have exactly `{"id":STRING,"priority":INTEGER}`; in-progress
+and deferred arrays contain IDs in native order. E3a does not sort or choose:
+existing consumers apply their priority and dependency-unblocking policy.
 
 ```json
 {"schema":"skills.drive.bead-lanes.v1","scope_label":"drive-open-issues",
@@ -1397,8 +1392,8 @@ admission registry, lock, daemon, or recovery API.
 
 Test the two resolver forms, platform/identity/OID admission, per-dispatch swaps,
 clean snapshots, exact query argv/streams, both typed schemas, lane refusals,
-a ready ID absent from open refusing, deferred-only GRAPH, all-status-empty DONE,
->50-row no truncation, and
+a ready ID absent from open or carrying a missing/mismatched priority refusing,
+deferred-only GRAPH, all-status-empty DONE, >50-row no truncation, and
 zero-`br`/no-inference `drive-status`. Mutate one production property at a time
 and read the assertion that fails. The retained probe must reconstruct its
 candidate with `git show
@@ -1411,21 +1406,11 @@ in an explicit sanitized environment.
 Fresh E3a outcome itemization: pinned resolver forms plus platform and identity
 admission 22; per-dispatch OID and sanitized absolute dispatch 14; selector modes
 and sole Scope-Label parser 12; read-query capture and cleanup 20; minimal
-envelope/lane validation and typed projection 26; explicit-selection
+envelope/lane validation and typed ID/priority projection 27; explicit-selection
 `drive-status` and zero-`br` fallback 18; API and consumer docs 18; plan,
-table/frontier, and gate wiring 10 = **140 production lines**. The exact BUILD
-budget is **420 production lines** (`3 × 140`); crossing it returns to reduction,
+table/frontier, and gate wiring 10 = **141 production lines**. The exact BUILD
+budget is **423 production lines** (`3 × 141`); crossing it returns to reduction,
 split, or SHAPE.
-
-Projection is re-derived to 26, correcting the 28 this file carried. The +2 was
-charged for the ready-in-open containment check, but the projection must validate
-that membership either way, and stating it without an order claim asks for less work
-than stating it with one -- a requirement was relaxed, not added, so nothing was owed
-for it. (The pre-squash drafts of douglaz/skills#75 cost the same check at 26 while it
-was still the stronger `ordered subset`; that history is not reachable from `master`,
-so the derivation above stands on the current text rather than on those commits.)
-An itemization is re-derived when the requirement set changes; moving a number because
-the surrounding prose moved is the same error as carrying one across a change that did.
 
 ### E3b. Native closure and consumers — issue #65 (`skills-dhm`)
 

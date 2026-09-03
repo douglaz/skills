@@ -4,11 +4,11 @@
 `docs/specs/backlog-execution-plan.md`; the Beads graph is the only work. GitHub
 #67 is out of scope.
 **Scope-Label:** `drive-open-issues`
-**Baseline:** E3a 140 production lines — pinned admission, minimal typed selector,
+**Baseline:** E3a 141 production lines — pinned admission, minimal typed selector,
 zero-`br` Drive handoff, consumer docs, and gate wiring.
 **Do-NOT-build:** selector launcher/second parser, downloader/installer, admission
 registry, scheduler/closure code, cosmetic row validation, locks/daemon/recovery API.
-**Phase:** SHAPE · **Bead:** E3 split · **Branch:** `shape/e3a-e3b-split`
+**Phase:** SHAPE · **Bead:** E3 split · **Branch:** `shape/e3-final-reconciliation`
 **Pending:** —
 **Gate:** `./check.sh`
 
@@ -30,13 +30,10 @@ registry, scheduler/closure code, cosmetic row validation, locks/daemon/recovery
 ## Now
 
 E3a fresh baseline: admission 22; dispatch 14; selector modes/parser 12; query
-capture 20; typed projection 26; Drive handoff 18; consumer docs 18; plan/gate 10
-= **140 production lines**; exact BUILD budget **420** (`3 × 140`). Corrected from
-142: the +2 was charged for a containment check the projection owed either way, and
-relaxing it from an ordered subset asks for less work, not more.
-E3a does not sort ready IDs — every routing outcome is
-order-independent, so native order ships and sorting waits for a consumer that
-demonstrably cannot pick without it.
+capture 20; typed ID/priority projection 27; Drive handoff 18; consumer docs 18;
+plan/gate 10 = **141 production lines**; exact BUILD budget **423** (`3 × 141`).
+E3a does not sort or schedule: existing consumers apply their priority and
+dependency-unblocking policy to its typed ready entries.
 
 E3b fresh baseline: entry/guards 12; forge state matrix with head-in-self on both
 sides 24; clone/preflight 18; close/flush 5; multiset-comment proof 29;
