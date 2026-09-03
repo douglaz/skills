@@ -10,7 +10,7 @@ zero-`br` Drive handoff, consumer docs, and gate wiring.
 registry, scheduler/closure code, cosmetic row validation, locks/daemon/recovery API.
 **Phase:** GRAPH · **Bead:** E3a (`skills-uay`) · **Branch:** `shape/e3-final-reconciliation`
 **Pending:** —
-**Gate:** `./check.sh` · last green 2026-09-03 before GRAPH transfer (exit 0)
+**Gate:** `./check.sh` · last green 2026-09-03 after final GRAPH polish (exit 0)
 
 ## Done
 
@@ -28,13 +28,15 @@ registry, scheduler/closure code, cosmetic row validation, locks/daemon/recovery
 - GRAPH created E3a `skills-uay` depending on closed E1, rewired
   `skills-dhm` to depend on E3a, retained its 15 dependents, and updated only
   the six approved description bodies.
+- Five deterministic polish passes confirm 34 unique rows, complete executable
+  P0/P1 bodies, an acyclic 38-edge graph, sole-ready E3a, and all 15 E3b
+  dependents. The exact-tree repository gate exited 0 after final polish.
 
 ## Now
 
-Polish and independently audit the 34-row graph. Prove the only semantic delta:
-new E3a `skills-uay`; five existing description replacements; and
-`skills-dhm`'s dependency moving from closed `skills-iog` to `skills-uay`.
-Confirm E3a alone is ready and `skills-dhm` retains all 15 dependents.
+Run the final independent read-only audit of the polished 34-row graph against
+the approved plan. Require an unqualified PASS on a stable source/graph
+snapshot before entering BUILD.
 
 ## Next
 
