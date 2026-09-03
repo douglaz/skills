@@ -307,8 +307,20 @@ appropriate 40- or 64-hex OID in the consuming repository.
    present directory that is partial, malformed, contains unexpected entries, or
    is not proved stale is unknown and blocks. Partial creation never authorizes
    work. Before cleanup, revalidate the same path and all four exact values, unlink
-   only those four files, and require `rmdir` to succeed. This is the complete
-   coordinator procedure, not a production helper, lock API, registry, or daemon.
+   only those four files, and require `rmdir` to succeed.
+
+   Partial acquisition or cleanup is never automatic stale recovery. It stops for
+   human repair. The human must identify the owning coordinator/session and
+   authorize the exact repair only after retained session, branch, `DRIVE.md`, and
+   PR evidence proves no coordinator is active and either dispatch never began or
+   the lifecycle completed/was explicitly abandoned. Before deletion, record that
+   evidence and authorization in `DRIVE.md`, inspect without following links, and
+   require the directory to contain only a subset of the four allowed names, with
+   every present entry a regular non-symlink single-link file whose content agrees
+   with the proved acquisition record. Then unlink only that observed subset and
+   require `rmdir` to succeed; an unexpected entry or value still blocks. This is
+   the complete coordinator procedure, not a production helper, lock API, registry,
+   recovery API, or daemon.
 
    The external `executor-rb-lite` lane may run concurrently because its work owns
    another repository; authority beads are reported, never implemented
