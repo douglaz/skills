@@ -8,9 +8,9 @@
 zero-`br` Drive handoff, consumer docs, and gate wiring.
 **Do-NOT-build:** selector launcher/second parser, downloader/installer, admission
 registry, scheduler/closure code, cosmetic row validation, locks/daemon/recovery API.
-**Phase:** SHAPE · **Bead:** E3 split · **Branch:** `shape/e3-final-reconciliation`
+**Phase:** GRAPH · **Bead:** E3a (`skills-uay`) · **Branch:** `shape/e3-final-reconciliation`
 **Pending:** —
-**Gate:** `./check.sh`
+**Gate:** `./check.sh` · last green 2026-09-03 before GRAPH transfer (exit 0)
 
 ## Done
 
@@ -22,36 +22,25 @@ registry, scheduler/closure code, cosmetic row validation, locks/daemon/recovery
   its one-time coordinator bootstrap, and merged E3b supplies reusable Step 11.
 - Exact v0.3.2 evidence now covers deferred selection, authenticated-archive
   extraction, byte-identical admitted `br`, and a history-reconstructed candidate.
-- The planned GRAPH delta is bounded: create E3a depending on closed E1; change
-  `skills-dhm` to depend on E3a; retain its identity and all 15 dependents; update
-  descriptions only for `skills-dta`, `skills-xfd`, `skills-qmi`, `skills-rrk`,
-  new E3a, and E3b `skills-dhm`. Do not edit Beads in this SHAPE pass.
+- Pinned Codex CLI 0.149.0 with `gpt-5.6-sol`/xhigh reviewed `a32cb9f`
+  against `cddc78b` with no P0/P1; two P2 observations remain visible in the
+  E3a/E3b bodies. The exact-tree gate exited 0.
+- GRAPH created E3a `skills-uay` depending on closed E1, rewired
+  `skills-dhm` to depend on E3a, retained its 15 dependents, and updated only
+  the six approved description bodies.
 
 ## Now
 
-E3a fresh baseline: admission 22; dispatch 14; selector modes/parser 12; query
-capture 20; typed ID/priority projection 27; Drive handoff 18; consumer docs 18;
-plan/gate 10 = **141 production lines**; exact BUILD budget **423** (`3 × 141`).
-E3a does not sort or schedule: existing consumers apply their priority and
-dependency-unblocking policy to its typed ready entries.
-
-E3b fresh baseline: entry/guards 12; forge state matrix with head-in-self on both
-sides 24; clone/preflight 18; close/flush 5; multiset-comment proof 29;
-retained-clone resume 9; PR lifecycle 18; links/ADR/plan/gate 16 = **131
-production lines**; exact BUILD budget **393** (`3 × 131`).
-It resumes one exact-ID OPEN closure only; cross-ID, CLOSED-unmerged, partial, or
-ambiguous attempts stop for human resolution.
-
-Both itemizations are re-derived when the requirement set changes, never carried
-across it. A stop computed from a stale itemization is how `select-bead-lanes`
-reached exactly 450 lines against a 450-line stop.
+Polish and independently audit the 34-row graph. Prove the only semantic delta:
+new E3a `skills-uay`; five existing description replacements; and
+`skills-dhm`'s dependency moving from closed `skills-iog` to `skills-uay`.
+Confirm E3a alone is ready and `skills-dhm` retains all 15 dependents.
 
 ## Next
 
-Transition reviewed spec → graph transfer: create E3a only, transfer its closed-E1
-edge and `skills-dhm`→E3a edge, keep all 15 `skills-dhm` dependents unchanged, and
-confirm E3a alone is ready. Then E3b alone is ready; normal scheduling starts only
-after E3b work and its rule-9 closure merge.
+After GRAPH audit PASS, enter BUILD for E3a `skills-uay` at baseline 141 and
+budget 423. E3b `skills-dhm` becomes ready only after E3a work and rule-9
+closure; normal scheduling starts only after E3b and its closure merge.
 
 ## Standing decisions
 
