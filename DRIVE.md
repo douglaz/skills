@@ -8,7 +8,7 @@
 zero-`br` Drive handoff, consumer docs, and gate wiring.
 **Do-NOT-build:** selector launcher/second parser, downloader/installer, admission
 registry, scheduler/closure code, cosmetic row validation, locks/daemon/recovery API.
-**Phase:** SHAPE · **Bead:** E3a (`skills-uay`) · **Branch:** `shape/e3-final-reconciliation`
+**Phase:** GRAPH · **Bead:** E3a (`skills-uay`) · **Branch:** `shape/e3-final-reconciliation`
 **Pending:** —
 **Gate:** `./check.sh` · last green 2026-09-03 after final GRAPH polish (exit 0)
 
@@ -34,18 +34,21 @@ registry, scheduler/closure code, cosmetic row validation, locks/daemon/recovery
 - The authorized extra full-panel audit kept the graph topology clear but returned
   CONDITIONAL PASS: B0/F2r generic authority wording weakens their exact
   conjunctions, and rule 7 lacked the reservation's exact directory identity.
+- Rule 7 now fixes `drive-executor-skills.reservation`, its four-file record,
+  fail-closed acquisition/cleanup, and human-authorized partial-state repair.
+  Pinned `gpt-5.6-sol`/xhigh SHAPE review exited 0 with no P0/P1. Its one P2
+  observation about truncated partial metadata remains nonblocking and visible.
 
 ## Now
 
-Specify and review the coordinator-only rule-7 reservation at exact Git-common
-path `drive-executor-skills.reservation`, without adding production lock code.
-Then tighten the B0/F2r bodies to their exact decision/publication conjunctions.
+Transfer the reviewed rule-7 reservation citation and exact B0/F2r authority
+conjunctions into only `skills-uay`, `skills-xfd`, and `skills-rrk`. Prove the
+three-row description-only delta, polish, and rerun the full graph audit.
 
 ## Next
 
-After pinned SHAPE review clears, transfer only the three authorized body
-clarifications, polish, and rerun the full graph audit. Enter BUILD for E3a
-`skills-uay` only on unqualified PASS at baseline 141 and budget 423.
+Enter BUILD for E3a `skills-uay` only after an unqualified graph-audit PASS,
+at baseline 141 and budget 423.
 
 ## Standing decisions
 
