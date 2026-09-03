@@ -297,6 +297,19 @@ appropriate 40- or 64-hex OID in the consuming repository.
    lifecycle completes, or until explicit pre-closure abandonment and verified
    cleanup. The reservation is not a closure lock.
 
+   The coordinator procedure uses exactly
+   `<absolute-git-common-dir>/drive-executor-skills.reservation`. With `umask 077`,
+   atomically create that directory using `mkdir`, then write exactly four regular,
+   non-symlink, single-link, LF-terminated files named `bead-id`, `branch`,
+   `coordinator`, and `started-at`. Their single lines are respectively the exact
+   bead ID, exact attached branch, stable coordinator identity, and UTC RFC 3339
+   start time. A missing directory permits the one atomic `mkdir` attempt; a
+   present directory that is partial, malformed, contains unexpected entries, or
+   is not proved stale is unknown and blocks. Partial creation never authorizes
+   work. Before cleanup, revalidate the same path and all four exact values, unlink
+   only those four files, and require `rmdir` to succeed. This is the complete
+   coordinator procedure, not a production helper, lock API, registry, or daemon.
+
    The external `executor-rb-lite` lane may run concurrently because its work owns
    another repository; authority beads are reported, never implemented
    speculatively. After recorded human authorization, any mechanical skills-repository

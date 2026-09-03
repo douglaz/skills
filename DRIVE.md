@@ -8,7 +8,7 @@
 zero-`br` Drive handoff, consumer docs, and gate wiring.
 **Do-NOT-build:** selector launcher/second parser, downloader/installer, admission
 registry, scheduler/closure code, cosmetic row validation, locks/daemon/recovery API.
-**Phase:** GRAPH · **Bead:** E3a (`skills-uay`) · **Branch:** `shape/e3-final-reconciliation`
+**Phase:** SHAPE · **Bead:** E3a (`skills-uay`) · **Branch:** `shape/e3-final-reconciliation`
 **Pending:** —
 **Gate:** `./check.sh` · last green 2026-09-03 after final GRAPH polish (exit 0)
 
@@ -31,18 +31,21 @@ registry, scheduler/closure code, cosmetic row validation, locks/daemon/recovery
 - Five deterministic polish passes confirm 34 unique rows, complete executable
   P0/P1 bodies, an acyclic 38-edge graph, sole-ready E3a, and all 15 E3b
   dependents. The exact-tree repository gate exited 0 after final polish.
+- The authorized extra full-panel audit kept the graph topology clear but returned
+  CONDITIONAL PASS: B0/F2r generic authority wording weakens their exact
+  conjunctions, and rule 7 lacked the reservation's exact directory identity.
 
 ## Now
 
-Run the final independent read-only audit of the polished 34-row graph against
-the approved plan. Require an unqualified PASS on a stable source/graph
-snapshot before entering BUILD.
+Specify and review the coordinator-only rule-7 reservation at exact Git-common
+path `drive-executor-skills.reservation`, without adding production lock code.
+Then tighten the B0/F2r bodies to their exact decision/publication conjunctions.
 
 ## Next
 
-After GRAPH audit PASS, enter BUILD for E3a `skills-uay` at baseline 141 and
-budget 423. E3b `skills-dhm` becomes ready only after E3a work and rule-9
-closure; normal scheduling starts only after E3b and its closure merge.
+After pinned SHAPE review clears, transfer only the three authorized body
+clarifications, polish, and rerun the full graph audit. Enter BUILD for E3a
+`skills-uay` only on unqualified PASS at baseline 141 and budget 423.
 
 ## Standing decisions
 
