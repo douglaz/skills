@@ -581,6 +581,12 @@ unaffected (on 0.3.x it was filtered out too). Stop the loop and merge instead. 
 checkpoint to assess and relaunch, not a finish line. (See
 `references/autonomy-contract.md` § 4.)
 
+Check `rb-lite --version` before relying on any of this. The mechanical guards arrived in
+0.3.0; older builds have no skeptic and reject `--max-production-lines` as a usage error.
+On those, pass neither flag, hold the budget yourself by watching each round, and say in
+your report that the mechanical guards were unavailable — an unenforced budget reported as
+enforced is worse than none, because the reader stops watching.
+
 ### Guard 3 — Transitions fire their own gates
 
 Committing, pushing, reviewing, and opening the PR are **parts of a phase transition**,
