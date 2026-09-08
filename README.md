@@ -563,11 +563,12 @@ directories created by `--migrate-existing`.
   no Codex equivalent. Under Codex the skill relies on its continuation contract
   alone.
 - [gstack](https://github.com/garrytan/gstack) with its `browse` skill built
-  (`~/.claude/skills/gstack/browse/dist/browse`) for `flight-search`; the
-  headless daemon renders Google Flights
+  (`gstack/browse/dist/browse` under one of the skills roots, or `BROWSE_BIN`)
+  for `flight-search`; the headless daemon renders Google Flights
 - `google-chrome` (or Chromium via `CHROME_BIN`), a desktop session to show its
   window, `node`, and `playwright-core` (found via `require`, or from gstack's
-  bundled copy) for `copa-booking`
+  bundled copy) for `copa-booking`; `node` is also needed by `./check.sh`,
+  which runs `copa-booking`'s offline test
 
 ## License
 

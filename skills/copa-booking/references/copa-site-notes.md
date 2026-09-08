@@ -3,15 +3,37 @@
 Read this when a page differs from the scripted flow. Everything here was seen
 live; selectors can drift, so treat them as the first thing to try.
 
+## Provenance
+
+One booking session on 2026-09-07/08 (UTC), ASU→ATL round trip, 1 adult,
+Economy Classic, run from Linux with these versions:
+
+- Google Chrome 152.0.7977.82, launched as `google-chrome
+  --remote-debugging-port=9222 --user-data-dir=~/.config/chrome-agent` and
+  driven with `playwright-core` 1.62.1 (`chromium.connectOverCDP`) on Node
+  24.19.0; the driving commands are the ones now in `scripts/copa.js` (the
+  session used their predecessors with the same selectors).
+- gstack 1.79.0 `browse` (Playwright Chromium) for the headless and `--headed`
+  attempts; observations there came from `browse goto` (reported `(401)`),
+  `browse html body`, and `browse network`.
+
+What was not measured: the cookie route. gstack's `cookie-import-browser`
+reported `Imported 0 cookies for copaair.com` from both a Chrome and a Chromium
+profile, so no imported `datadome` cookie was ever presented to the site. Site
+behaviour in other regions, storefronts, or on macOS/Windows is also unmeasured.
+
 ## Bot protection
 
-- `shopping.copaair.com` and `login.copaair.com` are behind DataDome. Automation
-  browsers get HTTP 401 with a `captcha-delivery.com` iframe (`'t':'bv'` = hard
-  block, `'t':'fe'` = interactive challenge). The `datadome` cookie is
-  fingerprint-bound; importing it into another browser does not help.
-- A real Google Chrome launched with `--remote-debugging-port` passes once the
-  user solves the challenge. Playwright's `connectOverCDP` did not trip it
-  during a full booking flow.
+- `shopping.copaair.com` and `login.copaair.com` are behind DataDome. The
+  headless daemon got HTTP 401 with a `captcha-delivery.com` iframe and
+  `'t':'bv'` in the page's `dd` config (a block the user cannot click through);
+  the headed daemon got 401 with `'t':'fe'` (an interactive challenge that the
+  user still could not pass in that window). Whether a copied `datadome` cookie
+  would pass is unmeasured (see Provenance).
+- The real Google Chrome above passed once the user solved the challenge in its
+  window. Playwright's `connectOverCDP` did not trip DataDome during that one
+  full booking flow (search → fares → passenger → seats → review → payment
+  page).
 - Chrome 136+ ignores `--remote-debugging-port` on the default profile; use a
   separate `--user-data-dir`. The user then logs into ConnectMiles in that
   profile once.
@@ -78,8 +100,21 @@ split, same total).
 
 `/ibe/booking/flexible-dates` returns the grid used by `/flexible-search`.
 
+## Header / login box
+
+Logged in, `#btnMembersLoginBox` carries aria-label `You've logged in with the
+user <NAME>. Press Enter to enter Member's Menu` and the header shows the
+member's initials. Logged out (observed after the session expired a few hours
+later), that id is absent, the header shows `LOG IN`, and the login control's
+aria-label is `Connect Miles Login, allows you to get access to your member
+profile. Press Enter to go to Login form.` `status` keys `loggedIn` on the
+logged-in phrase and reports whichever label it finds as `user`.
+
 ## Summary page
 
+Each itinerary line reads `Thu, Oct 8, 2026 · CM 296 · CM 880` (nonstop: a
+single flight number after the date, inferred, not observed) and its fare
+family (`Economy Classic`) appears a few lines below, before `Change Flight`.
 Itinerary with `Change Flight` per direction, baggage allowance, an upsell
 (`Unlimited Flexibility +147.60 USD`), PriceLock radios (`name=priceLock`:
 `1` = 24 hours free, `3` = 3 days for a fee, `0` = continue without, default
@@ -101,9 +136,10 @@ button aria-label starts with `Continue button`.
   and pick the exact label. Free text there yields `Enter a valid phone
   number`. Number goes in `#phone0` without spaces.
 - Optional: Frequent Flyer Program, Known traveler number, Redress number.
-- Continue button aria-label: `Button, Press enter to to validate your frequent
-  flyer number, save the information and proceed to seat selection`. Name and
-  birth date are locked after purchase.
+- Continue button: visible text `Continue` (what the driver matches), aria-label
+  `Button, Press enter to to validate your frequent flyer number, save the
+  information and proceed to seat selection`. Name and birth date are locked
+  after purchase.
 
 ## Seats, checkout, payment
 

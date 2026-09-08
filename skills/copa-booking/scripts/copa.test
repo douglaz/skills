@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# copa.test — offline checks for copa.js's browser-free logic: the fare-matrix printer that
+# the SKILL tells the agent to quote from, and the argument handling around it. No Chrome.
+# Usage: ./skills/copa-booking/scripts/copa.test   (exits 0 if all pass)
+set -euo pipefail
+cd "$(dirname "$0")"
+# The gate is otherwise bash-only; name the extra runtime instead of dying with "command not found".
+command -v node >/dev/null 2>&1 || { echo "copa.test needs node on PATH (copa-booking's runtime, see README prerequisites)"; exit 1; }
+fail=0; n=0
+check() { n=$((n+1)); if "$@"; then echo "  ok   $desc"; else echo "  FAIL $desc"; fail=1; fi; }
+out=$(mktemp); trap 'rm -f "$out"' EXIT
+
+# `&& rc=0 || rc=$?` throughout: a bare `; rc=$?` under set -e ends the script on the first
+# non-zero exit before any FAIL line or the summary count is printed.
+node copa.js plan fixtures/plan-sample.json >"$out" 2>&1 && rc=0 || rc=$?
+desc="plan prints the fixture (exit 0)"
+check test "$rc" -eq 0
+desc="cheapest solution comes first, priced in the response currency (line 3: banner, OD header, then the row)"
+check test "$(sed -n '3p' "$out")" = '  362.48 USD 12H26M lay=1h51m CM296 ASU 03:58→PTY 08:09 / CM880 PTY 10:00→ATL 15:24 | BAS=362.48 CLS=446.58'
+desc="next-day arrival and non-Copa carriers are rendered"
+check grep -qF -- 'UA1357 PTY 09:13→ATL 00:23+1' "$out"
+desc="a business-only solution (null coach price) sorts by its business price and says so, never 'null USD'"
+check test "$(sed -n '5p' "$out")" = '  1097.38 USD (business only) 13H00M lay=2h30m CM206 ASU 01:47→PTY 05:58 / CM882 PTY 08:28→ATL 13:47 | PRO=1097.38'
+check test "$(grep -c 'null USD' "$out")" -eq 0
+desc="price calendar is rendered"
+check grep -qF -- 'nearby: 2026-10-07:631.88 2026-10-08:362.48' "$out"
+desc="fare-code legend is rendered"
+check grep -qF -- 'Fare codes: BAS=Economy Basic' "$out"
+
+node copa.js plan >"$out" 2>&1 && rc=0 || rc=$?
+desc="plan without a file exits 1"
+check test "$rc" -eq 1
+desc="plan without a file prints usage"
+check grep -qF -- 'usage: plan <file.json>' "$out"
+
+printf '<html>error</html>' >"$out.bad"
+node copa.js plan "$out.bad" >"$out" 2>&1 && rc=0 || rc=$?
+rm -f "$out.bad"
+desc="a non-JSON plan body does not crash (exit 0)"
+check test "$rc" -eq 0
+desc="a non-JSON plan body is reported as not parseable"
+check grep -qF -- 'plan response not parseable' "$out"
+
+desc="an unknown command prints usage and exits 2"
+node copa.js bogus >"$out" 2>&1 && rc=0 || rc=$?
+check test "$rc" -eq 2
+
+# The summary-page leg parser (used by `summary`'s assertions) must see a nonstop leg (one
+# flight number, no second middle dot) as well as a connecting one, and take each leg's own fare
+# line rather than the upsell copy further down. The connecting leg's shape is as observed live;
+# the nonstop shape is inferred from it.
+node copa.js parse-legs fixtures/summary-sample.txt >"$out" 2>&1 && rc=0 || rc=$?
+desc="parse-legs exits 0 on the sample summary"
+check test "$rc" -eq 0
+desc="parse-legs finds both the connecting and the nonstop leg with their own fare lines"
+check test "$(cat "$out")" = '[{"leg":"Thu, Oct 8, 2026 · CM 296 · CM 880","fam":"Economy Classic"},{"leg":"Sat, Oct 17, 2026 · CM 291","fam":"Business Promo"}]'
+
+echo "$n checks, $( [ "$fail" -eq 0 ] && echo all passed || echo FAILURES )"
+exit "$fail"

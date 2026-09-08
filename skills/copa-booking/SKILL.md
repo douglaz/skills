@@ -16,8 +16,9 @@ description: >-
 
 Copa's shopping site (`shopping.copaair.com`) sits behind DataDome. Headless
 and headed Playwright browsers get a 401 challenge page they cannot pass, and
-imported cookies do not help because the token is bound to the browser
-fingerprint. What works: a real Google Chrome that the user unlocks once, which
+importing cookies from the user's browsers was not a usable route either (the
+importer found nothing to import, so whether a copied cookie would pass is
+unmeasured). What works: a real Google Chrome that the user unlocks once, which
 you then drive over the DevTools protocol. Chrome 136+ refuses remote debugging
 on its default profile, so a dedicated profile directory is used; the user logs
 into ConnectMiles there once and it persists.
@@ -36,38 +37,77 @@ family (`basic`, `classic`, `full`, `business`). If you only have a price,
 Fare families in economy: **Basic** (no checked bag, paid seat, changes with
 fee), **Classic** (23 kg bag, regular seat pick, one free change if made 8+
 days out), **Full** (two bags, refundable-ish). Google Flights' headline price
-is normally Basic; users who say "with a bag" mean Classic.
+is normally Basic; users who say "with a bag" mean Classic. Business comes as
+**Promo** and **Full** (API codes PRO/BFU, very different prices); `pick`
+refuses a bare `business` when both are offered, so pass `business-promo` or
+`business-full`. The business labels were not exercised in the field.
 
 ## Flow
 
-Scripts live in `scripts/`; set `C="node $HOME/.claude/skills/copa-booking/scripts/copa.js"`.
-Both scripts need `playwright-core`; they fall back to the copy bundled with
-gstack at `~/.claude/skills/gstack/node_modules/playwright-core`.
+Scripts live in `scripts/`. The skill may be installed under any of the three
+skills roots (Claude Code, Codex, legacy Codex), so resolve it rather than
+assuming one:
+
+```bash
+for d in "$HOME/.claude/skills/copa-booking" \
+         "${CODEX_HOME:-$HOME/.codex}/skills/copa-booking" \
+         "$HOME/.agents/skills/copa-booking"; do
+  [ -f "$d/scripts/copa.js" ] && { S="$d/scripts"; break; }
+done
+[ -n "${S:-}" ] || { echo "copa-booking scripts not found under any skills root"; exit 1; }
+C="node $S/copa.js"
+```
+
+Both scripts need `playwright-core` (resolved by `require`, falling back to the
+copy gstack bundles under `~/.claude/skills/gstack/node_modules`). Every
+required click or page transition in `copa.js` throws and exits 1 when it does
+not happen, so a non-zero exit means "the page is not where the flow assumes",
+never "carry on".
 
 ### 1. Launch Chrome and hand the challenge to the user
 
 ```bash
-$HOME/.claude/skills/copa-booking/scripts/launch_chrome.sh https://shopping.copaair.com/booking-panel
-$C status        # {"url":..., "captcha":true/false, "user":"You've logged in with the user <NAME>..."}
+"$S/launch_chrome.sh" https://shopping.copaair.com/booking-panel
+$C status        # {"url":..., "captcha":true/false, "loggedIn":true/false, "user":"<login-box label>"}
 ```
 
-If `captcha` is true or `user` is null, stop and tell the user: a Chrome window
-titled Copa is open on their desktop; solve the challenge and log into
-ConnectMiles there, then say "done". Logging in matters because the passenger
-form can then auto-fill from the profile, which avoids asking for name and
-birth date in chat. Do not try to solve or bypass the challenge.
+The launcher reuses a Chrome that is already listening on the port and opens
+the URL as a new tab there, so the drivers always have a Copa tab to attach
+to. When several Copa tabs are open the drivers take the most recently active
+one (Chrome's own ordering) and say so; other tabs (a payment page still
+waiting for a card, a PriceLock hold from an earlier session) are never
+navigated: `search` opens its own tab unless the chosen one is already the
+booking panel. Close finished tabs yourself when a session ends. If port 9222 is taken, export `CDP_PORT` once; the launcher and
+both drivers read it.
+
+If `captcha` is true, stop and tell the user: a Chrome window titled Copa is
+open on their desktop; solve the challenge there, then say "done". Do not try
+to solve or bypass it. If `loggedIn` is false the user has a choice: log into
+ConnectMiles in that window so the passenger form auto-fills from the profile
+(no name or birth date in chat), or continue as a guest and give you the
+passenger details for the manual form (`--first --last --dob --email`). Only
+the challenge blocks progress.
 
 ### 2. Search from the booking panel
 
 ```bash
-$C search ASU ATL 2026-10-08 2026-10-17     # omit the return date for one way
+$C search ASU ATL 2026-10-08 2026-10-17     # omit the return date for one way; --adults N for a party
 ```
 
+The panel remembers its traveler count between searches and the script does
+not drive that popover. It verifies the control reads the expected adults
+(1 unless `--adults N`) with no children or infants, and exits 1 otherwise;
+in that case ask the user to set travelers in the Chrome window and rerun.
+Later, fill each traveler with `passenger --traveler K`; only traveler 1 was
+exercised in the field.
+
 This fills the autocompletes, works the range date picker (both dates in one
-open picker, it resets if closed in between), presses "Find flights", waits
+open picker, it resets if closed in between), presses "Find flights" (the
+button's aria-label is "Search Flights", which is what the script matches), waits
 for the results to settle and prints two things: the visible outbound cards,
-and a fare matrix parsed from Copa's `/ibe/booking/plan` API response
-(saved to `copa-plan.json`). The matrix is the complete picture: every
+and a fare matrix parsed from Copa's `/ibe/booking/plan` API response (saved
+as `plan.json` in a private temp directory of its own; the path is printed,
+and `$C plan <file>` re-prints it). The matrix is the complete picture: every
 itinerary, layover, and fare-family price per direction, plus the price
 calendar for nearby days. Quote from it.
 
@@ -84,11 +124,15 @@ few seconds before the list appears; the script waits through it.
 $C pick "CM 296 · CM 880" classic      # opens the card's Economy panel, expands Classic, confirms
 $C flights                             # now shows the return cards
 $C pick "CM 891 · CM 291" classic
-$C summary                             # itinerary, baggage, PriceLock options, total
+$C summary "CM 296 · CM 880" "CM 891 · CM 291" classic 2026-10-08 2026-10-17   # args must hold: flights, fare, dates in leg order
 ```
 
 `pick` matches the flight-number string exactly as printed on the card (middle
-dot, spaces). On the summary page check the total against what you quoted and
+dot, spaces; a nonstop card is just `CM 206`) and confines the fare click to
+that card's own panel. Pass the flight numbers and fare family to `summary` so
+it exits 1 if the page holds anything else: it checks whole flight strings and
+the fare line under each itinerary line, one leg per direction requested. On
+the summary page check the total against what you quoted and
 tell the user about PriceLock: 24 hours is free, which is a good default when
 they still need to think.
 
@@ -100,7 +144,8 @@ $C passenger --profile --gender Male --cc "+1 United States of America" --phone 
 ```
 
 `--profile` picks the first saved passenger from the ConnectMiles profile
-(name, birth date, email, frequent-flyer number come along). Then supply what
+(name, birth date, email, frequent-flyer number come along); `--profile 2`
+picks the second, counting from 1 in the order the picker lists them. Then supply what
 the profile lacks: gender is a two-option dropdown (Male/Female), phone needs
 the country from a dial-code picker whose labels look like `+1 United States
 of America` (there is also `+1 United States Virgin Islands`, so pass the full
@@ -115,6 +160,10 @@ date cannot be changed after purchase, so echo them to the user.
 ```bash
 $C continue          # validates the frequent-flyer number and opens the seat map
 ```
+
+`continue` knows where each page should lead (summary → passengers →
+seats/checkout) and exits 1 if the site lands anywhere else, which is what an
+expired session or a login redirect looks like.
 
 ### 5. Seats, review, payment
 
@@ -145,6 +194,13 @@ cover (multi-city, miles, children, business fares).
 
 ## Rules that keep this safe
 
+- The DevTools port is loopback-only but has no authentication: any other
+  account on the same machine could attach to the logged-in Copa tabs, payment
+  page included. The launcher refuses when `who` shows other logged-in users or
+  cannot run at all; that is a heuristic (it sees terminal sessions, not every
+  local process), so treat this workflow as single-user-desktop only and
+  override with `CDP_SHARED_HOST_OK=1` solely on a host the user trusts. Once
+  the purchase is done tell the user to close that Chrome window.
 - Never click "Confirm Purchase and Continue" or type card numbers unless the
   user gave them in the conversation and asked you to pay.
 - Never try to defeat DataDome; the user solves it in their own window.

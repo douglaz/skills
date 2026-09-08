@@ -1,51 +1,107 @@
 #!/usr/bin/env bash
 # Google Flights helper on top of the gstack browse daemon.
-#   gf.sh search ORIG DEST DEPART [RETURN]   print itineraries (Google's aria-label text, one block each)
-#   gf.sh grid                              open the "Date grid" and print "$price, <dep> to <ret>" cells
-#   gf.sh select PRICE                      click the itinerary priced PRICE (digits, no $), print what follows
+#   gf.sh search ORIG DEST DEPART [RETURN] [EXTRA WORDS...]
+#                                           print itineraries (Google's aria-label text, one block each);
+#                                           extra words go into Google's natural-language query,
+#                                           e.g. "for 2 adults" or "business class"
+#   gf.sh grid                              open the "Date grid" and print "<price>, <dates>" cells
+#   gf.sh select PRICE [N]                  click the itinerary priced PRICE (digits, no symbol). With several
+#                                           at that price and no N, it refuses without clicking; N picks one.
 #   gf.sh booking                           print booking options (airline vs OTA) on the booking page
 #   gf.sh handoff-url                       capture the form behind "Continue to book" (first option)
-# Env: BROWSE_BIN (path to browse), CURR (default USD)
+# Env: BROWSE_BIN (path to browse; otherwise probed under each skills root), CURR (default USD)
+# Needs jq (URL-encoding), a prerequisite this repo already lists.
 set -euo pipefail
-B="${BROWSE_BIN:-$HOME/.claude/skills/gstack/browse/dist/browse}"
-[ -x "$B" ] || { echo "browse not found at $B; run the gstack browse skill setup first" >&2; exit 1; }
-# Follow whatever mode the daemon is already in (a headed daemon rejects plain commands).
-if "$B" status 2>/dev/null | grep -q "Mode: headed"; then B="$B --headed"; fi
+command -v jq >/dev/null 2>&1 || { echo "gf.sh needs jq on PATH" >&2; exit 1; }
+bin="${BROWSE_BIN:-}"
+if [ -z "$bin" ]; then
+  for d in "$HOME/.claude/skills" "${CODEX_HOME:-$HOME/.codex}/skills" "$HOME/.agents/skills"; do
+    [ -x "$d/gstack/browse/dist/browse" ] && { bin="$d/gstack/browse/dist/browse"; break; }
+  done
+fi
+[ -n "$bin" ] && [ -x "$bin" ] || { echo "gstack browse not found (set BROWSE_BIN, or build it with the gstack browse skill's setup)" >&2; exit 1; }
+# The executable and its global flags live in an array so every call site (quoted or not) runs
+# the same command. Follow the daemon's mode: a headed daemon rejects plain commands. Only
+# --headed is carried; a daemon started with --proxy must be disconnected first (its proxy URL
+# is not knowable here).
+B=("$bin")
+if "$bin" status 2>/dev/null | grep -q "Mode: headed"; then B+=(--headed); fi
 CURR="${CURR:-USD}"
 extract='Array.from(document.querySelectorAll("[aria-label^=\"From \"]")).map(e=>e.getAttribute("aria-label")).join("\n---\n")'
+# Run a browse command into a file and return ITS status: a dead daemon must surface as a
+# failure, never as "no results" (the fallbacks below apply only to a successful empty answer).
+browse_to() { local f=$1; shift; "${B[@]}" "$@" >"$f" 2>&1 || { echo "browse $1 failed (exit $?):" >&2; tail -3 "$f" >&2; return 1; }; }
+tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
 
 cmd=${1:-}; shift || true
 case "$cmd" in
   search)
-    o=${1:?origin}; d=${2:?destination}; dep=${3:?depart YYYY-MM-DD}; ret=${4:-}
-    if [ -n "$ret" ]; then q="Flights%20from%20$o%20to%20$d%20on%20$dep%20through%20$ret"
-    else q="One%20way%20flights%20from%20$o%20to%20$d%20on%20$dep"; fi
-    $B goto "https://www.google.com/travel/flights?q=$q&curr=$CURR&hl=en" >/dev/null
-    sleep 6
-    $B js "$extract"
+    o=${1:?origin}; d=${2:?destination}; dep=${3:?depart YYYY-MM-DD}; shift 3
+    ret=""; if [[ "${1:-}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then ret=$1; shift; fi
+    extra="$*"
+    if [ -n "$ret" ]; then q="Flights from $o to $d on $dep through $ret"
+    else q="One way flights from $o to $d on $dep"; fi
+    [ -n "$extra" ] && q="$q $extra"
+    # Encode the whole natural-language query (an "&" in "2 adults & 1 child" must not end it).
+    q=$(jq -rn --arg s "$q" '$s|@uri')
+    "${B[@]}" goto "https://www.google.com/travel/flights?q=$q&curr=$CURR&hl=en" >/dev/null
+    # Poll instead of a fixed sleep: a slow render or a consent page would otherwise print
+    # nothing and exit 0, which reads exactly like a search with no results.
+    out=""
+    for _ in 1 2 3 4 5 6; do sleep 5; out=$("${B[@]}" js "$extract"); [ -n "$out" ] && break; done
+    if [ -z "$out" ]; then
+      echo "no itineraries rendered within 30 s; page is: $("${B[@]}" js 'document.title') — $("${B[@]}" text 2>/dev/null | tr '\n' ' ' | head -c 300)" >&2; exit 1
+    fi
+    printf '%s\n' "$out"
     ;;
   grid)
-    ref=$($B snapshot -i 2>/dev/null | grep -oE '@e[0-9]+ \[button\] "Date grid"' | grep -oE '@e[0-9]+' | head -1 || true)
-    [ -n "$ref" ] && $B click "$ref" >/dev/null && sleep 4
-    $B snapshot 2>/dev/null | grep -oE '\[button\] "\$[0-9,]+,[^"]*"' | sed 's/\[button\] //'
+    browse_to "$tmp" snapshot -i
+    ref=$(grep -oE '@e[0-9]+ \[button\] "Date grid"' "$tmp" | grep -oE '@e[0-9]+' | head -1 || true)
+    # A missing button is a state to report below; a click that fails is an error to surface.
+    if [ -n "$ref" ]; then
+      "${B[@]}" click "$ref" >/dev/null || { echo "browse click on the Date grid button failed" >&2; exit 1; }
+      sleep 4
+    fi
+    browse_to "$tmp" snapshot
+    # Any currency prefix (US$, €, £ ...), the amount, then a label carrying at least one
+    # "<Mon> <d>" date (round trip: "Oct 8 to Oct 17"; one-way labels were not exercised).
+    cells=$(grep -oE '\[button\] "[^"0-9]{0,4}[0-9][0-9,.]*, [^"]*[A-Z][a-z]{2} [0-9]{1,2}[^"]*"' "$tmp" | sed 's/\[button\] //' || true)
+    [ -n "$cells" ] && printf '%s\n' "$cells" || echo "(no date-grid cells found; is a search loaded? run: $0 search ...)"
     ;;
   select)
-    price=${1:?price digits}
-    $B js "document.querySelector('[aria-label^=\"From $price\"]').click()" >/dev/null
-    sleep 6
-    echo "URL: $($B js 'location.href' | head -c 120)"
-    $B js "$extract"
+    price=${1:?price digits}; n=${2:-}
+    # Both values are interpolated into JS: enforce the shape. Google writes four-digit fares
+    # without a thousands separator ("From 1551 US dollars", observed), so digits only is right.
+    [[ "$price" =~ ^[0-9]+$ ]] || { echo "PRICE must be digits only (got '$price')" >&2; exit 1; }
+    [[ -z "$n" || "$n" =~ ^[1-9][0-9]*$ ]] || { echo "N must be a positive integer (got '$n')" >&2; exit 1; }
+    # Trailing space after the amount: "From 988 " must not match "From 9880 ...". Count first and
+    # click only when the choice is unambiguous or an index says which; clicking the first of
+    # several would advance the page before the caller could pick another.
+    before=$("${B[@]}" js 'location.href')
+    out=$("${B[@]}" js "(()=>{const m=[...document.querySelectorAll('[aria-label^=\"From $price \"]')];const n=${n:-0};if(!m.length)return 'ERROR: no itinerary priced $price';if(m.length>1&&!n)return 'ERROR: '+m.length+' itineraries priced $price; rerun as: select $price <index 1..'+m.length+'>';const e=m[n?n-1:0];if(!e)return 'ERROR: no itinerary #'+n+' priced $price ('+m.length+' match)';e.click();return m.length+' itinerar'+(m.length===1?'y':'ies')+' priced $price; clicked #'+(n||1)})()")
+    echo "$out"; case "$out" in *ERROR:*) exit 1;; esac
+    # Wait for the page to move on (return options or the booking page) instead of sleeping.
+    moved=""
+    for _ in 1 2 3 4 5 6 7 8 9 10; do sleep 3; now=$("${B[@]}" js 'location.href'); [ "$now" != "$before" ] && { moved=1; break; }; done
+    [ -n "$moved" ] || { echo "page did not change within 30 s after the click (still $before)" >&2; exit 1; }
+    echo "URL: $(printf '%s' "$now" | head -c 120)"
+    "${B[@]}" js "$extract"
     ;;
   booking)
-    $B text 2>/dev/null | grep -oE "Booking options.{0,900}" | head -c 1000; echo
-    $B snapshot -i 2>/dev/null | grep -E "Continue to book" || true
+    browse_to "$tmp" text
+    # `browse text` may wrap; flatten before matching, and an absent section is an answer, not a crash.
+    tr '\n' ' ' <"$tmp" | grep -oE "Booking options.{0,900}" | head -c 1000 \
+      || echo "(no 'Booking options' section: select an outbound and a return first with: $0 select PRICE)"
+    echo
+    browse_to "$tmp" snapshot -i
+    grep -E "Continue to book" "$tmp" || true
     ;;
   handoff-url)
     # Google's Continue button POSTs a hidden form to a _blank window; record it instead of following it.
-    $B js "window.__cap=[];HTMLFormElement.prototype.submit=function(){window.__cap.push({action:this.action,target:this.target,inputs:[...this.querySelectorAll('input')].map(i=>[i.name,i.value.slice(0,120)])})};'hooked'" >/dev/null
-    $B js "document.querySelector('[aria-label^=\"Continue to book\"]').click();'clicked'" >/dev/null
+    "${B[@]}" js "window.__cap=[];HTMLFormElement.prototype.submit=function(){window.__cap.push({action:this.action,target:this.target,inputs:[...this.querySelectorAll('input')].map(i=>[i.name,i.value.slice(0,120)])})};'hooked'" >/dev/null
+    "${B[@]}" js "document.querySelector('[aria-label^=\"Continue to book\"]').click();'clicked'" >/dev/null
     sleep 3
-    $B js "JSON.stringify(window.__cap)"
+    "${B[@]}" js "JSON.stringify(window.__cap)"
     ;;
-  *) sed -n '2,8p' "$0"; exit 1 ;;
+  *) sed -n '2,12p' "$0"; exit 1 ;;
 esac

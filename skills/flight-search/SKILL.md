@@ -29,32 +29,51 @@ the assumptions in your first reply rather than blocking on questions:
   the machine (`curl -s https://ipinfo.io/json`) and pick the city's main
   airport. Say which one you assumed.
 - **Destination and dates**: for an event ("TABConf", "Web Summit"), WebSearch
-  the current year's dates and venue, then propose arriving the day before and
-  leaving the day after. Show the event dates in your reply.
+  the next upcoming edition's dates and venue (if this year's has already
+  happened, that means next year's; if no upcoming edition is announced, ask
+  which year), then propose arriving the day before and leaving the day after.
+  Show the event dates in your reply.
 - **Passengers and cabin**: default 1 adult, economy.
 - **Currency**: USD unless the user says otherwise.
 
 ## 2. Start the browser
 
-Run the `browse` skill preamble (skill-start), then the setup check. Then:
+Run the `browse` skill preamble (skill-start), then the setup check. Skills
+may live under any of the three skills roots (Claude Code, Codex, legacy
+Codex), so resolve both paths rather than assuming `~/.claude`:
 
 ```bash
-B="$HOME/.claude/skills/gstack/browse/dist/browse"
+for d in "$HOME/.claude/skills" "${CODEX_HOME:-$HOME/.codex}/skills" "$HOME/.agents/skills"; do
+  [ -f "$d/flight-search/scripts/gf.sh" ] && G="$d/flight-search/scripts/gf.sh"
+  [ -x "$d/gstack/browse/dist/browse" ] && B="$d/gstack/browse/dist/browse"
+done
+[ -n "${G:-}" ] && [ -n "${B:-}" ] || { echo "flight-search scripts or gstack browse not found under any skills root"; exit 1; }
 $B status          # "Mode: headed" means a previous session left it headed
 ```
 
-`scripts/gf.sh` picks up the daemon's mode automatically. If commands hang or
-the daemon is unresponsive, `$B disconnect` and retry.
+`gf.sh` probes the same roots for the browse binary (override with
+`BROWSE_BIN`) and carries `--headed` when the daemon runs headed. It cannot
+carry a `--proxy` (the daemon's proxy URL is not readable), so a daemon started
+with a proxy must be `$B disconnect`ed first; Google Flights needs none. If
+commands hang or the daemon is unresponsive, `$B disconnect` and retry.
 
 ## 3. Search and read the results
 
 ```bash
-G="$HOME/.claude/skills/flight-search/scripts/gf.sh"
 $G search ASU ATL 2026-10-11 2026-10-16      # round trip; omit the return date for one way
+$G search ASU ATL 2026-10-11 2026-10-16 for 2 adults business class   # extra words go into Google's query
 ```
 
-Each printed block is one itinerary in Google's own words: price (round trip
-total per adult), airline, departure and arrival times, duration, layovers.
+Google's `q=` is natural language, so passengers and cabin ride along as extra
+words. Google's "round trip total" then covers all passengers: in one check,
+"for 2 adults" turned a $742 itinerary into $1,551, so compare against the
+1-adult price before quoting, and treat a cabin word the same way (business
+fares are several times economy). `search` exits 1 with the page state if no
+itinerary renders within 30 seconds (slow response, consent page).
+
+Each printed block is one itinerary in Google's own words: price (Google's
+round-trip total for the searched party, so per adult only for the default
+1-adult search), airline, departure and arrival times, duration, layovers.
 Put the top 3 to 5 in a table: price, airline, out times, stops and layover,
 duration. Google's page also carries two useful hints worth quoting when they
 appear in `$B text`: "Prices are currently high/typical/low" and "Travel
@@ -75,7 +94,9 @@ $G grid      # clicks "Date grid", prints "$price, Oct 8 to Oct 17" per cell
 
 Reduce it to a small departure x return table around the user's dates and
 name the pattern you see. Note that the grid shows the cheapest fare per cell,
-which may be a worse connection than the headline itinerary.
+which may be a worse connection than the headline itinerary. Only round-trip
+grids were exercised; if a one-way search yields no cells, read Google's price
+strip above the results with `$B text` instead.
 
 ## 5. Drill into the chosen itinerary
 
@@ -85,6 +106,11 @@ $G select 988        # click the itinerary priced $988 -> shows return options
 $G select 988        # click the matching return -> booking page
 $G booking           # "Book with COPA Airline $988 / Book with United $2,880"
 ```
+
+`select` counts the itineraries at that price before clicking: with more than
+one and no index it refuses and exits 1, so rerun as `$G select 988 2` with
+the index of the one the user chose. It then waits for the page to move on and
+exits 1 if it does not, rather than printing the old page as if it had.
 
 The booking page names who sells the fare and at what price. Airline-direct is
 almost always what the user wants; online travel agencies are worth mentioning
@@ -124,10 +150,9 @@ whether the ticket was bought before searching again.
 
 ## Pitfalls seen in practice
 
-- Google's price is "from" per adult and drifts within minutes; the airline's
-  checkout total is the truth.
+- Google's price is a "from" total for the searched party and drifts within
+  minutes; the airline's checkout total is the truth.
 - `$B text` on Google Flights returns the results twice (top and "other"
   flights); the aria-label extraction dedupes naturally.
-- The `q=` URL parameter is natural language, so "for 2 adults" or "business
-  class" can be appended to the query; passengers other than 1 adult were not
-  exercised here, verify in the page header.
+- Prices are the searched party's round-trip total in the currency `CURR`
+  selects; the date grid follows that currency, so `CURR=EUR` prints `€` cells.
