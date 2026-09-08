@@ -1,0 +1,133 @@
+---
+name: flight-search
+description: >-
+  Search and compare flights with Google Flights through the headless gstack
+  browse daemon, then hand the chosen itinerary to an airline booking skill
+  (copa-booking for Copa Airlines). Use this whenever the user wants to fly
+  somewhere, asks for flight prices, cheapest dates, itineraries, layovers,
+  who sells a fare, or says "book me a flight", "find flights", "how much to
+  fly to", "trip to <conference/event>", even when they only name the event
+  (look the dates up) or only the destination (infer the origin from memory or
+  the machine's location). Also use it as the first step of any ticket
+  purchase: search here, then invoke the airline skill for booking.
+---
+
+# Flight search (Google Flights via browse)
+
+Google Flights is the fastest way to see every airline, nearby-date prices and
+who sells each fare. It renders fine headless, so use the gstack `browse`
+daemon. Airline sites are a different story: most sit behind bot protection,
+which is why booking is a separate skill (`copa-booking` for Copa; the same
+real-Chrome technique works for other carriers).
+
+## 1. Pin down the trip
+
+Collect these before touching the browser. Fill gaps yourself, then confirm
+the assumptions in your first reply rather than blocking on questions:
+
+- **Origin**: check memory for the user's home airport. If unknown, geolocate
+  the machine (`curl -s https://ipinfo.io/json`) and pick the city's main
+  airport. Say which one you assumed.
+- **Destination and dates**: for an event ("TABConf", "Web Summit"), WebSearch
+  the current year's dates and venue, then propose arriving the day before and
+  leaving the day after. Show the event dates in your reply.
+- **Passengers and cabin**: default 1 adult, economy.
+- **Currency**: USD unless the user says otherwise.
+
+## 2. Start the browser
+
+Run the `browse` skill preamble (skill-start), then the setup check. Then:
+
+```bash
+B="$HOME/.claude/skills/gstack/browse/dist/browse"
+$B status          # "Mode: headed" means a previous session left it headed
+```
+
+`scripts/gf.sh` picks up the daemon's mode automatically. If commands hang or
+the daemon is unresponsive, `$B disconnect` and retry.
+
+## 3. Search and read the results
+
+```bash
+G="$HOME/.claude/skills/flight-search/scripts/gf.sh"
+$G search ASU ATL 2026-10-11 2026-10-16      # round trip; omit the return date for one way
+```
+
+Each printed block is one itinerary in Google's own words: price (round trip
+total per adult), airline, departure and arrival times, duration, layovers.
+Put the top 3 to 5 in a table: price, airline, out times, stops and layover,
+duration. Google's page also carries two useful hints worth quoting when they
+appear in `$B text`: "Prices are currently high/typical/low" and "Travel
+<dates> for $<price>".
+
+Prefer this aria-label extraction over `$B text`: the full page text is
+20 KB+ and slow. Skip screenshots; the daemon's screenshot path needs `sharp`,
+which is not installed here.
+
+## 4. Check nearby dates
+
+Weekday effects are large (in the TABConf search, returning Saturday instead
+of Friday cut the fare by a third). Always show the grid:
+
+```bash
+$G grid      # clicks "Date grid", prints "$price, Oct 8 to Oct 17" per cell
+```
+
+Reduce it to a small departure x return table around the user's dates and
+name the pattern you see. Note that the grid shows the cheapest fare per cell,
+which may be a worse connection than the headline itinerary.
+
+## 5. Drill into the chosen itinerary
+
+```bash
+$G search ASU ATL 2026-10-08 2026-10-17   # re-run for the final dates
+$G select 988        # click the itinerary priced $988 -> shows return options
+$G select 988        # click the matching return -> booking page
+$G booking           # "Book with COPA Airline $988 / Book with United $2,880"
+```
+
+The booking page names who sells the fare and at what price. Airline-direct is
+almost always what the user wants; online travel agencies are worth mentioning
+only when materially cheaper.
+
+`$G handoff-url` captures the form Google POSTs when you press "Continue to
+book" (it opens in a new tab, so plain clicks look like nothing happened). For
+Copa this deep link is useless because their site redirects it to a
+flexible-dates page; go through `copa-booking` instead.
+
+## 6. Recommend, then let the user choose
+
+Give one recommendation with the reason (total cost including the hotel nights
+that cheaper dates add, connection quality, arrival time versus the event).
+Then ask with AskUserQuestion: which itinerary, and how they want to pay
+(hand-off to their browser at checkout, details in chat, or just the link).
+Buying spends money and needs passport-grade personal data, so this is a
+genuine stop even in autonomous mode.
+
+## 7. Hand off to booking
+
+- **Copa Airlines**: invoke the `copa-booking` skill and pass it the dates,
+  flight numbers (e.g. "CM 296 · CM 880" out, "CM 891 · CM 291" back) and the
+  fare family the user picked. Copa's site prices Economy Basic (no bag) versus
+  Economy Classic (23 kg bag, seat pick, one free change); Google's headline
+  price is usually Basic, so say which one you quoted.
+- **Other airlines**: give the direct link. If asked to complete the booking,
+  reuse the real-Chrome-over-CDP approach from `copa-booking`
+  (`scripts/launch_chrome.sh` + `scripts/cdp.js` are airline-agnostic); only
+  the page-specific driver differs.
+
+## 8. Remember what you learned
+
+Save to memory: the user's home airport, and the trip (event, dates, chosen
+itinerary, price, booking status). Next time the user mentions the trip, check
+whether the ticket was bought before searching again.
+
+## Pitfalls seen in practice
+
+- Google's price is "from" per adult and drifts within minutes; the airline's
+  checkout total is the truth.
+- `$B text` on Google Flights returns the results twice (top and "other"
+  flights); the aria-label extraction dedupes naturally.
+- The `q=` URL parameter is natural language, so "for 2 adults" or "business
+  class" can be appended to the query; passengers other than 1 adult were not
+  exercised here, verify in the page header.
