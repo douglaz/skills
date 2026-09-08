@@ -26,7 +26,7 @@ Collect these before touching the browser. Fill gaps yourself, then confirm
 the assumptions in your first reply rather than blocking on questions:
 
 - **Origin**: check memory for the user's home airport, then local hints that
-  leave the machine (system timezone, locale). If still unknown, ask; only
+  stay on the machine (system timezone, locale). If still unknown, ask; only
   query an IP geolocation service (`curl -s https://ipinfo.io/json`) with the
   user's permission, since it sends the machine's public IP to a third party.
   Say which airport you assumed and why.
