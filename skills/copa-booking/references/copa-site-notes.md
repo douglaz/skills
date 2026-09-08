@@ -22,6 +22,48 @@ reported `Imported 0 cookies for copaair.com` from both a Chrome and a Chromium
 profile, so no imported `datadome` cookie was ever presented to the site. Site
 behaviour in other regions, storefronts, or on macOS/Windows is also unmeasured.
 
+### Rerunnable record: the browse daemon is blocked
+
+Run on 2026-09-08 (UTC) with gstack 1.79.0.0's `browse` (`B` below), from
+Asunción; each stream captured by redirection. `browse goto` exits 0 even when
+the page answers 401 — the HTTP status is only in its stdout line.
+
+```console
+$ B=~/.claude/skills/gstack/browse/dist/browse; URL=https://shopping.copaair.com/booking-panel
+$ $B disconnect; $B goto "$URL" >goto.headless.out 2>goto.headless.err; echo "exit=$?"
+exit=0
+$ cat goto.headless.out
+Navigated to https://shopping.copaair.com/booking-panel (401)
+$ cat goto.headless.err
+[browse] Starting server...
+$ $B html body >body.headless.html 2>body.headless.err; echo "exit=$?"
+exit=0
+$ grep -oE "'rt':'[a-z]'|'t':'[a-z]+'" body.headless.html; grep -c captcha-delivery.com/captcha body.headless.html
+'rt':'c'
+'t':'bv'
+1
+
+$ $B disconnect; DISPLAY=:0 $B --headed goto "$URL" >goto.headed.out 2>goto.headed.err; echo "exit=$?"
+exit=0
+$ cat goto.headed.out
+Navigated to https://shopping.copaair.com/booking-panel (401)
+$ cat goto.headed.err
+[browse] Starting server in headed mode...
+$ sleep 3; $B --headed html body >body.headed.html 2>body.headed.err; echo "exit=$?"
+exit=0
+$ grep -oE "'rt':'[a-z]'|'t':'[a-z]+'" body.headed.html; grep -c captcha-delivery body.headed.html
+'rt':'i'
+3
+```
+
+Read: both modes get a 401 body that is DataDome's `dd` config plus the
+`geo.captcha-delivery.com` challenge; headless carries `'t':'bv'` (the block
+the user cannot click through), headed carries `'rt':'i'` (the interactive
+page; on 2026-09-07 the same run showed `'t':'fe'`). The user could not pass
+the challenge in the headed daemon's window either, which is an observation,
+not an explanation of why. Only the real Chrome path below produced a page
+with flight results.
+
 ## Bot protection
 
 - `shopping.copaair.com` and `login.copaair.com` are behind DataDome. The

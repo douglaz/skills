@@ -252,7 +252,8 @@ const cmds = {
       let picked = await pickOption(p, new RegExp(`(^|[^A-Z])${code}([^A-Z]|$)`));
       if (!picked) { log(sel, 'options:', await listOptions(p)); await p.keyboard.press('ArrowDown'); await p.keyboard.press('Enter'); picked = '(first option)'; }
       await sleep(500); const val = await p.inputValue(sel); log(sel, '=', val, 'via', picked);
-      must(`${sel} contains ${code}`, val.includes(code));
+      // A committed selection renders as "City (CODE)"; the bare typed code means nothing was picked.
+      must(`${sel} shows a committed airport "… (${code})" (got ${JSON.stringify(val)})`, new RegExp(`\\(${code}\\)`).test(val));
     }
     await p.click('#date-input-0'); await sleep(1200);
     log('depart:', await pickDay(p, dep)); await sleep(700);
