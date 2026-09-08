@@ -40,7 +40,7 @@ const must = (what, v) => { if (!v) throw new Error(`required step failed: ${wha
 // unmasks name and birth date only, for the confirmation the purchase lock requires.
 const mask = (k, v) => {
   v = String(v ?? ''); if (!v) return '(empty)';
-  if (/email/i.test(k)) return v.replace(/^(.).*?(@.*)$/, '$1***$2');
+  if (/email/i.test(k)) return /@/.test(v) ? v.replace(/^(.).*?(@.*)$/, '$1***$2') : 'set (' + v.length + ' chars)'; // a malformed address must not print whole
   if (/phone|FFPnumber|areaCode/i.test(k)) return v.length > 3 ? '***' + v.slice(-3) : '***';
   if (/^(day|month|year)$/i.test(k)) return 'set';
   if (/name|surname/i.test(k)) return v[0] + '*** (' + v.length + ' chars)';
