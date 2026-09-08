@@ -8,7 +8,8 @@
 #   gf.sh select PRICE [N]                  click the itinerary priced PRICE (digits, no symbol). With several
 #                                           at that price and no N, it refuses without clicking; N picks one.
 #   gf.sh booking                           print booking options (airline vs OTA) on the booking page
-#   gf.sh handoff-url                       capture the form behind "Continue to book" (first option)
+#   gf.sh handoff-url [SELLER|N]            capture the form behind "Continue to book with SELLER"; with several
+#                                           sellers on the page and no argument it refuses
 # Env: BROWSE_BIN (path to browse; otherwise probed under each skills root), CURR (default USD)
 # Needs jq (URL-encoding), a prerequisite this repo already lists.
 set -euo pipefail
@@ -100,11 +101,16 @@ case "$cmd" in
     grep -E "Continue to book" "$tmp" || true
     ;;
   handoff-url)
+    # handoff-url [SELLER|N]: capture the form behind "Continue to book with <SELLER> ...". With several
+    # sellers on the page and no argument it refuses, so the wrong seller's form is never captured.
+    who=${1:-}; who_re='^[A-Za-z0-9 ]{1,40}$'
+    [[ -z "$who" || "$who" =~ $who_re ]] || { echo "SELLER must be a seller name or an index (got '$who')" >&2; exit 1; }
     # Google's Continue button POSTs a hidden form to a _blank window; record it instead of following it.
     # Two hooks: prototype.submit() for direct calls (what Google used when measured), and a capturing
     # submit listener for requestSubmit()/button activation, which bypass the prototype method.
     "${B[@]}" js "window.__cap=[];const rec=(f,via)=>window.__cap.push({via,action:f.action,target:f.target,inputs:[...f.querySelectorAll('input')].map(i=>[i.name,i.value.slice(0,120)])});HTMLFormElement.prototype.submit=function(){rec(this,'submit()')};document.addEventListener('submit',e=>{rec(e.target,'submit event');e.preventDefault()},true);'hooked'" >/dev/null
-    "${B[@]}" js "document.querySelector('[aria-label^=\"Continue to book\"]').click();'clicked'" >/dev/null
+    out=$("${B[@]}" js "(()=>{const bs=[...document.querySelectorAll('[aria-label^=\"Continue to book\"]')];const labels=bs.map(b=>b.getAttribute('aria-label'));const who='$who';let e;if(!bs.length)return 'ERROR: no Continue to book button on this page';if(/^[0-9]+$/.test(who))e=bs[+who-1];else if(who)e=bs.find(b=>b.getAttribute('aria-label').toLowerCase().includes('with '+who.toLowerCase()));else if(bs.length===1)e=bs[0];else return 'ERROR: '+bs.length+' sellers on this page; rerun as: handoff-url <seller or index>: '+labels.join(' | ');if(!e)return 'ERROR: no seller matches '+JSON.stringify(who)+': '+labels.join(' | ');e.click();return 'clicked: '+e.getAttribute('aria-label')})()")
+    echo "$out"; case "$out" in *ERROR:*) exit 1;; esac
     sleep 3
     "${B[@]}" js "JSON.stringify(window.__cap)"
     ;;

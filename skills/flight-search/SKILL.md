@@ -119,8 +119,10 @@ The booking page names who sells the fare and at what price. Airline-direct is
 almost always what the user wants; online travel agencies are worth mentioning
 only when materially cheaper.
 
-`$G handoff-url` captures the form Google POSTs when you press "Continue to
-book" (it opens in a new tab, so plain clicks look like nothing happened). For
+`$G handoff-url COPA` captures the form Google POSTs when you press that
+seller's "Continue to book" (it opens in a new tab, so plain clicks look like
+nothing happened); with several sellers listed it refuses until you name one
+or pass its index. For
 Copa this deep link is useless because their site redirects it to a
 flexible-dates page; go through `copa-booking` instead.
 
@@ -128,10 +130,12 @@ flexible-dates page; go through `copa-booking` instead.
 
 Give one recommendation with the reason (total cost including the hotel nights
 that cheaper dates add, connection quality, arrival time versus the event).
-Then ask with AskUserQuestion: which itinerary, and how they want to pay
-(hand-off to their browser at checkout, details in chat, or just the link).
-Buying spends money and needs passport-grade personal data, so this is a
-genuine stop even in autonomous mode.
+Then ask with AskUserQuestion: which itinerary, and whether they want the
+booking driven up to the payment page in their own browser or just the link.
+Never offer or accept card details in chat, for any airline: payment is typed
+by the user into the airline's or payment provider's page. Buying spends
+money and needs passport-grade personal data, so this is a genuine stop even
+in autonomous mode.
 
 ## 7. Hand off to booking
 

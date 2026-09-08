@@ -40,7 +40,7 @@ const must = (what, v) => { if (!v) throw new Error(`required step failed: ${wha
 // unmasks name and birth date only, for the confirmation the purchase lock requires.
 const mask = (k, v) => {
   v = String(v ?? ''); if (!v) return '(empty)';
-  if (/email/i.test(k)) return /@/.test(v) ? v.replace(/^(.).*?(@.*)$/, '$1***$2') : 'set (' + v.length + ' chars)'; // a malformed address must not print whole
+  if (/email/i.test(k)) { const m = v.match(/^[^@]+(@[^@]+)$/); return m ? v[0] + '***' + m[1] : 'set (' + v.length + ' chars)'; } // anything not local@domain prints as length only
   if (/phone|FFPnumber|areaCode/i.test(k)) return v.length > 3 ? '***' + v.slice(-3) : '***';
   if (/^(day|month|year)$/i.test(k)) return 'set';
   if (/name|surname/i.test(k)) return v[0] + '*** (' + v.length + ' chars)';
@@ -221,7 +221,7 @@ const cmds = {
   },
   async 'parse-legs'() { const f = pos[0]; if (!f) throw new Error('usage: parse-legs <summary-text-file>'); log(JSON.stringify(parseLegs(fs.readFileSync(f, 'utf8')))); },
   async search({ p }) {
-    const [o, d, dep, ret] = pos; if (!o || !d || !dep) throw new Error('usage: search ORIG DEST YYYY-MM-DD [YYYY-MM-DD]');
+    const [o, d, dep, ret] = pos; // validated and uppercased by checkSearchArgs() before connecting
     const planFlag = val('--plan-out');
     // Default to a private temp dir (0700, random name) and an exclusive 0600 file: a search run
     // from inside a user's repository must not touch their tree, and itinerary data on a shared
@@ -442,10 +442,19 @@ const cmds = {
   async plan() { const f = pos[0]; if (!f) throw new Error('usage: plan <file.json> (search prints the path it saved)'); printPlan(fs.readFileSync(f, 'utf8'), 'from ' + f); },
 };
 
+// Codes are interpolated into regular expressions and dates into the picker: accept IATA codes
+// (uppercased) and YYYY-MM-DD only, and say so before touching the browser.
+function checkSearchArgs() {
+  if (!pos[0] || !pos[1] || !pos[2]) throw new Error('usage: search ORIG DEST YYYY-MM-DD [YYYY-MM-DD]');
+  pos[0] = String(pos[0]).toUpperCase(); pos[1] = String(pos[1]).toUpperCase();
+  for (const c of [pos[0], pos[1]]) if (!/^[A-Z]{3}$/.test(c)) throw new Error(`airport must be a 3-letter IATA code (got ${JSON.stringify(c)})`);
+  for (const iso of [pos[2], pos[3]].filter(Boolean)) if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) throw new Error(`date must be YYYY-MM-DD (got ${JSON.stringify(iso)})`);
+}
+
 (async () => {
   if (!cmds[cmd]) { const src = fs.readFileSync(__filename, 'utf8').split('\n').slice(1); console.log(src.slice(0, src.findIndex(l => !l.startsWith('//'))).join('\n')); process.exit(2); } // the whole leading comment block, however long it grows
   let ctx = {}; let code = 0;
-  try { if (!['plan', 'parse-legs'].includes(cmd)) ctx = await connect({ freshPanel: cmd === 'search' }); await cmds[cmd](ctx); }
+  try { if (cmd === 'search') checkSearchArgs(); if (!['plan', 'parse-legs'].includes(cmd)) ctx = await connect({ freshPanel: cmd === 'search' }); await cmds[cmd](ctx); }
   catch (e) { log('ERR', e.message.split('\n')[0]); code = 1; }
   if (ctx.b) await ctx.b.close(); // disconnect; Chrome stays open
   process.exit(code);
