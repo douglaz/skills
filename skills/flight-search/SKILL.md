@@ -25,9 +25,11 @@ real-Chrome technique works for other carriers).
 Collect these before touching the browser. Fill gaps yourself, then confirm
 the assumptions in your first reply rather than blocking on questions:
 
-- **Origin**: check memory for the user's home airport. If unknown, geolocate
-  the machine (`curl -s https://ipinfo.io/json`) and pick the city's main
-  airport. Say which one you assumed.
+- **Origin**: check memory for the user's home airport, then local hints that
+  leave the machine (system timezone, locale). If still unknown, ask; only
+  query an IP geolocation service (`curl -s https://ipinfo.io/json`) with the
+  user's permission, since it sends the machine's public IP to a third party.
+  Say which airport you assumed and why.
 - **Destination and dates**: for an event ("TABConf", "Web Summit"), WebSearch
   the next upcoming edition's dates and venue (if this year's has already
   happened, that means next year's; if no upcoming edition is announced, ask

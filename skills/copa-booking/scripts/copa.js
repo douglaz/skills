@@ -14,7 +14,8 @@
 //                                                  (bound to legs in order) are asserted, exit 1 otherwise
 //   continue                                       press the page's main Continue; exits 1 unless the expected next page loads
 //   passenger [--traveler K] [--profile [N]] [--first F --last L --dob DD/MM/YYYY --email E]
-//             [--gender Male|Female] [--cc "+1 United States of America"] [--phone 5551234567]
+//             [--gender Male|Female] [--cc "+1 United States of America"] [--phone 5551234567] [--show-fields]
+//             (values are printed masked; --show-fields prints them in clear for the read-back to the user)
 //             (--profile alone = first saved passenger; N counts from 1 in the picker's order;
 //              --traveler K fills the K-th traveler's block, default 1; contact fields sit on traveler 1)
 //   seats-skip                                     "Continue to checkout" without seats
@@ -35,6 +36,17 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // A required step: anything falsy (null, false, '') means the page is not where the flow assumes.
 const must = (what, v) => { if (!v) throw new Error(`required step failed: ${what}`); return v; };
+// Passenger data stays out of stdout (transcripts persist): values are masked unless the caller
+// passes --show-fields to read them back to the user for the name/birth-date confirmation.
+const mask = (k, v) => {
+  v = String(v ?? ''); if (!v) return '(empty)';
+  if (/email/i.test(k)) return v.replace(/^(.).*?(@.*)$/, '$1***$2');
+  if (/phone|FFPnumber|areaCode/i.test(k)) return v.length > 3 ? '***' + v.slice(-3) : '***';
+  if (/^(day|month|year)$/i.test(k)) return 'set';
+  if (/name|surname/i.test(k)) return v[0] + '*** (' + v.length + ' chars)';
+  return v;
+};
+const initials = s => String(s).trim().split(/\s+/).map(w => w[0] || '').join('') + '…';
 
 function chromium() {
   const H = process.env.HOME; const roots = [`${H}/.claude/skills`, `${process.env.CODEX_HOME || H + '/.codex'}/skills`, `${H}/.agents/skills`];
@@ -203,7 +215,7 @@ const cmds = {
     const user = await p.evaluate(() => document.getElementById('btnMembersLoginBox')?.getAttribute('aria-label')
       || [...document.querySelectorAll('[aria-label]')].map(e => e.getAttribute('aria-label')).find(l => /^Connect ?Miles Login/i.test(l)) || null);
     const loggedIn = /logged in with the user/i.test(user || '');
-    log(JSON.stringify({ url: p.url(), captcha, loggedIn, user, title: await p.title() }));
+    log(JSON.stringify({ url: p.url(), captcha, loggedIn, user: user && user.replace(/(logged in with the user )([^.]+)/i, (m, a, n) => a + initials(n)), title: await p.title() }));
     log(clean((await body(p)).slice(0, 500)));
   },
   async 'parse-legs'() { const f = pos[0]; if (!f) throw new Error('usage: parse-legs <summary-text-file>'); log(JSON.stringify(parseLegs(fs.readFileSync(f, 'utf8')))); },
@@ -369,8 +381,10 @@ const cmds = {
       if (!Number.isInteger(idx) || idx < 0) throw new Error('--profile N counts from 1');
       await p.evaluate(i => document.getElementById('filled-auto-populate' + i)?.click(), k); await sleep(800);
       await centerClick(p, `#profile${k}`); await sleep(1500);
-      const opts = await listOptions(p); log('profiles:', JSON.stringify(opts));
-      log('profile picked:', must(`saved passenger #${idx + 1} of ${opts.length} in the profile list`, await p.evaluate(i => { const els = [...document.querySelectorAll('[role="option"], [role="listbox"] li')].filter(e => e.offsetParent && e.innerText.trim()); if (!els[i]) return null; els[i].click(); return els[i].innerText.trim(); }, idx)));
+      const show = flag('--show-fields') === true;
+      const opts = await listOptions(p); log('profiles:', JSON.stringify(opts.map(o => show ? o : initials(o))));
+      const picked = must(`saved passenger #${idx + 1} of ${opts.length} in the profile list`, await p.evaluate(i => { const els = [...document.querySelectorAll('[role="option"], [role="listbox"] li')].filter(e => e.offsetParent && e.innerText.trim()); if (!els[i]) return null; els[i].click(); return els[i].innerText.trim(); }, idx));
+      log('profile picked:', show ? picked : initials(picked));
       await sleep(2500);
     } else if (val('--first')) {
       if (!val('--last')) throw new Error('--first needs --last too (a blank surname would only fail at the next step)');
@@ -392,7 +406,9 @@ const cmds = {
       await sleep(500);
     }
     if (val('--phone')) { await p.click(`#phone${k}`); await p.fill(`#phone${k}`, ''); await p.keyboard.type(val('--phone'), { delay: 40 }); await p.keyboard.press('Tab'); await sleep(700); }
-    log('FIELDS:', JSON.stringify(await fields(p), null, 1)); const errs = await errors(p); log('errors:', JSON.stringify(errs));
+    const raw = await fields(p); const show = flag('--show-fields') === true;
+    log(show ? 'FIELDS (clear, --show-fields):' : 'FIELDS (masked; --show-fields to read them back to the user):', JSON.stringify(Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, show ? v : mask(k, v)])), null, 1));
+    const errs = await errors(p); log('errors:', JSON.stringify(errs));
     if (errs.length) throw new Error('form still shows validation errors: ' + errs.join(' | '));
   },
   async 'seats-skip'({ p }) {
@@ -403,11 +419,13 @@ const cmds = {
   },
   async review({ p }) {
     const pickRadio = re => p.evaluate(r => { const R = new RegExp(r, 'i'); const lab = [...document.querySelectorAll('label')].find(l => R.test(l.innerText)); if (!lab) return null; (lab.querySelector('input[type=radio]') || lab).click(); return lab.innerText.replace(/\s+/g, ' ').trim().slice(0, 60); }, re);
-    if (flag('--no-insurance')) log('insurance:', must('insurance decline radio', await pickRadio("No, I don.t want to add travel insurance")));
-    if (flag('--no-carbon')) log('carbon:', must('carbon decline radio', await pickRadio("No, I don.t want to offset")));
-    if (flag('--no-miles')) log('miles:', must('miles booster decline radio', await pickRadio('Do not multiply')));
+    const optOuts = [['--no-insurance', "No, I don.t want to add travel insurance", 'insurance'], ['--no-carbon', "No, I don.t want to offset", 'carbon offset'], ['--no-miles', 'Do not multiply', 'miles booster']].filter(([f]) => flag(f));
+    for (const [, re, what] of optOuts) log(`${what}:`, must(`${what} decline radio`, await pickRadio(re)));
     await sleep(600);
-    log('radios:', JSON.stringify(await p.evaluate(() => [...document.querySelectorAll('input[type=radio]')].map(r => ({ name: r.name, checked: r.checked, label: (r.closest('label')?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 45) })))));
+    const radios = await p.evaluate(() => [...document.querySelectorAll('input[type=radio]')].map(r => ({ name: r.name, checked: r.checked, label: (r.closest('label')?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 60) })));
+    log('radios:', JSON.stringify(radios.map(r => ({ ...r, label: r.label.slice(0, 45) }))));
+    // Clicking is not enough: confirm each requested opt-out is the CHECKED radio before moving on.
+    for (const [, re, what] of optOuts) must(`${what} opt-out is checked`, radios.some(r => r.checked && new RegExp(re, 'i').test(r.label)));
     const t = clean(await body(p)); const i = t.indexOf('Reservation cost'); log(t.slice(i >= 0 ? i : 0, (i >= 0 ? i : 0) + 400));
     if (flag('--to-payment')) {
       log('clicked:', must('Continue button', await clickBy(p, '^Continue button', 'button')));

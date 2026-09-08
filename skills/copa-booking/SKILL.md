@@ -24,8 +24,9 @@ on its default profile, so a dedicated profile directory is used; the user logs
 into ConnectMiles there once and it persists.
 
 Everything below stops at the payment page. Card entry and the final "Confirm
-Purchase" click belong to the user unless they explicitly hand you the card in
-chat and ask you to pay.
+Purchase" click are always the user's: do not type card numbers or press that
+button even if a card is pasted in chat; ask them to enter it in the Chrome
+window instead.
 
 ## Inputs to have ready
 
@@ -152,10 +153,11 @@ of America` (there is also `+1 United States Virgin Islands`, so pass the full
 label), and the number without spaces. For a manual passenger use `--first
 --last --dob DD/MM/YYYY --email` instead of `--profile`.
 
-The script prints the field values and any validation messages; the form
-refuses to continue while "Enter a valid phone number" is showing. Passport
-data is not requested here (Copa takes it at check-in), but name and birth
-date cannot be changed after purchase, so echo them to the user.
+The script prints the field values masked plus any validation messages; the
+form refuses to continue while "Enter a valid phone number" is showing.
+Passport data is not requested here (Copa takes it at check-in), but name and
+birth date cannot be changed after purchase, so read them back to the user once
+with `--show-fields` and get a yes before continuing.
 
 ```bash
 $C continue          # validates the frequent-flyer number and opens the seat map
@@ -201,8 +203,11 @@ cover (multi-city, miles, children, business fares).
   local process), so treat this workflow as single-user-desktop only and
   override with `CDP_SHARED_HOST_OK=1` solely on a host the user trusts. Once
   the purchase is done tell the user to close that Chrome window.
-- Never click "Confirm Purchase and Continue" or type card numbers unless the
-  user gave them in the conversation and asked you to pay.
+- Never click "Confirm Purchase and Continue" and never type card numbers, even
+  when a card is pasted in chat: the user enters it in the Chrome window.
+- Passenger values print masked (`a***@x.com`, `***244`, names as first letter
+  plus length); use `passenger --show-fields` only for the one read-back the
+  name/birth-date lock requires, and do not repeat those values elsewhere.
 - Never try to defeat DataDome; the user solves it in their own window.
 - The Chrome window is the user's: do not close it, log out, or navigate away
   from a half-finished booking without saying so.

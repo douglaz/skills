@@ -17,7 +17,7 @@
     },
     {
       "id": 2,
-      "prompt": "how much is a round trip ASU to MIA leaving nov 3 and coming back nov 10? just the top few options and whether it's cheaper a day either side",
+      "prompt": "how much is a round trip ASU to MIA leaving 2026-11-03 and coming back 2026-11-10? just the top few options and whether it's cheaper a day either side",
       "expected_output": "Uses gf.sh search and grid for ASU-MIA 2026-11-03/2026-11-10, presents 3-5 itineraries and a small date grid with a one-line verdict on shifting dates.",
       "files": [],
       "expectations": [

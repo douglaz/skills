@@ -58,14 +58,17 @@ case "$cmd" in
     browse_to "$tmp" snapshot -i
     ref=$(grep -oE '@e[0-9]+ \[button\] "Date grid"' "$tmp" | grep -oE '@e[0-9]+' | head -1 || true)
     # A missing button is a state to report below; a click that fails is an error to surface.
-    if [ -n "$ref" ]; then
-      "${B[@]}" click "$ref" >/dev/null || { echo "browse click on the Date grid button failed" >&2; exit 1; }
-      sleep 4
-    fi
-    browse_to "$tmp" snapshot
     # Any currency prefix (US$, €, £ ...), the amount, then a label carrying at least one
     # "<Mon> <d>" date (round trip: "Oct 8 to Oct 17"; one-way labels were not exercised).
-    cells=$(grep -oE '\[button\] "[^"0-9]{0,4}[0-9][0-9,.]*, [^"]*[A-Z][a-z]{2} [0-9]{1,2}[^"]*"' "$tmp" | sed 's/\[button\] //' || true)
+    cell_re='\[button\] "[^"0-9]{0,4}[0-9][0-9,.]*, [^"]*[A-Z][a-z]{2} [0-9]{1,2}[^"]*"'
+    if [ -n "$ref" ]; then
+      "${B[@]}" click "$ref" >/dev/null || { echo "browse click on the Date grid button failed" >&2; exit 1; }
+      # Poll for the grid to render rather than sleeping a fixed time.
+      for _ in 1 2 3 4 5; do sleep 3; browse_to "$tmp" snapshot; grep -qE "$cell_re" "$tmp" && break; done
+    else
+      browse_to "$tmp" snapshot
+    fi
+    cells=$(grep -oE "$cell_re" "$tmp" | sed 's/\[button\] //' || true)
     [ -n "$cells" ] && printf '%s\n' "$cells" || echo "(no date-grid cells found; is a search loaded? run: $0 search ...)"
     ;;
   select)
@@ -98,7 +101,9 @@ case "$cmd" in
     ;;
   handoff-url)
     # Google's Continue button POSTs a hidden form to a _blank window; record it instead of following it.
-    "${B[@]}" js "window.__cap=[];HTMLFormElement.prototype.submit=function(){window.__cap.push({action:this.action,target:this.target,inputs:[...this.querySelectorAll('input')].map(i=>[i.name,i.value.slice(0,120)])})};'hooked'" >/dev/null
+    # Two hooks: prototype.submit() for direct calls (what Google used when measured), and a capturing
+    # submit listener for requestSubmit()/button activation, which bypass the prototype method.
+    "${B[@]}" js "window.__cap=[];const rec=(f,via)=>window.__cap.push({via,action:f.action,target:f.target,inputs:[...f.querySelectorAll('input')].map(i=>[i.name,i.value.slice(0,120)])});HTMLFormElement.prototype.submit=function(){rec(this,'submit()')};document.addEventListener('submit',e=>{rec(e.target,'submit event');e.preventDefault()},true);'hooked'" >/dev/null
     "${B[@]}" js "document.querySelector('[aria-label^=\"Continue to book\"]').click();'clicked'" >/dev/null
     sleep 3
     "${B[@]}" js "JSON.stringify(window.__cap)"

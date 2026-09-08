@@ -4,7 +4,7 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "Book the Copa flights we found: out Oct 8 on CM 296 / CM 880, back Oct 17 on CM 891 / CM 291, Economy Classic, ASU to ATL. Use my ConnectMiles profile for the passenger, I'm Male, phone +1 555 123 4567. Stop before payment.",
+      "prompt": "Book the Copa flights we found: out 2026-10-08 on CM 296 / CM 880, back 2026-10-17 on CM 891 / CM 291, Economy Classic, ASU to ATL. Use my ConnectMiles profile for the passenger, I'm Male, phone +1 555 123 4567. Stop before payment.",
       "expected_output": "Launches Chrome with the debug port, asks the user to clear the challenge and log in, runs the booking-panel search, picks both flights in Economy Classic, verifies the total on the summary, auto-fills the passenger from the profile plus gender and phone, skips seats, declines extras, reaches the secure.copaair.com card form and hands over.",
       "files": [],
       "expectations": [
@@ -12,7 +12,7 @@
         "The user is asked to solve the DataDome challenge; no bypass is attempted",
         "The search goes through /booking-panel, not a date1=/date2= deep link",
         "Both directions are selected with the Economy Classic fare and the summary total is reported",
-        "Passenger fields are filled from the profile plus gender and phone, and the printed values are echoed to the user",
+        "Passenger fields are filled from the profile plus gender and phone; logs show them masked, and name and birth date are read back to the user once via --show-fields for confirmation",
         "Insurance, carbon offset and miles booster are declined",
         "The run stops on the payment page without entering card data or clicking Confirm Purchase",
         "Memory is updated with the itinerary and payment-pending status"
@@ -20,7 +20,7 @@
     },
     {
       "id": 2,
-      "prompt": "start a copa booking asuncion to panama city dec 12 to dec 19, cheapest economy fare with a checked bag. i'll give you my details when you get to the passenger page",
+      "prompt": "start a copa booking asuncion to panama city 2026-12-12 to 2026-12-19, cheapest economy fare with a checked bag. i'll give you my details when you get to the passenger page",
       "expected_output": "Searches, reads the fare matrix, explains that a checked bag means Economy Classic, picks the cheapest Classic pair, shows the summary total and PriceLock option, and pauses at the passenger page asking for gender/phone (or manual details if not logged in).",
       "files": [],
       "expectations": [
