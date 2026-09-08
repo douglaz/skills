@@ -24,6 +24,12 @@ check test "$(sed -n '5p' "$out")" = '  1097.38 USD (business only) 13H00M lay=2
 check test "$(grep -c 'null USD' "$out")" -eq 0
 desc="price calendar is rendered"
 check grep -qF -- 'nearby: 2026-10-07:631.88 2026-10-08:362.48' "$out"
+# A round-trip plan response carries both directions (measured live: OD1 and OD2 in one body);
+# the return leg must be printed with its own cheapest-first rows.
+desc="the return direction (OD2) is printed from the same plan response"
+check grep -qF -- '== OD2 ATL 2026-10-17 -> ASU  (USD)' "$out"
+desc="OD2 rows are sorted cheapest first"
+check test "$(grep -A1 -F '== OD2' "$out" | tail -1)" = '  313.55 USD 29H47M lay=19h24m CM891 ATL 17:16→PTY 20:31 / CM207 PTY 15:55→ASU 00:03+1 | BAS=313.55 CLS=397.65'
 desc="fare-code legend is rendered"
 check grep -qF -- 'Fare codes: BAS=Economy Basic' "$out"
 

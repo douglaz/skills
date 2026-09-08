@@ -58,7 +58,11 @@ $B status          # "Mode: headed" means a previous session left it headed
 `BROWSE_BIN`) and carries `--headed` when the daemon runs headed. It cannot
 carry a `--proxy` (the daemon's proxy URL is not readable), so a daemon started
 with a proxy must be `$B disconnect`ed first; Google Flights needs none. If
-commands hang or the daemon is unresponsive, `$B disconnect` and retry.
+commands hang or the daemon is unresponsive, `$B disconnect` and retry. The
+daemon can also restart on its own between commands (observed after a few
+idle minutes): `$B status` then shows `about:blank`, and every step that
+depends on page state (`grid`, `select`, `booking`, `handoff-url`) has to be
+preceded by a fresh `search`, so run a dependent sequence back to back.
 
 ## 3. Search and read the results
 

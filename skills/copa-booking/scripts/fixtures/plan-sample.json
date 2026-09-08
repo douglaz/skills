@@ -31,5 +31,30 @@
         "offers": [ { "fareFamily": { "code": "PRO", "name": "Business Promo" }, "totalPrice": 1097.38 } ]
       }
     ]
+  },
+  {
+    "originDestinationKey": "OD2",
+    "origin": { "code": "ATL", "departureDate": "2026-10-17" },
+    "destination": { "code": "ASU" },
+    "currency": { "code": "USD", "decimals": 2 },
+    "priceCalendars": [ { "date": "2026-10-16", "price": 577.35 }, { "date": "2026-10-17", "price": 313.55 } ],
+    "solutions": [
+      {
+        "key": "r2", "numberOfLayovers": 1, "journeyTime": "PT11H15M", "lowestPriceCoachCabin": 379.15,
+        "flights": [
+          { "marketingCarrier": { "airlineCode": "CM", "flightNumber": "891" }, "departure": { "airportCode": "ATL", "flightTime": "17:16" }, "arrival": { "airportCode": "PTY", "flightTime": "20:31" }, "layoverTime": "0h52m", "changeOfDay": "0" },
+          { "marketingCarrier": { "airlineCode": "CM", "flightNumber": "291" }, "departure": { "airportCode": "PTY", "flightTime": "21:23" }, "arrival": { "airportCode": "ASU", "flightTime": "05:31" }, "layoverTime": "0h0m", "changeOfDay": "1" }
+        ],
+        "offers": [ { "fareFamily": { "code": "BAS", "name": "Economy Basic" }, "totalPrice": 379.15 }, { "fareFamily": { "code": "CLS", "name": "Economy Classic" }, "totalPrice": 463.25 } ]
+      },
+      {
+        "key": "r1", "numberOfLayovers": 1, "journeyTime": "PT29H47M", "lowestPriceCoachCabin": 313.55,
+        "flights": [
+          { "marketingCarrier": { "airlineCode": "CM", "flightNumber": "891" }, "departure": { "airportCode": "ATL", "flightTime": "17:16" }, "arrival": { "airportCode": "PTY", "flightTime": "20:31" }, "layoverTime": "19h24m", "changeOfDay": "0" },
+          { "marketingCarrier": { "airlineCode": "CM", "flightNumber": "207" }, "departure": { "airportCode": "PTY", "flightTime": "15:55" }, "arrival": { "airportCode": "ASU", "flightTime": "00:03" }, "layoverTime": "0h0m", "changeOfDay": "1" }
+        ],
+        "offers": [ { "fareFamily": { "code": "BAS", "name": "Economy Basic" }, "totalPrice": 313.55 }, { "fareFamily": { "code": "CLS", "name": "Economy Classic" }, "totalPrice": 397.65 } ]
+      }
+    ]
   }
 ]
