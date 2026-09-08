@@ -71,12 +71,28 @@ $G search ASU ATL 2026-10-11 2026-10-16      # round trip; omit the return date 
 $G search ASU ATL 2026-10-11 2026-10-16 for 2 adults business class   # extra words go into Google's query
 ```
 
-Google's `q=` is natural language, so passengers and cabin ride along as extra
-words. Google's "round trip total" then covers all passengers: in one check,
-"for 2 adults" turned a $742 itinerary into $1,551, so compare against the
-1-adult price before quoting, and treat a cabin word the same way (business
-fares are several times economy). `search` exits 1 with the page state if no
-itinerary renders within 30 seconds (slow response, consent page).
+Google's `q=` is natural language, so passenger words ride along. Google's
+"round trip total" then covers the whole party, so compare against the
+1-adult price before quoting. Rerunnable record (gstack 1.79.0.0 `browse`,
+2026-09-08, streams captured separately; fares drift, the ratio is the point):
+
+```console
+$ G=skills/flight-search/scripts/gf.sh
+$ $G search ASU ATL 2026-10-08 2026-10-17 >party1.out 2>party1.err; echo "exit=$?"; head -c 40 party1.out; wc -c <party1.err
+exit=0
+From 742 US dollars round trip total.
+0
+$ $G search ASU ATL 2026-10-08 2026-10-17 for 2 adults >party2.out 2>party2.err; echo "exit=$?"; head -c 41 party2.out; wc -c <party2.err
+exit=0
+From 1569 US dollars round trip total.
+0
+$ browse js "decodeURIComponent(new URLSearchParams(location.search).get('q'))"
+Flights from ASU to ATL on 2026-10-08 through 2026-10-17 for 2 adults
+```
+
+Cabin words ("business class") were not measured; if you use them, check
+the page's cabin control before quoting. `search` exits 1 with the page state
+if no itinerary renders within 30 seconds (slow response, consent page).
 
 Each printed block is one itinerary in Google's own words: price (Google's
 round-trip total for the searched party, so per adult only for the default

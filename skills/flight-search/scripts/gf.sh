@@ -108,15 +108,22 @@ case "$cmd" in
     # Google's Continue button POSTs a hidden form to a _blank window; record it instead of following it.
     # Two hooks: prototype.submit() for direct calls (what Google used when measured), and a capturing
     # submit listener for requestSubmit()/button activation, which bypass the prototype method.
-    "${B[@]}" js "window.__cap=[];const rec=(f,via)=>window.__cap.push({via,action:f.action,target:f.target,inputs:[...f.querySelectorAll('input')].map(i=>[i.name,i.value.slice(0,120)])});HTMLFormElement.prototype.submit=function(){rec(this,'submit()')};document.addEventListener('submit',e=>{rec(e.target,'submit event');e.preventDefault()},true);'hooked'" >/dev/null
+    # Values are captured in full: a truncated token or itinerary blob would replay as a corrupt handoff.
+    "${B[@]}" js "window.__cap=[];const rec=(f,via)=>window.__cap.push({via,action:f.action,target:f.target,inputs:[...f.querySelectorAll('input')].map(i=>[i.name,i.value])});HTMLFormElement.prototype.submit=function(){rec(this,'submit()')};document.addEventListener('submit',e=>{rec(e.target,'submit event');e.preventDefault()},true);'hooked'" >/dev/null
     # The seller buttons render after the booking page loads ("Checking prices from multiple sources…"): wait for them.
     n=0; for _ in 1 2 3 4 5 6 7 8 9 10; do n=$("${B[@]}" js "document.querySelectorAll('[aria-label^=\"Continue to book\"]').length"); [ "$n" != "0" ] && break; sleep 2; done
     out=$("${B[@]}" js "(()=>{const bs=[...document.querySelectorAll('[aria-label^=\"Continue to book\"]')];const labels=bs.map(b=>b.getAttribute('aria-label'));const who='$who';let e;if(!bs.length)return 'ERROR: no Continue to book button on this page';if(/^[0-9]+$/.test(who))e=bs[+who-1];else if(who)e=bs.find(b=>b.getAttribute('aria-label').toLowerCase().includes('with '+who.toLowerCase()));else if(bs.length===1)e=bs[0];else return 'ERROR: '+bs.length+' sellers on this page; rerun as: handoff-url <seller or index>: '+labels.join(' | ');if(!e)return 'ERROR: no seller matches '+JSON.stringify(who)+': '+labels.join(' | ');e.click();return 'clicked: '+e.getAttribute('aria-label')})()")
     echo "$out"; case "$out" in *ERROR:*) exit 1;; esac
     # The click alone proves nothing: wait for a hook to record the form, and fail when none does.
-    cap="[]"
-    for _ in 1 2 3 4 5 6 7 8 9 10; do sleep 1; cap=$("${B[@]}" js "JSON.stringify(window.__cap)"); [ "$cap" != "[]" ] && break; done
-    [ "$cap" != "[]" ] || { echo "no form submission was captured within 10 s of the click (hooks: submit(), submit event); nothing to hand off" >&2; exit 1; }
+    # Success means the capture parses as a non-empty JSON array — "" or "undefined" (the page
+    # navigated and the hook state is gone) is a failure, not a different kind of success.
+    cap=""
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      sleep 1; cap=$("${B[@]}" js "JSON.stringify(window.__cap)" 2>/dev/null || true)
+      printf '%s' "$cap" | jq -e 'type=="array" and length>0' >/dev/null 2>&1 && break
+    done
+    printf '%s' "$cap" | jq -e 'type=="array" and length>0' >/dev/null 2>&1 \
+      || { echo "no form submission was captured within 10 s of the click (hooks: submit(), submit event; got: $(printf '%s' "$cap" | head -c 60)); nothing to hand off" >&2; exit 1; }
     printf '%s\n' "$cap"
     ;;
   *) sed -n '2,12p' "$0"; exit 1 ;;
