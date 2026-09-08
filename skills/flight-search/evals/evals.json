@@ -1,0 +1,43 @@
+{
+  "skill_name": "flight-search",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I want to go to Atlanta for TABConf this year. Find me flights, I'm flexible by a day or two on each side. 1 adult, economy.",
+      "expected_output": "Looks up TABConf dates, assumes the origin airport from memory or geolocation (states it), searches Google Flights, shows a date grid around the conference and a table of the best itineraries with price, airline, times and layovers, recommends one, and asks the user which to book and how to pay.",
+      "files": [],
+      "expectations": [
+        "The reply states the conference dates and venue found by web search",
+        "The reply states which origin airport was assumed and why",
+        "The reply contains a table of itineraries with price, airline, departure/arrival times and layover",
+        "The reply contains a nearby-dates price comparison (grid or table)",
+        "The reply names who sells the cheapest fare (airline direct or OTA)",
+        "The reply ends by asking the user to choose an itinerary and payment mode rather than buying"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "how much is a round trip ASU to MIA leaving 2026-11-03 and coming back 2026-11-10? just the top few options and whether it's cheaper a day either side",
+      "expected_output": "Uses gf.sh search and grid for ASU-MIA 2026-11-03/2026-11-10, presents 3-5 itineraries and a small date grid with a one-line verdict on shifting dates.",
+      "files": [],
+      "expectations": [
+        "The reply lists at least three itineraries with prices and airlines",
+        "The reply includes prices for departure or return dates one day earlier and later",
+        "Prices are labelled as per-adult round-trip totals in USD",
+        "No booking is attempted"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Book me the cheapest Copa flight to Panama City for Dec 12-19. Use my usual airport.",
+      "expected_output": "Searches Google Flights from the remembered home airport, identifies the Copa itineraries and their fare families, recommends one, confirms the choice with the user, then invokes the copa-booking skill to carry out the booking.",
+      "files": [],
+      "expectations": [
+        "The search uses the origin airport recorded in memory",
+        "The reply distinguishes Copa Economy Basic (no checked bag) from Economy Classic",
+        "The user is asked to confirm the itinerary before any booking step",
+        "The copa-booking skill is invoked (or named as the next step) rather than driving copaair.com ad hoc"
+      ]
+    }
+  ]
+}

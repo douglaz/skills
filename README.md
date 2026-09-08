@@ -159,6 +159,49 @@ Codex:
 Use the lnd-payments skill to decode this invoice and dry-run payment.
 ```
 
+### flight-search
+
+Searches and compares flights on Google Flights through the gstack `browse`
+headless daemon: itineraries, the nearby-dates price grid, and who sells each
+fare. Infers the origin airport from memory or the machine's location, looks up
+event dates when the user only names a conference, recommends one itinerary,
+and hands the choice to an airline booking skill (`copa-booking` for Copa).
+
+Claude Code:
+
+```text
+/flight-search I want to go to Atlanta for TABConf, find me flights
+```
+
+Codex:
+
+```text
+Use the flight-search skill to compare ASU to MIA round trips around Nov 3-10.
+```
+
+### copa-booking
+
+Books a Copa Airlines itinerary on copaair.com up to the payment page by
+driving the user's real Google Chrome over the DevTools protocol. The site's
+bot protection blocks automation browsers, so the user clears the challenge and
+logs into ConnectMiles once in a dedicated Chrome profile; the skill then runs
+the booking-panel search, reads the full fare matrix from Copa's plan API,
+selects fare families, auto-fills the passenger from the profile, declines
+paid extras, and stops on the card form. `references/copa-site-notes.md`
+records the site's routes, element ids, and quirks.
+
+Claude Code:
+
+```text
+/copa-booking book CM 296 / CM 880 out Oct 8, CM 891 / CM 291 back Oct 17, Economy Classic
+```
+
+Codex:
+
+```text
+Use the copa-booking skill to start a Copa booking ASU-PTY Dec 12-19 with a checked bag.
+```
+
 ### plan-to-beads-transfer
 
 Translates a stable spec, PRD, or markdown plan into actual `br` beads with
@@ -519,6 +562,13 @@ directories created by `--migrate-existing`.
 - `drive`'s self-continuation section uses `/goal`, a Claude Code built-in with
   no Codex equivalent. Under Codex the skill relies on its continuation contract
   alone.
+- [gstack](https://github.com/garrytan/gstack) with its `browse` skill built
+  (`gstack/browse/dist/browse` under one of the skills roots, or `BROWSE_BIN`)
+  for `flight-search`; the headless daemon renders Google Flights
+- `google-chrome` (or Chromium via `CHROME_BIN`), a desktop session to show its
+  window, `node`, and `playwright-core` (found via `require`, or from gstack's
+  bundled copy) for `copa-booking`; `node` is also needed by `./check.sh`,
+  which runs `copa-booking`'s offline test
 
 ## License
 
