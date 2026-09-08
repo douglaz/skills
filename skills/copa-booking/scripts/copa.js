@@ -439,7 +439,7 @@ const cmds = {
 };
 
 (async () => {
-  if (!cmds[cmd]) { console.log(fs.readFileSync(__filename, 'utf8').split('\n').slice(1, 20).join('\n')); process.exit(2); }
+  if (!cmds[cmd]) { const src = fs.readFileSync(__filename, 'utf8').split('\n').slice(1); console.log(src.slice(0, src.findIndex(l => !l.startsWith('//'))).join('\n')); process.exit(2); } // the whole leading comment block, however long it grows
   let ctx = {}; let code = 0;
   try { if (!['plan', 'parse-legs'].includes(cmd)) ctx = await connect({ freshPanel: cmd === 'search' }); await cmds[cmd](ctx); }
   catch (e) { log('ERR', e.message.split('\n')[0]); code = 1; }

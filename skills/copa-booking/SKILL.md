@@ -53,9 +53,12 @@ assuming one:
 for d in "$HOME/.claude/skills/copa-booking" \
          "${CODEX_HOME:-$HOME/.codex}/skills/copa-booking" \
          "$HOME/.agents/skills/copa-booking"; do
-  [ -f "$d/scripts/copa.js" ] && { S="$d/scripts"; break; }
+  # The whole script set must be there: a stale root with only copa.js would pass and fail at launch.
+  if [ -f "$d/scripts/copa.js" ] && [ -f "$d/scripts/cdp.js" ] && [ -x "$d/scripts/launch_chrome.sh" ]; then
+    S="$d/scripts"; break
+  fi
 done
-[ -n "${S:-}" ] || { echo "copa-booking scripts not found under any skills root"; exit 1; }
+[ -n "${S:-}" ] || { echo "copa-booking scripts (copa.js, cdp.js, launch_chrome.sh) not found together under any skills root"; exit 1; }
 C="node $S/copa.js"
 ```
 

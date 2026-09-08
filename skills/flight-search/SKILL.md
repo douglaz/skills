@@ -45,10 +45,11 @@ may live under any of the three skills roots (Claude Code, Codex, legacy
 Codex), so resolve both paths rather than assuming `~/.claude`:
 
 ```bash
-for d in "$HOME/.claude/skills" "${CODEX_HOME:-$HOME/.codex}/skills" "$HOME/.agents/skills"; do
-  [ -f "$d/flight-search/scripts/gf.sh" ] && G="$d/flight-search/scripts/gf.sh"
-  [ -x "$d/gstack/browse/dist/browse" ] && B="$d/gstack/browse/dist/browse"
-done
+# First hit wins for each, searched separately: gstack may live under one root
+# (Claude Code's, where its installer puts it) while this skill is under another.
+ROOTS=("$HOME/.claude/skills" "${CODEX_HOME:-$HOME/.codex}/skills" "$HOME/.agents/skills")
+for d in "${ROOTS[@]}"; do [ -f "$d/flight-search/scripts/gf.sh" ] && { G="$d/flight-search/scripts/gf.sh"; break; }; done
+for d in "${ROOTS[@]}"; do [ -x "$d/gstack/browse/dist/browse" ] && { B="$d/gstack/browse/dist/browse"; break; }; done
 [ -n "${G:-}" ] && [ -n "${B:-}" ] || { echo "flight-search scripts or gstack browse not found under any skills root"; exit 1; }
 $B status          # "Mode: headed" means a previous session left it headed
 ```
