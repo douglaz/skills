@@ -15,7 +15,7 @@
 //   continue                                       press the page's main Continue; exits 1 unless the expected next page loads
 //   passenger [--traveler K] [--profile [N]] [--first F --last L --dob DD/MM/YYYY --email E]
 //             [--gender Male|Female] [--cc "+1 United States of America"] [--phone 5551234567] [--show-fields]
-//             (values are printed masked; --show-fields prints them in clear for the read-back to the user)
+//             (values are printed masked; --show-fields prints only name and birth date in clear, for the read-back)
 //             (--profile alone = first saved passenger; N counts from 1 in the picker's order;
 //              --traveler K fills the K-th traveler's block, default 1; contact fields sit on traveler 1)
 //   seats-skip                                     "Continue to checkout" without seats
@@ -36,8 +36,8 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // A required step: anything falsy (null, false, '') means the page is not where the flow assumes.
 const must = (what, v) => { if (!v) throw new Error(`required step failed: ${what}`); return v; };
-// Passenger data stays out of stdout (transcripts persist): values are masked unless the caller
-// passes --show-fields to read them back to the user for the name/birth-date confirmation.
+// Passenger data stays out of stdout (transcripts persist): values are masked; --show-fields
+// unmasks name and birth date only, for the confirmation the purchase lock requires.
 const mask = (k, v) => {
   v = String(v ?? ''); if (!v) return '(empty)';
   if (/email/i.test(k)) return v.replace(/^(.).*?(@.*)$/, '$1***$2');
@@ -406,8 +406,10 @@ const cmds = {
       await sleep(500);
     }
     if (val('--phone')) { await p.click(`#phone${k}`); await p.fill(`#phone${k}`, ''); await p.keyboard.type(val('--phone'), { delay: 40 }); await p.keyboard.press('Tab'); await sleep(700); }
-    const raw = await fields(p); const show = flag('--show-fields') === true;
-    log(show ? 'FIELDS (clear, --show-fields):' : 'FIELDS (masked; --show-fields to read them back to the user):', JSON.stringify(Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, show ? v : mask(k, v)])), null, 1));
+    // --show-fields unmasks only what the name/birth-date lock makes the user confirm; email,
+    // phone, frequent-flyer, known-traveler and redress numbers stay masked regardless.
+    const raw = await fields(p); const show = flag('--show-fields') === true; const confirmable = /^(name|surname|day|month|year)$/;
+    log(show ? 'FIELDS (name and birth date in clear for the read-back; the rest masked):' : 'FIELDS (masked; --show-fields to read name and birth date back to the user):', JSON.stringify(Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, show && confirmable.test(k) ? v : mask(k, v)])), null, 1));
     const errs = await errors(p); log('errors:', JSON.stringify(errs));
     if (errs.length) throw new Error('form still shows validation errors: ' + errs.join(' | '));
   },

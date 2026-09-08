@@ -209,8 +209,9 @@ cover (multi-city, miles, children, business fares).
 - Never click "Confirm Purchase and Continue" and never type card numbers, even
   when a card is pasted in chat: the user enters it in the Chrome window.
 - Passenger values print masked (`a***@x.com`, `***244`, names as first letter
-  plus length); use `passenger --show-fields` only for the one read-back the
-  name/birth-date lock requires, and do not repeat those values elsewhere.
+  plus length). `passenger --show-fields` unmasks only the name and birth date,
+  for the one read-back the purchase lock requires; email, phone, frequent-flyer
+  and traveler numbers never print in clear. Do not repeat those values elsewhere.
 - Never try to defeat DataDome; the user solves it in their own window.
 - The Chrome window is the user's: do not close it, log out, or navigate away
   from a half-finished booking without saying so.
