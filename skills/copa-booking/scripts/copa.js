@@ -198,8 +198,10 @@ function parseLegs(text) {
   lines.forEach((l, i) => { if (/, \d{4} · [A-Z]{2} \d+/.test(l)) legs.push({ leg: l, fam: lines.slice(i + 1, i + 15).find(x => /^(Economy (Basic|Classic|Full)|Business\b.*)$/.test(x)) || '(no fare line found)' }); });
   return legs;
 }
-// A flight-number string must match whole ("CM 29" is not "CM 296", "CM 880" is not "CM 8801").
-const flightsRe = s => new RegExp(`(^|[^\\d])${esc(s)}(?!\\d)`);
+// The flight portion of a summary itinerary line ("Thu, Oct 8, 2026 · CM 296 · CM 880" → "CM 296 · CM 880"),
+// compared whole: "CM 29" is not "CM 296", and a leg that gained or lost a segment is not the one asked for.
+const legFlights = leg => leg.replace(/^.*?, \d{4} · /, '').replace(/\s+/g, ' ').trim();
+const sameFlights = (leg, want) => legFlights(leg) === String(want).replace(/\s+/g, ' ').trim();
 
 // Where each page's main Continue must lead; anything else (login, error, expired session) fails.
 const NEXT = [
@@ -216,7 +218,8 @@ const cmds = {
     const user = await p.evaluate(() => document.getElementById('btnMembersLoginBox')?.getAttribute('aria-label')
       || [...document.querySelectorAll('[aria-label]')].map(e => e.getAttribute('aria-label')).find(l => /^Connect ?Miles Login/i.test(l)) || null);
     const loggedIn = /logged in with the user/i.test(user || '');
-    log(JSON.stringify({ url: p.url(), captcha, loggedIn, user: user && user.replace(/(logged in with the user )([^.]+)/i, (m, a, n) => a + initials(n)), title: await p.title() }));
+    // Redact the whole name up to the label's fixed ". Press Enter" suffix (names can contain periods).
+    log(JSON.stringify({ url: p.url(), captcha, loggedIn, user: user && user.replace(/(logged in with the user )(.+?)(\. Press Enter.*|$)/i, (m, a, n, rest) => a + initials(n) + rest), title: await p.title() }));
     log(clean((await body(p)).slice(0, 500)));
   },
   async 'parse-legs'() { const f = pos[0]; if (!f) throw new Error('usage: parse-legs <summary-text-file>'); log(JSON.stringify(parseLegs(fs.readFileSync(f, 'utf8')))); },
@@ -354,7 +357,7 @@ const cmds = {
       if (isFam(want)) {
         const re = /^business$/i.test(want) ? /^Business\b/ : new RegExp(`^(Economy )?${want.replace('-', ' ?')}$`, 'i');
         must(`every leg is ${want} (legs: ${legs.map(x => x.fam).join(' / ') || 'none found'})`, legs.length > 0 && legs.every(x => re.test(x.fam)));
-      } else must(`summary shows ${JSON.stringify(want)} as a whole flight string`, legs.some(x => flightsRe(want).test(x.leg)));
+      } else must(`a leg's complete flight string equals ${JSON.stringify(want)} (legs: ${legs.map(x => legFlights(x.leg)).join(' / ') || 'none'})`, legs.some(x => sameFlights(x.leg, want)));
     }
     if (pos.length) log('summary asserts ok:', pos.join(' | '));
   },

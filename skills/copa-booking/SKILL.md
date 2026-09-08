@@ -19,9 +19,10 @@ and headed Playwright browsers get a 401 challenge page they cannot pass, and
 importing cookies from the user's browsers was not a usable route either (the
 importer found nothing to import, so whether a copied cookie would pass is
 unmeasured). What works: a real Google Chrome that the user unlocks once, which
-you then drive over the DevTools protocol. Chrome 136+ refuses remote debugging
-on its default profile, so a dedicated profile directory is used; the user logs
-into ConnectMiles there once and it persists.
+you then drive over the DevTools protocol. A dedicated profile directory is
+used (Chrome's release notes say 136+ refuses remote debugging on the default
+profile; the dedicated profile is the path that was measured to work); the
+user logs into ConnectMiles there once and it persists.
 
 Everything below stops at the payment page. Card entry and the final "Confirm
 Purchase" click are always the user's: do not type card numbers or press that

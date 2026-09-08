@@ -76,9 +76,12 @@ with flight results.
   window. Playwright's `connectOverCDP` did not trip DataDome during that one
   full booking flow (search → fares → passenger → seats → review → payment
   page).
-- Chrome 136+ ignores `--remote-debugging-port` on the default profile; use a
-  separate `--user-data-dir`. The user then logs into ConnectMiles in that
-  profile once.
+- A separate `--user-data-dir` is used. Chrome's release notes state that 136+
+  refuses `--remote-debugging-port` on the default profile; that was not
+  measured here (the default profile was busy with the user's normal Chrome),
+  so it is the vendor's claim, not an observation. The dedicated profile is
+  the measured, working path (Provenance above). The user logs into
+  ConnectMiles in that profile once.
 
 ## SPA routes (shopping.copaair.com)
 

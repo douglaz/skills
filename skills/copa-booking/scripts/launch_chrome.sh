@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Launch the user's real Google Chrome with a DevTools port on a dedicated profile.
-# Chrome 136+ ignores --remote-debugging-port on the default profile, hence ~/.config/chrome-agent.
+# Chrome's own release notes say 136+ refuses --remote-debugging-port on the default profile; that was
+# not measured here (the default profile was in use by the user's normal Chrome). The dedicated
+# profile ~/.config/chrome-agent is what was run and what worked (see references/copa-site-notes.md).
 # Usage: launch_chrome.sh [URL]   Env: CDP_PORT (9222), CHROME_AGENT_PROFILE, CHROME_BIN (google-chrome)
 set -euo pipefail
 PORT="${CDP_PORT:-9222}"
