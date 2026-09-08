@@ -44,7 +44,8 @@ const mask = (k, v) => {
   if (/phone|FFPnumber|areaCode/i.test(k)) return v.length > 3 ? '***' + v.slice(-3) : '***';
   if (/^(day|month|year)$/i.test(k)) return 'set';
   if (/name|surname/i.test(k)) return v[0] + '*** (' + v.length + ' chars)';
-  return v;
+  if (/^(gender|FFProgramID)$/i.test(k)) return v; // the only values known to be harmless (Male/Female, a program code)
+  return 'set (' + v.length + ' chars)'; // deny by default: known-traveler, redress and any future field stay out of the transcript
 };
 const initials = s => String(s).trim().split(/\s+/).map(w => w[0] || '').join('') + '…';
 
@@ -382,7 +383,7 @@ const cmds = {
       await p.evaluate(i => document.getElementById('filled-auto-populate' + i)?.click(), k); await sleep(800);
       await centerClick(p, `#profile${k}`); await sleep(1500);
       const show = flag('--show-fields') === true;
-      const opts = await listOptions(p); log('profiles:', JSON.stringify(opts.map(o => show ? o : initials(o))));
+      const opts = await listOptions(p); log('profiles:', JSON.stringify(opts.map(initials))); // always initials: other saved passengers are not part of the read-back
       const picked = must(`saved passenger #${idx + 1} of ${opts.length} in the profile list`, await p.evaluate(i => { const els = [...document.querySelectorAll('[role="option"], [role="listbox"] li')].filter(e => e.offsetParent && e.innerText.trim()); if (!els[i]) return null; els[i].click(); return els[i].innerText.trim(); }, idx));
       log('profile picked:', show ? picked : initials(picked));
       await sleep(2500);
