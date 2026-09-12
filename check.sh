@@ -7,3 +7,4 @@ set -euo pipefail
 ./skills/copa-booking/scripts/copa.test
 ./skills/lnd-payments/scripts/lnpay.test
 ./skills/token-ledger/scripts/token_ledger.test
+./skills/pdf-to-kindle-epub/scripts/pdf2epub.test

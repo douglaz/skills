@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+"""pdf2epub.test — fixture tests for the layout decisions.
+
+Every case here is a defect that shipped to a reader during development, where
+the failure is silent: the EPUB builds, opens, and looks plausible, and the
+damage only shows up while actually reading. Nothing else in the pipeline
+objects, so these assertions are the objection.
+
+The fixture is a synthetic `pdftohtml -xml` document, so the suite needs no
+poppler, no calibre and no PDF — it tests the decisions, which is where the
+bugs were. The extraction and the calibre call around them are thin.
+
+Usage: ./pdf2epub.test        (exits 0 if all pass)
+"""
+import os
+import re
+import sys
+import tempfile
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+sys.dont_write_bytecode = True
+import pdf2epub as P  # noqa: E402
+
+PASS = FAIL = 0
+
+
+def check(name, cond, detail=''):
+    global PASS, FAIL
+    if cond:
+        PASS += 1
+        print(f'  ok   {name}')
+    else:
+        FAIL += 1
+        print(f'  FAIL {name}' + (f'\n       {detail}' if detail else ''))
+
+
+def text(el):
+    """Tag-stripped text. Note: strips with '' so a broken join stays visible."""
+    return re.sub(r'<[^>]+>', '', el)
+
+
+# --------------------------------------------------------------------- fixture
+# left=50 width=500 puts the right margin at 550; a line ending short of that
+# closes a paragraph, which is how justified text signals one.
+FIXTURE = '''<?xml version="1.0" encoding="UTF-8"?>
+<pdf2xml producer="poppler" version="test">
+<page number="1" position="absolute" top="0" left="0" height="1000" width="600">
+<fontspec id="0" size="15" family="ABCDEF+Serif" color="#000000"/>
+<fontspec id="1" size="13" family="ABCDEF+Serif" color="#000000"/>
+<text top="100" left="50" width="500" height="17" font="0">The quick brown fox jumps over the lazy</text>
+<text top="122" left="50" width="500" height="17" font="0">dog and keeps run­</text>
+<text top="144" left="50" width="500" height="17" font="0">ning onward to show that a soft hyphen joins</text>
+<text top="166" left="50" width="200" height="17" font="0">correctly here.</text>
+<text top="188" left="70" width="480" height="17" font="0">An indented line starts a paragraph, and produc­</text>
+<text top="210" left="50" width="500" height="17" font="0">tive work differs from self-</text>
+<text top="232" left="50" width="300" height="17" font="0">interest, which keeps its hyphen.</text>
+</page>
+<page number="2" position="absolute" top="0" left="0" height="1000" width="600">
+<fontspec id="2" size="138" family="ABCDEF+Display" color="#000000"/>
+<fontspec id="3" size="24" family="ABCDEF+Display" color="#000000"/>
+<fontspec id="4" size="40" family="ABCDEF+Serif" color="#000000"/>
+<text top="60" left="140" width="60" height="100" font="2">II</text>
+<text top="100" left="50" width="80" height="17" font="0">CAPÍTULO</text>
+<text top="200" left="50" width="400" height="28" font="3">THE SECOND CHAPTER</text>
+<text top="300" left="50" width="30" height="44" font="4">T</text>
+<text top="320" left="82" width="460" height="17" font="0">his line opens with a drop cap and then continues as ordinary prose for a good while</text>
+<text top="342" left="50" width="240" height="17" font="0">until it ends.</text>
+</page>
+<page number="3" position="absolute" top="0" left="0" height="1000" width="600">
+<text top="100" left="50" width="500" height="17" font="0">A paragraph whose sentence carries on across</text>
+<text top="180" left="50" width="400" height="15" font="1">12. A footnote starts at the body margin.</text>
+<text top="220" left="50" width="300" height="17" font="0">the footnote that interrupts it.</text>
+</page>
+<page number="4" position="absolute" top="0" left="0" height="1000" width="600">
+<text top="100" left="50" width="300" height="17" font="0">He put it this way:</text>
+<text top="140" left="100" width="400" height="15" font="1">An inset quotation sits well in from the body margin.</text>
+<text top="200" left="50" width="300" height="17" font="0">That was his claim.</text>
+</page>
+</pdf2xml>
+'''
+
+
+class Opt:
+    head_delta = 2
+    quote_indent = 40
+    table_gap = 40
+    table_sizes = None
+    code = True
+    indent = 6
+    short = 18
+
+
+def build():
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, 'book.xml')
+        with open(path, 'w', encoding='utf8') as fh:
+            fh.write(FIXTURE)
+        pages, body = P.parse(path)
+    P.strip_furniture(pages, body)
+    P.classify(pages, body, Opt())
+    for p in pages:
+        p['tables'] = []
+    # the oracle pdftotext would supply: it knows "productive", and does not
+    # know "selfinterest", which is what makes the two cases decidable
+    vocab = frozenset(['productive', 'work', 'self-interest', 'interest'])
+    # as a real book maps them: parts to h1 (none here), chapters to h2
+    doc, counts, blocks = P.build_html(pages, body, Opt(), set(), {138}, vocab)
+    return pages, body, doc, counts, blocks
+
+
+pages, body, doc, counts, blocks = build()
+plain = text(doc)
+
+print('body text and hyphenation')
+check('body font size detected as 15', body == 15, f'got {body}')
+check('soft hyphen joins across the line break',
+      'running onward' in plain, 'expected "running onward"')
+check('no space left where the soft hyphen was',
+      'run ning' not in plain and 'run­' not in plain)
+check('real hyphen dropped when the joined word is known',
+      'productive work' in plain, 'expected "productive work"')
+check('real hyphen kept for a genuine compound',
+      'self-interest' in plain, 'expected "self-interest" to survive')
+check('lines of one paragraph join into a single <p>',
+      '<p>The quick brown fox jumps over the lazy dog and keeps running onward'
+      ' to show that a soft hyphen joins correctly here.</p>' in doc,
+      'paragraph did not reassemble; got:\n       '
+      + (re.findall(r'<p>[^<]*</p>', doc) or ['none'])[0][:140])
+check('an indented line opens a new paragraph',
+      doc.count('<p>') >= 2 and 'An indented line starts a paragraph' in doc)
+
+print('\nheadings')
+heads = re.findall(r'<h[123]>(.*?)</h[123]>', doc)
+check('numeral sharing a line with its label is split at the run',
+      any(h.startswith('CAPÍTULO II') for h in heads),
+      f'got {heads}')
+check('heading group absorbs the title line',
+      any('CAPÍTULO II — THE SECOND CHAPTER' == h for h in heads), f'got {heads}')
+check('opener becomes h2 because 138 was mapped there',
+      '<h2>CAPÍTULO II — THE SECOND CHAPTER</h2>' in doc)
+check('a drop cap does not turn a paragraph into a heading',
+      not any('drop cap' in h for h in heads), f'got {heads}')
+check('drop-cap line still reads as one paragraph',
+      'This line opens with a drop cap' in plain
+      or 'T his line opens with a drop cap' in plain,
+      'drop cap line lost or split')
+
+print('\nquotes, footnotes and ordering')
+check('inset small type becomes a block quote at full size',
+      '<blockquote>An inset quotation sits well in from the body margin.</blockquote>' in doc,
+      'quote was not recognised; small type at the margin is a footnote, inset is a quote')
+check('small type at the body margin stays a footnote',
+      '<p class="fn">12. A footnote starts at the body margin.</p>' in doc)
+check('a footnote does not split the sentence it interrupts',
+      'carries on across the footnote that interrupts it.' in plain,
+      'the interrupted paragraph did not rejoin')
+check('the footnote is emitted after that paragraph, not inside it',
+      plain.find('the footnote that interrupts it.')
+      < plain.find('12. A footnote starts at the body margin.'),
+      'footnote landed before the paragraph closed')
+
+print('\nline clustering')
+p2 = pages[1]
+first = p2['lines'][0]
+check('runs at different sizes cluster into one visual line',
+      'CAPÍTULO' in P.txt_of(first['html']) and 'II' in P.txt_of(first['html']),
+      f"got {P.txt_of(first['html'])!r} — clustering by top alone splits these")
+check('that line is classified as a heading despite its modal size being body',
+      first['kind'] == 'head',
+      f"kind={first['kind']}, size={first['size']}, max={first['max']}")
+
+print('\ntable detection')
+check('wide column gaps are not claimed in ordinary prose',
+      all(l['kind'] != 'table' for p in pages for l in p['lines']),
+      'a prose line was mistaken for a table')
+
+print(f'\n{PASS} passed, {FAIL} failed')
+sys.exit(1 if FAIL else 0)
