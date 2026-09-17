@@ -253,10 +253,9 @@ unset _bjp_candidate
 BEADS_JSONL=$("$BEADS_JSONL_RESOLVER") || exit 1
 ```
 
-If the owner refuses, resolve the reported state first — recovery case (a) in
-exact companion skill [`rb-lite-backlog-drain`, step 11](../rb-lite-backlog-drain/SKILL.md#backlog-step-11).
-**Companion unavailable: stop, rerun the same installer command once, reload it, and do
-not improvise this procedure.**
+If the owner refuses, resolve the reported state first — recovery case (a) in step 11 of
+the archived drain skill (`archive/skills/rb-lite-backlog-drain/SKILL.md#backlog-step-11`
+in the douglaz/skills repository). **Do not improvise this procedure.**
 After the first flush the choice
 is gone.
 
@@ -377,7 +376,7 @@ run `second-model-bead-audit` by default after the graph meets these gates.
    re-serialization with every id on both sides is normal, ids on only one side or a
    `description` you did not touch is the tell. Recovery — and why `"$BEADS_JSONL_RESOLVER" --run-br sync --import-only`
    cannot do it — is in
-   [exact companion skill `rb-lite-backlog-drain`, step 11](../rb-lite-backlog-drain/SKILL.md#backlog-step-11), with one
+   step 11 of the archived drain skill (`archive/skills/rb-lite-backlog-drain/SKILL.md#backlog-step-11` in douglaz/skills), with one
    caveat: its replay step assumes a SINGLE mutation, the drain's case. A polish round
    batches several rewrites, so enumerate the complete intended delta (the step 4 replay manifest, NOT
    the step 6 round summary — the summary records decisions, not commands, ids or order) before restoring — and restore from the side you established holds the good bodies, not

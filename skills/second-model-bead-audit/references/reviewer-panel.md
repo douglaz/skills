@@ -370,8 +370,8 @@ skill step or audit was explicitly cleared above and cannot authorize this flush
 # would have objected to is already gone. Field-diff it, key the +/- lines by `id`, and
 # assert only the fields you meant to change moved. Ids on one side only, or a
 # `description` this session did not write, is the tell. Recovery:
-# exact companion skill rb-lite-backlog-drain, step 11:
-# ../../rb-lite-backlog-drain/SKILL.md#backlog-step-11.
+# step 11 of the archived drain skill, archive/skills/rb-lite-backlog-drain/SKILL.md
+# #backlog-step-11 in the douglaz/skills repository.
 unset BEADS_POSTFLUSH_REVIEWED
 if "$BEADS_GIT_RUNNER" diff-files "$AUDIT_DIR/preflush.jsonl" "$BEADS_JSONL"; then
   _BEADS_POSTFLUSH_DIFF_RC=0

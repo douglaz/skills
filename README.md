@@ -2,67 +2,13 @@
 
 Shared agent skills for [Claude Code](https://claude.com/claude-code) and
 [OpenAI Codex](https://github.com/openai/codex). The repo collects the
-workflows I reach for most: multi-reviewer review loops, beads planning, rb-lite
-orchestration, Lightning ops, code simplification, and writing checks.
+workflows I reach for most: multi-reviewer review loops, beads planning, PR
+landing, Lightning ops, code simplification, and writing checks.
 
 Each skill sticks to the shared agent-skills format, so the same source can be
 installed into both tools.
 
 ## Available skills
-
-### drive
-
-The meta-skill: it drives a project through its whole lifecycle and sequences the
-other skills. It implements nothing itself — it works out which phase the project
-is in, runs the right specialist skill for that phase, demands evidence that the
-phase actually closed, records the transition in `DRIVE.md`, and enters the next
-phase without waiting to be told.
-
-```text
-/drive take the M1b milestone from spec to merged
-/drive drain the ready beads
-/drive                          # orient only: where are we, what's next
-```
-
-The phase machine, and the skill each phase delegates to:
-
-| Phase | Skill | Exit gate |
-|---|---|---|
-| SHAPE | `planning-workflow`, `grill-with-docs`, `spec` | spec committed, codex xhigh clean of P0/P1 |
-| GRAPH | `plan-to-beads-transfer` → `bead-polish-loop` → `second-model-bead-audit` | audit PASS, a scoped `br ready` bead exists |
-| BUILD | `orchestrating-with-rb-lite` | rb-lite clean, you ran the gate yourself, **and** each load-bearing behavior was inverted and seen to redden |
-| PROVE | `testing-with-rb-lite` | the gate ran green at a real exit code **and** was observed to FAIL once per property it claims |
-| HARDEN | `multi-reviewer-loop` + a final pinned `codex review --base` | `multi-reviewer-loop` reports `CLEAN` (reviewers **and** consistency pass), then the cleared SHA is recorded |
-| LAND | `pr-with-codex-bot-review` | no evidence of a pending bot round on the tip, base still an ancestor of it, squash-merged; closure lands via a reviewed path |
-| DONE | — | the scope is empty and any `Pending:` closure PR has merged |
-
-Four guards automate what previously took a human nudge: **evidence** (run the real
-gate, never piped through `tail`, make new tests fail first), **scope budget** (a
-file-lock and a do-NOT-build list up front, hard brake at 2× budget or round 4),
-**transitions fire their own gates** (commit/push/review are part of the transition,
-not a separate request), and **durable state** split by lifetime — `DRIVE.md` at the repo
-root carries the committed narrative, while per-checkout facts (which tree the panel
-cleared) live under the git dir and are correctly absent from a fresh clone.
-
-LAND is *derived*, never recorded: a commit cannot honestly say its own SHA was reviewed,
-because writing the record changes the SHA. `Phase:` never records LAND — it is computed
-from `cleared == tip`, the current base still being the one the panel reviewed, that base
-still being fresh enough that the squash lands the reviewed tree, and a clean worktree — post-clearance edits are not in the commit a merge would take. See `docs/adr/` for that decision and two others.
-
-A short stop-list still ends a turn. It does not cover landing the drive's own work —
-its branch, its PR, `--force-with-lease` on that branch, the squash-merge once gates are
-green — which the goal authorizes. It covers anything leaving the repo or unrecoverable: a design
-fork on a money/consensus/data-loss path, the cross-cutting tell (a second review round
-adding another consumer of the same concept), a blown scope budget, or a goal that
-turned out to be wrong. The rationale for each rule, with the transcript evidence
-behind it, is in `references/autonomy-contract.md`.
-
-Ships with `scripts/drive-status`, a read-only detector that prints branch, gate command,
-bead counts, PR state, specs, the cleared SHA, and an inferred phase (`--json` for
-scripting). It also flags the failures that are otherwise invisible: a base that advanced
-after clearance (a squash merge would then land a tree nobody reviewed, while every SHA
-still matches), and a `DONE` record that names a closure PR — it reports `WAITING_FOR_MERGE` and hands
-you the number to query, deliberately not calling the forge itself.
 
 ### agents-md
 
@@ -264,77 +210,6 @@ Codex:
 Use the second-model-bead-audit skill and give me a launch verdict.
 ```
 
-### testing-with-rb-lite
-
-Uses `rb-lite` to **author** a test or verification gate, then independently **runs**
-it — because rb-lite's reviewer panel reads the test's source and never executes the
-gate, so a clean run means "no reviewer objected", not "the test passes". Reach for it
-when the deliverable *is* the test: a smoke, an integration or property test, or a live
-end-to-end gate that has to go green against real infrastructure.
-
-Claude Code:
-
-```text
-/testing-with-rb-lite write a smoke test that proves the retry budget holds
-```
-
-Codex:
-
-```text
-Use the testing-with-rb-lite skill to build and verify an end-to-end gate for this flow.
-```
-
-Front-loads the seven ways a test reports PASS without proving anything — stale binaries,
-substring assertions, assertion-weakening to force green, fake setup, false PASS on a
-hang, editing the code under test, and a gate never observed red — as hard constraints in
-the task file, then checks for each in the result. A test that falsely reports PASS is
-worse than no test, and the last trap is the one that catches the rest: break the
-production behavior, one mutation per property, and watch the pinning assertion fail —
-in a **disposable environment** when the gate touches anything live. A deliberately
-defective build can perform the harmful operation against a real database, service or
-balance before the assertion notices; if it cannot be isolated, say the red run could
-not be done safely rather than doing it.
-
-### orchestrating-with-rb-lite
-
-Uses `rb-lite` as the lightweight implement/review loop for self-contained work
-on the current repo. It also drains an existing `br` backlog by running one
-focused rb-lite loop per ready bead, with one branch, one work PR, one squash merge,
-and one bead closure per item.
-
-Claude Code:
-
-```text
-/orchestrating-with-rb-lite review and fix this branch before PR
-/orchestrating-with-rb-lite drain the ready br backlog with rb-lite
-```
-
-Codex:
-
-```text
-Use the orchestrating-with-rb-lite skill to run rb-lite until this branch is clean.
-Use the orchestrating-with-rb-lite skill to clear the ready br backlog one bead at a time.
-```
-
-It also runs a **harden-until-clean drive**: a codex + Claude reviewer panel
-reviews the whole branch, every real finding becomes a bead labeled with the
-reviewer that found it, the beads drain one rb-lite run at a time, and the panel
-runs again over everything that merged — until both reviewers are clean.
-
-```text
-/orchestrating-with-rb-lite harden this branch against main until review is clean
-```
-
-Best fit: you want implementation/review convergence without a durable
-multi-stage project. For backlog draining, the durable state comes from `br`,
-Git branches, PRs, and CI; rb-lite only handles one bead's inner loop at a
-time. Reach for the harden-until-clean drive when you want durable,
-bead-tracked regression sweeps with one PR per finding instead of the
-inline-edit style of `multi-reviewer-loop`.
-
-(This mode replaces the retired `codex-review-beads-ralph-loop` skill, which
-drove the same loop through `ralph-burning`.)
-
 ### pr-with-codex-bot-review
 
 Opens and lands GitHub pull requests through the `chatgpt-codex-connector`
@@ -434,6 +309,13 @@ Use the galtland-code-style skill to review this crate for convention conformanc
 Best fit: writing Rust that should match these conventions, or reviewing a
 crate for style, error handling, and logging quality.
 
+## Archived
+
+`drive`, `orchestrating-with-rb-lite`, `rb-lite-backlog-drain`, and
+`testing-with-rb-lite` live under `archive/` with their ADRs, specs, and last drive
+record. They are not installed and not gated; they grew too complex to keep honest,
+and a replacement approach has not been decided. See `archive/README.md`.
+
 ## Install
 
 ```bash
@@ -492,10 +374,10 @@ Install specific skills:
 ```bash
 ./install.sh multi-reviewer-loop
 ./install.sh --target claude multi-reviewer-loop
-./install.sh --target codex plan-to-beads-transfer bead-polish-loop second-model-bead-audit orchestrating-with-rb-lite
-./install.sh plan-to-beads-transfer bead-polish-loop second-model-bead-audit orchestrating-with-rb-lite
+./install.sh --target codex plan-to-beads-transfer bead-polish-loop second-model-bead-audit
+./install.sh plan-to-beads-transfer bead-polish-loop second-model-bead-audit
 ./install.sh --target codex --migrate-existing plan-to-beads-transfer bead-polish-loop second-model-bead-audit
-./install.sh --target codex complexity-reducer orchestrating-with-rb-lite
+./install.sh --target codex complexity-reducer
 ./install.sh --target both voice-dna pr-with-codex-bot-review
 ```
 
@@ -514,54 +396,26 @@ directories created by `--migrate-existing`.
 
 - [Claude Code](https://claude.com/claude-code) for Claude installation targets
 - [OpenAI Codex CLI](https://github.com/openai/codex) for Codex installation targets
-- `codex` on `PATH` for the `multi-reviewer-loop` panel, the
-  `second-model-bead-audit` panel,
-  `orchestrating-with-rb-lite` harden-until-clean panel, and the default
-  `orchestrating-with-rb-lite` reviewer panel
+- `codex` on `PATH` for the `multi-reviewer-loop` and `second-model-bead-audit`
+  panels
 - `claude` on `PATH` for the Claude reviewer in `multi-reviewer-loop`,
-  `second-model-bead-audit`,
-  `orchestrating-with-rb-lite` harden-until-clean mode, and
-  `pr-with-codex-bot-review`, and for the default `orchestrating-with-rb-lite`
-  implementer cycle and reviewer panel.
+  `second-model-bead-audit`, and `pr-with-codex-bot-review`.
   When both reviewers are requested, either CLI alone runs the loops degraded;
   with both missing they stop. An explicitly pinned reviewer produces
   `PINNED PANEL` when healthy and `BLOCKED` when it fails.
 - `jq` on `PATH` to build `second-model-bead-audit` graph snapshots and unwrap
   Claude reviewer JSON in `multi-reviewer-loop`, `second-model-bead-audit`,
-  `orchestrating-with-rb-lite`, and `pr-with-codex-bot-review`; Nix-wrapped
-  rb-lite supplies its own for the default panel
+  and `pr-with-codex-bot-review`
 - SHA-256 tooling (`sha256sum` or `shasum`) for
   `second-model-bead-audit` snapshot integrity
 - GNU `timeout` with `--kill-after` support (named `timeout`, or `gtimeout` from
   Homebrew coreutils) to bound each reviewer in `multi-reviewer-loop` — both CLIs can
   hang with no output and no exit, and a backgrounded one has nothing to reap it —
-  and for `second-model-bead-audit` unconditionally — it never uses rb-lite, so nothing
-  can supply `timeout` on its behalf — and for normal `orchestrating-with-rb-lite` runs
-  when using a source/path rb-lite install; Nix-wrapped rb-lite supplies GNU coreutils
-- `rb-lite` on `PATH`, or `nix run --refresh github:douglaz/rb-lite -- ...`
-  (the `--refresh` avoids running an hour-stale cached revision), for
-  `orchestrating-with-rb-lite`
+  and for `second-model-bead-audit` unconditionally
 - `br` (≥ 0.1.45) and `bv` on `PATH`, plus a repo that uses `.beads/`, for
-  `plan-to-beads-transfer`, `bead-polish-loop`, `second-model-bead-audit`, and
-  `orchestrating-with-rb-lite` backlog-drain and harden-until-clean modes.
-  Older `br` corrupts its DB after the branch resets those modes depend on
-- `gh` authenticated for `orchestrating-with-rb-lite` backlog-drain and
-  harden-until-clean modes (PR creation, checks, merge) and
-  `pr-with-codex-bot-review`
-- `drive` orchestrates the other skills, so it inherits every prerequisite above
-  for whichever phases a given project actually reaches. Its own
-  `scripts/drive-status` detector needs nothing — it degrades to `n/a`/`unknown` and exits
-  0 without `br`, `jq`, or `gh` — but its bead counts and PR state stay blank
-  until those are present.
-- `drive`'s SHAPE phase delegates to planning skills that are **not** in this
-  repo: `planning-workflow`, `spec`, `grill-me`, `grill-with-docs`,
-  `plan-eng-review`, and `plan-ceo-review`. Install them separately (several ship
-  with gstack) or substitute your own — the
-  phase only requires that a reviewed, buildable spec exists at its exit gate,
-  not that any particular skill produced it.
-- `drive`'s self-continuation section uses `/goal`, a Claude Code built-in with
-  no Codex equivalent. Under Codex the skill relies on its continuation contract
-  alone.
+  `plan-to-beads-transfer`, `bead-polish-loop`, and `second-model-bead-audit`.
+  Older `br` corrupts its DB after branch resets
+- `gh` authenticated for `pr-with-codex-bot-review`
 - [gstack](https://github.com/garrytan/gstack) with its `browse` skill built
   (`gstack/browse/dist/browse` under one of the skills roots, or `BROWSE_BIN`)
   for `flight-search`; the headless daemon renders Google Flights
