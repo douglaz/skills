@@ -115,20 +115,14 @@ companion_dependencies() {
     multi-reviewer-loop-delegating-edits)
       printf '%s\n' multi-reviewer-loop
       ;;
-    orchestrating-with-rb-lite|bead-polish-loop|plan-to-beads-transfer|second-model-bead-audit)
-      printf '%s\n' rb-lite-backlog-drain beads-jsonl-path
-      ;;
-    rb-lite-backlog-drain)
-      printf '%s\n' orchestrating-with-rb-lite beads-jsonl-path
+    bead-polish-loop|plan-to-beads-transfer|second-model-bead-audit)
+      printf '%s\n' beads-jsonl-path
       ;;
     pr-with-codex-bot-review)
       printf '%s\n' pr-with-codex-bot-review-merge
       ;;
     pr-with-codex-bot-review-merge)
       printf '%s\n' pr-with-codex-bot-review
-      ;;
-    drive)
-      printf '%s\n' rb-lite-backlog-drain pr-with-codex-bot-review-merge beads-jsonl-path
       ;;
   esac
 }

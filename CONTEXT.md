@@ -5,33 +5,8 @@ Each skill is a `SKILL.md` plus optional `references/` and `scripts/`.
 
 ## Language
 
-### Driving a project
-
-**Drive**:
-One goal pursued to completion through the software lifecycle, without returning to the
-user between phases.
-_Avoid_: run, session, pipeline
-
-**Phase**:
-A named stage of a drive with an entry condition and an exit gate. Only phases whose
-completion is durably true may be recorded; conditions that are only true of the current
-checkout are derived instead.
-_Avoid_: step, stage, state
-
-**Record**:
-The committed narrative of a drive, in `DRIVE.md`. Durable, survives a fresh clone, and
-answers "where are we" without re-deriving anything.
-_Avoid_: state file, status file
-
-**Volatile state**:
-Facts true only of the current checkout — chiefly which tree a panel cleared. Never
-committed, and correctly absent from a fresh clone.
-_Avoid_: cache, scratch, local state
-
-**Scope**:
-The bead set a drive is authorized to take. The canonical boundary every phase reads; a
-ready bead outside it is not this drive's work.
-_Avoid_: milestone, epic, backlog
+The lifecycle vocabulary (drive, phase, record, scope) went to `archive/` with the
+`drive` skill; see `archive/README.md`.
 
 ### Review and admission
 

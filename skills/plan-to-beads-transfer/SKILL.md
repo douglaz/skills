@@ -246,10 +246,9 @@ unset _bjp_candidate
 BEADS_JSONL=$("$BEADS_JSONL_RESOLVER") || exit 1
 ```
 
-If the owner refuses, resolve the reported state first — recovery case (a) in
-[exact companion skill `rb-lite-backlog-drain`, step 11](../rb-lite-backlog-drain/SKILL.md#backlog-step-11).
-**Companion unavailable: stop, rerun the same installer command once, reload it, and do
-not improvise this procedure.**
+If the owner refuses, resolve the reported state first — recovery case (a) in step 11 of
+the archived drain skill (`archive/skills/rb-lite-backlog-drain/SKILL.md#backlog-step-11`
+in the douglaz/skills repository). **Do not improvise this procedure.**
 After the first flush the choice
 is gone.
 
@@ -338,7 +337,7 @@ order.
     only one side, or a
     `description` you did not touch, is the tell. Recovery, and why `"$BEADS_JSONL_RESOLVER" --run-br sync --import-only`
     cannot do it, is in
-    [exact companion skill `rb-lite-backlog-drain`, step 11](../rb-lite-backlog-drain/SKILL.md#backlog-step-11) — but note
+    step 11 of the archived drain skill (`archive/skills/rb-lite-backlog-drain/SKILL.md#backlog-step-11` in douglaz/skills) — but note
     its replay step assumes a SINGLE mutation, the drain's case. A transfer has a whole
     graph in flight, so enumerate the complete intended delta (the replay manifest you started before step 4 —
     NOT the coverage matrix, which maps plan elements to beads and preserves no ids, field

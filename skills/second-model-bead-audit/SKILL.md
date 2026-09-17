@@ -183,10 +183,8 @@ recorded acceptance of the reduced review coverage.
    # reverted — exit 0, no warning — and an audit over a truncated graph reviews text the
    # reviewers will never see. Check BEFORE flushing: afterwards the file matches the index
    # again, so the diff comes back empty and the loss is undetectable. Recovery is in
-   # exact companion skill rb-lite-backlog-drain, step 11:
-   # ../rb-lite-backlog-drain/SKILL.md#backlog-step-11.
-   # Companion unavailable: stop, rerun the same installer command once, reload it, and
-   # do not improvise this procedure.
+   # step 11 of the archived drain skill, archive/skills/rb-lite-backlog-drain/SKILL.md
+   # #backlog-step-11 in the douglaz/skills repository. Do not improvise this procedure.
    # Clear loader injection in this already-running shell before the locator starts
    # any new process. The resolver/git-clean script bodies are too late: a shebang
    # interpreter would already have loaded caller-selected libraries.
