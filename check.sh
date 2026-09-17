@@ -6,6 +6,7 @@ set -euo pipefail
 ./skills/pr-with-codex-bot-review/scripts/bot-gate.test
 ./skills/drive/scripts/drive-status.test
 ./skills/copa-booking/scripts/copa.test
+./skills/lnd-payments/scripts/lnpay.test
 
 # The record this repo is driven by, checked against the parser that reads it. In the
 # 2026-08-30 run the driver wrote a **Baseline:** field that reads as well-formed to a human

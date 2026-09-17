@@ -6,7 +6,8 @@ description: >-
   invoice, decode an invoice or Lightning QR image, create a receive invoice
   optionally as a QR code, generate an onchain (on-chain) bitcoin receive
   address, watch a receive invoice until settlement, inspect outgoing payment
-  status/fees/routes/preimages, or check an lnd node's sync and channel balance.
+  status/fees/routes/preimages, make a shareable proof-of-payment certificate
+  (HTML or PNG) for a settled send, or check an lnd node's sync and channel balance.
   Use for Kubernetes-hosted lnd nodes configured through environment variables
   or XDG config files.
 ---
@@ -86,6 +87,9 @@ scripts/lnpay track <payment_hash|bolt11>
 scripts/lnpay watch <payment_hash|bolt11>
                                         poll until a receive invoice settles
       [--timeout S] [--interval S]
+scripts/lnpay proof <payment_hash|bolt11>
+                                        proof-of-payment certificate
+      [--to LABEL] [--html PATH] [--png PATH]
 ```
 
 The CLI is non-interactive: commands exit non-zero on failure, `--json` returns
@@ -161,6 +165,28 @@ When reporting a route, include the configured local alias if present, then each
 successful HTLC part and each hop alias, with pubkeys/channel IDs when audit
 detail is useful.
 
+## Proof of payment
+
+Use `scripts/lnpay proof <payment_hash|bolt11> --to <label> --html out.html --png out.png`
+when the user wants a receipt or proof of payment to send someone. It fills
+`assets/proof-of-payment.html` from `trackpayment`: amount, fee, settlement time,
+route aliases, preimage, payment hash, and the signed invoice. The HTML page
+has a button that checks SHA-256(preimage) = payment hash in the viewer's
+browser. The PNG is a 2x render of the same page (`#print` mode), with a
+shell command for that check instead of the button.
+
+- `--to` labels the recipient, for example the Lightning address the invoice
+  came from. lnd doesn't know that address, so without `--to` the certificate
+  names the destination node's alias.
+- It refuses, exits 1, and writes nothing unless the payment is `SUCCEEDED`,
+  the preimage hashes to the payment hash, and there is an invoice. A keysend
+  preimage was chosen by the sender, so it proves nothing.
+- Node aliases come from the public graph and are HTML-escaped.
+- The PNG needs Google Chrome or Chromium on PATH, plus ImageMagick `magick`,
+  which is fetched through `nix shell` when missing, like `qrencode`.
+- The preimage proves the invoice was paid, not who paid it. The sender and
+  recipient names on the certificate are labels.
+
 ## Watching
 
 Use `scripts/lnpay watch <payment_hash|bolt11> --timeout 1800 --interval 8` to
@@ -174,6 +200,9 @@ watches in the background rather than blocking the session.
 - `qrencode` for QR generation and `zbarimg` for QR decoding; the script uses
   system binaries when available, otherwise it tries `nix shell nixpkgs#...`.
 - `timeout` for bounded `trackpayment` calls.
+- Google Chrome or Chromium and ImageMagick for `proof --png`.
+
+Offline test: `scripts/lnpay.test` (fake `kubectl`, no node or browser).
 
 ## Troubleshooting
 
