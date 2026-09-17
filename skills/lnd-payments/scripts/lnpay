@@ -604,6 +604,165 @@ cmd_watch() {
   echo "RESULT: still ${last:-OPEN} after ${timeout}s - stopped watching (invoice may still be valid)"
 }
 
+render_proof_html() {
+  python3 -c '
+import sys, json, hashlib, html, re, datetime
+tpl_path, out_path, sender, to = sys.argv[1:5]
+aliases = dict(a.split("=", 1) for a in sys.argv[5:])
+s = sys.stdin.read()
+dec = json.JSONDecoder()
+objs = []
+i = 0
+while i < len(s):
+    while i < len(s) and s[i].isspace():
+        i += 1
+    if i >= len(s):
+        break
+    obj, i = dec.raw_decode(s, i)
+    objs.append(obj)
+if not objs:
+    sys.exit("lnpay: no JSON payment update found")
+d = objs[-1]
+
+# A certificate must only ever describe a payment that provably happened.
+if d.get("status") != "SUCCEEDED":
+    sys.exit("lnpay: payment status is %s, not SUCCEEDED - nothing to prove" % (d.get("status") or "unknown"))
+pre, rhash = d.get("payment_preimage", ""), d.get("payment_hash", "")
+try:
+    matches = hashlib.sha256(bytes.fromhex(pre)).hexdigest() == rhash
+except ValueError:
+    matches = False
+if not matches:
+    sys.exit("lnpay: preimage does not hash to the payment hash - refusing to certify")
+if not d.get("payment_request"):
+    sys.exit("lnpay: no invoice (keysend?) - the sender chose the preimage, so it proves nothing")
+parts = [h for h in d.get("htlcs") or [] if h.get("status") == "SUCCEEDED"]
+if not parts:
+    sys.exit("lnpay: no successful HTLC in the payment record")
+
+def sat(msat):
+    whole, frac = divmod(int(msat), 1000)
+    return "{:,}".format(whole) + ((".%03d" % frac).rstrip("0") if frac else "")
+
+def plural(n, word):
+    return "%d %s%s" % (n, word, "" if n == 1 else "s")
+
+def label(pubkey):
+    return aliases.get(pubkey) or pubkey[:12] + "…"
+
+value_msat, fee_msat = int(d["value_msat"]), int(d["fee_msat"])
+settled_ns = max(int(h["resolve_time_ns"]) for h in parts)
+t = datetime.datetime.fromtimestamp(settled_ns / 1e9, datetime.timezone.utc)
+ords = ("first second third fourth fifth sixth seventh eighth ninth tenth eleventh twelfth "
+        "thirteenth fourteenth fifteenth sixteenth seventeenth eighteenth nineteenth twentieth").split()
+day = ords[t.day - 1] if t.day <= 20 else "twenty-" + ords[t.day - 21] if t.day < 30 else ["thirtieth", "thirty-first"][t.day - 30]
+last_hops = parts[0]["route"]["hops"]
+destination = last_hops[-1]["pub_key"]
+
+routes = []
+for n, part in enumerate(parts, 1):
+    hops = part["route"]["hops"]
+    items = ["<li><div class=\"hop end\"><b>%s</b><i>sender</i></div></li>" % html.escape(sender)]
+    for k, hop in enumerate(hops):
+        last = k == len(hops) - 1
+        note = "recipient’s node" if last else "charged %s sat" % sat(hop.get("fee_msat", 0))
+        items.append("<li><span class=\"arrow\" aria-hidden=\"true\">→</span><div class=\"hop%s\"><b>%s</b><i>%s</i></div></li>"
+                     % (" end" if last else "", html.escape(label(hop["pub_key"])), html.escape(note)))
+    head = ""
+    if len(parts) > 1:
+        head = "<p class=\"part-label\">Part %d · %s sat</p>" % (n, sat(int(hops[-1]["amt_to_forward_msat"])))
+    routes.append(head + "<ol class=\"route\">" + "".join(items) + "</ol>")
+
+filled = {k: html.escape(v) for k, v in {
+    "amount_sat": sat(value_msat),
+    "fee_sat": sat(fee_msat),
+    "fee_pct": "%.2f%%" % (fee_msat * 100 / value_msat),
+    "sender": sender,
+    "recipient": to or label(destination),
+    "settled_prose": "%s day of %s, %d, at %s UTC" % (day, t.strftime("%B"), t.year, t.strftime("%H:%M:%S")),
+    "settled_utc": t.strftime("%Y-%m-%d %H:%M:%S UTC"),
+    "settle_seconds": "%.2f" % ((settled_ns - int(d["creation_time_ns"])) / 1e9),
+    "path": plural(len(last_hops), "hop") if len(parts) == 1 else plural(len(parts), "part"),
+    "preimage": pre,
+    "payment_hash": rhash,
+    "payment_request": d["payment_request"],
+}.items()}
+filled["routes"] = "\n".join(routes)
+
+tpl = open(tpl_path).read()
+wanted = set(re.findall(r"\{\{(\w+)\}\}", tpl))
+if wanted != set(filled):
+    sys.exit("lnpay: template placeholders %s do not match the data %s" % (sorted(wanted), sorted(filled)))
+# One pass, so a value that happens to contain {{name}} is never substituted again.
+with open(out_path, "w") as f:
+    f.write(re.sub(r"\{\{(\w+)\}\}", lambda m: filled[m.group(1)], tpl))
+' "$@"
+}
+
+render_proof_png() {
+  local html="$1" png="$2" work="$3" chrome="" b url
+  for b in google-chrome-stable google-chrome chromium chromium-browser; do
+    if command -v "$b" >/dev/null 2>&1; then chrome="$b"; break; fi
+  done
+  [ -n "$chrome" ] || die "--png needs Google Chrome or Chromium on PATH"
+  # as_uri percent-encodes '#' and '?' in the path, which would otherwise cut the URL short.
+  url="$(python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve().as_uri())' "$html")#print"
+  # --screenshot captures only the viewport, so the page must fit in 4000px (checked below).
+  timeout 120 "$chrome" --headless=new --user-data-dir="$work/chrome" --disable-gpu --hide-scrollbars --force-device-scale-factor=2 \
+    --window-size=860,4000 --virtual-time-budget=8000 --screenshot="$work/raw.png" "$url" \
+    >/dev/null 2>&1 || true
+  [ -s "$work/raw.png" ] || die "$chrome did not render $html"
+  # %@ is the content box WxH+X+Y after trimming the page background. Content reaching the
+  # bottom edge means the viewport cut the certificate off; refuse rather than emit it.
+  local box height content_h content_y
+  read -r box height <<< "$(with_tool imagemagick magick -- "$work/raw.png" -fuzz 3% -format '%@ %h' info:)"
+  content_h="${box#*x}"; content_h="${content_h%%+*}"; content_y="${box##*+}"
+  [ $((content_y + content_h)) -lt "$height" ] ||
+    die "certificate is taller than the PNG render viewport (many payment parts?) - use --html"
+  with_tool imagemagick magick -- "$work/raw.png" -fuzz 3% -trim +repage \
+    -bordercolor '#23271a' -border 64 -strip "$png"
+}
+
+cmd_proof() {
+  local target="" to="" html="" png="" timeout="$LNPAY_TRACK_TIMEOUT"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --to) need_value "$@"; to="$2"; shift 2;;
+      --html) need_value "$@"; html="$2"; shift 2;;
+      --png) need_value "$@"; png="$2"; shift 2;;
+      --timeout) need_value "$@"; timeout="$2"; shift 2;;
+      -*) die "unknown flag: $1";;
+      *) [ -z "$target" ] && { target="$1"; shift; } || die "unexpected arg: $1";;
+    esac
+  done
+  [ -n "$target" ] && [ -n "$html$png" ] ||
+    die "usage: lnpay proof <payment_hash|bolt11> [--to LABEL] [--html PATH] [--png PATH]"
+  [ "$html" != "$png" ] || die "--html and --png must be different paths"
+
+  local template
+  template="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../assets/proof-of-payment.html"
+  local out; out="$(cmd_track "$target" --timeout "$timeout" --json)" || exit 1
+
+  local sender="${LN_LOCAL_ALIAS:-}"
+  [ -n "$sender" ] || sender="$(lncli getinfo | jget alias)"
+  local aliases=() pub
+  while IFS=$'\t' read -r kind _ _ pub _; do
+    if [ "$kind" = hop ]; then aliases+=("$pub=$(node_alias "$pub")"); fi
+  done <<< "$(printf '%s' "$out" | payment_rows)"
+
+  # Global, not local: the EXIT trap runs after this function returns. The trap reads the
+  # variable rather than embedding the path, so a quote in TMPDIR is never parsed as shell.
+  LNPAY_PROOF_WORK="$(mktemp -d)"
+  trap 'rm -rf -- "$LNPAY_PROOF_WORK"' EXIT
+  local html_out="${html:-$LNPAY_PROOF_WORK/proof.html}"
+  printf '%s' "$out" | render_proof_html "$template" "$html_out" "$sender" "$to" "${aliases[@]}" || exit 1
+  if [ -n "$html" ]; then echo "proof_html: $html"; fi
+  if [ -n "$png" ]; then
+    render_proof_png "$html_out" "$png" "$LNPAY_PROOF_WORK"
+    echo "proof_png:  $png"
+  fi
+}
+
 usage() {
   cat <<EOF
 lnpay - send and receive Lightning payments via kubectl exec + lncli
@@ -624,6 +783,8 @@ Commands:
         [--timeout S] [--json]
   lnpay watch <payment_hash|bolt11>       poll until a receive invoice settles
         [--timeout S] [--interval S]
+  lnpay proof <payment_hash|bolt11>       proof-of-payment certificate for a
+        [--to LABEL] [--html PATH] [--png PATH]  settled send
 
 Config:
   Required: LN_CONTEXT, LN_NAMESPACE, and LN_TARGET (or LN_DEPLOY).
@@ -654,6 +815,7 @@ case "$cmd" in
   pay) cmd_pay "$@";;
   track) cmd_track "$@";;
   watch) cmd_watch "$@";;
+  proof) cmd_proof "$@";;
   ""|help|-h|--help) usage;;
   *) err "unknown command: $cmd"; usage; exit 2;;
 esac

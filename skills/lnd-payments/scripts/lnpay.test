@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# lnpay.test — offline checks for `lnpay proof`: it renders a certificate only for a payment that
+# provably settled, and escapes node aliases (arbitrary strings from the gossip graph).
+# A fake kubectl answers lncli calls from fixtures; no node, no network, no browser.
+# Usage: ./skills/lnd-payments/scripts/lnpay.test   (exits 0 if all pass)
+set -euo pipefail
+cd "$(dirname "$0")"
+command -v python3 >/dev/null 2>&1 || { echo "lnpay.test needs python3 on PATH"; exit 1; }
+fail=0; n=0
+check() { n=$((n+1)); if "$@"; then echo "  ok   $desc"; else echo "  FAIL $desc"; fail=1; fi; }
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+
+mkdir "$tmp/bin"
+cat >"$tmp/bin/kubectl" <<'EOF'
+#!/usr/bin/env bash
+while [ "$1" != lncli ]; do shift; done; shift
+case "$1" in
+  trackpayment) cat "$FAKE_TRACK";;
+  getinfo) echo '{"alias":"test-sender"}';;
+  getnodeinfo)
+    case "$2" in
+      02aa*) echo '{"node":{"alias":"hop-one"}}';;
+      02bb*) echo '{"node":{"alias":"<img src=x onerror=alert(1)>"}}';;
+      *) echo '{}';;
+    esac;;
+  *) exit 1;;
+esac
+EOF
+chmod +x "$tmp/bin/kubectl"
+
+# preimage 0x01 * 32; payment_hash is its SHA-256.
+track() { # status preimage payment_request
+  cat <<EOF
+{"payment_hash":"72cd6e8422c407fb6d098690f1130b7ded7ec2f7f5e1d30bd9d521f015363793",
+ "value_msat":"102000500","fee_msat":"102898","status":"$1","payment_preimage":"$2",
+ "payment_request":"$3","creation_time_ns":"1789606282012933756",
+ "htlcs":[{"status":"SUCCEEDED","resolve_time_ns":"1789606283151116966","route":{"hops":[
+   {"pub_key":"02aa11","fee_msat":"102898","amt_to_forward_msat":"102000500"},
+   {"pub_key":"02bb22","fee_msat":"0","amt_to_forward_msat":"102000500"},
+   {"pub_key":"03cc33","fee_msat":"0","amt_to_forward_msat":"102000500"}]}}]}
+EOF
+}
+good_pre=0101010101010101010101010101010101010101010101010101010101010101
+track SUCCEEDED "$good_pre" lnbc1test >"$tmp/ok.json"
+track FAILED "$good_pre" lnbc1test >"$tmp/failed.json"
+track SUCCEEDED 0202020202020202020202020202020202020202020202020202020202020202 lnbc1test >"$tmp/wrongpre.json"
+track SUCCEEDED "$good_pre" "" >"$tmp/keysend.json"
+
+proof() { # fixture html [extra args]
+  local fixture="$1" html="$2"; shift 2
+  env -i PATH="$tmp/bin:$PATH" HOME="$tmp" XDG_CONFIG_HOME="$tmp" FAKE_TRACK="$tmp/$fixture" \
+    LN_CONTEXT=t LN_NAMESPACE=t LN_TARGET=deploy/t \
+    ./lnpay proof 72cd6e8422c407fb6d098690f1130b7ded7ec2f7f5e1d30bd9d521f015363793 \
+    --to "a&b@example.com" --html "$html" "$@"
+}
+
+# `&& rc=0 || rc=$?` throughout: a bare `; rc=$?` under set -e ends the script early.
+proof ok.json "$tmp/ok.html" >"$tmp/out" 2>&1 && rc=0 || rc=$?
+desc="a settled payment renders (exit 0)"
+check test "$rc" -eq 0
+desc="amount keeps its msat precision"
+check grep -qF -- '102,000.5<small>sats</small>' "$tmp/ok.html"
+desc="sender, hop alias, and unresolved-hop fallback appear on the route"
+check grep -qF -- '<b>test-sender</b><i>sender</i>' "$tmp/ok.html"
+check grep -qF -- '<b>hop-one</b><i>charged 102.898 sat</i>' "$tmp/ok.html"
+check grep -qF -- '<b>03cc33…</b><i>recipient’s node</i>' "$tmp/ok.html"
+desc="a hostile node alias is escaped, never injected"
+check grep -qF -- '&lt;img src=x onerror=alert(1)&gt;' "$tmp/ok.html"
+check test "$(grep -cF -- '<img src=x' "$tmp/ok.html")" -eq 0
+desc="the --to label is escaped"
+check grep -qF -- '<dd>a&amp;b@example.com</dd>' "$tmp/ok.html"
+desc="settlement time is written out"
+check grep -qF -- 'seventeenth day of September, 2026, at 00:51:23 UTC' "$tmp/ok.html"
+check grep -qF -- 'settled in 1.14 seconds over 3 hops' "$tmp/ok.html"
+desc="no placeholder is left unfilled"
+check test "$(grep -cE -- '\{\{[a-z_]+\}\}' "$tmp/ok.html")" -eq 0
+
+# A multi-part payment, streamed as an in-flight update followed by the final record.
+python3 - "$tmp/ok.json" >"$tmp/mpp.json" <<'EOF'
+import json, sys
+d = json.load(open(sys.argv[1]))
+part = d["htlcs"][0]
+small = json.loads(json.dumps(part)); small["route"]["hops"][-1]["amt_to_forward_msat"] = "2000000"
+failed = dict(part, status="FAILED")
+print(json.dumps(dict(d, status="IN_FLIGHT", htlcs=[])))
+print(json.dumps(dict(d, htlcs=[failed, part, small])))
+EOF
+proof mpp.json "$tmp/mpp.html" >"$tmp/out" 2>&1 && rc=0 || rc=$?
+desc="a streamed multi-part payment renders from its final record (exit 0)"
+check test "$rc" -eq 0
+desc="each successful part gets its own route, failed attempts do not"
+check test "$(grep -oF -- '<ol class="route">' "$tmp/mpp.html" | wc -l)" -eq 2
+check grep -qF -- 'Part 2 · 2,000 sat' "$tmp/mpp.html"
+check grep -qF -- 'over 2 parts' "$tmp/mpp.html"
+
+for bad in failed:"not SUCCEEDED" wrongpre:"does not hash" keysend:"no invoice"; do
+  fixture=${bad%%:*}; msg=${bad#*:}
+  proof "$fixture.json" "$tmp/$fixture.html" >"$tmp/out" 2>&1 && rc=0 || rc=$?
+  desc="$fixture: refuses to certify (exit 1)"
+  check test "$rc" -eq 1
+  desc="$fixture: says why ($msg)"
+  check grep -qF -- "$msg" "$tmp/out"
+  desc="$fixture: writes no certificate"
+  check test ! -e "$tmp/$fixture.html"
+done
+
+# One path for both formats would let the PNG overwrite the HTML (PR #83 review, codex + CodeRabbit).
+proof ok.json "$tmp/same.out" --png "$tmp/same.out" >"$tmp/out" 2>&1 && rc=0 || rc=$?
+desc="--html and --png on the same path is refused before anything is written"
+check test "$rc" -eq 1
+check grep -qF -- 'must be different paths' "$tmp/out"
+check test ! -e "$tmp/same.out"
+
+# --png alone renders through a scratch HTML file; a refusal must not leave it behind, even
+# when TMPDIR holds a quote or starts with '-' (codex-review PR #83 P2 rounds 1 and 2: the
+# path was reparsed as shell, then parsed as an rm option). Run from $tmp so the relative
+# '-scratch' lands there.
+lnpay="$PWD/lnpay"
+for scratch in "it's scratch" -scratch; do
+  mkdir "$tmp/$scratch"
+  (cd "$tmp" && env -i PATH="$tmp/bin:$PATH" HOME="$tmp" XDG_CONFIG_HOME="$tmp" TMPDIR="$scratch" \
+    FAKE_TRACK="$tmp/failed.json" LN_CONTEXT=t LN_NAMESPACE=t LN_TARGET=deploy/t \
+    "$lnpay" proof 72cd6e8422c407fb6d098690f1130b7ded7ec2f7f5e1d30bd9d521f015363793 \
+    --png "$tmp/failed.png") >"$tmp/out" 2>&1 && rc=0 || rc=$?
+  desc="--png refusal with TMPDIR=$scratch exits 1 and leaves no scratch files"
+  check test "$rc" -eq 1
+  check test -z "$(ls -A -- "$tmp/$scratch")"
+  check test ! -e "$tmp/failed.png"
+done
+
+echo "$n checks, $([ "$fail" = 0 ] && echo all passed || echo FAILURES)"
+exit "$fail"

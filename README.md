@@ -90,8 +90,9 @@ Use the voice-dna skill to check this announcement draft.
 
 Operates a Kubernetes-hosted lnd node through `kubectl exec` and `lncli` for
 Lightning invoice decode, receive, pay dry-run/send, watch, and payment tracking
-workflows. Node-specific selectors live outside the public skill in XDG config
-or environment variables.
+workflows, plus a proof-of-payment certificate (HTML with in-browser preimage
+check, or PNG) for settled sends. Node-specific selectors live outside the
+public skill in XDG config or environment variables.
 
 Claude Code:
 

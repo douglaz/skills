@@ -37,6 +37,12 @@
       "prompt": "generate an onchain address on our lnd",
       "expected_output": "Runs `scripts/lnpay newaddress` (default p2wkh native SegWit) and returns the fresh bc1q address; offers np2wkh or p2tr as alternatives when relevant, without hand-writing a raw kubectl exec.",
       "files": []
+    },
+    {
+      "id": 7,
+      "prompt": "make a proof of payment PNG for the payment I just sent to alice@example.com",
+      "expected_output": "Runs `scripts/lnpay proof <payment_hash|bolt11> --to alice@example.com --png <path>` (optionally `--html`), reports the file paths, and does not hand-build the certificate. If the payment is not SUCCEEDED or the preimage does not match, relays the refusal instead of producing an image.",
+      "files": []
     }
   ]
 }

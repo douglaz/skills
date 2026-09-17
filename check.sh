@@ -5,3 +5,4 @@ set -euo pipefail
 ./install.test
 ./skills/pr-with-codex-bot-review/scripts/bot-gate.test
 ./skills/copa-booking/scripts/copa.test
+./skills/lnd-payments/scripts/lnpay.test
