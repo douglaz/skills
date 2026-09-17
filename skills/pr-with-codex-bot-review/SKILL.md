@@ -378,13 +378,10 @@ is not a mechanism — an unreachable model is indistinguishable from a slow rev
 while you watch it, and the measured behaviour is that it does not exit on its own.
 
 Every reviewer invocation *this skill and the panel skills own* is bounded for the same
-reason. Not every one in the repo is: `orchestrating-with-rb-lite` documents **three**
-unbounded `claude -p` reviewer commands that rb-lite itself dispatches — the default
-reviewer command in `orchestrating-with-rb-lite` § **Tool dependencies** pins
-`claude-opus-5`, and two under `orchestrating-with-rb-lite` § **Customizing the panel**
-pin `opus` — all carry no timeout
-because this repo does not launch them. All three hang on exactly the failure this
-change removes elsewhere; tracked in #51 rather than claimed as covered here.
+reason. The archived `orchestrating-with-rb-lite` skill documented three unbounded
+`claude -p` reviewer commands that rb-lite itself dispatches; they hang on exactly the
+failure this change removes elsewhere and are tracked in #51 rather than claimed as
+covered here.
 
 Triage it exactly like a bot finding: credible hypothesis, verify before agreeing
 or rejecting, fix what's real, and don't build mechanism no requirement needs.
@@ -634,10 +631,10 @@ condition:
      decidable; this is not, and a rule in branch protection cannot be skipped by forgetting
      to run a script.
 
-     Resolve it from the installed skill directory, the same way `drive` resolves
-     `drive-status` — skill commands run from the *driven* repo, which has no
+     Resolve it from the installed skill directory — skill commands run from the
+     *target* repo, which has no
      `scripts/bot-gate`, so a bare relative path fails with "No such file or directory"
-     and blocks LAND:
+     and blocks the merge:
 
      ```bash
      for d in "$HOME/.claude/skills/pr-with-codex-bot-review" \

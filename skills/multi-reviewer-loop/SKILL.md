@@ -287,8 +287,8 @@ a reviewer.
      # PR exists, and every candidate the ladder below can reach — @{upstream}, the fork's
      # origin/HEAD, a bare `gh repo view` default — lives in the FORK. When the parent's
      # default branch has a different name (or its tip has moved), those candidates review
-     # the wrong diff, and drive's post-panel OID check (phases.md § HARDEN pins the
-     # PARENT's base via `base_repo`) then rejects every rerun with "different base commit"
+     # the wrong diff, and a post-panel base check pinned to the PARENT's base then
+     # rejects every rerun with "different base commit"
      # — a deadlock whose remedy re-reviews the same wrong base. Resolve and fetch the
      # parent's own default here, exactly as the PR path above fetches the PR's base.
      if [ -z "${DIFF_BASE:-}" ] && [ -n "$PARENT" ]; then
