@@ -184,6 +184,9 @@ shell command for that check instead of the button.
 - Node aliases come from the public graph and are HTML-escaped.
 - The PNG needs Google Chrome or Chromium on PATH, plus ImageMagick `magick`,
   which is fetched through `nix shell` when missing, like `qrencode`.
+- The PNG is rendered in a 4000px-tall viewport. If a payment has so many
+  parts that the certificate doesn't fit, `--png` refuses rather than cut it
+  off; use `--html` for those.
 - The preimage proves the invoice was paid, not who paid it. The sender and
   recipient names on the certificate are labels.
 

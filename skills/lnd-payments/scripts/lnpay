@@ -707,11 +707,18 @@ render_proof_png() {
   [ -n "$chrome" ] || die "--png needs Google Chrome or Chromium on PATH"
   # as_uri percent-encodes '#' and '?' in the path, which would otherwise cut the URL short.
   url="$(python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve().as_uri())' "$html")#print"
-  # ponytail: fixed 4000px-tall viewport; a payment split into many parts would be cut off.
+  # --screenshot captures only the viewport, so the page must fit in 4000px (checked below).
   timeout 120 "$chrome" --headless=new --user-data-dir="$work/chrome" --disable-gpu --hide-scrollbars --force-device-scale-factor=2 \
     --window-size=860,4000 --virtual-time-budget=8000 --screenshot="$work/raw.png" "$url" \
     >/dev/null 2>&1 || true
   [ -s "$work/raw.png" ] || die "$chrome did not render $html"
+  # %@ is the content box WxH+X+Y after trimming the page background. Content reaching the
+  # bottom edge means the viewport cut the certificate off; refuse rather than emit it.
+  local box height content_h content_y
+  read -r box height <<< "$(with_tool imagemagick magick -- "$work/raw.png" -fuzz 3% -format '%@ %h' info:)"
+  content_h="${box#*x}"; content_h="${content_h%%+*}"; content_y="${box##*+}"
+  [ $((content_y + content_h)) -lt "$height" ] ||
+    die "certificate is taller than the PNG render viewport (many payment parts?) - use --html"
   with_tool imagemagick magick -- "$work/raw.png" -fuzz 3% -trim +repage \
     -bordercolor '#23271a' -border 64 -strip "$png"
 }
@@ -730,6 +737,7 @@ cmd_proof() {
   done
   [ -n "$target" ] && [ -n "$html$png" ] ||
     die "usage: lnpay proof <payment_hash|bolt11> [--to LABEL] [--html PATH] [--png PATH]"
+  [ "$html" != "$png" ] || die "--html and --png must be different paths"
 
   local template
   template="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../assets/proof-of-payment.html"

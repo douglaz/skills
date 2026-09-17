@@ -46,11 +46,12 @@ track FAILED "$good_pre" lnbc1test >"$tmp/failed.json"
 track SUCCEEDED 0202020202020202020202020202020202020202020202020202020202020202 lnbc1test >"$tmp/wrongpre.json"
 track SUCCEEDED "$good_pre" "" >"$tmp/keysend.json"
 
-proof() { # fixture html
-  env -i PATH="$tmp/bin:$PATH" HOME="$tmp" XDG_CONFIG_HOME="$tmp" FAKE_TRACK="$tmp/$1" \
+proof() { # fixture html [extra args]
+  local fixture="$1" html="$2"; shift 2
+  env -i PATH="$tmp/bin:$PATH" HOME="$tmp" XDG_CONFIG_HOME="$tmp" FAKE_TRACK="$tmp/$fixture" \
     LN_CONTEXT=t LN_NAMESPACE=t LN_TARGET=deploy/t \
     ./lnpay proof 72cd6e8422c407fb6d098690f1130b7ded7ec2f7f5e1d30bd9d521f015363793 \
-    --to "a&b@example.com" --html "$2"
+    --to "a&b@example.com" --html "$html" "$@"
 }
 
 # `&& rc=0 || rc=$?` throughout: a bare `; rc=$?` under set -e ends the script early.
@@ -102,6 +103,13 @@ for bad in failed:"not SUCCEEDED" wrongpre:"does not hash" keysend:"no invoice";
   desc="$fixture: writes no certificate"
   check test ! -e "$tmp/$fixture.html"
 done
+
+# One path for both formats would let the PNG overwrite the HTML (PR #83 review, codex + CodeRabbit).
+proof ok.json "$tmp/same.out" --png "$tmp/same.out" >"$tmp/out" 2>&1 && rc=0 || rc=$?
+desc="--html and --png on the same path is refused before anything is written"
+check test "$rc" -eq 1
+check grep -qF -- 'must be different paths' "$tmp/out"
+check test ! -e "$tmp/same.out"
 
 # --png alone renders through a scratch HTML file; a refusal must not leave it behind, even
 # when TMPDIR holds a quote or starts with '-' (codex-review PR #83 P2 rounds 1 and 2: the
