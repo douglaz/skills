@@ -228,13 +228,31 @@ Observed on **lncli v0.21.3-beta** (`ver.out` → `"version": "0.21.3-beta"`), w
 Both failures put **nothing** on stdout and exit non-zero, which is why
 `est="$(lncli estimatefee ...)" || die` is a sound guard rather than a hopeful one.
 
-Rate by conf target, same address and 250000 sats, all exit 0 — this is the
-measurement the floor-rate choice above rests on:
+Rate by conf target — the measurement the floor-rate choice above rests on. Same
+address, 250000 sats, run the same way:
+
+```bash
+for ct in 1 6 144 1008; do
+  "${K[@]}" estimatefee "{\"$ADDR\":250000}" --conf_target "$ct" \
+    >"ct$ct.out" 2>"ct$ct.err"; echo "conf_target=$ct exit=$?"
+done
+```
+
+All four exited 0 with 286 bytes on stdout and **0 bytes on stderr**. From the
+`ct*.out` files, on lncli v0.21.3-beta:
 
 | conf_target | 1 | 6 | 144 | 1008 |
 |---|---|---|---|---|
 | sat_per_vbyte | 2 | 1 | 1 | 1 |
-| fee_sat | 305 | 162 | 145 | 145 |
+| fee_sat | 324 | 172 | 145 | 145 |
+
+**Re-running this will not reproduce the fees, and should not.** `estimatefee`
+selects coins, so `fee_sat` moves with the wallet's UTXO set: an earlier run the
+same day, on the same node and amount, returned 305 / 162 / 145 / 145. The design
+does not depend on those numbers. It depends on the rate being non-increasing in
+the conf target and bottoming at the 1 sat/vB relay floor, which is why 1008 is
+asked for when the funding decision has already been delegated to the balance
+check. Treat the fee row as a snapshot and the `sat_per_vbyte` row as the claim.
 
 ## Receiving
 
