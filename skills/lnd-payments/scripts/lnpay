@@ -439,8 +439,9 @@ cmd_sendonchain() {
   # transaction's vsize; funding is settled by the balance check below, at the rate the
   # broadcast will use. Take it at the longest conf target - the lowest rate the estimator
   # quotes - so a low manual rate is not refused for failing to fund a conf-target-6 fee it
-  # would never pay. A request that cannot be funded even at the floor rate cannot be
-  # funded at any rate, so the refusal is right in that case.
+  # would never pay. 1008 is the estimator-s own floor, not a bound below every manual
+  # rate: if the estimator quotes above the requested rate, a refusal here can still be
+  # wrong. SKILL.md documents that residual band and why it is accepted.
   est_ct="$ct"
   [ -z "$satvb" ] || est_ct=1008
   est="$(lncli estimatefee "$req" --conf_target "$est_ct")" ||

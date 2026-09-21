@@ -161,8 +161,10 @@ dry run and then fail inside `sendcoins`, and a low one would be refused for
 failing to afford a fee it never pays. The estimate is therefore requested at
 `--conf_target 1008`, the lowest rate the estimator quotes, purely to validate
 the address and reveal the vsize. A request that cannot be funded even at that
-floor rate cannot be funded at any rate, so refusing it there is correct. The
-scaled fee is an estimate, so a marginal case can still fail at broadcast.
+floor rate is usually unfundable at any rate the operator could pick — but not
+provably, since 1008 is the estimator's own floor and not a bound below every
+manual rate. The band where that breaks down is the known limitation below. The
+scaled fee is an estimate too, so a marginal case can still fail at broadcast.
 
 One known limitation, left in deliberately. If the estimator's 1008-block rate is
 *above* the manual rate, a balance sitting between the two totals is refused by
@@ -246,13 +248,17 @@ All four exited 0 with 286 bytes on stdout and **0 bytes on stderr**. From the
 | sat_per_vbyte | 2 | 1 | 1 | 1 |
 | fee_sat | 324 | 172 | 145 | 145 |
 
-**Re-running this will not reproduce the fees, and should not.** `estimatefee`
-selects coins, so `fee_sat` moves with the wallet's UTXO set: an earlier run the
-same day, on the same node and amount, returned 305 / 162 / 145 / 145. The design
-does not depend on those numbers. It depends on the rate being non-increasing in
-the conf target and bottoming at the 1 sat/vB relay floor, which is why 1008 is
-asked for when the funding decision has already been delegated to the balance
-check. Treat the fee row as a snapshot and the `sat_per_vbyte` row as the claim.
+**The fees may differ on a re-run.** Two runs the same day, on the same node,
+address and amount, returned `305 / 162 / 145 / 145` and then
+`324 / 172 / 145 / 145`. Nothing here isolates what varied between them, so no
+cause is claimed for the difference. The `sat_per_vbyte` row was identical in
+both.
+
+The design does not depend on the fees. It depends on the rate being
+non-increasing in the conf target and bottoming at the 1 sat/vB relay floor,
+which is why 1008 is asked for once the funding decision has been delegated to
+the balance check. Treat the `fee_sat` row as a snapshot and the `sat_per_vbyte`
+row as the claim.
 
 ## Receiving
 
