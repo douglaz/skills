@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# lnpay.test — offline checks for `lnpay proof`: it renders a certificate only for a payment that
-# provably settled, and escapes node aliases (arbitrary strings from the gossip graph).
+# lnpay.test — offline checks for `lnpay proof` (it renders a certificate only for a payment that
+# provably settled, and escapes node aliases, which are arbitrary strings from the gossip graph)
+# and for `lnpay sendonchain` (it broadcasts only under --yes).
 # A fake kubectl answers lncli calls from fixtures; no node, no network, no browser.
 # Usage: ./skills/lnd-payments/scripts/lnpay.test   (exits 0 if all pass)
 set -euo pipefail
@@ -14,9 +15,32 @@ mkdir "$tmp/bin"
 cat >"$tmp/bin/kubectl" <<'EOF'
 #!/usr/bin/env bash
 while [ "$1" != lncli ]; do shift; done; shift
+# '|'-joined, not "$*": flattening with spaces makes `--label "rent payment"` and
+# `--label rent payment` the same line, so an argument-boundary bug could not redden.
+[ -n "${FAKE_CALLS:-}" ] && (IFS='|'; echo "$*") >>"$FAKE_CALLS"
 case "$1" in
   trackpayment) cat "$FAKE_TRACK";;
   getinfo) echo '{"alias":"test-sender"}';;
+  estimatefee)
+    case "$2" in
+      *nosuchaddress*)
+        echo '[lncli] rpc error: decoded address is of unknown format' >&2; exit 1;;
+      *nofunds*)
+        echo '[lncli] rpc error: insufficient funds available to construct transaction' >&2
+        exit 1;;
+    esac
+    # The floor-rate estimate selects different coins, so it implies a different vsize;
+    # SKILL.md has the conf-target table measured on a live node. These two values only
+    # need to DIFFER, so that the quoted fee alone proves which target was asked for.
+    case "$*" in
+      *"--conf_target 1008"*) echo '{"fee_sat":"145","feerate_sat_per_byte":"1","sat_per_vbyte":"1"}';;
+      *) echo '{"fee_sat":"155","feerate_sat_per_byte":"1","sat_per_vbyte":"1"}';;
+    esac;;
+  sendcoins)
+    echo '{"txid":"0000000000000000000000000000000000000000000000000000000000000abc"}';;
+  walletbalance)
+    # usable = confirmed - anchor reserve = 360000
+    echo '{"confirmed_balance":"400000","unconfirmed_balance":"0","reserved_balance_anchor_chan":"40000"}';;
   getnodeinfo)
     case "$2" in
       02aa*) echo '{"node":{"alias":"hop-one"}}';;
@@ -127,6 +151,120 @@ for scratch in "it's scratch" -scratch; do
   check test -z "$(ls -A -- "$tmp/$scratch")"
   check test ! -e "$tmp/failed.png"
 done
+
+# sendonchain: an on-chain send is irreversible, so the only thing that may broadcast is --yes.
+onchain() {
+  : >"$tmp/calls"
+  env -i PATH="$tmp/bin:$PATH" HOME="$tmp" XDG_CONFIG_HOME="$tmp" FAKE_CALLS="$tmp/calls" \
+    LN_CONTEXT=t LN_NAMESPACE=t LN_TARGET=deploy/t ./lnpay sendonchain "$@"
+}
+not_called() { ! grep -qF -- "$1" "$tmp/calls"; }
+broadcast_args() { grep -F -- 'sendcoins|' "$tmp/calls"; }
+
+onchain 31h1vYVSYuKP6AhS86fbRdMw9XHieotbST 250000 >"$tmp/out" 2>&1 && rc=0 || rc=$?
+desc="a dry run quotes the fee (exit 0)"
+check test "$rc" -eq 0
+check grep -qF -- 'fee_estimate: 155 sats' "$tmp/out"
+check grep -qF -- 'total_sats:   250155' "$tmp/out"
+check grep -qF -- 'feerate:      1 sat/vB (conf_target 6)' "$tmp/out"
+# Conf-target mode quotes AND funds at the same rate, so it keeps asking for that target.
+check grep -qF -- '|--conf_target|6' "$tmp/calls"
+desc="a dry run never reaches sendcoins"
+check grep -qF -- 'DRY RUN' "$tmp/out"
+check not_called sendcoins
+
+onchain 31h1vYVSYuKP6AhS86fbRdMw9XHieotbST 250000 --label "rent payment" --yes >"$tmp/out" 2>&1 && rc=0 || rc=$?
+desc="--yes broadcasts and reports the txid (exit 0)"
+check test "$rc" -eq 0
+check grep -qF -- 'txid:         0000000000000000000000000000000000000000000000000000000000000abc' "$tmp/out"
+desc="the broadcast carries the amount, the quoted conf target, and the label as ONE argument"
+# Equality, not a substring: it pins the whole argument list, so a stray extra flag or a
+# label split across two arguments both redden.
+check test "$(broadcast_args)" = \
+  'sendcoins|--addr|31h1vYVSYuKP6AhS86fbRdMw9XHieotbST|--amt|250000|--force|--conf_target|6|--label|rent payment'
+
+onchain 31h1vYVSYuKP6AhS86fbRdMw9XHieotbST 250000 --sat-per-vbyte 5 --yes >"$tmp/out" 2>&1 && rc=0 || rc=$?
+desc="--sat-per-vbyte scales the quote and is what gets broadcast (exit 0)"
+check test "$rc" -eq 0
+check grep -qF -- 'feerate:      5 sat/vB (requested)' "$tmp/out"
+# 145, not 155: codex-review PR #84 P2 -- the manual-rate path must take its estimate at
+# the floor conf target, so funding is never judged at a rate the broadcast will not pay.
+# The quoted number is the proof of which target was asked for.
+check grep -qF -- 'fee_estimate: 725 sats' "$tmp/out"
+check grep -qF -- '|--conf_target|1008' "$tmp/calls"
+# estimatefee still quotes at a conf target; what matters is that the broadcast does not.
+check test "$(broadcast_args)" = \
+  'sendcoins|--addr|31h1vYVSYuKP6AhS86fbRdMw9XHieotbST|--amt|250000|--force|--sat_per_vbyte|5'
+
+# Amount and feerate shapes that must never reach the node. The leading-zero cases are the
+# sharp ones: "0123" is 123 to python's int(), 83 to bash arithmetic, and 83 to lncli's
+# base-0 flag parser, so accepting it quotes one amount and sends another.
+for bad in \
+  "0.00250000:must be a whole number" \
+  "0123:must not have a leading zero" \
+  "250000 --sat-per-vbyte 010:must not have a leading zero" \
+  "250000 --sat-per-vbyte 0:must be at least 1" \
+  "250000 --conf-target 0:must be at least 1" \
+  "0:must be at least 1" \
+  "99999999999999999999:out of range" \
+  "250000 --sat-per-vbyte 5 --conf-target 6:pick one" \
+  ; do
+  args=${bad%%:*}; msg=${bad#*:}
+  # shellcheck disable=SC2086
+  onchain 31h1vYVSYuKP6AhS86fbRdMw9XHieotbST $args >"$tmp/out" 2>&1 && rc=0 || rc=$?
+  desc="refuses '$args' (exit 1, says '$msg')"
+  check test "$rc" -eq 1
+  check grep -qF -- "$msg" "$tmp/out"
+  desc="refuses '$args' before calling the node"
+  check test ! -s "$tmp/calls"
+done
+
+# Passed as a real empty argument: the loop above cannot carry one, because word splitting
+# drops it before lnpay sees it. An empty value is what a caller computing a rate into a
+# variable actually produces, and it must not be read as "flag absent".
+onchain 31h1vYVSYuKP6AhS86fbRdMw9XHieotbST 250000 --sat-per-vbyte "" --yes >"$tmp/out" 2>&1 && rc=0 || rc=$?
+desc="an empty --sat-per-vbyte is refused, not silently ignored (exit 1)"
+check test "$rc" -eq 1
+check grep -qF -- 'must be a whole number' "$tmp/out"
+check test ! -s "$tmp/calls"
+
+# Both estimatefee refusals lnd can give: an undecodable address and an unfundable amount.
+for addr in nosuchaddress nofunds; do
+  onchain "$addr" 250000 --yes >"$tmp/out" 2>&1 && rc=0 || rc=$?
+  desc="estimatefee refusing ($addr) stops the send there (exit 1)"
+  check test "$rc" -eq 1
+  check grep -qF -- 'estimatefee failed' "$tmp/out"
+  check not_called sendcoins
+done
+
+# CodeRabbit #84 (Major): estimatefee funds the request at the conf-target rate, so in
+# --sat-per-vbyte mode it never checked the rate actually being broadcast. 250000 + a fee
+# scaled to 1000 sat/vB is 395000, past the fake wallet's 360000 usable.
+onchain 31h1vYVSYuKP6AhS86fbRdMw9XHieotbST 250000 --sat-per-vbyte 1000 --yes >"$tmp/out" 2>&1 && rc=0 || rc=$?
+desc="a manual feerate the balance cannot fund is refused before broadcast (exit 1)"
+check test "$rc" -eq 1
+check grep -qF -- 'more than the 360000 sat spendable on-chain balance' "$tmp/out"
+check not_called sendcoins
+
+# CodeRabbit #84 (Minor): need_value only counts arguments, so `--label --yes` took --yes
+# as the label and turned a send into a dry run.
+onchain 31h1vYVSYuKP6AhS86fbRdMw9XHieotbST 250000 --label --yes >"$tmp/out" 2>&1 && rc=0 || rc=$?
+desc="'--label --yes' is refused rather than swallowing the flag into the label (exit 1)"
+check test "$rc" -eq 1
+check grep -qF -- "requires a value, got '--yes'" "$tmp/out"
+check test ! -s "$tmp/calls"
+onchain 31h1vYVSYuKP6AhS86fbRdMw9XHieotbST 250000 --label "" --yes >"$tmp/out" 2>&1 && rc=0 || rc=$?
+desc="an empty --label is refused, not silently dropped (exit 1)"
+check test "$rc" -eq 1
+check grep -qF -- 'requires a value' "$tmp/out"
+check not_called sendcoins
+
+# The routing fee ceiling is a money-path default; pin it so a silent change reddens.
+env -i PATH="$tmp/bin:$PATH" HOME="$tmp" XDG_CONFIG_HOME="$tmp" \
+  ./lnpay config >"$tmp/out" 2>&1 && rc=0 || rc=$?
+desc="the default routing fee ceiling is 0.5% (exit 0)"
+check test "$rc" -eq 0
+check grep -qF -- 'fee_limit_percent: 0.5' "$tmp/out"
 
 echo "$n checks, $([ "$fail" = 0 ] && echo all passed || echo FAILURES)"
 exit "$fail"

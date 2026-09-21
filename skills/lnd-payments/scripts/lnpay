@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# lnpay - send and receive Bitcoin Lightning payments through an lnd node that
-# is reached by running lncli inside a Kubernetes workload.
+# lnpay - send and receive Bitcoin over Lightning and on-chain through an lnd node
+# that is reached by running lncli inside a Kubernetes workload.
 set -euo pipefail
 
 err() { echo "lnpay: $*" >&2; }
@@ -121,7 +121,7 @@ load_config() {
   validate_profile_name
 
   LN_CONTAINER="${LN_CONTAINER:-lnd}"
-  LNPAY_FEE_LIMIT_PERCENT="${LNPAY_FEE_LIMIT_PERCENT:-${LN_DEFAULT_FEE_PCT:-2}}"
+  LNPAY_FEE_LIMIT_PERCENT="${LNPAY_FEE_LIMIT_PERCENT:-${LN_DEFAULT_FEE_PCT:-0.5}}"
   LNPAY_PAY_TIMEOUT="${LNPAY_PAY_TIMEOUT:-60}"
   LNPAY_TRACK_TIMEOUT="${LNPAY_TRACK_TIMEOUT:-30}"
   LNPAY_WATCH_TIMEOUT="${LNPAY_WATCH_TIMEOUT:-1800}"
@@ -327,11 +327,40 @@ import sys, json
 d = json.load(sys.stdin)
 print("spendable_local: ", d.get("local_balance", {}).get("sat"), "sat")
 print("inbound_remote:  ", d.get("remote_balance", {}).get("sat"), "sat")'
+  lncli walletbalance | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+conf, unconf = int(d.get("confirmed_balance", 0)), int(d.get("unconfirmed_balance", 0))
+# Anchor channels keep a UTXO back for force-close fee bumping; sendcoins cannot spend it.
+res = int(d.get("reserved_balance_anchor_chan", 0))
+print("onchain_conf:    %d sat" % conf)
+print("onchain_unconf:  %d sat" % unconf)
+print("onchain_usable:  %d sat (%d sat anchor reserve)" % (conf - res, res))'
 }
 
 need_value() {
   [ "$#" -ge 2 ] || die "$1 requires a value"
 }
+
+# Numeric input on a money path. A leading zero is rejected rather than tolerated because
+# three parsers then disagree about the same digits: python's int() reads "0123" as 123,
+# bash arithmetic reads it as octal 83, and lncli parses integer flags with base 0, so it
+# reads 83 too. The dry run would quote a fee for one amount and the node would send
+# another. The length bound comes before any comparison, since `[ 99999999999999999999
+# -gt 0 ]` is a bash error, not a false.
+need_uint() { # name value min max
+  local name="$1" value="$2" min="$3" max="$4"
+  case "$value" in
+    ""|*[!0-9]*) die "$name must be a whole number, got '$value'";;
+    0|[1-9]*) ;;
+    *) die "$name must not have a leading zero, got '$value'";;
+  esac
+  [ "${#value}" -le 18 ] || die "$name is out of range: $value"
+  [ "$value" -ge "$min" ] || die "$name must be at least $min, got $value"
+  [ "$value" -le "$max" ] || die "$name must be at most $max, got $value"
+}
+
+MAX_SATS=2100000000000000   # 21M BTC, the whole supply
 
 cmd_newaddress() {
   local addr_type="" json=0
@@ -360,6 +389,108 @@ cmd_newaddress() {
   fi
 }
 
+cmd_sendonchain() {
+  local addr="" sats="" satvb="" conf_target="" label="" yes=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      # Validated here, not after the loop: an empty value is indistinguishable from an
+      # absent flag once it is in the variable, so `--sat-per-vbyte ""` would otherwise be
+      # ignored in silence and the send would fall back to the conf-target estimate.
+      # Both reject 0: to lncli 0 means "flag unset, pick your own rate", so the dry run
+      # would quote a zero fee for a transaction that goes out at the node's rate.
+      --sat-per-vbyte) need_value "$@"; need_uint "$1" "$2" 1 100000; satvb="$2"; shift 2;;
+      --conf-target) need_value "$@"; need_uint "$1" "$2" 1 1008; conf_target="$2"; shift 2;;
+      # `need_value` only counts arguments, so `--label --yes` would take `--yes` as the
+      # label and silently turn the send into a dry run. An empty value would be dropped
+      # later by `[ -n "$label" ]`, just as silently. A label starting with '-' is not
+      # supported, which is the price of catching both.
+      --label)
+        need_value "$@"
+        case "${2:-}" in ""|-*) die "$1 requires a value, got '${2:-}'";; esac
+        label="$2"; shift 2;;
+      --yes|-y) yes=1; shift;;
+      -*) die "unknown flag: $1";;
+      *)
+        if [ -z "$addr" ]; then addr="$1"
+        elif [ -z "$sats" ]; then sats="$1"
+        else die "unexpected arg: $1"; fi
+        shift;;
+    esac
+  done
+  [ -n "$addr" ] && [ -n "$sats" ] ||
+    die "usage: lnpay sendonchain <address> <sats> [--sat-per-vbyte N|--conf-target N] [--label L] [--yes]"
+  [ -z "$satvb" ] || [ -z "$conf_target" ] ||
+    die "--sat-per-vbyte and --conf-target set the fee two different ways - pick one"
+  # Whole satoshis only. lncli takes satoshis, so a BTC-shaped "0.00123456" would be a
+  # silent hundred-millionfold error on a path that cannot be undone.
+  need_uint "amount (satoshis)" "$sats" 1 "$MAX_SATS"
+
+  # estimatefee decodes the address and selects the coins, so an unknown address format or an
+  # amount the wallet cannot fund fails here, before anything can be broadcast.
+  local ct="${conf_target:-6}" req est fee rate est_ct
+  req="$(python3 -c 'import json,sys; print(json.dumps({sys.argv[1]: int(sys.argv[2])}))' "$addr" "$sats")"
+  # In manual-rate mode the estimate exists only to validate the address and reveal the
+  # transaction's vsize; funding is settled by the balance check below, at the rate the
+  # broadcast will use. Take it at the longest conf target - the lowest rate the estimator
+  # quotes - so a low manual rate is not refused for failing to fund a conf-target-6 fee it
+  # would never pay. A request that cannot be funded even at the floor rate cannot be
+  # funded at any rate, so the refusal is right in that case.
+  est_ct="$ct"
+  [ -z "$satvb" ] || est_ct=1008
+  est="$(lncli estimatefee "$req" --conf_target "$est_ct")" ||
+    die "estimatefee failed - unknown address format, or not enough confirmed funds?"
+  fee="$(printf '%s' "$est" | jget fee_sat)"
+  rate="$(printf '%s' "$est" | jget sat_per_vbyte)"
+  [ -n "$fee" ] && [ "${rate:-0}" -gt 0 ] || die "estimatefee returned no usable estimate: $est"
+
+  local shown_rate="$rate" shown_fee="$fee" rate_source="conf_target $ct"
+  if [ -n "$satvb" ]; then
+    # estimatefee has no feerate flag, so scale its quote by fee/rate - the vsize it implies.
+    shown_rate="$satvb"
+    shown_fee="$(python3 -c 'import sys; f,r,w=(int(x) for x in sys.argv[1:4]); print(round(f / r * w))' \
+      "$fee" "$rate" "$satvb")"
+    rate_source="requested"
+    # estimatefee selected coins at the conf-target rate, not this one, so its funding
+    # check says nothing about the rate we are about to broadcast at: a high manual rate
+    # can clear the dry run and then fail in sendcoins, and a low one can be refused
+    # although the send would have fit. Check the balance directly instead. shown_fee is
+    # scaled from the estimate, so this is a close check, not an exact one.
+    local usable
+    usable="$(lncli walletbalance | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+print(int(d.get("confirmed_balance", 0)) - int(d.get("reserved_balance_anchor_chan", 0)))')" ||
+      die "walletbalance failed"
+    [ "$(( sats + shown_fee ))" -le "$usable" ] ||
+      die "$(( sats + shown_fee )) sats (amount plus fee at $satvb sat/vB) is more than the $usable sat spendable on-chain balance"
+  fi
+
+  echo "On-chain send"
+  echo "address:      $addr"
+  echo "amount_sats:  $sats"
+  echo "feerate:      $shown_rate sat/vB ($rate_source)"
+  echo "fee_estimate: $shown_fee sats"
+  echo "total_sats:   $(( sats + shown_fee ))"
+  [ -n "$label" ] && echo "label:        $label"
+
+  if [ "$yes" != 1 ]; then
+    echo "DRY RUN - nothing sent. Re-run with --yes to send $sats sats to $addr."
+    return 0
+  fi
+
+  # --force only skips lncli's interactive prompt, which it already skips whenever stdout is
+  # not a terminal (`lncli sendcoins --help`) - as it never is under kubectl exec. The guard
+  # that actually holds here is this script's --yes, so never call sendcoins before it.
+  local sendargs=(sendcoins --addr "$addr" --amt "$sats" --force)
+  if [ -n "$satvb" ]; then sendargs+=(--sat_per_vbyte "$satvb"); else sendargs+=(--conf_target "$ct"); fi
+  [ -n "$label" ] && sendargs+=(--label "$label")
+  local out txid
+  out="$(lncli "${sendargs[@]}")" || die "sendcoins failed"
+  txid="$(printf '%s' "$out" | jget txid)"
+  [ -n "$txid" ] || die "sendcoins returned no txid: $out"
+  echo "txid:         $txid"
+}
+
 cmd_receive() {
   local sats="" memo="lnpay invoice" qr="" ansi=0 expiry="" json=0
   while [ $# -gt 0 ]; do
@@ -374,6 +505,8 @@ cmd_receive() {
     esac
   done
   [ -n "$sats" ] || die "usage: lnpay receive <sats> [--memo M] [--qr PATH] [--ansi] [--expiry SECONDS] [--json]"
+  # Same base-0 hazard as sendonchain: unvalidated, `receive 0x10` invoices 16 sats.
+  need_uint "amount (satoshis)" "$sats" 1 "$MAX_SATS"
 
   local addargs=(addinvoice --amt "$sats" --memo "$memo")
   [ -n "$expiry" ] && addargs+=(--expiry "$expiry")
@@ -449,8 +582,8 @@ cmd_pay() {
   local target="" amt="" fee_limit="" yes=0 timeout="$LNPAY_PAY_TIMEOUT"
   while [ $# -gt 0 ]; do
     case "$1" in
-      --amt) need_value "$@"; amt="$2"; shift 2;;
-      --fee-limit) need_value "$@"; fee_limit="$2"; shift 2;;
+      --amt) need_value "$@"; need_uint "$1" "$2" 1 "$MAX_SATS"; amt="$2"; shift 2;;
+      --fee-limit) need_value "$@"; need_uint "$1" "$2" 0 "$MAX_SATS"; fee_limit="$2"; shift 2;;
       --timeout) need_value "$@"; timeout="$2"; shift 2;;
       --yes|-y) yes=1; shift;;
       -*) die "unknown flag: $1";;
@@ -765,13 +898,15 @@ cmd_proof() {
 
 usage() {
   cat <<EOF
-lnpay - send and receive Lightning payments via kubectl exec + lncli
+lnpay - send and receive Lightning and on-chain payments via kubectl exec + lncli
 
 Commands:
   lnpay config                            show loaded config, without secrets
-  lnpay node                              node sync status + spendable balance
+  lnpay node                              node sync status + channel/onchain balance
   lnpay newaddress [p2wkh|np2wkh|p2tr]    generate an onchain receive address
         [--json]
+  lnpay sendonchain <address> <sats>      send onchain, dry-run until --yes
+        [--sat-per-vbyte N|--conf-target N] [--label L] [--yes]
   lnpay receive <sats> [--memo M]         create an invoice to receive sats
         [--qr PATH] [--ansi] [--expiry S] [--json]
   lnpay decode <bolt11|lightning:...>     show what an invoice will pay
@@ -809,6 +944,7 @@ case "$cmd" in
   config) cmd_config "$@";;
   node) cmd_node "$@";;
   newaddress) cmd_newaddress "$@";;
+  sendonchain) cmd_sendonchain "$@";;
   receive) cmd_receive "$@";;
   decode) cmd_decode "$@";;
   decode-qr) cmd_decode_qr "$@";;
