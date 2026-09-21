@@ -333,6 +333,12 @@ d = json.load(sys.stdin)
 conf, unconf = int(d.get("confirmed_balance", 0)), int(d.get("unconfirmed_balance", 0))
 # Anchor channels keep a UTXO back for force-close fee bumping; sendcoins cannot spend it.
 res = int(d.get("reserved_balance_anchor_chan", 0))
+# locked_balance is deliberately NOT subtracted: confirmed_balance already excludes
+# locked/leased coins. ConfirmedBalance in lnd sums ListUnspentWitness -> btcwallet
+# ListUnspent -> wtxmgr UnspentOutputs, which calls fetchCredits with includeLocked
+# false ("UnspentOutputs needs outputs that are actually spendable: - Not locked.",
+# wtxmgr v1.5.6 tx.go:1010, the version lnd v0.21.3-beta pins). Subtracting it again
+# would understate the balance and refuse sends that would have succeeded.
 print("onchain_conf:    %d sat" % conf)
 print("onchain_unconf:  %d sat" % unconf)
 print("onchain_usable:  %d sat (%d sat anchor reserve)" % (conf - res, res))'
@@ -455,6 +461,7 @@ cmd_sendonchain() {
     # can clear the dry run and then fail in sendcoins, and a low one can be refused
     # although the send would have fit. Check the balance directly instead. shown_fee is
     # scaled from the estimate, so this is a close check, not an exact one.
+    # See cmd_node for why locked_balance is not part of this subtraction.
     local usable
     usable="$(lncli walletbalance | python3 -c '
 import sys, json
