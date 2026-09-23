@@ -2,7 +2,7 @@
 name: second-model-bead-audit
 description: >-
   Runs the default final launch-readiness audit for a polished bead graph against
-  its plan. A read-only two-reviewer panel (Codex gpt-5.6-sol at xhigh plus Claude
+  its plan. A read-only two-reviewer panel (Codex gpt-6-sol at xhigh plus Claude
   reviewer at high effort) independently checks coverage, ownership, bead quality,
   dependencies, priority, verification, and operational obligations; the
   orchestrator merges and reconciles their findings into one verdict. Use after
@@ -70,7 +70,7 @@ The default panel is:
 
 | Reviewer | Invocation | Role |
 |---|---|---|
-| `codex` | `codex exec`, `gpt-5.6-sol`, `model_reasoning_effort="xhigh"`, read-only sandbox | Independent plan/graph audit with a custom rubric |
+| `codex` | `codex exec`, `gpt-6-sol`, `model_reasoning_effort="xhigh"`, read-only sandbox | Independent plan/graph audit with a custom rubric |
 | `claude` | `claude -p`, `--model "$CLAUDE_MODEL" --effort high`, read-only tool set | Independent plan/graph audit with the same rubric |
 
 `$CLAUDE_MODEL` is resolved by the ladder probe in
