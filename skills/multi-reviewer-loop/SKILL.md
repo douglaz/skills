@@ -39,7 +39,7 @@ The default panel is two reviewers, run in parallel every pass:
 
 | Reviewer | Command | Notes |
 |---|---|---|
-| `codex` | `codex review --base "$DIFF_BASE" -c 'model="gpt-5.6-sol"' -c 'model_reasoning_effort="xhigh"'` | Diff-scoped, structured `[P*]` output |
+| `codex` | `codex review --base "$DIFF_BASE" -c 'model="gpt-6-sol"' -c 'model_reasoning_effort="xhigh"'` | Diff-scoped, structured `[P*]` output |
 | `claude` | `claude -p "<review prompt>" --model "$CLAUDE_MODEL" --effort high --output-format json` | Repo-aware, reads beyond the diff |
 
 **The Claude slot is a role, not a model.** `$CLAUDE_MODEL` is resolved once per run
@@ -67,11 +67,11 @@ nothing and never exiting.
   to a later ladder entry, the panel is still two independent reviewers and can
   reach plain `CLEAN`; report which model filled the slot. `DEGRADED` is for a slot
   left **empty** — every ladder candidate failed, or codex did.
-- Default to `gpt-5.6-sol` at `xhigh` for codex and the first reachable ladder entry
+- Default to `gpt-6-sol` at `xhigh` for codex and the first reachable ladder entry
   at `--effort high` for Claude. If the user or repo pins different models, honor
   that — a pin replaces the ladder rather than prefixing it, so a pinned model that
   cannot be reached is a failure to report, not a licence to substitute. If
-  `gpt-5.6-sol` is unavailable, retry once with the environment default model and
+  `gpt-6-sol` is unavailable, retry once with the environment default model and
   note the fallback. If a flag is not recognized, retry without it and note the
   incompatibility; both CLIs change between versions.
 - Web search is enabled by default in current Codex CLI releases, so do not pass
@@ -470,7 +470,7 @@ For each pass `N` from `1` to `MAX_PASSES`:
    # calls then die instantly on `--kill-after` with nothing naming the dependency.
    [ -n "${TO:-}" ] || { echo "no validated GNU timeout — see references/reviewer-panel.md"; exit 1; }
    "$TO" --kill-after=60 1500 codex review --base "$DIFF_BASE" \
-     -c 'model="gpt-5.6-sol"' -c 'model_reasoning_effort="xhigh"' \
+     -c 'model="gpt-6-sol"' -c 'model_reasoning_effort="xhigh"' \
      </dev/null >"$REVIEW_DIR/pass-${PASS_ID}.codex.txt" 2>"$REVIEW_DIR/pass-${PASS_ID}.codex.stderr.txt" &
    CODEX_PID=$!
    "$TO" --kill-after=60 1500 \
