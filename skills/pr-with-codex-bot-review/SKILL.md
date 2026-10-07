@@ -129,9 +129,12 @@ the same PR:
    `created_at` is the start of the PR's *first* round and `updated_at` moves on every
    edit, so neither dates anything. This row is the **only SHA-bearing signal a
    "PR opened" clean round leaves**: no review object, no line comments, no § 3 comment.
-   `bot-gate` reads it as its third wrapper channel (§ 7). Because the table keeps only
-   the latest round, an earlier round's end is overwritten — see the exit-4 notes in § 7
-   and § 8b for what that costs.
+   `bot-gate` reads it as its third wrapper channel (§ 7). Only a row whose Review cell
+   is `📝 **Code Review**` counts as a wrapper: a Completed `🔒 **Security Review**` row
+   is reported and ignored, while a Running or unknown-status row of any type still
+   blocks; a marked summary the gate cannot parse into a row blocks with exit 3. Because
+   the table keeps only the latest round, an earlier round's end is overwritten — see the
+   exit-4 notes in § 7 and § 8b for what that costs.
 
 When checking whether the bot has weighed in, reactions are the cheapest signal to read —
 but they are not a completion signal, and § 7 explains why you must not treat one as
@@ -597,13 +600,13 @@ condition:
   What must hold before merging:
 
   1. A wrapper exists naming the tip: a review whose `Reviewed commit:` equals it, a
-     clean-round comment whose abbreviated sha prefixes it, or a `✅ **Completed**` row
-     in the Codex Review Summary (§ 5) whose 7-hex cell is a prefix of **exactly one**
+     clean-round comment whose abbreviated sha prefixes it, or a `✅ **Completed**`
+     **Code Review** row in the Codex Review Summary (§ 5) whose 7-hex cell is a prefix of **exactly one**
      commit on the PR and that commit is the tip. That is the bot stating, with a SHA,
      which tree it read.
   2. Run **`scripts/bot-gate <PR>`** and require exit 0. Six conditions: a *submitted* codex
-     review naming this tip, a clean-round comment naming it, or a Completed summary row
-     naming it (a summary row with status `Running`, on any commit, blocks — a round is in
+     review naming this tip, a clean-round comment naming it, or a Completed **Code Review**
+     summary row naming it (a summary row with status `Running`, on any commit, blocks — a round is in
      flight; a status that is neither `Completed` nor `Running` blocks too, fail-closed,
      and the report names the text it saw); no PENDING review from the bot on it (a rerun in flight); no
      `@codex review` request left unanswered — one newer than the wrapper has not reported,
@@ -868,8 +871,8 @@ legitimate outcome to report; laundering it into `NO_PENDING_EVIDENCE` is not.
 ### 8b. When the forge itself is degraded
 
 `bot-gate`'s first condition is *a wrapper names the tip*: a review object whose reviewed
-commit equals it, a § 3 clean comment carrying its sha, or a Completed summary row (channel
-5) whose commit cell resolves to it.
+commit equals it, a § 3 clean comment carrying its sha, or a Completed Code Review summary
+row (channel 5) whose commit cell resolves to it.
 During a GitHub incident that condition can be **unsatisfiable no matter how long you
 wait** — not because the bot disapproves, but because the forge is not answering. Observed:
 the checks rollup showed only CodeRabbit while two CI jobs never appeared at all, and the

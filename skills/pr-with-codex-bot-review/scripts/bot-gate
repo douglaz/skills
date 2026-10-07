@@ -385,6 +385,18 @@ done < <(printf '%s' "$ALL_COMMENTS" | jq -r --arg bot "$BOT_LOGIN" '
 #     (`✅ **Completed** <relative-time>` and `🔄 **Running** since <relative-time>`) are
 #     known; a first-word match read `Completed with errors` as `Completed` and cleared,
 #     and a first-bold-span match cleared on trailing or leading text around the span.
+#   - The Review cell is a shape too: only a row reading exactly `**Code Review**` in bold,
+#     with nothing but non-letter decoration (`📝`, whitespace) before it and nothing after,
+#     can be a wrapper. A Completed row of any other type — `🔒 **Security Review**`, an
+#     empty cell, an unbolded `Code Review` — is not the general code review this skill
+#     requires: it is never credited (no WRAPPER_TIP, no WRAPPER_AT, no coverage epochs),
+#     the text report names it in one line, and the verdict is whatever the other channels
+#     yield. A Running or unknown-status row blocks whatever its review type.
+#   - A marked, authenticated summary comment from which NO data row can be parsed (a
+#     table without leading pipes, which GitHub still renders) is exit 3, per comment: the
+#     channel is present but unreadable, and skipping it would let an older wrapper clear
+#     a tip whose current round may be Running. Only when no marked comment exists at all
+#     is the channel absent (and the PR commits endpoint not read).
 #   - The commit cell is 7 hex, which this file already calls forgeable. Closed cheaply:
 #     the PR's own commit list is fetched (fail-closed, exit 3, like every verdict-feeding
 #     read), and the row counts only when its abbreviation is a prefix of exactly ONE PR
@@ -409,11 +421,24 @@ done < <(printf '%s' "$ALL_COMMENTS" | jq -r --arg bot "$BOT_LOGIN" '
 SUMMARY_MARKER='<!-- codex-pull-request-review-summary -->'
 SUMMARY_RUNNING=""          # abbrev named by a Running row, when one exists
 SUMMARY_UNKNOWN_STATUS=""   # status text of a row that is neither Completed nor Running
+SUMMARY_IGNORED_REVIEW=""   # review-type text of a Completed row that is not a Code Review
 _SUMMARY_ROWS=$(printf '%s' "$ALL_COMMENTS" | jq -r --arg bot "$BOT_LOGIN" --arg mark "$SUMMARY_MARKER" '
   .[][] | select(.user.login==$bot) | select(.user.type=="Bot")
   | select((.body // "") | contains($mark))
-  | (.body | split("\n")[] | select(test("^[[:space:]]*\\|")) | select(test("^[[:space:]]*\\|[[:space:]]*(Review|---)[[:space:]]*\\|") | not))
-  | split("|") | select(length >= 5)
+  # One array of data rows PER marked comment. A marked comment that yields none (a table
+  # whose lines carry no leading pipe, which GitHub still renders) is a summary this gate
+  # cannot read: it emits the `norows` sentinel and the loop below exits 3, instead of the
+  # empty output that used to skip the channel and let an older wrapper clear the tip.
+  | [ (.body | split("\n")[] | select(test("^[[:space:]]*\\|")) | select(test("^[[:space:]]*\\|[[:space:]]*(Review|---)[[:space:]]*\\|") | not))
+      | split("|") | select(length >= 5) ]
+  | if length == 0 then "norows" else .[]
+  # The Review cell is classified by shape too: only non-letter decoration (`📝`,
+  # whitespace) before exactly a bold `Code Review`, nothing after. A Completed row of any
+  # other type (`🔒 **Security Review**`, an empty cell, an unbolded `Code Review`) is not
+  # the general code review this gate certifies and is carried as `ignored` with its text,
+  # so the report can name it. No tag stripping: a tag has letters and fails the match.
+  | (.[1] | test("^[^A-Za-z*]*\\*\\*Code Review\\*\\*[[:space:]]*$")) as $cr
+  | (.[1] | gsub("\\*"; "") | gsub("^[[:space:]]+|[[:space:]]+$"; "") | if . == "" then "?" else . end) as $rtext
   # The status is the SHAPE of the whole cell, not a captured word. The `<relative-time>`
   # element goes first, inner text included (it is the only text a known row carries after
   # the span), then any other tag; what remains must be exactly a bold `Completed`, or a
@@ -423,7 +448,10 @@ _SUMMARY_ROWS=$(printf '%s' "$ALL_COMMENTS" | jq -r --arg bot "$BOT_LOGIN" --arg
   # `Completed` as Completed too (fail-open, all three). Anything else is unknown, carried
   # as the trimmed, tag- and asterisk-stripped cell text so the report names what it saw.
   | (.[2] | gsub("<relative-time[^>]*>[^<]*</relative-time>"; "") | gsub("<[^>]*>"; "")
-     | if test("^[^A-Za-z*]*\\*\\*Completed\\*\\*[[:space:]]*$") then "Completed"
+     | if test("^[^A-Za-z*]*\\*\\*Completed\\*\\*[[:space:]]*$") then
+         (if $cr then "Completed" else "ignored\t" + $rtext end)
+       # Running and unknown block whatever the review type: a round in flight is a round
+       # in flight, and a state this gate cannot read is doubt.
        elif test("^[^A-Za-z*]*\\*\\*Running\\*\\*[[:space:]]*(since)?[[:space:]]*$") then "Running"
        # The unknown class is a separate field from its text: a bare `Completed` with no
        # bold span strips to the text `Completed`, which must not be read as the class.
@@ -432,7 +460,8 @@ _SUMMARY_ROWS=$(printf '%s' "$ALL_COMMENTS" | jq -r --arg bot "$BOT_LOGIN" --arg
        end) as $word
   | ((.[2] | capture("datetime=\"(?<d>[^\"]*)\"").d) // "") as $dt
   | ((.[3] | capture("`(?<h>[0-9a-f]{7,40})`").h) // "") as $sha
-  | $word + "\t" + ([$dt, $sha] | @tsv)' 2>/dev/null) \
+  | $word + "\t" + ([$dt, $sha] | @tsv)
+  end' 2>/dev/null) \
   || { echo "BLOCKED: cannot parse the review summary" >&2; exit 3; }
 if [[ -n "$_SUMMARY_ROWS" ]]; then
   # Fetched only when a summary exists: no extra read on PRs that have none.
@@ -448,6 +477,10 @@ if [[ -n "$_SUMMARY_ROWS" ]]; then
     _sw="${_srow%%$'\t'*}"; _srest="${_srow#*$'\t'}"
     case "$_sw" in
       Completed) ;;
+      # A marked comment with no parseable row: cannot determine, same class as a jq failure.
+      norows)    echo "BLOCKED: a Codex Review Summary comment exists but no row could be parsed" >&2; exit 3 ;;
+      # ignored: a Completed row of another review type. Named in the report, never credited.
+      ignored)   SUMMARY_IGNORED_REVIEW="${_srest%%$'\t'*}"; continue ;;
       Running)   _ssha="${_srest#*$'\t'}"; SUMMARY_RUNNING="${_ssha:-?}"; continue ;;
       # unknown: the status text is the next field, then datetime and sha.
       *)         SUMMARY_UNKNOWN_STATUS="${_srest%%$'\t'*}"; continue ;;
@@ -1174,6 +1207,7 @@ else
   $ROUND_ACTIVE && printf '  ⚠ an `eyes` reaction is newer than the wrapper — a fresh round is running on this\n    same tip. Wait for it to finish.\n'
   [[ -n "$SUMMARY_RUNNING" ]] && printf '  ⚠ the Codex Review Summary says a round is RUNNING on `%s`. Wait for it to finish.\n' "$SUMMARY_RUNNING"
   [[ -n "$SUMMARY_UNKNOWN_STATUS" ]] && printf '  ⚠ the Codex Review Summary shows a row with status "%s", which this gate does not\n    know how to read — it fails closed. Read the summary comment and decide.\n' "$SUMMARY_UNKNOWN_STATUS"
+  [[ -n "$SUMMARY_IGNORED_REVIEW" ]] && printf '  · a Completed "%s" row in the Codex Review Summary is not a code review and does not count as a wrapper.\n' "$SUMMARY_IGNORED_REVIEW"
   # Reported, never gated — see the CR_SKIPLIST block. Every file here is one this PR
   # changes, since that is the only kind CodeRabbit can skip; read the list and decide.
   [[ -n "$CR_SKIPLIST" ]] && printf '  · CodeRabbit skipped these file(s) as trivial — it did not review them:\n%s\n' "$(printf '%s' "$CR_SKIPLIST" | sed 's/^/      /')"
