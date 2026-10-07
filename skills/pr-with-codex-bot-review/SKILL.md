@@ -70,10 +70,10 @@ the same PR:
 
    **That sample contained no clean rounds, so it could not show what one looks like.**
    The conclusion drawn from it — that the clean case leaves nothing usable — was false,
-   and it shaped a gate that could not pass on success. A clean round posts the § 3
-   comment (manual `@codex review`) or updates the channel-5 summary row ("PR opened"),
-   both of which carry the sha. Gate on those; the reaction stays worthless because a
-   reaction has no sha.
+   and it shaped a gate that could not pass on success. A clean round rewrites the
+   channel-5 summary row whatever triggered it, and a manually requested one
+   (`@codex review`) also posts the § 3 comment; both carry the sha. Gate on those; the
+   reaction stays worthless because a reaction has no sha.
 
    **And when it does appear it approves the tree the bot read, which is not always the
    tip.** The reaction has a timestamp and no SHA, so after a force-push a surviving `+1`
@@ -106,11 +106,12 @@ the same PR:
      --jq '.[] | select(.user.login=="chatgpt-codex-connector[bot]") | .body'
    ```
 
-   **This is SHA-bearing evidence**, and for a *manually requested* clean round
-   (`@codex review`) it is the only proof the round leaves that names a tree. A clean
-   round triggered by "PR opened" posts no such comment at all — only the § 5 summary row
-   names its tree. The sha is abbreviated, so match it as a prefix of the tip. Reading
-   only `pulls/<N>/reviews` makes success indistinguishable from a stalled bot — see § 7.
+   **This is SHA-bearing evidence.** A *manually requested* clean round (`@codex review`)
+   posts it AND rewrites the § 5 summary row, so it leaves two signals naming the tree. A
+   clean round triggered by "PR opened" posts no such comment at all — only the § 5
+   summary row names its tree. The sha is abbreviated, so match it as a prefix of the tip.
+   Reading only `pulls/<N>/reviews` makes success indistinguishable from a stalled bot —
+   see § 7.
 
 4. **Line-level review comments** — where actual findings live, separate API:
 
@@ -120,8 +121,9 @@ the same PR:
 
 5. **The "Codex Review Summary" issue comment** — ONE per PR, created with the first
    round and **edited in place** afterwards, identified by the HTML marker
-   `<!-- codex-pull-request-review-summary -->`. It holds a table with one row per round:
-   status (`✅ **Completed**` or `🔄 **Running**`), a `<relative-time datetime="...">`
+   `<!-- codex-pull-request-review-summary -->`. It holds a table with one row, holding
+   the latest round: the review type (`📝 **Code Review**`), the status
+   (`✅ **Completed**` or `🔄 **Running**`), a `<relative-time datetime="...">`
    carrying microseconds, a backticked 7-hex commit cell, and the trigger ("PR opened",
    "@codex review"). **The row's datetime is the round's end.** The comment's
    `created_at` is the start of the PR's *first* round and `updated_at` moves on every
@@ -737,8 +739,13 @@ condition:
      so after a "PR opened" clean round a later `@codex review` can lose its pre-request
      anchor: the first round's end is overwritten by the new row, no round end precedes
      the request any more, and the gate stays at "request not provably answered"
-     (exit 1). A push that moves the tip is the clean escape — the push's automatic round
-     lands a fresh Completed row on the new tip with no request to attribute. Three
+     (exit 1). A push does not get out of it: the request is counted against whatever
+     tip is current and a prior-tip clean comment is not an anchor, so the push's fresh
+     Completed row lands after the request and leaves the same exit 1. What clears it is
+     a **second `@codex review` on the same tip**, posted after the first request's clean
+     `**Reviewed commit:**` comment has arrived: that comment is the second request's
+     pre-request anchor, and its own clean round answers it (exit 0). Both outcomes are
+     fixture-measured in `bot-gate.test` (the P1 and P2 checks), not observed live. Three
      honesty notes:
 
      - **The bound is a lower one, and it admits a false positive.** The honest boundary is
@@ -766,8 +773,9 @@ condition:
      only a `+1`, so nothing proves which tree it read". That was **wrong**, and the advice
      that followed from it ("get a wrapper with `@codex review`") could never work: a
      re-run on a clean tree produces another clean round, which again posts no review
-     object. A clean round DOES leave SHA-bearing evidence — the issue comment in § 3 or
-     the channel-5 Completed summary row — and the gate reads all three channels now. If
+     object. A clean round DOES leave SHA-bearing evidence — the channel-5 Completed
+     summary row on every trigger, plus the § 3 issue comment when it was manually
+     requested — and the gate reads all three channels now. If
      `wrapper 0` persists, the bot genuinely has not reported on this tip.
   3. If a `+1` exists, it is consistent with (1) and (2); if it does not, that is normal
      on a PR the bot has ever had findings on, and is not a reason to wait.
@@ -873,7 +881,7 @@ did.
 | Gate says | Means | Do |
 |---|---|---|
 | `BLOCKED`, wrapper 0, no other signal | the bot has not reviewed this tip | wait, or `@codex review` |
-| `BLOCKED_UNATTRIBUTED` (exit 4) | a round *completed* — its 👍 post-dates the tip — but nothing says which tree it read | `@codex review` first, knowing the request may not be credited: the summary (§ 5) holds only the latest round, so the request can lose its pre-request anchor and the gate stays at "request not provably answered"; a push that moves the tip is the clean escape. If no wrapper comes, go on |
+| `BLOCKED_UNATTRIBUTED` (exit 4) | a round *completed* — its 👍 post-dates the tip — but nothing says which tree it read | `@codex review` first, knowing the request may not be credited: the summary (§ 5) holds only the latest round, so the request can lose its pre-request anchor and the gate stays at "request not provably answered". A push does not clear that; a second `@codex review` on the same tip, after the first one's clean comment has arrived, does (fixture-measured in `bot-gate.test`, not observed live). If no wrapper comes, go on |
 
 Exit 4 is still a refusal. It changes what you do next, never whether the gate approved.
 And it is not proof of an outage: the 👍 is sticky and bounded only by the tip's local

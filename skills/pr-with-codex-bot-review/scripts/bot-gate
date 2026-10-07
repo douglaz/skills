@@ -31,7 +31,8 @@
 # `Completed` row naming the tip in the bot's edited-in-place "Codex Review Summary"
 # comment — the only SHA-bearing signal a "PR opened" clean round leaves. A `Running` or
 # unknown-status summary row blocks. The summary keeps only the latest round, so a later
-# `@codex review` can lose its pre-request anchor and stay uncredited (documented residual).
+# `@codex review` can lose its pre-request anchor and stay uncredited (documented residual;
+# the escape is a second `@codex review` on the same tip — see the summary block below).
 #
 # CODERABBIT DOES NOT GATE. Its status is reported and ignored, because it is a PR-level
 # signal, not evidence about a tree: it lands on whatever head exists when the bot posts
@@ -354,9 +355,10 @@ done < <(printf '%s' "$ALL_COMMENTS" | jq -r --arg bot "$BOT_LOGIN" '
 
 # The THIRD wrapper channel: the bot's "Codex Review Summary" issue comment. One per PR,
 # edited in place, identified by the HTML marker `<!-- codex-pull-request-review-summary -->`,
-# holding a table with one row per round: status, a `<relative-time datetime>`, a 7-hex
-# commit cell and the trigger. A clean round triggered by "PR opened" leaves NO review
-# object, NO line comments and NO `Reviewed commit` comment — this row is the only
+# holding a table with ONE row, the latest round: the review type (`📝 **Code Review**`),
+# the status, a `<relative-time datetime>`, a 7-hex commit cell and the trigger (observed
+# across 14 PRs: one row, final status `Completed`). A clean round triggered by "PR opened"
+# leaves NO review object, NO line comments and NO `Reviewed commit` comment — this row is the only
 # SHA-bearing signal it leaves, so without reading it the gate answered exit 4 on a tip the
 # bot had finished (douglaz/skills #86).
 #
@@ -365,7 +367,7 @@ done < <(printf '%s' "$ALL_COMMENTS" | jq -r --arg bot "$BOT_LOGIN" '
 #     summary and contributes nothing here (every existing rule still applies to it).
 #   - A `Completed` row naming THIS tip is a round that read it: +1 WRAPPER_TIP, WRAPPER_AT
 #     moves forward by EPOCH comparison (the row carries microseconds, the other channels
-#     do not, so a string compare could pick the older one), and the epoch joins both
+#     do not), and the epoch joins both
 #     coverage lists — tip-only, for the same prior-tip-anchor reason as the loop above.
 #   - The round END is the row's `datetime`, NEVER the comment's created_at/updated_at:
 #     the comment is edited in place, so created_at is the START of the PR's first round,
@@ -374,8 +376,15 @@ done < <(printf '%s' "$ALL_COMMENTS" | jq -r --arg bot "$BOT_LOGIN" '
 #     WRAPPER_UNDATED and does not count, mirroring the clean-comment loop.
 #   - A `Running` row on ANY commit is positive evidence a round is in flight — same class
 #     as a fresh `eyes` — and blocks with exit 1 even when an older wrapper names the tip.
-#   - Any other status fails closed: exit 1, naming the status text. Only `Completed` and
-#     `Running` have been observed.
+#   - The status is the SHAPE of the whole cell: once the `<relative-time>` element (inner
+#     text included) and any other tag are stripped, exactly `**Completed**` or
+#     `**Running**` (the latter optionally followed by `since`), with only non-letter
+#     decoration before the span. Anything else — `**Completed with errors**`,
+#     `**Completed** with errors`, `not **Completed**`, a cell with no bold span — fails
+#     closed: exit 1, naming the status text it saw. Only the two observed forms
+#     (`✅ **Completed** <relative-time>` and `🔄 **Running** since <relative-time>`) are
+#     known; a first-word match read `Completed with errors` as `Completed` and cleared,
+#     and a first-bold-span match cleared on trailing or leading text around the span.
 #   - The commit cell is 7 hex, which this file already calls forgeable. Closed cheaply:
 #     the PR's own commit list is fetched (fail-closed, exit 3, like every verdict-feeding
 #     read), and the row counts only when its abbreviation is a prefix of exactly ONE PR
@@ -385,12 +394,18 @@ done < <(printf '%s' "$ALL_COMMENTS" | jq -r --arg bot "$BOT_LOGIN" '
 # DOCUMENTED RESIDUAL, not fixed: the summary keeps only the LATEST round, so after a
 # PR-opened clean round a later `@codex review` can lose its pre-request anchor (the first
 # round's end is overwritten) and stay uncredited — the gate then blocks with the existing
-# "request not provably answered" message. A push that moves the tip is the escape.
+# "request not provably answered" message. A push does NOT escape it: the request is
+# counted against whatever tip is current and a prior-tip clean comment is not an anchor,
+# so the push's fresh row on the new tip lands after the request and anchors nothing. What
+# does escape — fixture-measured in bot-gate.test (the P1 and P2 checks), not observed
+# live — is a SECOND `@codex review` on the same tip, posted after the first request's
+# clean `**Reviewed commit:**` comment has arrived: that comment is the second request's
+# pre-request anchor, and its own clean comment answers it.
 #
-# Microsecond datetimes (`03:10:51.511066Z`) parse under GNU `date -u -d`. The BSD fallback
-# in iso_to_epoch does not accept them, so on such a platform the row is undated and the
-# gate blocks — fail-closed, and left that way rather than extending a branch that cannot
-# be tested here.
+# Microsecond datetimes (`03:10:51.511066Z`) parse under GNU `date -u -d`. Whether the BSD
+# fallback in iso_to_epoch parses them is unmeasured (no BSD/macOS here). If it does not,
+# the row is undated and the gate blocks — fail-closed, and left that way rather than
+# extending a branch that cannot be tested here.
 SUMMARY_MARKER='<!-- codex-pull-request-review-summary -->'
 SUMMARY_RUNNING=""          # abbrev named by a Running row, when one exists
 SUMMARY_UNKNOWN_STATUS=""   # status text of a row that is neither Completed nor Running
@@ -399,10 +414,25 @@ _SUMMARY_ROWS=$(printf '%s' "$ALL_COMMENTS" | jq -r --arg bot "$BOT_LOGIN" --arg
   | select((.body // "") | contains($mark))
   | (.body | split("\n")[] | select(test("^[[:space:]]*\\|")) | select(test("^[[:space:]]*\\|[[:space:]]*(Review|---)[[:space:]]*\\|") | not))
   | split("|") | select(length >= 5)
-  | (.[2] | gsub("<[^>]*>"; "") | gsub("\\*"; "") | (capture("(?<w>[A-Za-z]+)").w // "?")) as $word
+  # The status is the SHAPE of the whole cell, not a captured word. The `<relative-time>`
+  # element goes first, inner text included (it is the only text a known row carries after
+  # the span), then any other tag; what remains must be exactly a bold `Completed`, or a
+  # bold `Running` optionally followed by `since`, with only non-letter decoration (`✅`,
+  # `🔄`, whitespace) before the span. A first-bold-span capture read `✅ **Completed** with
+  # errors` and `❌ not **Completed**` as Completed, and its no-span fallback read a bare
+  # `Completed` as Completed too (fail-open, all three). Anything else is unknown, carried
+  # as the trimmed, tag- and asterisk-stripped cell text so the report names what it saw.
+  | (.[2] | gsub("<relative-time[^>]*>[^<]*</relative-time>"; "") | gsub("<[^>]*>"; "")
+     | if test("^[^A-Za-z*]*\\*\\*Completed\\*\\*[[:space:]]*$") then "Completed"
+       elif test("^[^A-Za-z*]*\\*\\*Running\\*\\*[[:space:]]*(since)?[[:space:]]*$") then "Running"
+       # The unknown class is a separate field from its text: a bare `Completed` with no
+       # bold span strips to the text `Completed`, which must not be read as the class.
+       else ("unknown\t" + (gsub("\\*"; "") | gsub("^[[:space:]]+|[[:space:]]+$"; "")
+             | if . == "" then "?" else . end))
+       end) as $word
   | ((.[2] | capture("datetime=\"(?<d>[^\"]*)\"").d) // "") as $dt
   | ((.[3] | capture("`(?<h>[0-9a-f]{7,40})`").h) // "") as $sha
-  | [$word, $dt, $sha] | @tsv' 2>/dev/null) \
+  | $word + "\t" + ([$dt, $sha] | @tsv)' 2>/dev/null) \
   || { echo "BLOCKED: cannot parse the review summary" >&2; exit 3; }
 if [[ -n "$_SUMMARY_ROWS" ]]; then
   # Fetched only when a summary exists: no extra read on PRs that have none.
@@ -416,12 +446,13 @@ if [[ -n "$_SUMMARY_ROWS" ]]; then
   # which is exactly the silent drop that fails _ready_covered open.
   while IFS= read -r _srow; do
     _sw="${_srow%%$'\t'*}"; _srest="${_srow#*$'\t'}"
-    _sdt="${_srest%%$'\t'*}"; _ssha="${_srest#*$'\t'}"
     case "$_sw" in
       Completed) ;;
-      Running)   SUMMARY_RUNNING="${_ssha:-?}"; continue ;;
-      *)         SUMMARY_UNKNOWN_STATUS="$_sw"; continue ;;
+      Running)   _ssha="${_srest#*$'\t'}"; SUMMARY_RUNNING="${_ssha:-?}"; continue ;;
+      # unknown: the status text is the next field, then datetime and sha.
+      *)         SUMMARY_UNKNOWN_STATUS="${_srest%%$'\t'*}"; continue ;;
     esac
+    _sdt="${_srest%%$'\t'*}"; _ssha="${_srest#*$'\t'}"
     [[ -n "$_ssha" ]] || continue
     # Exactly one PR commit carries this prefix, and it is the tip.
     _sm=$(printf '%s' "$COMMITS" | jq -r --arg p "$_ssha" '
