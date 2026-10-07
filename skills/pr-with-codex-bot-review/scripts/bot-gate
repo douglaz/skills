@@ -397,7 +397,7 @@ SUMMARY_UNKNOWN_STATUS=""   # status text of a row that is neither Completed nor
 _SUMMARY_ROWS=$(printf '%s' "$ALL_COMMENTS" | jq -r --arg bot "$BOT_LOGIN" --arg mark "$SUMMARY_MARKER" '
   .[][] | select(.user.login==$bot) | select(.user.type=="Bot")
   | select((.body // "") | contains($mark))
-  | (.body | split("\n")[] | select(test("^\\|")) | select(test("^\\|[[:space:]]*(Review|---)[[:space:]]*\\|") | not))
+  | (.body | split("\n")[] | select(test("^[[:space:]]*\\|")) | select(test("^[[:space:]]*\\|[[:space:]]*(Review|---)[[:space:]]*\\|") | not))
   | split("|") | select(length >= 5)
   | (.[2] | gsub("<[^>]*>"; "") | gsub("\\*"; "") | (capture("(?<w>[A-Za-z]+)").w // "?")) as $word
   | ((.[2] | capture("datetime=\"(?<d>[^\"]*)\"").d) // "") as $dt
@@ -410,7 +410,13 @@ if [[ -n "$_SUMMARY_ROWS" ]]; then
     || { echo "BLOCKED: PR commits query failed" >&2; exit 3; }
   require_json "PR commits" "$COMMITS"
   _SUM_N=0
-  while IFS=$'\t' read -r _sw _sdt _ssha; do
+  # Split with parameter expansion, not `IFS=$'\t' read`: tab is IFS whitespace, so read
+  # collapses the two adjacent tabs of an EMPTY datetime field and binds the sha as the
+  # datetime — the row then looks sha-less and is dropped before the undated check below,
+  # which is exactly the silent drop that fails _ready_covered open.
+  while IFS= read -r _srow; do
+    _sw="${_srow%%$'\t'*}"; _srest="${_srow#*$'\t'}"
+    _sdt="${_srest%%$'\t'*}"; _ssha="${_srest#*$'\t'}"
     case "$_sw" in
       Completed) ;;
       Running)   SUMMARY_RUNNING="${_ssha:-?}"; continue ;;

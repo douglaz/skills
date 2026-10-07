@@ -1198,6 +1198,21 @@ thumbs "$FAR_UTC" > "$FIX/reactions.json"
 : > "$FIX/commitsfail"
 check "a failed commits read with a summary is exit 3" 3
 
+# 10. A Completed tip row with an EMPTY datetime is undated, like a garbage one: it marks
+# WRAPPER_UNDATED and blocks. Dropped silently it would fail OPEN here — mark-ready at
+# MID, a review wrapper on the tip at NEW, no wrapper at or before the ready — because
+# _ready_covered's draft-flow fallback clears exactly when nothing undated stops it.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$NEW_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"ready_for_review","created_at":"%s"}]]' "$MID_UTC" > "$FIX/timeline.json"
+printf '[[%s]]' "$(summary_row '✅ **Completed**' "" "${TIP:0:7}")" > "$FIX/issues.json"
+check "a summary row with no datetime marks undated" 1
+
+# 11. GitHub-flavoured markdown accepts a table indented by up to three spaces. An indented
+# Running row is still a round in flight: case 2 with two spaces before every table line.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s]]' "$(summary_row '🔄 **Running** since' "$SUM86_AT" "${TIP:0:7}" | sed 's/\\n|/\\n  |/g')" > "$FIX/issues.json"
+check "an indented Running summary row blocks" 1
+
 echo
 echo "passed $PASS, failed $FAIL"
 [[ "$FAIL" -eq 0 ]]

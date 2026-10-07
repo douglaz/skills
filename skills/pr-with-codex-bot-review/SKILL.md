@@ -71,7 +71,8 @@ the same PR:
    **That sample contained no clean rounds, so it could not show what one looks like.**
    The conclusion drawn from it — that the clean case leaves nothing usable — was false,
    and it shaped a gate that could not pass on success. A clean round posts the § 3
-   comment, which carries the sha. Gate on that; the reaction stays worthless because a
+   comment (manual `@codex review`) or updates the channel-5 summary row ("PR opened"),
+   both of which carry the sha. Gate on those; the reaction stays worthless because a
    reaction has no sha.
 
    **And when it does appear it approves the tree the bot read, which is not always the
@@ -765,9 +766,9 @@ condition:
      only a `+1`, so nothing proves which tree it read". That was **wrong**, and the advice
      that followed from it ("get a wrapper with `@codex review`") could never work: a
      re-run on a clean tree produces another clean round, which again posts no review
-     object. A clean round DOES leave SHA-bearing evidence — the issue comment in § 3 — and
-     the gate reads both channels now. If `wrapper 0` persists, the bot genuinely has not
-     reported on this tip.
+     object. A clean round DOES leave SHA-bearing evidence — the issue comment in § 3 or
+     the channel-5 Completed summary row — and the gate reads all three channels now. If
+     `wrapper 0` persists, the bot genuinely has not reported on this tip.
   3. If a `+1` exists, it is consistent with (1) and (2); if it does not, that is normal
      on a PR the bot has ever had findings on, and is not a reason to wait.
 
@@ -858,7 +859,9 @@ legitimate outcome to report; laundering it into `NO_PENDING_EVIDENCE` is not.
 
 ### 8b. When the forge itself is degraded
 
-`bot-gate`'s first condition is *a wrapper exists whose reviewed commit equals the tip*.
+`bot-gate`'s first condition is *a wrapper names the tip*: a review object whose reviewed
+commit equals it, a § 3 clean comment carrying its sha, or a Completed summary row (channel
+5) whose commit cell resolves to it.
 During a GitHub incident that condition can be **unsatisfiable no matter how long you
 wait** — not because the bot disapproves, but because the forge is not answering. Observed:
 the checks rollup showed only CodeRabbit while two CI jobs never appeared at all, and the
