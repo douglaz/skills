@@ -88,6 +88,10 @@ case "$*" in
   *reactions*)                  [ -f "$FIX/reactionsfail" ] && exit 1; f reactions.json '[[]]' ;;
   *graphql*)                    f threads.json '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}' ;;
   *"pulls/"*"/reviews"*)        f reviews.json '[[]]' ;;
+  # The PR's commit list, read only when a Codex Review Summary exists so its 7-hex commit
+  # cell can be resolved against exactly one commit. Default: the tip alone.
+  *"pulls/"*"/commits"*)        [ -f "$FIX/commitsfail" ] && exit 1
+                                   f commits.json "[[{\"sha\":\"$(git rev-parse HEAD)\"}]]" ;;
   *"issues/"*"/comments"*)      printf '%s\n' "$*" >> "$FIX/gh.calls"
                                    [ -f "$FIX/commentsfail" ] && exit 1; f issues.json '[[]]' ;;
   *) echo "[]" ;;
@@ -1112,6 +1116,87 @@ if printf '%s' "$J" | jq -e '(.verdict=="BLOCKED_UNATTRIBUTED") and (.unattribut
 else
   FAIL=$((FAIL+1)); echo "  FAIL JSON names the unattributed verdict"
 fi
+
+# ── The Codex Review Summary comment: the THIRD wrapper channel ──────────────────────
+#
+# The bot posts ONE issue comment per PR and edits it in place: an HTML marker, then a
+# table with one row per round — status, a `<relative-time datetime>` (microseconds), a
+# 7-hex commit cell, the trigger. A clean round triggered by "PR opened" leaves nothing
+# else that names a tree: no review object, no line comments, no `Reviewed commit`
+# comment. douglaz/skills #86 was exactly that, and the gate answered exit 4 twice on a tip
+# the bot had finished reading. These fixtures are synthesized in that shape.
+summary_row() {  # $1 = status cell, $2 = row datetime, $3 = abbrev, [$4 created_at] [$5 login] [$6 type] [$7 boilerplate, "" to omit]
+  local created=${4:-$OLD_UTC} login=${5:-chatgpt-codex-connector[bot]} type=${6:-Bot} boiler=${7-yes}
+  local about=""
+  [[ -n "$boiler" ]] && about='\n\n<details> <summary>About Codex in GitHub</summary>\n\nReviews are triggered when you\n- Open a pull request for review\n- Comment \"@codex review\" or \"@codex security review\".\n\n</details>'
+  printf '{"user":{"login":"%s","type":"%s"},"created_at":"%s","updated_at":"%s","body":"<!-- codex-pull-request-review-summary -->\\n\\n## Codex Review Summary\\n\\n| Review | Status | Commit | Review trigger |\\n| --- | --- | --- | --- |\\n| 📝 **Code Review** | %s <relative-time datetime=\\"%s\\">%s</relative-time> | `%s` | PR opened |%s\\n"}' \
+    "$login" "$type" "$created" "$created" "$1" "$2" "$2" "$3" "$about"
+}
+SUM86_AT="2026-10-07T03:10:51.511066Z"   # the real #86 row datetime, microseconds included
+
+# 1. The #86 shape: Completed on the tip, boilerplate quoting `@codex review`, a 👍 after
+# the tip's commit, nothing else. Today's gate: exit 4. With the row read: exit 0.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s]]' "$(summary_row '✅ **Completed**' "$SUM86_AT" "${TIP:0:7}")" > "$FIX/issues.json"
+thumbs "$FAR_UTC" > "$FIX/reactions.json"
+check "a Completed summary row on the tip clears (#86)" 0
+
+# 2. A Running row is positive evidence a round is in flight, like a fresh `eyes`, and
+# blocks even though an older review wrapper names the tip.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s]]' "$(summary_row '🔄 **Running** since' "$SUM86_AT" "${TIP:0:7}")" > "$FIX/issues.json"
+check "a Running summary row blocks despite a tip wrapper" 1
+
+# 3. Completed on an OLDER commit of the PR says nothing about the tip.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"sha":"%s"},{"sha":"%s"}]]' "$OLDTIP" "$TIP" > "$FIX/commits.json"
+printf '[[%s]]' "$(summary_row '✅ **Completed**' "$SUM86_AT" "${OLDTIP:0:7}")" > "$FIX/issues.json"
+check "a Completed summary row on an older commit blocks" 1
+
+# 4. The marker from a NON-bot login is not a summary. Boilerplate omitted: from a human it
+# would be an `@codex review` trigger and block for a different reason.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s]]' "$(summary_row '✅ **Completed**' "$SUM86_AT" "${TIP:0:7}" "$OLD_UTC" douglaz Bot "")" > "$FIX/issues.json"
+check "a summary from a non-bot login is not a wrapper" 1
+
+# 5. The bot's login on a `User`-typed account is not the bot.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s]]' "$(summary_row '✅ **Completed**' "$SUM86_AT" "${TIP:0:7}" "$OLD_UTC" 'chatgpt-codex-connector[bot]' User)" > "$FIX/issues.json"
+check "a summary from a User-typed account is not a wrapper" 1
+
+# 6. A status that is neither Completed nor Running fails closed, and the report names it.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s]]' "$(summary_row '❌ **Failed**' "$SUM86_AT" "${TIP:0:7}")" > "$FIX/issues.json"
+check "an unknown summary status blocks" 1
+OUT=$(run); _rc=$?
+if [[ "$_rc" == 1 ]] && printf '%s' "$OUT" | grep -qF -- 'Failed'; then
+  PASS=$((PASS+1)); echo "  ok   an unknown summary status is named in the report (exit 1)"
+else
+  FAIL=$((FAIL+1)); echo "  FAIL an unknown summary status is named in the report exit $_rc"
+fi
+
+# 7. A 7-hex prefix shared by two PR commits is ambiguous: the row counts for neither.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"sha":"%s"},{"sha":"%s"}]]' "$TIP" "${TIP:0:7}aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" > "$FIX/commits.json"
+printf '[[%s]]' "$(summary_row '✅ **Completed**' "$SUM86_AT" "${TIP:0:7}")" > "$FIX/issues.json"
+check "an ambiguous summary abbreviation blocks" 1
+
+# 8. The round END is the row's datetime, never the comment's created_at. The comment is
+# edited in place, so created_at is the START of the PR's first round. Here the summary
+# comment was created at OLD, a human requested at MID, a review wrapper landed at NEW and
+# the row says Completed at NEW2(+µs). No round end precedes the request, so it is not
+# provably answered. Using created_at as the end would anchor at OLD, call the gap to MID
+# quiet, and wrongly credit the NEW wrapper to the request.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$NEW_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s,%s]]' "$(summary_row '✅ **Completed**' "2000-01-01T00:00:03.511066Z" "${TIP:0:7}" "$OLD_UTC")" "$(human_request "$MID_UTC")" > "$FIX/issues.json"
+check "a summary row's end is its datetime, not created_at" 1
+
+# 9. The commits read is verdict-feeding, so its failure is exit 3 like every other.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s]]' "$(summary_row '✅ **Completed**' "$SUM86_AT" "${TIP:0:7}")" > "$FIX/issues.json"
+thumbs "$FAR_UTC" > "$FIX/reactions.json"
+: > "$FIX/commitsfail"
+check "a failed commits read with a summary is exit 3" 3
 
 echo
 echo "passed $PASS, failed $FAIL"

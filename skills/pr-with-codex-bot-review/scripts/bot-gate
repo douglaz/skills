@@ -26,6 +26,13 @@
 #
 # Any doubt exits non-zero: an API failure or a missing signal is NOT clearance.
 #
+# THREE WRAPPER CHANNELS prove a round READ a given tree: submitted review objects
+# (`.commit_id`), clean-round issue comments (`**Reviewed commit:** <sha>`), and a
+# `Completed` row naming the tip in the bot's edited-in-place "Codex Review Summary"
+# comment — the only SHA-bearing signal a "PR opened" clean round leaves. A `Running` or
+# unknown-status summary row blocks. The summary keeps only the latest round, so a later
+# `@codex review` can lose its pre-request anchor and stay uncredited (documented residual).
+#
 # CODERABBIT DOES NOT GATE. Its status is reported and ignored, because it is a PR-level
 # signal, not evidence about a tree: it lands on whatever head exists when the bot posts
 # it. Measured on this repo's PR #16 — CodeRabbit auto-paused the PR, and 75 seconds after
@@ -249,7 +256,8 @@ PENDING_ON_TIP=$(printf '%s' "$REVIEWS" | jq -r --arg tip "$TIP" --arg bot "$BOT
    | select(.commit_id==$tip) | select(.state=="PENDING")] | length' 2>/dev/null)
 [[ "$PENDING_ON_TIP" =~ ^[0-9]+$ ]] || { echo "BLOCKED: cannot parse reviews" >&2; exit 3; }
 
-# The OTHER wrapper channel: a clean round's issue comment. It carries
+# The SECOND wrapper channel (of three; the summary comment below is the third): a clean
+# round's issue comment. It carries
 # `**Reviewed commit:** <sha>`, so it is SHA-bearing evidence naming a tree — the same
 # thing a review wrapper is, in a different endpoint. The `+1` reaction beside it stays
 # worthless and ungated, because a reaction has no SHA; nothing here relaxes that.
@@ -267,13 +275,14 @@ CLEAN_JSON=$(printf '%s' "$ALL_COMMENTS" | jq -c --arg tip "$TIP" --arg bot "$BO
 
 WRAPPER_TIP=$(printf '%s' "$WRAPPER_JSON" | jq -r '.n' 2>/dev/null)
 WRAPPER_AT=$(printf '%s' "$WRAPPER_JSON" | jq -r '.latest' 2>/dev/null)
-# Merge the two channels. A round that found nothing and a round that reported findings are
+# Merge the first two channels (the summary channel joins below). A round that found nothing
+# and a round that reported findings are
 # both rounds that READ THIS TIP, which is the only question a wrapper answers.
 _CLEAN_N=$(printf '%s' "$CLEAN_JSON" | jq -r '.n' 2>/dev/null)
 _CLEAN_AT=$(printf '%s' "$CLEAN_JSON" | jq -r '.latest' 2>/dev/null)
 if [[ "$_CLEAN_N" =~ ^[0-9]+$ ]] && [[ "$_CLEAN_N" -gt 0 ]]; then
   WRAPPER_TIP=$(( ${WRAPPER_TIP:-0} + _CLEAN_N ))
-  # Latest across both channels: the active-round check compares `eyes` against this, and
+  # Latest across the channels: the active-round check compares `eyes` against this, and
   # taking the older one would call a finished round active.
   [[ -z "$WRAPPER_AT" || "$_CLEAN_AT" > "$WRAPPER_AT" ]] && WRAPPER_AT="$_CLEAN_AT"
 fi
@@ -342,6 +351,86 @@ done < <(printf '%s' "$ALL_COMMENTS" | jq -r --arg bot "$BOT_LOGIN" '
   | ((.body | capture("Reviewed commit:\\*{0,2}[[:space:]]*`?(?<sha>[0-9a-f]{7,40})")).sha) as $sha
   | (if ((.created_at // "") | length) == 0 then "@undated@"
      else ($sha + "\t" + .created_at) end)' 2>/dev/null)
+
+# The THIRD wrapper channel: the bot's "Codex Review Summary" issue comment. One per PR,
+# edited in place, identified by the HTML marker `<!-- codex-pull-request-review-summary -->`,
+# holding a table with one row per round: status, a `<relative-time datetime>`, a 7-hex
+# commit cell and the trigger. A clean round triggered by "PR opened" leaves NO review
+# object, NO line comments and NO `Reviewed commit` comment — this row is the only
+# SHA-bearing signal it leaves, so without reading it the gate answered exit 4 on a tip the
+# bot had finished (douglaz/skills #86).
+#
+# Rules, each pinned by bot-gate.test:
+#   - Identity is strict: exact bot login, Bot type AND the marker. Anything less is not a
+#     summary and contributes nothing here (every existing rule still applies to it).
+#   - A `Completed` row naming THIS tip is a round that read it: +1 WRAPPER_TIP, WRAPPER_AT
+#     moves forward by EPOCH comparison (the row carries microseconds, the other channels
+#     do not, so a string compare could pick the older one), and the epoch joins both
+#     coverage lists — tip-only, for the same prior-tip-anchor reason as the loop above.
+#   - The round END is the row's `datetime`, NEVER the comment's created_at/updated_at:
+#     the comment is edited in place, so created_at is the START of the PR's first round,
+#     and an end placed there sits before any later `@codex review` and wrongly satisfies
+#     _round_covered. A Completed tip row without a parseable datetime marks
+#     WRAPPER_UNDATED and does not count, mirroring the clean-comment loop.
+#   - A `Running` row on ANY commit is positive evidence a round is in flight — same class
+#     as a fresh `eyes` — and blocks with exit 1 even when an older wrapper names the tip.
+#   - Any other status fails closed: exit 1, naming the status text. Only `Completed` and
+#     `Running` have been observed.
+#   - The commit cell is 7 hex, which this file already calls forgeable. Closed cheaply:
+#     the PR's own commit list is fetched (fail-closed, exit 3, like every verdict-feeding
+#     read), and the row counts only when its abbreviation is a prefix of exactly ONE PR
+#     commit and that commit is the tip. Ambiguous or non-tip rows contribute nothing.
+#   - The "Review trigger" column is NOT used to attribute rounds to requests.
+#
+# DOCUMENTED RESIDUAL, not fixed: the summary keeps only the LATEST round, so after a
+# PR-opened clean round a later `@codex review` can lose its pre-request anchor (the first
+# round's end is overwritten) and stay uncredited — the gate then blocks with the existing
+# "request not provably answered" message. A push that moves the tip is the escape.
+#
+# Microsecond datetimes (`03:10:51.511066Z`) parse under GNU `date -u -d`. The BSD fallback
+# in iso_to_epoch does not accept them, so on such a platform the row is undated and the
+# gate blocks — fail-closed, and left that way rather than extending a branch that cannot
+# be tested here.
+SUMMARY_MARKER='<!-- codex-pull-request-review-summary -->'
+SUMMARY_RUNNING=""          # abbrev named by a Running row, when one exists
+SUMMARY_UNKNOWN_STATUS=""   # status text of a row that is neither Completed nor Running
+_SUMMARY_ROWS=$(printf '%s' "$ALL_COMMENTS" | jq -r --arg bot "$BOT_LOGIN" --arg mark "$SUMMARY_MARKER" '
+  .[][] | select(.user.login==$bot) | select(.user.type=="Bot")
+  | select((.body // "") | contains($mark))
+  | (.body | split("\n")[] | select(test("^\\|")) | select(test("^\\|[[:space:]]*(Review|---)[[:space:]]*\\|") | not))
+  | split("|") | select(length >= 5)
+  | (.[2] | gsub("<[^>]*>"; "") | gsub("\\*"; "") | (capture("(?<w>[A-Za-z]+)").w // "?")) as $word
+  | ((.[2] | capture("datetime=\"(?<d>[^\"]*)\"").d) // "") as $dt
+  | ((.[3] | capture("`(?<h>[0-9a-f]{7,40})`").h) // "") as $sha
+  | [$word, $dt, $sha] | @tsv' 2>/dev/null) \
+  || { echo "BLOCKED: cannot parse the review summary" >&2; exit 3; }
+if [[ -n "$_SUMMARY_ROWS" ]]; then
+  # Fetched only when a summary exists: no extra read on PRs that have none.
+  COMMITS=$(api "repos/$REPO/pulls/$PR/commits") \
+    || { echo "BLOCKED: PR commits query failed" >&2; exit 3; }
+  require_json "PR commits" "$COMMITS"
+  _SUM_N=0
+  while IFS=$'\t' read -r _sw _sdt _ssha; do
+    case "$_sw" in
+      Completed) ;;
+      Running)   SUMMARY_RUNNING="${_ssha:-?}"; continue ;;
+      *)         SUMMARY_UNKNOWN_STATUS="$_sw"; continue ;;
+    esac
+    [[ -n "$_ssha" ]] || continue
+    # Exactly one PR commit carries this prefix, and it is the tip.
+    _sm=$(printf '%s' "$COMMITS" | jq -r --arg p "$_ssha" '
+      [.[][] | (.sha // "") | select(startswith($p))] | if length == 1 then .[0] else "" end' 2>/dev/null)
+    [[ -n "$_sm" && "$_sm" == "$TIP" ]] || continue
+    _we=$(iso_to_epoch "$_sdt") || { WRAPPER_UNDATED=true; continue; }
+    _SUM_N=$((_SUM_N + 1))
+    WRAPPER_EPOCHS="${WRAPPER_EPOCHS}${WRAPPER_EPOCHS:+$'\n'}${_we}"
+    WRAPPER_TIP_EPOCHS="${WRAPPER_TIP_EPOCHS}${WRAPPER_TIP_EPOCHS:+$'\n'}${_we}"
+    if [[ -z "$WRAPPER_AT" ]]; then WRAPPER_AT="$_sdt"
+    elif _wa=$(iso_to_epoch "$WRAPPER_AT") && (( _we > _wa )); then WRAPPER_AT="$_sdt"
+    fi
+  done <<< "$_SUMMARY_ROWS"
+  WRAPPER_TIP=$(( WRAPPER_TIP + _SUM_N ))
+fi
 
 # A wrapper AFTER a request does not show the REQUESTED round ended: rounds carry no
 # identity, so that wrapper can end a round that was already in flight when the request
@@ -986,13 +1075,17 @@ fi
 # check needs, so a wrapper without one means that check never ran, and a check that did
 # not run has not passed.
 VERDICT="BLOCKED"
+# A Running or unknown-status summary row is positive evidence (a round in flight, or a
+# state this gate cannot read) and blocks both verdicts: exit 1, never 4.
 if [[ "$WRAPPER_TIP" -gt 0 ]] && [[ -n "$WRAPPER_AT" ]] && [[ "$PENDING_ON_TIP" -eq 0 ]] \
    && ! $RERUN_REQUESTED && ! $ROUND_ACTIVE \
-   && ! $RETARGETED_AFTER_REVIEW && [[ "$UNRESOLVED" -eq 0 ]]; then
+   && ! $RETARGETED_AFTER_REVIEW && [[ "$UNRESOLVED" -eq 0 ]] \
+   && [[ -z "$SUMMARY_RUNNING" && -z "$SUMMARY_UNKNOWN_STATUS" ]]; then
   VERDICT="NO_PENDING_EVIDENCE"
 elif [[ "$WRAPPER_TIP" -eq 0 ]] && $THUMBS_UNATTRIBUTED && [[ "$PENDING_ON_TIP" -eq 0 ]] \
    && ! $RERUN_REQUESTED && ! $ROUND_ACTIVE \
-   && ! $RETARGETED_AFTER_REVIEW && [[ "$UNRESOLVED" -eq 0 ]]; then
+   && ! $RETARGETED_AFTER_REVIEW && [[ "$UNRESOLVED" -eq 0 ]] \
+   && [[ -z "$SUMMARY_RUNNING" && -z "$SUMMARY_UNKNOWN_STATUS" ]]; then
   VERDICT="BLOCKED_UNATTRIBUTED"
 fi
 OBSERVED_TO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -1014,11 +1107,14 @@ if $JSON; then
         --arg from "$OBSERVED_FROM" --arg to "$OBSERVED_TO" --arg claim "$CLAIM" \
         --arg cr_skipped "$CR_SKIPPED" --arg round_active "$ROUND_ACTIVE" --arg retargeted "$RETARGETED_AFTER_REVIEW" --arg rerun "$RERUN_REQUESTED" --arg skiplist "$CR_SKIPLIST" \
         --arg unattributed "$THUMBS_UNATTRIBUTED" \
+        --arg sum_running "$SUMMARY_RUNNING" --arg sum_unknown "$SUMMARY_UNKNOWN_STATUS" \
     '{tip:$tip,verdict:$v,claim:(if $claim=="" then null else $claim end),observed_from:$from,observed_to:$to,
       wrapper_on_tip:$w,unresolved_bot_threads:$u,
       coderabbit:$cr,coderabbit_skipped:($cr_skipped=="true"),round_active:($round_active=="true"),retargeted_after_review:($retargeted=="true"),
       rerun_requested:($rerun=="true"),pending_review_on_tip:($pending > 0),
       unattributed_round:($unattributed=="true"),
+      summary_running:(if $sum_running=="" then null else $sum_running end),
+      summary_unknown_status:(if $sum_unknown=="" then null else $sum_unknown end),
       coderabbit_skipped_files:($skiplist|split("\n")|map(select(length>0)))}'
 else
   printf 'tip              %s\n' "${TIP:0:10}"
@@ -1039,6 +1135,8 @@ else
   [[ "$PENDING_ON_TIP" -gt 0 ]] && printf '  ⚠ a PENDING review from the bot names this tip — a round is in flight and has not\n    submitted yet. Wait for it.\n'
   $RETARGETED_AFTER_REVIEW && printf '  ⚠ the base changed, a mark-ready started a round, or the head moved — with no later\n    provably fresh round to cover it, so part of the diff may never have been read or a\n    started round may not have reported. `@codex review` (again, if needed) and wait for\n    its wrapper.\n'
   $ROUND_ACTIVE && printf '  ⚠ an `eyes` reaction is newer than the wrapper — a fresh round is running on this\n    same tip. Wait for it to finish.\n'
+  [[ -n "$SUMMARY_RUNNING" ]] && printf '  ⚠ the Codex Review Summary says a round is RUNNING on `%s`. Wait for it to finish.\n' "$SUMMARY_RUNNING"
+  [[ -n "$SUMMARY_UNKNOWN_STATUS" ]] && printf '  ⚠ the Codex Review Summary shows a row with status "%s", which this gate does not\n    know how to read — it fails closed. Read the summary comment and decide.\n' "$SUMMARY_UNKNOWN_STATUS"
   # Reported, never gated — see the CR_SKIPLIST block. Every file here is one this PR
   # changes, since that is the only kind CodeRabbit can skip; read the list and decide.
   [[ -n "$CR_SKIPLIST" ]] && printf '  · CodeRabbit skipped these file(s) as trivial — it did not review them:\n%s\n' "$(printf '%s' "$CR_SKIPLIST" | sed 's/^/      /')"
