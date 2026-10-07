@@ -82,6 +82,8 @@
     overflow-wrap: anywhere;
   }
   .figure small { font-family: var(--display-sc); font-size: .38em; letter-spacing: .12em; margin-left: .25em; }
+  .fiat { font-size: clamp(1.3rem, 4.5vw, 1.9rem); color: var(--ink-soft); margin: -4px 0 0; font-variant-numeric: lining-nums tabular-nums; }
+  .nowrap { white-space: nowrap; }
 
   .proclamation { max-width: 62ch; margin: 0 auto; }
   .proclamation p { margin: 0; overflow-wrap: anywhere; }
@@ -231,16 +233,17 @@
       <p class="motto">Don't Trust · Verify</p>
       <h1>Paid in Full,<em>No Permission Asked</em></h1>
       <p class="figure">{{amount_sat}}<small>sats</small></p>
+      {{fiat_figure}}
     </header>
 
     <section class="proclamation">
-      <p>Be it known that on the {{settled_prose}}, the node <b>{{sender}}</b> delivered {{amount_sat}} satoshis to <b>{{recipient}}</b>. The payment settled in {{settle_seconds}} seconds over {{path}}. There was no clearing house and no settlement window, and nobody's permission was needed.</p>
+      <p>Be it known that on the {{settled_prose}}, the node <b>{{sender}}</b> delivered {{amount_sat}} satoshis{{fiat_worth}} to <b>{{recipient}}</b>. The payment settled in {{settle_seconds}} seconds over {{path}}. There was no clearing house and no settlement window, and nobody's permission was needed.</p>
     </section>
 
     <section>
       <h2>The Terms</h2>
       <dl class="terms">
-        <div><dt>Amount</dt><dd>{{amount_sat}} sat</dd></div>
+        <div><dt>Amount</dt><dd>{{amount_sat}} sat{{fiat_amount}}</dd></div>
         <div><dt>Routing fee</dt><dd>{{fee_sat}} sat <span>({{fee_pct}})</span></dd></div>
         <div><dt>Recipient</dt><dd>{{recipient}}</dd></div>
         <div><dt>Settled</dt><dd>{{settled_utc}}</dd></div>

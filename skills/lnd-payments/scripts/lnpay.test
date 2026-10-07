@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # lnpay.test — offline checks for `lnpay proof` (it renders a certificate only for a payment that
-# provably settled, and escapes node aliases, which are arbitrary strings from the gossip graph)
+# provably settled, and escapes node aliases, which are arbitrary strings from the gossip graph,
+# and the --to/--fiat labels)
 # and for `lnpay sendonchain` (it broadcasts only under --yes).
 # A fake kubectl answers lncli calls from fixtures; no node, no network, no browser.
 # Usage: ./skills/lnd-payments/scripts/lnpay.test   (exits 0 if all pass)
@@ -98,6 +99,26 @@ check grep -qF -- 'seventeenth day of September, 2026, at 00:51:23 UTC' "$tmp/ok
 check grep -qF -- 'settled in 1.14 seconds over 3 hops' "$tmp/ok.html"
 desc="no placeholder is left unfilled"
 check test "$(grep -cE -- '\{\{[a-z_]+\}\}' "$tmp/ok.html")" -eq 0
+desc="without --fiat, no fiat value appears anywhere"
+check test "$(grep -cF -- 'class="fiat"' "$tmp/ok.html")" -eq 0
+check grep -qF -- '<dd>102,000.5 sat</dd>' "$tmp/ok.html"
+check grep -qF -- 'delivered 102,000.5 satoshis to' "$tmp/ok.html"
+
+proof ok.json "$tmp/fiat.html" --fiat 'R$ 9.785,00 <b>' >"$tmp/out" 2>&1 && rc=0 || rc=$?
+desc="--fiat renders (exit 0)"
+check test "$rc" -eq 0
+desc="--fiat shows under the figure, in the Amount term, and in the proclamation, escaped"
+check grep -qF -- '<p class="fiat">R$ 9.785,00 &lt;b&gt;</p>' "$tmp/fiat.html"
+check grep -qF -- '<dd>102,000.5 sat <span class="nowrap">(R$ 9.785,00 &lt;b&gt;)</span></dd>' "$tmp/fiat.html"
+check grep -qF -- 'satoshis, worth <span class="nowrap">R$ 9.785,00 &lt;b&gt;</span>, to' "$tmp/fiat.html"
+check test "$(grep -cF -- '9.785,00 <b>' "$tmp/fiat.html")" -eq 0
+for bad in "" --png; do
+  proof ok.json "$tmp/badfiat.html" --fiat "$bad" >"$tmp/out" 2>&1 && rc=0 || rc=$?
+  desc="--fiat '$bad' is refused, not dropped or swallowed (exit 1, writes nothing)"
+  check test "$rc" -eq 1
+  check grep -qF -- '--fiat requires a value' "$tmp/out"
+  check test ! -e "$tmp/badfiat.html"
+done
 
 # A multi-part payment, streamed as an in-flight update followed by the final record.
 python3 - "$tmp/ok.json" >"$tmp/mpp.json" <<'EOF'
