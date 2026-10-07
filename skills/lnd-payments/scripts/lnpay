@@ -748,8 +748,8 @@ cmd_watch() {
 render_proof_html() {
   python3 -c '
 import sys, json, hashlib, html, re, datetime
-tpl_path, out_path, sender, to = sys.argv[1:5]
-aliases = dict(a.split("=", 1) for a in sys.argv[5:])
+tpl_path, out_path, sender, to, fiat = sys.argv[1:6]
+aliases = dict(a.split("=", 1) for a in sys.argv[6:])
 s = sys.stdin.read()
 dec = json.JSONDecoder()
 objs = []
@@ -829,6 +829,11 @@ filled = {k: html.escape(v) for k, v in {
     "payment_request": d["payment_request"],
 }.items()}
 filled["routes"] = "\n".join(routes)
+# --fiat is a label the operator supplies for what the payment was worth; lnd knows nothing of it.
+f = html.escape(fiat)
+filled["fiat_figure"] = "<p class=\"fiat\">%s</p>" % f if fiat else ""
+filled["fiat_amount"] = " <span class=\"nowrap\">(%s)</span>" % f if fiat else ""
+filled["fiat_worth"] = ", worth <span class=\"nowrap\">%s</span>," % f if fiat else ""
 
 tpl = open(tpl_path).read()
 wanted = set(re.findall(r"\{\{(\w+)\}\}", tpl))
@@ -865,10 +870,15 @@ render_proof_png() {
 }
 
 cmd_proof() {
-  local target="" to="" html="" png="" timeout="$LNPAY_TRACK_TIMEOUT"
+  local target="" to="" fiat="" html="" png="" timeout="$LNPAY_TRACK_TIMEOUT"
   while [ $# -gt 0 ]; do
     case "$1" in
       --to) need_value "$@"; to="$2"; shift 2;;
+      # Same guard as sendonchain --label: `--fiat --png x` must not take `--png` as the label.
+      --fiat)
+        need_value "$@"
+        case "${2:-}" in ""|-*) die "$1 requires a value, got '${2:-}'";; esac
+        fiat="$2"; shift 2;;
       --html) need_value "$@"; html="$2"; shift 2;;
       --png) need_value "$@"; png="$2"; shift 2;;
       --timeout) need_value "$@"; timeout="$2"; shift 2;;
@@ -877,7 +887,7 @@ cmd_proof() {
     esac
   done
   [ -n "$target" ] && [ -n "$html$png" ] ||
-    die "usage: lnpay proof <payment_hash|bolt11> [--to LABEL] [--html PATH] [--png PATH]"
+    die "usage: lnpay proof <payment_hash|bolt11> [--to LABEL] [--fiat LABEL] [--html PATH] [--png PATH]"
   [ "$html" != "$png" ] || die "--html and --png must be different paths"
 
   local template
@@ -896,7 +906,7 @@ cmd_proof() {
   LNPAY_PROOF_WORK="$(mktemp -d)"
   trap 'rm -rf -- "$LNPAY_PROOF_WORK"' EXIT
   local html_out="${html:-$LNPAY_PROOF_WORK/proof.html}"
-  printf '%s' "$out" | render_proof_html "$template" "$html_out" "$sender" "$to" "${aliases[@]}" || exit 1
+  printf '%s' "$out" | render_proof_html "$template" "$html_out" "$sender" "$to" "$fiat" "${aliases[@]}" || exit 1
   if [ -n "$html" ]; then echo "proof_html: $html"; fi
   if [ -n "$png" ]; then
     render_proof_png "$html_out" "$png" "$LNPAY_PROOF_WORK"
@@ -927,7 +937,8 @@ Commands:
   lnpay watch <payment_hash|bolt11>       poll until a receive invoice settles
         [--timeout S] [--interval S]
   lnpay proof <payment_hash|bolt11>       proof-of-payment certificate for a
-        [--to LABEL] [--html PATH] [--png PATH]  settled send
+        [--to LABEL] [--fiat LABEL]              settled send
+        [--html PATH] [--png PATH]
 
 Config:
   Required: LN_CONTEXT, LN_NAMESPACE, and LN_TARGET (or LN_DEPLOY).

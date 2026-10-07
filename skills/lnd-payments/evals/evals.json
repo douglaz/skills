@@ -43,6 +43,12 @@
       "prompt": "make a proof of payment PNG for the payment I just sent to alice@example.com",
       "expected_output": "Runs `scripts/lnpay proof <payment_hash|bolt11> --to alice@example.com --png <path>` (optionally `--html`), reports the file paths, and does not hand-build the certificate. If the payment is not SUCCEEDED or the preimage does not match, relays the refusal instead of producing an image.",
       "files": []
+    },
+    {
+      "id": 8,
+      "prompt": "make a proof of payment for the R$ 500,00 invoice I paid to bob@example.com, and show the BRL value on it",
+      "expected_output": "Runs `scripts/lnpay proof <payment_hash|bolt11> --to bob@example.com --fiat \"R$ 500,00\" --png <path>` (optionally `--html`) and reports the file paths. Uses the amount the invoice was requested in rather than a price looked up afterwards, and does not edit the generated HTML by hand to add the value.",
+      "files": []
     }
   ]
 }

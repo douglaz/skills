@@ -94,7 +94,7 @@ scripts/lnpay watch <payment_hash|bolt11>
       [--timeout S] [--interval S]
 scripts/lnpay proof <payment_hash|bolt11>
                                         proof-of-payment certificate
-      [--to LABEL] [--html PATH] [--png PATH]
+      [--to LABEL] [--fiat LABEL] [--html PATH] [--png PATH]
 ```
 
 The CLI is non-interactive: commands exit non-zero on failure, `--json` returns
@@ -328,10 +328,17 @@ shell command for that check instead of the button.
 - `--to` labels the recipient, for example the Lightning address the invoice
   came from. lnd doesn't know that address, so without `--to` the certificate
   names the destination node's alias.
+- `--fiat` adds what the payment was worth, written as it should read, for
+  example `--fiat "R$ 9.785,00"` for an invoice requested in BRL. It appears
+  under the sats figure, in the opening sentence, and next to the amount. lnd
+  records no fiat value, so this is a label too: use the amount the invoice was
+  requested in, not a price looked up afterwards. Like `sendonchain --label`, an
+  empty value or one starting with `-` is refused.
 - It refuses, exits 1, and writes nothing unless the payment is `SUCCEEDED`,
   the preimage hashes to the payment hash, and there is an invoice. A keysend
   preimage was chosen by the sender, so it proves nothing.
-- Node aliases come from the public graph and are HTML-escaped.
+- Node aliases come from the public graph and are HTML-escaped, as are the
+  `--to` and `--fiat` labels.
 - The PNG needs Google Chrome or Chromium on PATH, plus ImageMagick `magick`,
   which is fetched through `nix shell` when missing, like `qrencode`.
 - The PNG is rendered in a 4000px-tall viewport. If a payment has so many
