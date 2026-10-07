@@ -52,7 +52,7 @@ the bot is quiet, or got findings back and need to address them.
 
 ## What "the bot reviewed" actually means on GitHub
 
-The bot communicates approval and findings through **four distinct channels**, all on
+The bot communicates approval and findings through **five distinct channels**, all on
 the same PR:
 
 1. **Reaction on the PR body** — `eyes` (👀) when the bot picks up the PR for review,
@@ -70,9 +70,10 @@ the same PR:
 
    **That sample contained no clean rounds, so it could not show what one looks like.**
    The conclusion drawn from it — that the clean case leaves nothing usable — was false,
-   and it shaped a gate that could not pass on success. A clean round posts the § 3
-   comment, which carries the sha. Gate on that; the reaction stays worthless because a
-   reaction has no sha.
+   and it shaped a gate that could not pass on success. A clean round rewrites the
+   channel-5 summary row whatever triggered it, and a manually requested one
+   (`@codex review`) also posts the § 3 comment; both carry the sha. Gate on those; the
+   reaction stays worthless because a reaction has no sha.
 
    **And when it does appear it approves the tree the bot read, which is not always the
    tip.** The reaction has a timestamp and no SHA, so after a force-push a surviving `+1`
@@ -105,15 +106,35 @@ the same PR:
      --jq '.[] | select(.user.login=="chatgpt-codex-connector[bot]") | .body'
    ```
 
-   **This is SHA-bearing evidence**, and it is the only proof a clean round leaves that
-   names a tree. The sha is abbreviated, so match it as a prefix of the tip. Reading only
-   `pulls/<N>/reviews` makes success indistinguishable from a stalled bot — see § 7.
+   **This is SHA-bearing evidence.** A *manually requested* clean round (`@codex review`)
+   posts it AND rewrites the § 5 summary row, so it leaves two signals naming the tree. A
+   clean round triggered by "PR opened" posts no such comment at all — only the § 5
+   summary row names its tree. The sha is abbreviated, so match it as a prefix of the tip.
+   Reading only `pulls/<N>/reviews` makes success indistinguishable from a stalled bot —
+   see § 7.
 
 4. **Line-level review comments** — where actual findings live, separate API:
 
    ```bash
    gh api repos/<owner>/<repo>/pulls/<N>/comments      # actual findings
    ```
+
+5. **The "Codex Review Summary" issue comment** — ONE per PR, created with the first
+   round and **edited in place** afterwards, identified by the HTML marker
+   `<!-- codex-pull-request-review-summary -->`. It holds a table with one row, holding
+   the latest round: the review type (`📝 **Code Review**`), the status
+   (`✅ **Completed**` or `🔄 **Running**`), a `<relative-time datetime="...">`
+   carrying microseconds, a backticked 7-hex commit cell, and the trigger ("PR opened",
+   "@codex review"). **The row's datetime is the round's end.** The comment's
+   `created_at` is the start of the PR's *first* round and `updated_at` moves on every
+   edit, so neither dates anything. This row is the **only SHA-bearing signal a
+   "PR opened" clean round leaves**: no review object, no line comments, no § 3 comment.
+   `bot-gate` reads it as its third wrapper channel (§ 7). Only a row whose Review cell
+   is `📝 **Code Review**` counts as a wrapper: a Completed `🔒 **Security Review**` row
+   is reported and ignored, while a Running or unknown-status row of any type still
+   blocks; a marked summary the gate cannot parse into a row blocks with exit 3. Because
+   the table keeps only the latest round, an earlier round's end is overwritten — see the
+   exit-4 notes in § 7 and § 8b for what that costs.
 
 When checking whether the bot has weighed in, reactions are the cheapest signal to read —
 but they are not a completion signal, and § 7 explains why you must not treat one as
@@ -578,10 +599,16 @@ condition:
 
   What must hold before merging:
 
-  1. A wrapper exists whose `Reviewed commit:` equals the tip. That is the bot stating,
-     with a SHA, which tree it read.
+  1. A wrapper exists naming the tip: a review whose `Reviewed commit:` equals it, a
+     clean-round comment whose abbreviated sha prefixes it, or a `✅ **Completed**`
+     **Code Review** row in the Codex Review Summary (§ 5) whose 7-hex cell is a prefix of **exactly one**
+     commit on the PR and that commit is the tip. That is the bot stating, with a SHA,
+     which tree it read.
   2. Run **`scripts/bot-gate <PR>`** and require exit 0. Six conditions: a *submitted* codex
-     review naming this tip; no PENDING review from the bot on it (a rerun in flight); no
+     review naming this tip, a clean-round comment naming it, or a Completed **Code Review**
+     summary row naming it (a summary row with status `Running`, on any commit, blocks — a round is in
+     flight; a status that is neither `Completed` nor `Running` blocks too, fail-closed,
+     and the report names the text it saw); no PENDING review from the bot on it (a rerun in flight); no
      `@codex review` request left unanswered — one newer than the wrapper has not reported,
      and one older than it only counts as answered when a completed round separates it from
      any earlier round-start (a trigger comment, a mark-ready, a head force-push since the
@@ -710,7 +737,19 @@ condition:
      the PR and never to a commit. A 👍 older than the tip provably belongs to an earlier
      tree and leaves a plain exit 1. See § 8b.
 
-     **Try `@codex review` before treating exit 4 as an outage.** Three honesty notes:
+     **Try `@codex review` before treating exit 4 as an outage — but know the request
+     may not be credited.** The Codex Review Summary (§ 5) keeps only the *latest* round,
+     so after a "PR opened" clean round a later `@codex review` can lose its pre-request
+     anchor: the first round's end is overwritten by the new row, no round end precedes
+     the request any more, and the gate stays at "request not provably answered"
+     (exit 1). A push does not get out of it: the request is counted against whatever
+     tip is current and a prior-tip clean comment is not an anchor, so the push's fresh
+     Completed row lands after the request and leaves the same exit 1. What clears it is
+     a **second `@codex review` on the same tip**, posted after the first request's clean
+     `**Reviewed commit:**` comment has arrived: that comment is the second request's
+     pre-request anchor, and its own clean round answers it (exit 0). Both outcomes are
+     fixture-measured in `bot-gate.test` (the P1 and P2 checks), not observed live. Three
+     honesty notes:
 
      - **The bound is a lower one, and it admits a false positive.** The honest boundary is
        when the tip became the PR head, and nothing reports that — GitHub's timeline
@@ -737,9 +776,10 @@ condition:
      only a `+1`, so nothing proves which tree it read". That was **wrong**, and the advice
      that followed from it ("get a wrapper with `@codex review`") could never work: a
      re-run on a clean tree produces another clean round, which again posts no review
-     object. A clean round DOES leave SHA-bearing evidence — the issue comment in § 3 — and
-     the gate reads both channels now. If `wrapper 0` persists, the bot genuinely has not
-     reported on this tip.
+     object. A clean round DOES leave SHA-bearing evidence — the channel-5 Completed
+     summary row on every trigger, plus the § 3 issue comment when it was manually
+     requested — and the gate reads all three channels now. If
+     `wrapper 0` persists, the bot genuinely has not reported on this tip.
   3. If a `+1` exists, it is consistent with (1) and (2); if it does not, that is normal
      on a PR the bot has ever had findings on, and is not a reason to wait.
 
@@ -830,7 +870,9 @@ legitimate outcome to report; laundering it into `NO_PENDING_EVIDENCE` is not.
 
 ### 8b. When the forge itself is degraded
 
-`bot-gate`'s first condition is *a wrapper exists whose reviewed commit equals the tip*.
+`bot-gate`'s first condition is *a wrapper names the tip*: a review object whose reviewed
+commit equals it, a § 3 clean comment carrying its sha, or a Completed Code Review summary
+row (channel 5) whose commit cell resolves to it.
 During a GitHub incident that condition can be **unsatisfiable no matter how long you
 wait** — not because the bot disapproves, but because the forge is not answering. Observed:
 the checks rollup showed only CodeRabbit while two CI jobs never appeared at all, and the
@@ -842,7 +884,7 @@ did.
 | Gate says | Means | Do |
 |---|---|---|
 | `BLOCKED`, wrapper 0, no other signal | the bot has not reviewed this tip | wait, or `@codex review` |
-| `BLOCKED_UNATTRIBUTED` (exit 4) | a round *completed* — its 👍 post-dates the tip — but nothing says which tree it read | `@codex review` first; if no wrapper comes, go on |
+| `BLOCKED_UNATTRIBUTED` (exit 4) | a round *completed* — its 👍 post-dates the tip — but nothing says which tree it read | `@codex review` first, knowing the request may not be credited: the summary (§ 5) holds only the latest round, so the request can lose its pre-request anchor and the gate stays at "request not provably answered". A push does not clear that; a second `@codex review` on the same tip, after the first one's clean comment has arrived, does (fixture-measured in `bot-gate.test`, not observed live). If no wrapper comes, go on |
 
 Exit 4 is still a refusal. It changes what you do next, never whether the gate approved.
 And it is not proof of an outage: the 👍 is sticky and bounded only by the tip's local

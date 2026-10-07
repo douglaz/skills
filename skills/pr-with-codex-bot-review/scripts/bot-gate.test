@@ -88,6 +88,10 @@ case "$*" in
   *reactions*)                  [ -f "$FIX/reactionsfail" ] && exit 1; f reactions.json '[[]]' ;;
   *graphql*)                    f threads.json '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}' ;;
   *"pulls/"*"/reviews"*)        f reviews.json '[[]]' ;;
+  # The PR's commit list, read only when a Codex Review Summary exists so its 7-hex commit
+  # cell can be resolved against exactly one commit. Default: the tip alone.
+  *"pulls/"*"/commits"*)        [ -f "$FIX/commitsfail" ] && exit 1
+                                   f commits.json "[[{\"sha\":\"$(git rev-parse HEAD)\"}]]" ;;
   *"issues/"*"/comments"*)      printf '%s\n' "$*" >> "$FIX/gh.calls"
                                    [ -f "$FIX/commentsfail" ] && exit 1; f issues.json '[[]]' ;;
   *) echo "[]" ;;
@@ -1112,6 +1116,309 @@ if printf '%s' "$J" | jq -e '(.verdict=="BLOCKED_UNATTRIBUTED") and (.unattribut
 else
   FAIL=$((FAIL+1)); echo "  FAIL JSON names the unattributed verdict"
 fi
+
+# ── The Codex Review Summary comment: the THIRD wrapper channel ──────────────────────
+#
+# The bot posts ONE issue comment per PR and edits it in place: an HTML marker, then a
+# table with one row, holding the latest round — the review type (`📝 **Code Review**`),
+# the status, a `<relative-time datetime>` (microseconds), a 7-hex commit cell, the
+# trigger. A clean round triggered by "PR opened" leaves nothing
+# else that names a tree: no review object, no line comments, no `Reviewed commit`
+# comment. douglaz/skills #86 was exactly that, and the gate answered exit 4 twice on a tip
+# the bot had finished reading. These fixtures are synthesized in that shape.
+summary_row() {  # $1 = status cell, $2 = row datetime, $3 = abbrev, [$4 created_at] [$5 login] [$6 type] [$7 boilerplate, "" to omit] [$8 Review cell]
+  local created=${4:-$OLD_UTC} login=${5:-chatgpt-codex-connector[bot]} type=${6:-Bot} boiler=${7-yes} review=${8-📝 **Code Review**}
+  local about=""
+  [[ -n "$boiler" ]] && about='\n\n<details> <summary>About Codex in GitHub</summary>\n\nReviews are triggered when you\n- Open a pull request for review\n- Comment \"@codex review\" or \"@codex security review\".\n\n</details>'
+  printf '{"user":{"login":"%s","type":"%s"},"created_at":"%s","updated_at":"%s","body":"<!-- codex-pull-request-review-summary -->\\n\\n## Codex Review Summary\\n\\n| Review | Status | Commit | Review trigger |\\n| --- | --- | --- | --- |\\n| %s | %s <relative-time datetime=\\"%s\\">%s</relative-time> | `%s` | PR opened |%s\\n"}' \
+    "$login" "$type" "$created" "$created" "$review" "$1" "$2" "$2" "$3" "$about"
+}
+# A row with a non-default Review cell: $1 = Review cell, then summary_row's $1..$3.
+review_row() { summary_row "$2" "$3" "$4" "$OLD_UTC" '' '' yes "$1"; }
+SUM86_AT="2026-10-07T03:10:51.511066Z"   # the real #86 row datetime, microseconds included
+
+# 1. The #86 shape: Completed on the tip, boilerplate quoting `@codex review`, a 👍 after
+# the tip's commit, nothing else. Today's gate: exit 4. With the row read: exit 0.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s]]' "$(summary_row '✅ **Completed**' "$SUM86_AT" "${TIP:0:7}")" > "$FIX/issues.json"
+thumbs "$FAR_UTC" > "$FIX/reactions.json"
+check "a Completed summary row on the tip clears (#86)" 0
+
+# 2. A Running row is positive evidence a round is in flight, like a fresh `eyes`, and
+# blocks even though an older review wrapper names the tip.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s]]' "$(summary_row '🔄 **Running** since' "$SUM86_AT" "${TIP:0:7}")" > "$FIX/issues.json"
+check "a Running summary row blocks despite a tip wrapper" 1
+
+# 3. Completed on an OLDER commit of the PR says nothing about the tip.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"sha":"%s"},{"sha":"%s"}]]' "$OLDTIP" "$TIP" > "$FIX/commits.json"
+printf '[[%s]]' "$(summary_row '✅ **Completed**' "$SUM86_AT" "${OLDTIP:0:7}")" > "$FIX/issues.json"
+check "a Completed summary row on an older commit blocks" 1
+
+# 4. The marker from a NON-bot login is not a summary. Boilerplate omitted: from a human it
+# would be an `@codex review` trigger and block for a different reason.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s]]' "$(summary_row '✅ **Completed**' "$SUM86_AT" "${TIP:0:7}" "$OLD_UTC" douglaz Bot "")" > "$FIX/issues.json"
+check "a summary from a non-bot login is not a wrapper" 1
+
+# 5. The bot's login on a `User`-typed account is not the bot.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s]]' "$(summary_row '✅ **Completed**' "$SUM86_AT" "${TIP:0:7}" "$OLD_UTC" 'chatgpt-codex-connector[bot]' User)" > "$FIX/issues.json"
+check "a summary from a User-typed account is not a wrapper" 1
+
+# 6. A status that is neither Completed nor Running fails closed, and the report names it.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s]]' "$(summary_row '❌ **Failed**' "$SUM86_AT" "${TIP:0:7}")" > "$FIX/issues.json"
+check "an unknown summary status blocks" 1
+OUT=$(run); _rc=$?
+if [[ "$_rc" == 1 ]] && printf '%s' "$OUT" | grep -qF -- 'Failed'; then
+  PASS=$((PASS+1)); echo "  ok   an unknown summary status is named in the report (exit 1)"
+else
+  FAIL=$((FAIL+1)); echo "  FAIL an unknown summary status is named in the report exit $_rc"
+fi
+
+# 7. A 7-hex prefix shared by two PR commits is ambiguous: the row counts for neither.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"sha":"%s"},{"sha":"%s"}]]' "$TIP" "${TIP:0:7}aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" > "$FIX/commits.json"
+printf '[[%s]]' "$(summary_row '✅ **Completed**' "$SUM86_AT" "${TIP:0:7}")" > "$FIX/issues.json"
+check "an ambiguous summary abbreviation blocks" 1
+
+# 8. The round END is the row's datetime, never the comment's created_at. The comment is
+# edited in place, so created_at is the START of the PR's first round. Here the summary
+# comment was created at OLD, a human requested at MID, a review wrapper landed at NEW and
+# the row says Completed at NEW2(+µs). No round end precedes the request, so it is not
+# provably answered. Using created_at as the end would anchor at OLD, call the gap to MID
+# quiet, and wrongly credit the NEW wrapper to the request.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$NEW_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s,%s]]' "$(summary_row '✅ **Completed**' "2000-01-01T00:00:03.511066Z" "${TIP:0:7}" "$OLD_UTC")" "$(human_request "$MID_UTC")" > "$FIX/issues.json"
+check "a summary row's end is its datetime, not created_at" 1
+
+# 9. The commits read is verdict-feeding, so its failure is exit 3 like every other.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s]]' "$(summary_row '✅ **Completed**' "$SUM86_AT" "${TIP:0:7}")" > "$FIX/issues.json"
+thumbs "$FAR_UTC" > "$FIX/reactions.json"
+: > "$FIX/commitsfail"
+check "a failed commits read with a summary is exit 3" 3
+
+# 10. A Completed tip row with an EMPTY datetime is undated, like a garbage one: it marks
+# WRAPPER_UNDATED and blocks. Dropped silently it would fail OPEN here — mark-ready at
+# MID, a review wrapper on the tip at NEW, no wrapper at or before the ready — because
+# _ready_covered's draft-flow fallback clears exactly when nothing undated stops it.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$NEW_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"event":"ready_for_review","created_at":"%s"}]]' "$MID_UTC" > "$FIX/timeline.json"
+printf '[[%s]]' "$(summary_row '✅ **Completed**' "" "${TIP:0:7}")" > "$FIX/issues.json"
+check "a summary row with no datetime marks undated" 1
+
+# 11. GitHub-flavoured markdown accepts a table indented by up to three spaces. An indented
+# Running row is still a round in flight: case 2 with two spaces before every table line.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s]]' "$(summary_row '🔄 **Running** since' "$SUM86_AT" "${TIP:0:7}" | sed 's/\\n|/\\n  |/g')" > "$FIX/issues.json"
+check "an indented Running summary row blocks" 1
+
+# 12. (P7) The status is the cell's whole BOLD SPAN, not its first word. A first-word
+# capture read `⚠️ **Completed with errors**` as `Completed` and CLEARED on it — the
+# channel's own rule says a status that is neither Completed nor Running fails closed. No
+# wrapper, a 👍 after the tip: exit 1, not 4 and not 0, and the report names the full
+# phrase so the reader sees what the gate refused to interpret.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s]]' "$(summary_row '⚠️ **Completed with errors**' "$SUM86_AT" "${TIP:0:7}")" > "$FIX/issues.json"
+thumbs "$FAR_UTC" > "$FIX/reactions.json"
+check "'Completed with errors' is not Completed (P7)" 1
+OUT=$(run); _rc=$?
+if [[ "$_rc" == 1 ]] && printf '%s' "$OUT" | grep -qF -- 'Completed with errors'; then
+  PASS=$((PASS+1)); echo "  ok   'Completed with errors' is named whole in the report (exit 1)"
+else
+  FAIL=$((FAIL+1)); echo "  FAIL 'Completed with errors' is named whole in the report exit $_rc"
+fi
+
+# 13. A status cell with NO bold span is not a known status either, whatever word it
+# starts with: `✅ Completed` unbolded is an unknown shape and blocks.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s]]' "$(summary_row '✅ Completed' "$SUM86_AT" "${TIP:0:7}")" > "$FIX/issues.json"
+thumbs "$FAR_UTC" > "$FIX/reactions.json"
+check "a status cell with no bold span blocks" 1
+
+# 14. (P4) Running is in-flight evidence on ANY commit: a Running row naming an OLDER PR
+# commit blocks even though a review wrapper names the tip.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"sha":"%s"},{"sha":"%s"}]]' "$OLDTIP" "$TIP" > "$FIX/commits.json"
+printf '[[%s]]' "$(summary_row '🔄 **Running** since' "$SUM86_AT" "${OLDTIP:0:7}")" > "$FIX/issues.json"
+check "a Running row on an older commit blocks (P4)" 1
+
+# 15. (P3) A Running row vetoes exit 4 as well as exit 0: no wrapper, a 👍 after the tip
+# would be BLOCKED_UNATTRIBUTED, but the summary says a round is in flight, so exit 1.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s]]' "$(summary_row '🔄 **Running** since' "$SUM86_AT" "${TIP:0:7}")" > "$FIX/issues.json"
+thumbs "$FAR_UTC" > "$FIX/reactions.json"
+check "a Running row vetoes exit 4 (P3)" 1
+
+# 16. The HTML marker is part of the identity. A Bot-typed comment from the exact bot login
+# holding a Completed row on the tip but WITHOUT the marker is not a summary and counts for
+# nothing: no wrapper, no 👍, so nothing names the tip.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s]]' "$(summary_row '✅ **Completed**' "$SUM86_AT" "${TIP:0:7}" | sed 's/<!-- codex-pull-request-review-summary -->//')" > "$FIX/issues.json"
+check "a summary table without the marker is not a wrapper" 1
+
+# 17. The coverage feed is tip-only. A Completed row on a NON-tip commit must not enter
+# the anchor lists: here it is the only round end before the request at MID, the clean
+# comment on the tip lands at NEW, and the request is therefore not provably answered.
+# Feeding every Completed row into WRAPPER_EPOCHS would anchor the request at OLD and
+# credit the NEW comment to it.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"sha":"%s"},{"sha":"%s"}]]' "$OLDTIP" "$TIP" > "$FIX/commits.json"
+{ s=$(summary_row '✅ **Completed**' "2000-01-01T00:00:00.511066Z" "${OLDTIP:0:7}" "$OLD_UTC")
+  h=$(human_request "$MID_UTC")
+  c=$(clean_round_boiler "${TIP:0:10}" "$NEW_UTC" | jq -c '.[0][0]')
+  printf '[[%s,%s,%s]]' "$s" "$h" "$c"; } > "$FIX/issues.json"
+check "a non-tip Completed row is not a pre-request anchor" 1
+
+# 18. WRAPPER_AT advances across channels by EPOCH when the row is newer. A review wrapper
+# at OLD, an `eyes` at MID, a Completed tip row at NEW2(+µs): the row is the latest round
+# end, the eyes predates it, no round is active. Left at OLD, the eyes would read as a
+# running round and block.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s]]' "$(summary_row '✅ **Completed**' "2000-01-01T00:00:03.511066Z" "${TIP:0:7}")" > "$FIX/issues.json"
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":"%s"}]]' "$MID_UTC" > "$FIX/reactions.json"
+check "a later summary row moves WRAPPER_AT past an older eyes" 0
+
+# 19. `--json` carries both summary fields, each only when set. Running on the tip: the
+# abbreviation it named, null for the unknown status, verdict BLOCKED.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s]]' "$(summary_row '🔄 **Running** since' "$SUM86_AT" "${TIP:0:7}")" > "$FIX/issues.json"
+J=$(PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 --json 2>/dev/null); _rc=$?
+if [[ "$_rc" == 1 ]] && printf '%s' "$J" | jq -e --arg a "${TIP:0:7}" '(.summary_running==$a) and (.summary_unknown_status==null) and (.verdict=="BLOCKED")' >/dev/null 2>&1; then
+  PASS=$((PASS+1)); echo "  ok   JSON carries summary_running                  (exit 1)"
+else
+  FAIL=$((FAIL+1)); echo "  FAIL JSON carries summary_running exit $_rc"
+fi
+# ...and the unknown status: the whole phrase, null for running, verdict BLOCKED.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s]]' "$(summary_row '⚠️ **Completed with errors**' "$SUM86_AT" "${TIP:0:7}")" > "$FIX/issues.json"
+J=$(PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 --json 2>/dev/null); _rc=$?
+if [[ "$_rc" == 1 ]] && printf '%s' "$J" | jq -e '((.summary_unknown_status // "") | contains("Completed with errors")) and (.summary_running==null) and (.verdict=="BLOCKED")' >/dev/null 2>&1; then
+  PASS=$((PASS+1)); echo "  ok   JSON carries summary_unknown_status           (exit 1)"
+else
+  FAIL=$((FAIL+1)); echo "  FAIL JSON carries summary_unknown_status exit $_rc"
+fi
+
+# 20. (P1) The documented residual, and what a PUSH does to it — measured here, not live.
+# A manual clean round on OLDTIP at OLD (its `Reviewed commit` comment; the row it left
+# has since been overwritten), a human request at MID, the manual round answering it on
+# OLDTIP at NEW (another `Reviewed commit` comment), then a normal push to TIP whose
+# automatic round leaves a Completed row on TIP at NEW2(+µs). The request is counted
+# against the CURRENT tip, and a prior-tip clean comment is not an anchor (the tip-only
+# test in the clean-comment loop), so no round end precedes the request on this tip:
+# "request not provably answered", exit 1. A push is NOT the escape. Were prior-tip clean
+# comments fed into WRAPPER_EPOCHS, the OLD comment would anchor the request with a quiet
+# gap and the NEW comment would be credited to it: exit 0.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[{"sha":"%s"},{"sha":"%s"}]]' "$OLDTIP" "$TIP" > "$FIX/commits.json"
+{ s=$(summary_row '✅ **Completed**' "2000-01-01T00:00:03.511066Z" "${TIP:0:7}" "$OLD_UTC")
+  c0=$(clean_round_boiler "${OLDTIP:0:10}" "$OLD_UTC" | jq -c '.[0][0]')
+  h=$(human_request "$MID_UTC")
+  c=$(clean_round_boiler "${OLDTIP:0:10}" "$NEW_UTC" | jq -c '.[0][0]')
+  printf '[[%s,%s,%s,%s]]' "$s" "$c0" "$h" "$c"; } > "$FIX/issues.json"
+check "a push after an uncredited request still blocks (P1)" 1
+
+# 21. (P2) The escape that does work: a SECOND `@codex review` on the SAME tip, posted
+# after the first request's clean comment arrived. First request at MID, its clean comment
+# on the tip at NEW, second request at NEW3, its clean comment at NEW4, the summary row
+# (latest round) at NEW4(+µs). The NEW comment is the second request's pre-request anchor
+# with a quiet gap, so the request is credited and the gate clears.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+{ s=$(summary_row '✅ **Completed**' "2000-01-01T00:00:05.511066Z" "${TIP:0:7}" "$OLD_UTC")
+  h=$(human_request "$MID_UTC"); h2=$(human_request "$NEW3_UTC")
+  c=$(clean_round_boiler "${TIP:0:10}" "$NEW_UTC" | jq -c '.[0][0]')
+  c2=$(clean_round_boiler "${TIP:0:10}" "$NEW4_UTC" | jq -c '.[0][0]')
+  printf '[[%s,%s,%s,%s,%s]]' "$s" "$h" "$c" "$h2" "$c2"; } > "$FIX/issues.json"
+check "a second @codex review on the same tip clears (P2)" 0
+
+# 22–25. The status is classified on the cell's SHAPE, not on a captured word: after the
+# `<relative-time>` element (with its inner text) and any other tag are stripped, the cell
+# must be exactly a bold `Completed` or a bold `Running` (plus `since`), with only
+# decoration before it. Each of these is the only evidence on the tip — no wrapper, no 👍 —
+# so exit 1 means nothing names the tip. Round 1's parser took the FIRST bold span (or the
+# whole cell text when there was none) and cleared on every one of them.
+# 22. Trailing text after a bold Completed is unknown.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s]]' "$(summary_row '✅ **Completed** with errors' "$SUM86_AT" "${TIP:0:7}")" > "$FIX/issues.json"
+check "'**Completed** with errors' is unknown" 1
+# 23. Letters before the bold span are unknown.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s]]' "$(summary_row '❌ not **Completed**' "$SUM86_AT" "${TIP:0:7}")" > "$FIX/issues.json"
+check "'not **Completed**' is unknown" 1
+# 24. No bold span is unknown even when the remaining text is exactly the word. Case 13
+# passes with the datetime as the element's inner text; here the element is EMPTIED first
+# so that after the strip nothing but `Completed` is left.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s]]' "$(summary_row 'Completed' "$SUM86_AT" "${TIP:0:7}" | sed 's/\\">[^<]*<\/relative-time>/\\"><\/relative-time>/')" > "$FIX/issues.json"
+if [[ "$(grep -c '></relative-time>' "$FIX/issues.json")" == 1 ]]; then
+  check "bare 'Completed' with an empty relative-time is unknown" 1
+else
+  FAIL=$((FAIL+1)); echo "  FAIL bare 'Completed' fixture does not hold an empty relative-time"
+fi
+# 25. Whitespace inside the bold span is unknown: the span must be exactly the word.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s]]' "$(summary_row '** Completed **' "$SUM86_AT" "${TIP:0:7}")" > "$FIX/issues.json"
+check "'** Completed **' is unknown" 1
+
+# 26–33. The Review cell is a shape too: only a bold `Code Review` (decoration before,
+# nothing after) can be a wrapper. The bot also offers `@codex security review`; what its
+# row looks like is inferred from the table's columns, not observed live.
+# 26. A Completed Security Review on the tip is not the code review this skill requires.
+# No wrapper, no 👍, so with the row ignored nothing names the tip: exit 1 (was exit 0).
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s]]' "$(review_row '🔒 **Security Review**' '✅ **Completed**' "$SUM86_AT" "${TIP:0:7}")" > "$FIX/issues.json"
+check "a Completed Security Review row is not a wrapper" 1
+# 27. ...and the report says why it did not count, naming the review type.
+OUT=$(run); _rc=$?
+if [[ "$_rc" == 1 ]] && printf '%s' "$OUT" | grep -qF -- 'Security Review" row in the Codex Review Summary is not a code review'; then
+  PASS=$((PASS+1)); echo "  ok   an ignored Security Review row is named in the report (exit 1)"
+else
+  FAIL=$((FAIL+1)); echo "  FAIL an ignored Security Review row is named in the report exit $_rc"
+fi
+# 28. An EMPTY Review cell is not a Code Review.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s]]' "$(review_row ' ' '✅ **Completed**' "$SUM86_AT" "${TIP:0:7}")" > "$FIX/issues.json"
+check "an empty Review cell is not a wrapper" 1
+# 29. `Code Review` without the bold span is not the known shape either.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s]]' "$(review_row 'Code Review' '✅ **Completed**' "$SUM86_AT" "${TIP:0:7}")" > "$FIX/issues.json"
+check "an unbolded Code Review cell is not a wrapper" 1
+# 30. Running blocks whatever the review type: a round in flight is a round in flight,
+# even with an older review wrapper naming the tip (case 2 with a Security Review row).
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s]]' "$(review_row '🔒 **Security Review**' '🔄 **Running** since' "$SUM86_AT" "${TIP:0:7}")" > "$FIX/issues.json"
+check "a Running Security Review row still blocks" 1
+# 31. An unknown status blocks whatever the review type (case 6 with a Security Review row).
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s]]' "$(review_row '🔒 **Security Review**' '❌ **Failed**' "$SUM86_AT" "${TIP:0:7}")" > "$FIX/issues.json"
+check "a Failed Security Review row still blocks" 1
+# 32. A marked, authenticated summary from which NO row can be parsed is exit 3, not a
+# skipped channel. Here every table line has lost its leading pipe (GitHub still renders
+# that), a review wrapper names the tip, and the row — were it read — would say Running.
+# Skipping the channel cleared on the wrapper (exit 0); the gate cannot tell, so it says so.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s]]' "$(summary_row '🔄 **Running** since' "$SUM86_AT" "${TIP:0:7}" | sed 's/\\n|/\\n/g')" > "$FIX/issues.json"
+if grep -qF -- '\n|' "$FIX/issues.json"; then
+  FAIL=$((FAIL+1)); echo "  FAIL the pipe-less summary fixture still holds a leading pipe"
+else
+  check "a marked summary with no parseable row is exit 3" 3
+  # 33. ...with the cannot-determine message on stderr (run discards it, so capture here).
+  ERR=$(PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 2>&1 >/dev/null); _rc=$?
+  if [[ "$_rc" == 3 ]] && printf '%s' "$ERR" | grep -qF -- 'BLOCKED: a Codex Review Summary comment exists but no row could be parsed'; then
+    PASS=$((PASS+1)); echo "  ok   an unparseable summary names itself on stderr   (exit 3)"
+  else
+    FAIL=$((FAIL+1)); echo "  FAIL an unparseable summary names itself on stderr exit $_rc"
+  fi
+fi
+# 34. Per comment, not by count: a second, parseable marked comment must not hide the
+# unparseable one (the bot posts one comment; two is a defensive fixture, not an observation).
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+printf '[[%s,%s]]' "$(summary_row '✅ **Completed**' "$SUM86_AT" "${TIP:0:7}")" \
+  "$(summary_row '🔄 **Running** since' "$SUM86_AT" "${TIP:0:7}" | sed 's/\\n|/\\n/g')" > "$FIX/issues.json"
+check "a parseable summary does not hide an unparseable one" 3
 
 echo
 echo "passed $PASS, failed $FAIL"
