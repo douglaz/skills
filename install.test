@@ -1644,14 +1644,20 @@ printf '%s\n' '#!/bin/sh' 'exit 0' >"$cleanup_bin/unlink"
 printf '%s\n' '#!/bin/sh' 'exit 0' >"$cleanup_bin/rmdir"
 chmod +x "$cleanup_bin/unlink" "$cleanup_bin/rmdir"
 printf '%s\n' ': >"$BASHENV_MARKER"' 'exit 0' >"$bashenv_file"
-cat >"$bashenv_python_dir/python3" <<'EOF'
-#!/usr/bin/env bash
+# The shim names bash absolutely, so it does not depend on which `env` a
+# `#!/usr/bin/env bash` line reaches. The exported-command fixture below puts a fake `env`
+# (exit 0, no output) first on PATH: a shim that reaches it never starts, and its silent
+# exit 0 reads as the gate being bypassed.
+{
+  printf '#!%s\n' "$(command -v bash)"
+  cat <<'EOF'
 if [[ -n ${BASHENV_SUPERVISOR_DELAY:-} &&
     ${2:-} == */supervisor.py ]]; then
   sleep "$BASHENV_SUPERVISOR_DELAY"
 fi
 exec "$BASHENV_REAL_PYTHON" "$@"
 EOF
+} >"$bashenv_python_dir/python3"
 chmod +x "$bashenv_python_dir/python3"
 
 gate_fixture_group_alive() {
