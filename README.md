@@ -259,6 +259,24 @@ green light — where the forge can enforce a rule server-side, put it there ins
 `scripts/bot-gate.test` exercises it against a stubbed `gh` — each case
 a defect found in review, each shown to go red against the real bug.
 
+### delegate-to-manager
+
+Turns the main Claude Code session into the owner's assistant. A fresh background "manager"
+subagent does the repo work: grilling, triage, panels, rloop Runs, edits, reviews and PRs. The
+assistant relays both ways and filters out mechanical noise. It answers a question itself only when a
+recorded decision already settles it, and says which one. Technical questions go to a reviewer panel
+before they reach the owner. The assistant watches long jobs and starts a clean manager at each phase
+boundary.
+
+```text
+/delegate-to-manager triage the next bead
+```
+
+Best fit: you've been driving a multi-phase workflow by hand and want each phase in an empty context
+while you keep only the decisions. `references/manager-brief-template.md` is the standing brief every
+manager reads first. It keeps memory reads per activity, because a manager that read everything up
+front used about 110k tokens before starting work.
+
 ### galtland-architecture
 
 Applies or reviews a Rust async architecture: platform-split crates (a
