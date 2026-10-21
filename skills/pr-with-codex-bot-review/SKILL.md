@@ -52,7 +52,7 @@ the bot is quiet, or got findings back and need to address them.
 
 ## What "the bot reviewed" actually means on GitHub
 
-The bot communicates approval and findings through **five distinct channels**, all on
+The bot communicates approval and findings through **six distinct channels**, all on
 the same PR:
 
 1. **Reaction on the PR body** — `eyes` (👀) when the bot picks up the PR for review,
@@ -141,10 +141,24 @@ the same PR:
    the table keeps only the latest round, an earlier round's end is overwritten — see the
    exit-4 notes in § 7 and § 8b for what that costs.
 
+   It also carries `<!-- codex-review-state:v1 {json} -->`, whose `code_review` names the
+   round's full `commit_sha` and `has_unresolved_findings` **as of that round's end**.
+   `bot-gate` does not read that flag. Resolving a thread or hiding a comment does not
+   clear it: on 8 merged PRs it stayed `true` after every thread was resolved, and on
+   provisiond #18 it still read `true` after both finding comments were hidden and a
+   requested round on the same tip came back clean. Gating on it would deadlock a PR
+   whose P2 was answered without a push (ADR 0004, 2026-10-21 amendment).
+
+6. **Finding as a plain PR comment** — marked `<!-- codex-code-review-finding:v1 -->`,
+   with the usual P-badge and no review object or thread. On douglaz/provisiond #18 a P1
+   arrived this way three minutes after a clean receipt for the same tip. Hiding it as
+   Resolved is its disposition; `bot-gate` blocks on every one not hidden.
+
 When checking whether the bot has weighed in, reactions are the cheapest signal to read —
 but they are not a completion signal, and § 7 explains why you must not treat one as
-approval of the current head. Line comments carry the findings, if any. Findings are
-encoded with markdown priority badges:
+approval of the current head. Line comments carry the findings, if any, and so do plain
+PR comments marked as findings (channel 6). Findings are encoded with markdown priority
+badges:
 
 ```markdown
 **<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Title**
@@ -534,6 +548,16 @@ For each P-badge finding:
 - **Verify, don't reflexively agree.** The finding is a credible hypothesis. Read the
   code referenced. If the bot misread the diff, write a follow-up comment with
   evidence rather than capitulating.
+- **Record the disposition where the gate reads it.** Answer a thread finding, then
+  resolve the thread. Answer a channel-6 comment finding in a PR comment, then hide it as
+  Resolved — a PR comment's only resolution marker. A reply alone dispositions neither:
+  anyone can post one on a public repo. From the shell, with the comment's `node_id`:
+
+  ```bash
+  gh api graphql -f id=<node_id> -f query='mutation($id:ID!){
+    minimizeComment(input:{subjectId:$id,classifier:RESOLVED}){minimizedComment{isMinimized}}}'
+  ```
+
 - **Never write `@codex` anywhere but a top-level `@codex review` comment**, including thread
   replies and the PR body. The bot takes a mention as a task request and answers "create an
   environment for this repo", which starts no review round. Observed twice: on PR #90 as a
@@ -639,8 +663,9 @@ condition:
      mutation), and no `ready_for_review` event newer than the wrapper or unattributable to
      the wrapper that followed it — marking ready starts a round, so an older ready clears
      only when the PR was provably quiet at that moment (a first-ever mark-ready on a
-     born-draft PR qualifies) or a later provably-fresh request completed; and zero
-     unresolved review threads from either gated bot. It fails closed on any API error,
+     born-draft PR qualifies) or a later provably-fresh request completed; and no
+     undispositioned bot finding — zero unresolved review threads from either gated bot,
+     and zero codex finding comments (channel 6) left unhidden. It fails closed on any API error,
      missing tool, or unparseable response in the signals that feed all six — the timeline
      query behind the retarget check included. What the round-start list cannot see — a
      non-force push, and the round a non-draft PR starts at creation — is a documented
@@ -827,6 +852,7 @@ Don't merge when:
 
 - Codex bot reaction is `eyes` (still reviewing) — wait, even if CI is green.
 - Codex bot has unaddressed line comments (`P0`/`P1`/`P2`/`P3`) referencing the current head.
+- A codex finding comment (channel 6) is not hidden — see § 6.
 - No wrapper for the current tip yet — `@codex review` to wake it up. (A missing *reaction*
   is not itself a blocker; see the merge conditions above.)
 - CodeRabbit left unresolved review threads on the current head — those DO gate, because
