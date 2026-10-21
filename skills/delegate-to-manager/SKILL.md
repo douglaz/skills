@@ -37,7 +37,12 @@ running gates in the repo, stop and hand the work to the manager instead.
      through the table in the template, not all up front. A manager told to read every memory file up
      front used about 110k tokens before it started work.
    - Copy the project's **hard safety lines** verbatim from memory or CLAUDE.md: production systems
-     not to touch, what must be redacted from public repos, how credentials are fetched, and who merges.
+     not to touch, what must be redacted from public repos, and how credentials are fetched.
+   - Set the **merge lane**. At the start of every session, ask the owner whether to run the drain
+     lane (section 3), with "off" as the first option. Skip the question on a project in production:
+     the lane stays off unless the owner asks for it. If memory records a rule about who merges,
+     quote it in the question. The answer lasts for this session only: put it in the brief, never
+     in memory, and never carry it over from an earlier session.
 3. **Spawn the manager.** Use the Agent tool with `subagent_type: general-purpose`, `model: opus` and
    `run_in_background: true`. The prompt says: read the brief first and follow it all session, then
    gives the task in one or two sentences. Use a fresh agent, not a fork: a fork inherits your whole
@@ -82,7 +87,7 @@ short:
 - the decision, attributed ("The owner picked A");
 - what to do now;
 - what to end its turn with;
-- what not to do, such as "don't push", "don't merge" or "don't implement yet".
+- what not to do, such as "don't merge" or "don't implement yet".
 
 ## 3. Phase boundaries
 
@@ -100,9 +105,29 @@ anything the next manager needs that isn't already on the bead or branch.
   tell the owner you skipped it.
 
 **Keep going in an authorised lane.** If the standing workflow already authorises the next step (for
-example, triage marked it ready-for-agent, so an rloop Run follows; or a review passed, so a PR
-follows), start it, mention that you did, and offer to hold. **Merging always goes to the owner.**
-Quote the merge gate's verdict line in the question.
+example, triage marked it ready-for-agent, so an rloop Run follows), start it, mention that you did,
+and offer to hold. **Push and PR are always authorised:** once work is committed and reviewed, the
+manager pushes its branch and opens the PR without asking, and you report the link afterwards. Never
+hold that step for a yes. **Merging goes to the owner** unless the drain lane is on. Quote the merge
+gate's verdict line in the question.
+
+**Drain lane.** On a greenfield or pre-production project draining a bead backlog, the owner can
+delegate merging too. The lane is off unless the owner turned it on when this session started
+(section 1). The owner's go-ahead is the human merge decision `pr-with-codex-bot-review` asks for.
+The manager takes each bead from base to merged PR, then ends its turn. It stops early on the
+conditions in the brief's "Drain lane" section. After each merge, you:
+- give the owner one line with the PR, the bead, and `bot-gate`'s verdict, tip and observation
+  window, quoted as the manager reported them;
+- clear, and spawn a new manager on the next ready bead in the drain scope. That scope is what the
+  owner asked for (an epic, a label, a list of beads), or every ready bead if they named none;
+- don't ask in between.
+
+A stop condition pauses the lane until the owner answers. The lane ends when the scope is empty,
+when the session ends, or when the owner says "hold merges". On "hold merges", first set the brief's
+lane to `owner` and delete its "Drain lane" section, then tell the live manager. The manager
+re-reads the lane line before it starts each merge, so the hold stops every merge not yet started.
+A merge sequence that is already running can still land. Check the PR's state and tell the owner
+if it did.
 
 ## 4. Watching long jobs
 
