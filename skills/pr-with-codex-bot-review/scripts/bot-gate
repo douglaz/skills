@@ -1028,13 +1028,17 @@ if [[ "$CR_STATE" == "SUCCESS" ]] && ! $CR_SKIPPED && [[ -n "${CRC:-}" ]]; then
     | awk '
         tolower($0) ~ /files skipped from review/ {
           inskip=1
-          # Inline form: the path can sit on the header line after the colon.
-          if (match($0, /:[[:space:]]*[^[:space:]].*$/)) print substr($0, RSTART+1)
+          # Inline form: the path can sit on the header line after the colon. The HTML
+          # form puts the header in a <summary> and ends it with a file COUNT
+          # ("...changes: 1</strong></summary>", PR #91), so it carries no path.
+          if (tolower($0) !~ /<summary>/ && match($0, /:[[:space:]]*[^[:space:]].*$/)) print substr($0, RSTART+1)
           next
         }
         inskip && (/^<\/details>/ || /^#/ || tolower($0) ~ /files selected for processing/ \
                    || tolower($0) ~ /^[[:space:]]*<summary>/) { inskip=0 }
-        inskip' \
+        # Tags are layout, never a path: the HTML form wraps its list in <dl><dd> lines.
+        # Stripped AFTER the terminators above, which test the raw line.
+        inskip { gsub(/<[^>]*>/, ""); print }' \
     | sed -E 's/^[[:space:]]*[-*][[:space:]]+//' \
     | sed -E 's/[[:space:]]*\([0-9]+ hunks?\)[[:space:]]*$//' \
     | sed -E 's/`//g; s/\*\*//g' \
