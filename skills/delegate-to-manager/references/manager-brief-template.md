@@ -34,7 +34,50 @@ Don't write to the memory dir; tell the assistant what should be remembered.
 
 - <base branch and SHA; clean or not; open branches and what they hold>
 - <open tickets and their labels>
-- Never commit or push to <base> directly. Never merge a PR: merging is the owner's call.
+- Push your work branch and open its PR through `pr-with-codex-bot-review` without asking, then
+  report the link. Never commit or push to <base> directly.
+- Merge lane: <owner | drain>. `owner`: never merge a PR, because merging is the owner's call.
+  `drain`: see "Drain lane" below.
+
+## Drain lane
+
+<Delete this section unless the owner turned the drain lane on this session.> The owner has
+delegated merging for this session. That go-ahead is the human merge decision
+`pr-with-codex-bot-review` asks for. Drain scope: <every ready bead | the epic, label or bead ids
+the owner named>. Take each ready bead within that scope:
+
+1. Branch from freshly pulled <base>.
+2. Implement it. With rloop, use one Run per bead, never `--auto`: rloop commits onto the checked-out
+   branch and never branches, pushes or opens PRs.
+3. Before you push, check that the bead is closed in the committed JSONL. Run the resolver from the
+   exact skill `beads-jsonl-path` in its default clean mode. It succeeds only when the file's HEAD
+   and worktree bytes agree, so the record in the file it prints is the committed one. Don't use
+   `br show`: it reads the database every branch shares. If the record isn't closed, close and
+   flush it through that skill, commit the file with its Git runner, and check again. Otherwise the
+   same bead comes back after the merge.
+4. Push, open the PR, and work the bot rounds with `pr-with-codex-bot-review`. Never write
+   `@codex` in a thread reply. The bot answers it with a review stamped with the tip, and
+   `bot-gate` counts that as a review of the tree.
+5. Read `bot-gate`'s exit code:
+   - 1: do what its warnings name, such as fixing or answering an unresolved thread, or a second
+     `@codex review` as that skill describes. Return a watch condition only when a round is still
+     running.
+   - 4: re-request `@codex review` once, as that skill describes.
+   - 0: re-read this brief's Merge lane line, and merge only if it still says `drain`. Merge
+     through `pr-with-codex-bot-review-merge`, never `bot-gate && gh pr merge`.
+6. Report the merge, quoting `bot-gate`'s verdict, tip and observation window as that skill's
+   § 8a requires. Then return to <base> and end your turn.
+
+Stop and ask instead when:
+- `bot-gate` exits with any code other than 0, 1 or 4, or exits 4 again after the re-request;
+- a gate or CI stays red after your fix;
+- a finding needs a scope or design call;
+- the work comes near a hard safety line;
+- rloop exits 1 or 2;
+- nothing in scope is ready.
+
+If you stop before the merge with the bead already closed, say so. `br` keeps one database for every
+branch, so <base> now reads the bead as closed too, and the owner may need to reopen it.
 
 ## Hard safety lines
 
