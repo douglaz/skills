@@ -142,10 +142,12 @@ the same PR:
    exit-4 notes in § 7 and § 8b for what that costs.
 
    It also carries `<!-- codex-review-state:v1 {json} -->`, whose `code_review` names the
-   round's full `commit_sha` and `has_unresolved_findings` **as of that round's end**. A
-   snapshot: on 8 merged PRs (ADR 0004, 2026-10-21) it stayed `true` after every thread was resolved, and on
-   tau-web-rust #6 a later round rewrote it to `false`. `bot-gate` blocks while it is
-   `true` for the tip.
+   round's full `commit_sha` and `has_unresolved_findings` **as of that round's end**.
+   `bot-gate` does not read that flag. Resolving a thread or hiding a comment does not
+   clear it: on 8 merged PRs it stayed `true` after every thread was resolved, and on
+   provisiond #18 it still read `true` after both finding comments were hidden and a
+   requested round on the same tip came back clean. Gating on it would deadlock a PR
+   whose P2 was answered without a push (ADR 0004, 2026-10-21 amendment).
 
 6. **Finding as a plain PR comment** — marked `<!-- codex-code-review-finding:v1 -->`,
    with the usual P-badge and no review object or thread. On douglaz/provisiond #18 a P1
@@ -556,10 +558,6 @@ For each P-badge finding:
     minimizeComment(input:{subjectId:$id,classifier:RESOLVED}){minimizedComment{isMinimized}}}'
   ```
 
-- **Then refresh the summary flag if no push follows.** Channel 5's
-  `has_unresolved_findings` does not change when you resolve or hide; only the next
-  round's end rewrites it. So once every finding is dispositioned, post one more
-  `@codex review`, and triage whatever that round raises.
 - **Never write `@codex` anywhere but a top-level `@codex review` comment**, including thread
   replies and the PR body. The bot takes a mention as a task request and answers "create an
   environment for this repo", which starts no review round. Observed twice: on PR #90 as a
@@ -667,8 +665,7 @@ condition:
      only when the PR was provably quiet at that moment (a first-ever mark-ready on a
      born-draft PR qualifies) or a later provably-fresh request completed; and no
      undispositioned bot finding — zero unresolved review threads from either gated bot,
-     zero codex finding comments (channel 6) left unhidden, and no
-     `has_unresolved_findings: true` in the summary state for this tip (channel 5). It fails closed on any API error,
+     and zero codex finding comments (channel 6) left unhidden. It fails closed on any API error,
      missing tool, or unparseable response in the signals that feed all six — the timeline
      query behind the retarget check included. What the round-start list cannot see — a
      non-force push, and the round a non-draft PR starts at creation — is a documented
@@ -855,8 +852,7 @@ Don't merge when:
 
 - Codex bot reaction is `eyes` (still reviewing) — wait, even if CI is green.
 - Codex bot has unaddressed line comments (`P0`/`P1`/`P2`/`P3`) referencing the current head.
-- A codex finding comment (channel 6) is not hidden, or the summary flag (channel 5) is
-  still `true` for the tip — see § 6.
+- A codex finding comment (channel 6) is not hidden — see § 6.
 - No wrapper for the current tip yet — `@codex review` to wake it up. (A missing *reaction*
   is not itself a blocker; see the merge conditions above.)
 - CodeRabbit left unresolved review threads on the current head — those DO gate, because

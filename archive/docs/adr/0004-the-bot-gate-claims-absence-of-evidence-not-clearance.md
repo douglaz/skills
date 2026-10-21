@@ -233,7 +233,7 @@ thread. It also rewrote its summary state to `"has_unresolved_findings":true` fo
 commit. The gate counted 0 unresolved threads and would have cleared but for an unrelated
 request warning.
 
-The finding condition is now measured in two more places. This is not a seventh
+The finding condition is now measured in one more place. This is not a seventh
 condition, because the claim did not change; the gate was failing to measure part of it.
 
 - **Finding comments.** A codex comment carrying the marker is a finding. It is
@@ -242,13 +242,20 @@ condition, because the claim did not change; the gate was failing to measure par
   reason a thread reply does not: anyone can post one on a public repo. Every finding
   counts, whatever commit it names, as unresolved threads do. A failed hidden-state read
   is exit 3.
-- **The summary's own flag.** `has_unresolved_findings: true` in a state naming the tip's
-  full sha blocks. A state marker whose JSON cannot be read, or whose sha is not 40 hex,
-  is exit 3. The flag is the bot's snapshot at the end of its round. Eight merged PRs
-  ended with it still `true` on the merged tip after every thread was resolved: skills
-  #89, provisiond #12, #14, #15 and #16, tau-web #22 and #23, and tau-web-rust #9. That
-  was read from each summary's state line and from GraphQL `reviewThreads { isResolved }`
-  on 2026-10-21. On tau-web-rust #6, a later `@codex review` round rewrote the flag to
-  `false` once the threads were resolved. So a finding answered
-  without a push now costs one more round before the gate clears. That cost was accepted
-  so that the bot's own statement of open findings is never overridden by the gate.
+
+**The summary's own flag was considered and dropped.** A first version also blocked on
+`has_unresolved_findings: true` in a state naming the tip. The flag is the bot's snapshot
+at the end of its round, and resolving a thread or hiding a comment does not change it.
+Eight merged PRs ended with it still `true` on the merged tip after every thread was
+resolved: skills #89, provisiond #12, #14, #15 and #16, tau-web #22 and #23, and
+tau-web-rust #9. That was read from each summary's state line and from GraphQL
+`reviewThreads { isResolved }` on 2026-10-21. A later round does not reliably clear it
+either. On provisiond #18 itself, both finding comments were hidden as Resolved at
+17:29:19Z and 17:29:20Z, a requested round on tip `2ece975` posted a clean receipt at
+17:33:13Z, and the summary rewritten at 17:33:14Z still read
+`"has_unresolved_findings":true` for that tip. Where a later round does rewrite it to
+`false`, as on tau-web-rust #6, that round can raise a new P2, answered without a push,
+which sets it again. So gating on the flag deadlocks a PR whose P2 was answered without
+amending, which is the stop-amending-at-the-second-P2 practice. The owner ruled on
+2026-10-21 to drop it. The comment check alone blocks the #18 shape, so the flag added no coverage
+there.

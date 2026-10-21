@@ -1491,7 +1491,8 @@ check "a parseable summary does not hide an unparseable one" 3
 # review object, no thread — and rewrote its summary state to
 # `"has_unresolved_findings":true` for that commit. The gate saw 0 unresolved threads and
 # would have cleared but for an unrelated request warning. These fixtures take that shape
-# with the request removed, so nothing else blocks.
+# with the request removed, so nothing else blocks. The gate does not read the flag (ADR
+# 0004, 2026-10-21 amendment), so the comment alone has to block.
 PR18_RECEIPT_AT="2026-10-21T15:25:37Z"
 PR18_FINDING_AT="2026-10-21T15:29:00Z"
 PR18_ROW_AT="2026-10-21T15:29:01.469228Z"
@@ -1506,12 +1507,12 @@ finding() {  # $1 = node_id, [$2 login] [$3 type]
     html_url:("https://github.com/owner/repo/pull/16#issuecomment-" + $id),
     body:("<!-- codex-code-review-finding:v1 -->\n\n\n### 💡 Codex Review\n\nhttps://github.com/owner/repo/blob/" + $tip + "/.beads/issues.jsonl#L4\n**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Quote requirement text in the triage assertions**\n\nThe new proposal comment paraphrases a requirement.\n\n<details> <summary>About Codex in GitHub</summary>\n- Comment \"@codex review\".\n</details>")}'
 }
-state_summary() {  # $1 = state commit_sha, $2 = has_unresolved_findings, [$3 raw state text]
-  jq -nc --arg sha "$1" --argjson u "$2" --arg raw "${3-}" --arg at "$PR18_ROW_AT" --arg row "${TIP:0:7}" '
+state_summary() {  # $1 = state commit_sha, $2 = has_unresolved_findings
+  jq -nc --arg sha "$1" --argjson u "$2" --arg at "$PR18_ROW_AT" --arg row "${TIP:0:7}" '
     ({code_review:{commit_sha:$sha,has_any_findings:true,has_unresolved_findings:$u,status:"completed"},
       security_review:{commit_sha:null,has_any_findings:null,has_unresolved_findings:null,status:null}} | tojson) as $state
     | {user:{login:"chatgpt-codex-connector[bot]",type:"Bot"},created_at:"2026-10-21T15:08:39Z",node_id:"IC_summary",
-       body:("<!-- codex-pull-request-review-summary -->\n<!-- codex-review-state:v1 " + (if $raw == "" then $state else $raw end) + " -->\n\n## Codex Review Summary\n\n| Review | Status | Commit | Review trigger |\n| --- | --- | --- | --- |\n| 📝 **Code Review** | ✅ **Completed** <relative-time datetime=\"" + $at + "\">" + $at + "</relative-time> | `" + $row + "` | Manual request |\n")}'
+       body:("<!-- codex-pull-request-review-summary -->\n<!-- codex-review-state:v1 " + $state + " -->\n\n## Codex Review Summary\n\n| Review | Status | Commit | Review trigger |\n| --- | --- | --- | --- |\n| 📝 **Code Review** | ✅ **Completed** <relative-time datetime=\"" + $at + "\">" + $at + "</relative-time> | `" + $row + "` | Manual request |\n")}'
 }
 comments() { printf '[[%s]]' "$(IFS=,; printf '%s' "$*")"; }
 hidden() { printf '{"data":{"nodes":[{"id":"%s","isMinimized":true,"minimizedReason":"resolved"}]}}' "$1"; }
@@ -1528,42 +1529,33 @@ comments "$(receipt)" "$(finding IC_p1)" "$(state_summary "$TIP" false)" > "$FIX
 echo '{"data":{"nodes":[{"id":"IC_p1","isMinimized":false,"minimizedReason":null}]}}' > "$FIX/nodes.json"
 check "an undispositioned finding comment blocks" 1
 
-# 3. The flag alone, with no finding the gate can see: the bot says one is open.
-new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-comments "$(receipt)" "$(state_summary "$TIP" true)" > "$FIX/issues.json"
-check "the summary's unresolved flag on the tip blocks" 1
-
-# 4. Hiding the finding comment (minimized, the comment's own resolution marker) is its
+# 3. Hiding the finding comment (minimized, the comment's own resolution marker) is its
 # disposition, the way resolving a thread is a thread's.
 new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 comments "$(receipt)" "$(finding IC_p1)" "$(state_summary "$TIP" false)" > "$FIX/issues.json"
 hidden IC_p1 > "$FIX/nodes.json"
 check "a finding comment hidden as resolved clears" 0
 
-# 5. ...but only the comment that was hidden: a hidden node with another id answers nothing.
+# 4. ...but only the comment that was hidden: a hidden node with another id answers nothing.
 new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 comments "$(receipt)" "$(finding IC_p1)" "$(state_summary "$TIP" false)" > "$FIX/issues.json"
 hidden IC_other > "$FIX/nodes.json"
 check "hiding a different comment does not disposition it" 1
 
-# 6. A hidden finding does not clear the bot's own flag on the tip: the flag is a snapshot
-# at the round's end and only a later round rewrites it.
+# 5. The bot's flag stays true after the finding is hidden: on #18 it still did after a
+# requested round on the same tip came back clean. A finding answered without a push must
+# still clear, or the PR deadlocks.
 new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 comments "$(receipt)" "$(finding IC_p1)" "$(state_summary "$TIP" true)" > "$FIX/issues.json"
 hidden IC_p1 > "$FIX/nodes.json"
-check "a hidden finding leaves the tip's flag blocking" 1
+check "a hidden finding clears though the summary flag stays true" 0
 
-# 7. The flag counts for the tip only; a flag naming an older commit says nothing about it.
-new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-comments "$(receipt)" "$(state_summary "$OLDTIP" true)" > "$FIX/issues.json"
-check "the unresolved flag on another commit does not block" 0
-
-# 8. Identity is strict: the marker in a human's comment is not a codex finding.
+# 6. Identity is strict: the marker in a human's comment is not a codex finding.
 new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 comments "$(receipt)" "$(finding IC_human douglaz User)" "$(state_summary "$TIP" false)" > "$FIX/issues.json"
 check "a finding marker from a non-bot is not a finding" 0
 
-# 9-11. Fail closed: what the gate cannot read is not a disposition.
+# 7-8. Fail closed: what the gate cannot read is not a disposition.
 new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 comments "$(receipt)" "$(finding IC_p1)" "$(state_summary "$TIP" false)" > "$FIX/issues.json"
 touch "$FIX/nodesfail"
@@ -1572,22 +1564,15 @@ new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 comments "$(receipt)" "$(finding IC_p1)" "$(state_summary "$TIP" false)" > "$FIX/issues.json"
 echo '{"data":{"nodes":[{"id":"IC_p1","isMinimized":true}]},"errors":[{"message":"x"}]}' > "$FIX/nodes.json"
 check "a hidden-state response with errors is exit 3" 3
-new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-comments "$(receipt)" "$(state_summary "$TIP" false '{"code_review":')" > "$FIX/issues.json"
-check "an unparseable summary review state is exit 3" 3
-# ...and so is an abbreviated sha, which could never equal the tip and would never block.
-new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
-comments "$(receipt)" "$(state_summary "${TIP:0:7}" true)" > "$FIX/issues.json"
-check "an abbreviated review-state sha is exit 3" 3
 
-# 12. `--json` carries both new fields.
+# 9. `--json` carries the count.
 new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 comments "$(receipt)" "$(finding IC_p1)" "$(state_summary "$TIP" true)" > "$FIX/issues.json"
 J=$(PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 --json 2>/dev/null); _rc=$?
-if [[ "$_rc" == 1 ]] && printf '%s' "$J" | jq -e '(.undispositioned_finding_comments==1) and (.summary_unresolved_findings==true) and (.verdict=="BLOCKED")' >/dev/null 2>&1; then
-  PASS=$((PASS+1)); echo "  ok   JSON carries the finding-comment fields      (exit 1)"
+if [[ "$_rc" == 1 ]] && printf '%s' "$J" | jq -e '(.undispositioned_finding_comments==1) and (.verdict=="BLOCKED")' >/dev/null 2>&1; then
+  PASS=$((PASS+1)); echo "  ok   JSON carries the finding-comment count       (exit 1)"
 else
-  FAIL=$((FAIL+1)); echo "  FAIL JSON carries the finding-comment fields exit $_rc"
+  FAIL=$((FAIL+1)); echo "  FAIL JSON carries the finding-comment count exit $_rc"
 fi
 
 echo
