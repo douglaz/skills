@@ -55,9 +55,7 @@ the owner named>. Take each ready bead within that scope:
    `br show`: it reads the database every branch shares. If the record isn't closed, close and
    flush it through that skill, commit the file with its Git runner, and check again. Otherwise the
    same bead comes back after the merge.
-4. Push, open the PR, and work the bot rounds with `pr-with-codex-bot-review`. Never write
-   `@codex` in a thread reply. The bot answers it with a review stamped with the tip, and
-   `bot-gate` counts that as a review of the tree.
+4. Push, open the PR, and work the bot rounds with `pr-with-codex-bot-review`.
 5. Read `bot-gate`'s exit code:
    - 1: do what its warnings name, such as fixing or answering an unresolved thread, or a second
      `@codex review` as that skill describes. Return a watch condition only when a round is still

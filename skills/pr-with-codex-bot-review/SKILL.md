@@ -93,6 +93,11 @@ the same PR:
    The body of this review carries no findings. It's a wrapper that anchors the
    review to a specific commit SHA.
 
+   **A review with an empty body is not a wrapper.** When the bot answers in a review
+   thread, which it does whenever a reply mentions `@codex`, GitHub files the reply as a
+   submitted `COMMENTED` review with an empty body, stamped with the head commit. It names a
+   tree the bot never read, so `bot-gate` ignores it both as a wrapper and as a round's end.
+
 3. **Issue comment on a CLEAN round** — when the bot finds nothing it posts **no
    pull-request review at all**. It comments on the issue thread instead:
 
@@ -529,6 +534,11 @@ For each P-badge finding:
 - **Verify, don't reflexively agree.** The finding is a credible hypothesis. Read the
   code referenced. If the bot misread the diff, write a follow-up comment with
   evidence rather than capitulating.
+- **Never write `@codex` anywhere but a top-level `@codex review` comment**, including thread
+  replies and the PR body. The bot takes a mention as a task request and answers "create an
+  environment for this repo", which starts no review round. Observed twice: on PR #90 as a
+  thread reply, and on PR #91 for a mention in the PR body, where no automatic round ran on
+  PR open either. To ask for a round, post `@codex review` as a top-level PR comment.
 - **If accepted, fix it AND add a regression test that pins the new behavior.** The
   test serves as a counter-claim if the bot raises the same concern next round — but
   only if it can fail. **Invert the fix and watch that test go red before you push**,
@@ -583,7 +593,9 @@ condition:
   gh api --paginate --slurp repos/<owner>/<repo>/pulls/<N>/reviews \
     | jq -r --arg tip "$(git rev-parse HEAD)" '
         [.[][] | select(.user.login=="chatgpt-codex-connector[bot]" and .user.type=="Bot")
-         | select(.commit_id==$tip)] | last | .submitted_at'
+         | select(.commit_id==$tip)
+         | select((.submitted_at // "") != "" and (.body // "") != "")] | last | .submitted_at'
+  # (an empty body is a thread reply, not a round; see channel 2)
   # the +1 specifically — not `eyes`, which means the round is still running
   gh api repos/<owner>/<repo>/issues/<N>/reactions \
     --jq '.[] | select(.user.login=="chatgpt-codex-connector[bot]" and .user.type=="Bot")
@@ -605,7 +617,8 @@ condition:
      commit on the PR and that commit is the tip. That is the bot stating, with a SHA,
      which tree it read.
   2. Run **`scripts/bot-gate <PR>`** and require exit 0. Six conditions: a *submitted* codex
-     review naming this tip, a clean-round comment naming it, or a Completed **Code Review**
+     review naming this tip (not an empty-bodied thread reply; see channel 2), a clean-round
+     comment naming it, or a Completed **Code Review**
      summary row naming it (a summary row with status `Running`, on any commit, blocks — a round is in
      flight; a status that is neither `Completed` nor `Running` blocks too, fail-closed,
      and the report names the text it saw); no PENDING review from the bot on it (a rerun in flight); no
