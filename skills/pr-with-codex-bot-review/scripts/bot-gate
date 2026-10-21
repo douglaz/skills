@@ -663,6 +663,58 @@ count_unresolved_bot_threads() {
 # `eyes` check below detects directly and without the two-minute wait.
 UNRESOLVED=$(count_unresolved_bot_threads) || { echo "BLOCKED: thread query failed" >&2; exit 3; }
 
+# --- codex findings posted as plain PR comments, and the bot's own unresolved flag ---
+# Threads are not the only place codex files a finding. On douglaz/provisiond #18 it left a
+# clean receipt for tip 9b5abeb at 15:25:37Z, then at 15:29:00Z a P1 as an ordinary ISSUE
+# comment marked `<!-- codex-code-review-finding:v1 -->` — no review object, no thread —
+# and rewrote the summary state to `"has_unresolved_findings":true` for that commit. The
+# thread count above read 0, and the gate would have cleared an open P1.
+#
+# This is the existing "no undispositioned bot finding" condition measured in two more
+# places, not a new one (ADR 0004, 2026-10-21 amendment):
+#   - A finding comment is dispositioned when it is HIDDEN (minimized), the comment's own
+#     resolution marker, as a thread's is `isResolved`. A reply does not count, for the
+#     reason a thread reply does not: on a public repo anyone can post one. Identity is
+#     the exact login, Bot type and the marker prefix (any version — a v2 still blocks).
+#     Every finding counts, whichever commit it names, as unresolved threads do.
+#   - The summary's `<!-- codex-review-state:vN {json} -->` blocks when a review naming
+#     THIS tip (full sha) says `has_unresolved_findings: true`. That flag is the bot's
+#     snapshot at the end of its round: measured on 8 merged PRs it stayed true after
+#     every thread was resolved, and on tau-web-rust #6 a later `@codex review` round
+#     rewrote it to false once the threads were resolved. So after dispositioning, one
+#     more round is what clears it. A marker whose JSON cannot be read is exit 3.
+FINDING_IDS=$(printf '%s' "$ALL_COMMENTS" | jq -c --arg bot "$BOT_LOGIN" '
+  [.[][] | select(.user.login==$bot) | select(.user.type=="Bot")
+   | select((.body // "") | contains("<!-- codex-code-review-finding:")) | (.node_id // "")]' 2>/dev/null) \
+  || { echo "BLOCKED: cannot read codex finding comments" >&2; exit 3; }
+FINDINGS_OPEN=$(printf '%s' "$FINDING_IDS" | jq 'length')
+# Hidden state is GraphQL-only. Asked by node id, 100 at a time (the `nodes` limit), and
+# only for ids this gate asked about: anything not proven hidden stays open.
+_n=$FINDINGS_OPEN
+for ((_i = 0; _i < _n; _i += 100)); do
+  _chunk=$(printf '%s' "$FINDING_IDS" | jq -c ".[$_i:$((_i + 100))]")
+  _args=()
+  while IFS= read -r _id; do _args+=(-f "ids[]=$_id"); done < <(printf '%s' "$_chunk" | jq -r '.[]')
+  _page=$(gh api graphql -f query='query($ids:[ID!]!){ nodes(ids:$ids){ ... on IssueComment { id isMinimized } } }' \
+            "${_args[@]}" 2>/dev/null) \
+    && _hidden=$(printf '%s' "$_page" | jq -e --argjson ids "$_chunk" '
+         if ((.errors // []) | length) > 0 then error("errors") else
+         [.data.nodes[]? | select(.isMinimized == true) | .id | select(IN($ids[]))] | unique | length end' 2>/dev/null) \
+    || { echo "BLOCKED: cannot read whether the codex finding comments are hidden" >&2; exit 3; }
+  FINDINGS_OPEN=$((FINDINGS_OPEN - _hidden))
+done
+STATE_UNRESOLVED=$(printf '%s' "$ALL_COMMENTS" | jq -r --arg bot "$BOT_LOGIN" --arg mark "$SUMMARY_MARKER" --arg tip "$TIP" '
+  [.[][] | select(.user.login==$bot) | select(.user.type=="Bot")
+   | select((.body // "") | contains($mark))
+   | .body | split("\n")[] | (capture("<!-- codex-review-state:v[0-9]+ (?<j>.*) -->").j | fromjson)
+   | ((.code_review, .security_review) // empty)
+   | if type == "object" and ((.commit_sha | type) | IN("string", "null"))
+          and ((.has_unresolved_findings | type) | IN("boolean", "null")) then . else error("shape") end
+   | select(.commit_sha == $tip and .has_unresolved_findings == true)] | length > 0' 2>/dev/null) \
+  || { echo "BLOCKED: cannot parse the review state in the Codex Review Summary" >&2; exit 3; }
+[[ "$STATE_UNRESOLVED" == true || "$STATE_UNRESOLVED" == false ]] \
+  || { echo "BLOCKED: cannot parse the review state in the Codex Review Summary" >&2; exit 3; }
+
 # --- CodeRabbit, when configured ---
 # "query failed" is not "not configured": mapping both to absent would let a transient
 # network or auth failure satisfy CLEAR on a repo that DOES gate on CodeRabbit, against
@@ -1167,11 +1219,13 @@ VERDICT="BLOCKED"
 if [[ "$WRAPPER_TIP" -gt 0 ]] && [[ -n "$WRAPPER_AT" ]] && [[ "$PENDING_ON_TIP" -eq 0 ]] \
    && ! $RERUN_REQUESTED && ! $ROUND_ACTIVE \
    && ! $RETARGETED_AFTER_REVIEW && [[ "$UNRESOLVED" -eq 0 ]] \
+   && [[ "$FINDINGS_OPEN" -eq 0 ]] && ! $STATE_UNRESOLVED \
    && [[ -z "$SUMMARY_RUNNING" && -z "$SUMMARY_UNKNOWN_STATUS" ]]; then
   VERDICT="NO_PENDING_EVIDENCE"
 elif [[ "$WRAPPER_TIP" -eq 0 ]] && $THUMBS_UNATTRIBUTED && [[ "$PENDING_ON_TIP" -eq 0 ]] \
    && ! $RERUN_REQUESTED && ! $ROUND_ACTIVE \
    && ! $RETARGETED_AFTER_REVIEW && [[ "$UNRESOLVED" -eq 0 ]] \
+   && [[ "$FINDINGS_OPEN" -eq 0 ]] && ! $STATE_UNRESOLVED \
    && [[ -z "$SUMMARY_RUNNING" && -z "$SUMMARY_UNKNOWN_STATUS" ]]; then
   VERDICT="BLOCKED_UNATTRIBUTED"
 fi
@@ -1195,8 +1249,10 @@ if $JSON; then
         --arg cr_skipped "$CR_SKIPPED" --arg round_active "$ROUND_ACTIVE" --arg retargeted "$RETARGETED_AFTER_REVIEW" --arg rerun "$RERUN_REQUESTED" --arg skiplist "$CR_SKIPLIST" \
         --arg unattributed "$THUMBS_UNATTRIBUTED" \
         --arg sum_running "$SUMMARY_RUNNING" --arg sum_unknown "$SUMMARY_UNKNOWN_STATUS" \
+        --argjson findings "$FINDINGS_OPEN" --arg state_unresolved "$STATE_UNRESOLVED" \
     '{tip:$tip,verdict:$v,claim:(if $claim=="" then null else $claim end),observed_from:$from,observed_to:$to,
       wrapper_on_tip:$w,unresolved_bot_threads:$u,
+      undispositioned_finding_comments:$findings,summary_unresolved_findings:($state_unresolved=="true"),
       coderabbit:$cr,coderabbit_skipped:($cr_skipped=="true"),round_active:($round_active=="true"),retargeted_after_review:($retargeted=="true"),
       rerun_requested:($rerun=="true"),pending_review_on_tip:($pending > 0),
       unattributed_round:($unattributed=="true"),
@@ -1207,6 +1263,7 @@ else
   printf 'tip              %s\n' "${TIP:0:10}"
   printf 'codex wrapper    %s naming this tip\n' "$WRAPPER_TIP"
   printf 'unresolved bot   %s thread(s)\n' "$UNRESOLVED"
+  printf 'codex findings   %s comment(s) not hidden\n' "$FINDINGS_OPEN"
   printf 'coderabbit       %s   (reported, does not gate)\n' "$CR_STATE"
   printf 'observed         %s .. %s\n' "$OBSERVED_FROM" "$OBSERVED_TO"
   printf '\nverdict: %s\n' "$VERDICT"
@@ -1217,6 +1274,8 @@ else
     printf '  ⚠ no review from the codex bot names this tip, so nothing proves WHICH tree it read.\n    Push or `@codex review` to get one, or accept the round explicitly and say so.\n'
   fi
   [[ "$UNRESOLVED" -gt 0 ]] && printf '  ⚠ %s UNRESOLVED bot thread(s). Fix each, or answer it with evidence and resolve the\n    thread — resolving is how you record that it was dispositioned.\n' "$UNRESOLVED"
+  [[ "$FINDINGS_OPEN" -gt 0 ]] && printf '  ⚠ %s codex finding(s) posted as PR comments, not threads, and not hidden. Fix each,\n    or answer it with evidence, then hide the comment as Resolved — hiding is how a\n    comment finding is dispositioned.\n' "$FINDINGS_OPEN"
+  $STATE_UNRESOLVED && printf '  ⚠ the Codex Review Summary says this tip has UNRESOLVED findings. The flag is the\n    bot'"'"'s snapshot at the end of its round and does not clear when you resolve a thread\n    or hide a comment: once every finding is dispositioned, `@codex review` once more and\n    wait for that round to rewrite it.\n'
   [[ "$CR_STATE" == "query-failed" ]] && printf '  · CodeRabbit status could not be queried.\n'
   $RERUN_REQUESTED && printf '  ⚠ an `@codex review` request is not provably answered — either it is newer than the\n    wrapper, or no completed round separates it from an earlier round-start, so the\n    wrapper after it may belong to a round that was already running. Wait, or\n    `@codex review` once more and wait for that wrapper.\n'
   [[ "$PENDING_ON_TIP" -gt 0 ]] && printf '  ⚠ a PENDING review from the bot names this tip — a round is in flight and has not\n    submitted yet. Wait for it.\n'

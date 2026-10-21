@@ -222,3 +222,30 @@ coverage rule defines "provably answered" inside two of them, it is not a sevent
 
 The decision this ADR records is unchanged — the verdict claims absence of evidence over a
 window, never clearance. The set of things accepted as evidence of a pending round grew.
+
+## Amendment, 2026-10-21: findings outside threads
+
+The claim has always included "no bot finding on it was left undispositioned", but the
+gate measured that only as unresolved review threads. On douglaz/provisiond #18 codex left
+a clean receipt for tip 9b5abeb at 15:25:37Z, then at 15:29:00Z filed a P1 as a plain
+issue comment marked `<!-- codex-code-review-finding:v1 -->`, with no review object and no
+thread. It also rewrote its summary state to `"has_unresolved_findings":true` for that
+commit. The gate counted 0 unresolved threads and would have cleared but for an unrelated
+request warning.
+
+The finding condition is now measured in two more places. This is not a seventh
+condition, because the claim did not change; the gate was failing to measure part of it.
+
+- **Finding comments.** A codex comment carrying the marker is a finding. It is
+  dispositioned when it is hidden (`isMinimized`), the one resolution marker a comment
+  has. That parallels `isResolved` for a thread. A reply does not count, for the same
+  reason a thread reply does not: anyone can post one on a public repo. Every finding
+  counts, whatever commit it names, as unresolved threads do. A failed hidden-state read
+  is exit 3.
+- **The summary's own flag.** `has_unresolved_findings: true` in a state naming the tip's
+  full sha blocks, and a state marker whose JSON cannot be read is exit 3. The flag is
+  the bot's snapshot at the end of its round. Eight merged PRs ended with it still
+  `true` after every thread was resolved, and on tau-web-rust #6 a later `@codex review`
+  round rewrote it to `false` once the threads were resolved. So a finding answered
+  without a push now costs one more round before the gate clears. That cost was accepted
+  so that the bot's own statement of open findings is never overridden by the gate.
