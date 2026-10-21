@@ -679,10 +679,12 @@ UNRESOLVED=$(count_unresolved_bot_threads) || { echo "BLOCKED: thread query fail
 #     Every finding counts, whichever commit it names, as unresolved threads do.
 #   - The summary's `<!-- codex-review-state:vN {json} -->` blocks when a review naming
 #     THIS tip (full sha) says `has_unresolved_findings: true`. That flag is the bot's
-#     snapshot at the end of its round: measured on 8 merged PRs it stayed true after
-#     every thread was resolved, and on tau-web-rust #6 a later `@codex review` round
-#     rewrote it to false once the threads were resolved. So after dispositioning, one
-#     more round is what clears it. A marker whose JSON cannot be read is exit 3.
+#     snapshot at the end of its round: it stayed true on the merged tip after every
+#     thread was resolved on skills #89, provisiond #12 #14 #15 #16, tau-web #22 #23 and
+#     tau-web-rust #9, and on tau-web-rust #6 a later `@codex review` round rewrote it to
+#     false once the threads were resolved. So after dispositioning, one more round is
+#     what clears it. A marker whose JSON cannot be read, or whose sha is not 40 hex (all
+#     23 live payloads read were), is exit 3: an abbreviation would never equal the tip.
 FINDING_IDS=$(printf '%s' "$ALL_COMMENTS" | jq -c --arg bot "$BOT_LOGIN" '
   [.[][] | select(.user.login==$bot) | select(.user.type=="Bot")
    | select((.body // "") | contains("<!-- codex-code-review-finding:")) | (.node_id // "")]' 2>/dev/null) \
@@ -708,7 +710,8 @@ STATE_UNRESOLVED=$(printf '%s' "$ALL_COMMENTS" | jq -r --arg bot "$BOT_LOGIN" --
    | select((.body // "") | contains($mark))
    | .body | split("\n")[] | (capture("<!-- codex-review-state:v[0-9]+ (?<j>.*) -->").j | fromjson)
    | ((.code_review, .security_review) // empty)
-   | if type == "object" and ((.commit_sha | type) | IN("string", "null"))
+   | if type == "object" and (.commit_sha == null or ((.commit_sha | type) == "string"
+                                                       and (.commit_sha | test("^[0-9a-f]{40}$"))))
           and ((.has_unresolved_findings | type) | IN("boolean", "null")) then . else error("shape") end
    | select(.commit_sha == $tip and .has_unresolved_findings == true)] | length > 0' 2>/dev/null) \
   || { echo "BLOCKED: cannot parse the review state in the Codex Review Summary" >&2; exit 3; }

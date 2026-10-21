@@ -1440,6 +1440,8 @@ case ${1-} in
     # SSH push. Judge every URL Git will push to (insteadOf/pushInsteadOf
     # applied); only when all are SSH skip the helpers, and turn HTTPS off for
     # the push so a misjudged URL fails instead of reaching an unchecked helper.
+    # That last step is defence in depth: get-url and the push read the same
+    # config, and no URL is known that this calls SSH and Git sends over HTTPS.
     _bjg_push_ssh_only=false
     if _bjg_push_urls=$("$_bjg_git" --no-pager --no-replace-objects \
         -c core.fsmonitor=false -c core.hooksPath=/dev/null \

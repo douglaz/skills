@@ -143,7 +143,7 @@ the same PR:
 
    It also carries `<!-- codex-review-state:v1 {json} -->`, whose `code_review` names the
    round's full `commit_sha` and `has_unresolved_findings` **as of that round's end**. A
-   snapshot: on 8 merged PRs it stayed `true` after every thread was resolved, and on
+   snapshot: on 8 merged PRs (ADR 0004, 2026-10-21) it stayed `true` after every thread was resolved, and on
    tau-web-rust #6 a later round rewrote it to `false`. `bot-gate` blocks while it is
    `true` for the tip.
 

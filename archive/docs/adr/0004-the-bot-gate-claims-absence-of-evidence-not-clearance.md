@@ -243,9 +243,12 @@ condition, because the claim did not change; the gate was failing to measure par
   counts, whatever commit it names, as unresolved threads do. A failed hidden-state read
   is exit 3.
 - **The summary's own flag.** `has_unresolved_findings: true` in a state naming the tip's
-  full sha blocks, and a state marker whose JSON cannot be read is exit 3. The flag is
-  the bot's snapshot at the end of its round. Eight merged PRs ended with it still
-  `true` after every thread was resolved, and on tau-web-rust #6 a later `@codex review`
-  round rewrote it to `false` once the threads were resolved. So a finding answered
+  full sha blocks. A state marker whose JSON cannot be read, or whose sha is not 40 hex,
+  is exit 3. The flag is the bot's snapshot at the end of its round. Eight merged PRs
+  ended with it still `true` on the merged tip after every thread was resolved: skills
+  #89, provisiond #12, #14, #15 and #16, tau-web #22 and #23, and tau-web-rust #9. That
+  was read from each summary's state line and from GraphQL `reviewThreads { isResolved }`
+  on 2026-10-21. On tau-web-rust #6, a later `@codex review` round rewrote the flag to
+  `false` once the threads were resolved. So a finding answered
   without a push now costs one more round before the gate clears. That cost was accepted
   so that the bot's own statement of open findings is never overridden by the gate.

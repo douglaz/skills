@@ -1575,6 +1575,10 @@ check "a hidden-state response with errors is exit 3" 3
 new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
 comments "$(receipt)" "$(state_summary "$TIP" false '{"code_review":')" > "$FIX/issues.json"
 check "an unparseable summary review state is exit 3" 3
+# ...and so is an abbreviated sha, which could never equal the tip and would never block.
+new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+comments "$(receipt)" "$(state_summary "${TIP:0:7}" true)" > "$FIX/issues.json"
+check "an abbreviated review-state sha is exit 3" 3
 
 # 12. `--json` carries both new fields.
 new_fix; echo '[[]]' > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
