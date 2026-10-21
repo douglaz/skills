@@ -241,9 +241,16 @@ BOT_LOGIN="chatgpt-codex-connector[bot]"
 # the worst one available: the active-round check below is guarded on WRAPPER_AT, so it
 # would not run at all, and the verdict saw a wrapper on the tip with nothing contradicting
 # it. A review nobody submitted is not evidence that anybody read anything.
+# The body must be non-empty too. When the bot answers in a review THREAD — it does whenever
+# a reply mentions `@codex` — GitHub files that reply as a submitted COMMENTED review with an
+# empty body, stamped with whatever commit is the head. On PR #90 review 5593833655 (body
+# length 0, a reply saying "create an environment") named a tip nothing had read, beside the
+# 655-byte `codex-review-receipt:v1` bodies of every real round, and this count cleared the
+# gate on it. A reply review with a non-empty body would still count; none has been seen.
 WRAPPER_JSON=$(printf '%s' "$REVIEWS" | jq -c --arg tip "$TIP" --arg bot "$BOT_LOGIN" '
   [.[][] | select(.user.login==$bot) | select(.user.type=="Bot")
-   | select(.commit_id==$tip) | select((.submitted_at // "") != "")]
+   | select(.commit_id==$tip) | select((.submitted_at // "") != "")
+   | select((.body // "") != "")]
   | {n: length, latest: (max_by(.submitted_at).submitted_at // "")}' 2>/dev/null)
 # A PENDING review is excluded from the wrapper count above — nothing was submitted, so it
 # proves nothing — but it is positive evidence that a round is IN FLIGHT, which is the
@@ -317,12 +324,18 @@ while IFS= read -r _wt; do
   # _round_covered_on_tip.
   _wtip="${_wt%%$'\t'*}"; _wts="${_wt#*$'\t'}"
   _we=$(iso_to_epoch "$_wts") || { WRAPPER_UNDATED=true; continue; }
+  # A review with an empty body is a thread reply (see WRAPPER_JSON), not a round's end,
+  # so it anchors nothing. Skipped only AFTER its timestamp parsed: an undated or
+  # unparseable reply must still mark WRAPPER_UNDATED, or it would vanish into the
+  # fail-open hole above.
+  [[ "$_wtip" == "@reply@" ]] && continue
   WRAPPER_EPOCHS="${WRAPPER_EPOCHS}${WRAPPER_EPOCHS:+$'\n'}${_we}"
   [[ "$_wtip" == "$TIP" ]] \
     && WRAPPER_TIP_EPOCHS="${WRAPPER_TIP_EPOCHS}${WRAPPER_TIP_EPOCHS:+$'\n'}${_we}"
 done < <(printf '%s' "$REVIEWS" | jq -r --arg bot "$BOT_LOGIN" '
   .[][] | select(.user.login==$bot) | select(.user.type=="Bot")
   | (if ((.submitted_at // "") | length) == 0 then "@undated@"
+     elif (.body // "") == "" then ("@reply@\t" + .submitted_at)
      else ((.commit_id // "") + "\t" + .submitted_at) end)' 2>/dev/null)
 # Clean-round comments are round ENDS too — a round that found nothing still finished.
 # Feeding only review objects into these lists left a PR whose every round is clean with

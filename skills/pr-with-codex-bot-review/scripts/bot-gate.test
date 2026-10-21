@@ -936,6 +936,43 @@ printf '[[{"user":{"login":"chatgpt-codex-connector[bot]","type":"Bot"},"submitt
 threads 0 > "$FIX/threads.json"
 check "a wrapper with an empty submitted_at blocks" 1
 
+# A thread reply from the bot is a submitted COMMENTED review with an EMPTY body, stamped
+# with the head commit. PR #90 cleared on one (review 5593833655) though no round had read
+# that tip. Shape copied from that review.
+reply_review() {  # $1 = submitted_at
+  printf '{"user":{"login":"chatgpt-codex-connector[bot]","type":"Bot"},"state":"COMMENTED","submitted_at":"%s","commit_id":"%s","body":""}' "$1" "$TIP"
+}
+new_fix; printf '[[%s]]' "$(reply_review "$OLD_UTC")" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+check "a thread-reply review is not a wrapper" 1
+
+# ...nor a round's END. "a rerun requested before the wrapper clears" with its earlier
+# wrapper swapped for a reply: nothing completed before the request, so it is unanswered.
+new_fix
+printf '[[%s,{"user":{"login":"chatgpt-codex-connector[bot]","type":"Bot"},"submitted_at":"%s","commit_id":"%s","body":"x"}]]' \
+  "$(reply_review "$OLD_UTC")" "$NOW_UTC" "$TIP" > "$FIX/reviews.json"
+threads 0 > "$FIX/threads.json"
+printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$MID_UTC" > "$FIX/issues.json"
+check "a thread-reply review anchors no request" 1
+
+# ...but an UNDATED empty-bodied review is still undated. "an empty wrapper timestamp
+# blocks it too" with an empty body: filtering on the body before the undated test would
+# drop it, and the first-ready fallback would clear on the very round it may be.
+new_fix
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]","type":"Bot"},"submitted_at":"","commit_id":"%s","body":""},{"user":{"login":"chatgpt-codex-connector[bot]","type":"Bot"},"submitted_at":"%s","commit_id":"%s","body":"x"}]]' \
+  "$OLDTIP" "$NOW_UTC" "$TIP" > "$FIX/reviews.json"
+threads 0 > "$FIX/threads.json"
+printf '[[{"event":"ready_for_review","created_at":"%s"}]]' "$OLD_UTC" > "$FIX/timeline.json"
+check "an undated empty-bodied review still blocks" 1
+
+# ...and so is one whose timestamp is present but unparseable. Skipping replies before the
+# parse would drop it unmarked, the same fail-open as above one step later.
+new_fix
+printf '[[{"user":{"login":"chatgpt-codex-connector[bot]","type":"Bot"},"submitted_at":"not-a-date","commit_id":"%s","body":""},{"user":{"login":"chatgpt-codex-connector[bot]","type":"Bot"},"submitted_at":"%s","commit_id":"%s","body":"x"}]]' \
+  "$OLDTIP" "$NOW_UTC" "$TIP" > "$FIX/reviews.json"
+threads 0 > "$FIX/threads.json"
+printf '[[{"event":"ready_for_review","created_at":"%s"}]]' "$OLD_UTC" > "$FIX/timeline.json"
+check "an unparseable empty-bodied review still blocks" 1
+
 # CodeRabbit's state is REPORTED, so failing to read it cannot make the verdict
 # indeterminate — exit follows the gate's six conditions. This was exit 3 while CodeRabbit
 # still gated (correctly: "could not ask" is not "not done"), and ADR 0004 changed what
