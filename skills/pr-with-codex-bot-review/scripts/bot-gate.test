@@ -375,6 +375,30 @@ new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"
 cr_success; cr_skip '- src/my file.py' > "$FIX/issues.json"
 check_reports "path containing a space is parsed whole" "src/my file.py"
 
+# The HTML form, copied from PR #91: the header sits in a <summary> and ends in a file
+# COUNT, and the paths sit inside <dl><dd>. The inline-form rule printed the count as
+# `1</strong></summary>`, and every bare tag line came out as a "file". Asserted as the
+# exact list, since a presence check passes with the junk beside the path.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+cr_success
+jq -n --arg b '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->
+<details>
+<summary><strong>🚧 Files skipped from review as they are similar to previous changes: 1</strong></summary>
+<dl>
+<dd>
+
+* skills/x/scripts/bot-gate.test
+
+</dd>
+</dl>
+</details>' '[[{user:{login:"coderabbitai[bot]",type:"Bot"},created_at:"2026-01-01",body:$b}]]' > "$FIX/issues.json"
+J=$(PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 --json 2>/dev/null)
+if printf '%s' "$J" | jq -e '.coderabbit_skipped_files == ["skills/x/scripts/bot-gate.test"]' >/dev/null 2>&1; then
+  PASS=$((PASS+1)); echo "  ok   HTML skip form lists only the path           (exact)"
+else
+  FAIL=$((FAIL+1)); echo "  FAIL HTML skip form lists only the path: $(printf '%s' "$J" | jq -c .coderabbit_skipped_files 2>/dev/null)"
+fi
+
 # --- rounds in flight ---
 
 # A retarget expands the PR's diff without moving its head, so `commit_id` still matches
