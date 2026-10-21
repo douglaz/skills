@@ -630,6 +630,9 @@ RUNNER_ASKPASS
 chmod +x "$b/repo/runner-path/ssh" "$b/repo/runner-path/askpass"
 git -C "$b/repo" config core.askPass "$b/repo/runner-path/askpass"
 git -C "$b/repo" remote add runner-test ssh://git@127.0.0.1:1/never
+# Credential helpers matter only to HTTPS, so the helper-validation cases below push
+# here; an SSH push skips that validation and turns HTTPS off instead.
+git -C "$b/repo" remote add runner-https https://127.0.0.1:1/never
 if (
   cd "$b/repo" || exit 98
   PATH="$b/repo/runner-path:$SYSTEM_PATH" \
@@ -665,7 +668,7 @@ if (
   cd "$b/repo" || exit 98
   HOME="$b/helper-home" \
     RUNNER_CREDENTIAL_EVIL_RAN="$b/runner-credential-evil-ran" \
-    "$GIT_RUNNER" push --remote runner-test --branch "$push_branch" \
+    "$GIT_RUNNER" push --remote runner-https --branch "$push_branch" \
       --expect-head "$push_head" \
     >"$b/helper-push.stdout" 2>"$b/helper-push.stderr"
 ); then rc=0; else rc=$?; fi
@@ -699,7 +702,7 @@ HOME="$b/named-helper-home" git config --global \
 if (
   cd "$b/repo" || exit 98
   HOME="$b/named-helper-home" PATH="$b/named-helper-bin:$SYSTEM_PATH" \
-    "$GIT_RUNNER" push --remote runner-test --branch "$push_branch" \
+    "$GIT_RUNNER" push --remote runner-https --branch "$push_branch" \
       --expect-head "$push_head" \
     >"$b/named-helper.stdout" 2>"$b/named-helper.stderr"
 ); then rc=0; else rc=$?; fi
@@ -724,7 +727,7 @@ if (
   cd "$b/repo" || exit 98
   HOME="$b/env-identity-helper-home" \
     PATH="$b/env-identity-helper-bin:$SYSTEM_PATH" \
-    "$GIT_RUNNER" push --remote runner-test --branch "$push_branch" \
+    "$GIT_RUNNER" push --remote runner-https --branch "$push_branch" \
       --expect-head "$push_head" \
     >"$b/env-identity-helper.stdout" 2>"$b/env-identity-helper.stderr"
 ); then rc=0; else rc=$?; fi
@@ -764,7 +767,7 @@ if (
   cd "$b/repo" || exit 98
   HOME="$b/interpreter-helper-home" \
     PATH="$b/interpreter-helper-bin:$SYSTEM_PATH" \
-    "$GIT_RUNNER" push --remote runner-test --branch "$push_branch" \
+    "$GIT_RUNNER" push --remote runner-https --branch "$push_branch" \
       --expect-head "$push_head" \
     >"$b/interpreter-helper.stdout" 2>"$b/interpreter-helper.stderr"
 ); then rc=0; else rc=$?; fi
@@ -789,7 +792,7 @@ HOME="$b/nul-helper-home" git config --global credential.helper nulinterpreter
 if (
   cd "$b/repo" || exit 98
   HOME="$b/nul-helper-home" PATH="$b/nul-helper-bin:$SYSTEM_PATH" \
-    "$GIT_RUNNER" push --remote runner-test --branch "$push_branch" \
+    "$GIT_RUNNER" push --remote runner-https --branch "$push_branch" \
       --expect-head "$push_head" \
     >"$b/nul-helper.stdout" 2>"$b/nul-helper.stderr"
 ); then rc=0; else rc=$?; fi
@@ -954,7 +957,7 @@ HOME="$b/store-helper-home" git config --global credential.helper \
 if (
   cd "$b/repo" || exit 98
   HOME="$b/store-helper-home" \
-    "$GIT_RUNNER" push --remote runner-test --branch "$push_branch" \
+    "$GIT_RUNNER" push --remote runner-https --branch "$push_branch" \
       --expect-head "$push_head" \
     >"$b/store-helper.stdout" 2>"$b/store-helper.stderr"
 ); then rc=0; else rc=$?; fi
@@ -975,7 +978,7 @@ HOME="$b/default-store-home" git config --global credential.helper store
 if (
   cd "$b/repo" || exit 98
   HOME="$b/default-store-home" \
-    "$GIT_RUNNER" push --remote runner-test --branch "$push_branch" \
+    "$GIT_RUNNER" push --remote runner-https --branch "$push_branch" \
       --expect-head "$push_head" \
     >"$b/default-store.stdout" 2>"$b/default-store.stderr"
 ); then rc=0; else rc=$?; fi
@@ -1001,7 +1004,7 @@ if (
   cd "$b/repo" || exit 98
   HOME="$b/no-config-home" XDG_CONFIG_HOME="$b/not-created/xdg" \
     RUNNER_CREDENTIAL_EVIL_RAN="$b/fallback-credential-ran" \
-    "$GIT_RUNNER" push --remote runner-test --branch "$push_branch" \
+    "$GIT_RUNNER" push --remote runner-https --branch "$push_branch" \
       --expect-head "$push_head" \
     >"$b/absent-xdg.stdout" 2>"$b/absent-xdg.stderr"
 ); then rc=0; else rc=$?; fi
@@ -1032,6 +1035,60 @@ if [[ $rc -eq 0 ]]; then
   fail "$t" 'plaintext HTTP push unexpectedly succeeded'
 elif ! grep -Fq "transport 'http' not allowed" "$b/http-push.stderr"; then
   fail "$t" "runner did not reject HTTP transport: $(<"$b/http-push.stderr")"
+else
+  pass "$t"
+fi
+
+# The owner's real global config: gh's HTTPS-scoped shell helper after an empty reset.
+# An SSH push never consults it, so it must neither refuse the push nor run, and the
+# push must reach the SSH transport (a closed local port here).
+mkdir "$b/ssh-gh-home" "$b/ssh-gh-bin"
+command cat >"$b/ssh-gh-bin/gh" <<SSH_GH_HELPER
+#!/bin/sh
+printf '%s\n' ran >'$b/ssh-gh-helper-ran'
+exit 1
+SSH_GH_HELPER
+chmod +x "$b/ssh-gh-bin/gh"
+HOME="$b/ssh-gh-home" git config --global --add credential.https://github.com.helper ''
+HOME="$b/ssh-gh-home" git config --global --add credential.https://github.com.helper \
+  "!$b/ssh-gh-bin/gh auth git-credential"
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/ssh-gh-home" \
+    "$GIT_RUNNER" push --remote runner-test --branch "$push_branch" \
+      --expect-head "$push_head" \
+    >"$b/ssh-gh.stdout" 2>"$b/ssh-gh.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner pushes over SSH past an HTTPS-only shell helper'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'push to a closed local port unexpectedly succeeded'
+elif grep -Fq 'credential helper' "$b/ssh-gh.stderr"; then
+  fail "$t" "runner refused the SSH push over an HTTPS helper: $(<"$b/ssh-gh.stderr")"
+elif ! grep -Fq 'Could not read from remote repository' "$b/ssh-gh.stderr"; then
+  fail "$t" "push did not reach the SSH transport: $(<"$b/ssh-gh.stderr")"
+elif [[ -e "$b/ssh-gh-helper-ran" ]]; then
+  fail "$t" 'runner executed the HTTPS credential helper on an SSH push'
+else
+  pass "$t"
+fi
+
+# SSH is judged on the URL Git will push to, not the one the remote names: a repository
+# pushInsteadOf that rewrites an SSH remote to HTTPS keeps every HTTPS helper check.
+git -C "$b/repo" remote add rewrite-test ssh://git@127.0.0.2:1/rewritten
+git -C "$b/repo" config url.https://127.0.0.1:1/.pushInsteadOf ssh://git@127.0.0.2:1/
+if (
+  cd "$b/repo" || exit 98
+  HOME="$b/helper-home" \
+    "$GIT_RUNNER" push --remote rewrite-test --branch "$push_branch" \
+      --expect-head "$push_head" \
+    >"$b/rewrite.stdout" 2>"$b/rewrite.stderr"
+); then rc=0; else rc=$?; fi
+t='clean Git runner validates helpers when pushInsteadOf rewrites SSH to HTTPS'
+if [[ $rc -eq 0 ]]; then
+  fail "$t" 'push to a closed local port unexpectedly succeeded'
+elif ! grep -Fq 'configured credential helper is not a simple named helper' \
+    "$b/rewrite.stderr"; then
+  fail "$t" "runner skipped helper validation on a rewritten push URL: $(<"$b/rewrite.stderr")"
 else
   pass "$t"
 fi

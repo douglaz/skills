@@ -1434,19 +1434,45 @@ case ${1-} in
       done
       _bjg_credential_config+=( -c "$key=$value" )
     }
+    # Only HTTPS consults a credential helper, so an SSH push gains nothing from
+    # validating them and loses the push to any helper this runner refuses: a
+    # global `!gh auth git-credential` scoped to https://github.com blocked every
+    # SSH push. Judge every URL Git will push to (insteadOf/pushInsteadOf
+    # applied); only when all are SSH skip the helpers, and turn HTTPS off for
+    # the push so a misjudged URL fails instead of reaching an unchecked helper.
+    _bjg_push_ssh_only=false
+    if _bjg_push_urls=$("$_bjg_git" --no-pager --no-replace-objects \
+        -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+        remote get-url --push --all "$_bjg_push_remote" 2>/dev/null) \
+        && [[ -n "$_bjg_push_urls" ]]; then
+      _bjg_push_ssh_only=true
+      while IFS= read -r _bjg_push_url; do
+        case $_bjg_push_url in
+          ssh://*|git+ssh://*|ssh+git://*) ;;
+          *://*|*::*) _bjg_push_ssh_only=false ;;
+          *:*) [[ ${_bjg_push_url%%:*} != */* ]] || _bjg_push_ssh_only=false ;;
+          *) _bjg_push_ssh_only=false ;;
+        esac
+      done <<<"$_bjg_push_urls"
+    fi
     _bjg_credential_config=( -c credential.helper= )
-    while IFS=' ' read -r _bjg_credential_key _bjg_credential_helper; do
-      _bjg_append_credential_helper "$_bjg_credential_key" "$_bjg_credential_helper" ||
-        exit 1
-    done < <("$_bjg_git" config --system --get-regexp \
-      '^credential\.(.*\.)?helper$' 2>/dev/null)
-    while IFS=' ' read -r _bjg_credential_key _bjg_credential_helper; do
-      _bjg_append_credential_helper "$_bjg_credential_key" "$_bjg_credential_helper" ||
-        exit 1
-    done < <("$_bjg_git" config --global --get-regexp \
-      '^credential\.(.*\.)?helper$' 2>/dev/null)
-    unset _bjg_credential_helper _bjg_credential_key _bjg_git_exec_path
+    if [[ $_bjg_push_ssh_only == false ]]; then
+      while IFS=' ' read -r _bjg_credential_key _bjg_credential_helper; do
+        _bjg_append_credential_helper "$_bjg_credential_key" "$_bjg_credential_helper" ||
+          exit 1
+      done < <("$_bjg_git" config --system --get-regexp \
+        '^credential\.(.*\.)?helper$' 2>/dev/null)
+      while IFS=' ' read -r _bjg_credential_key _bjg_credential_helper; do
+        _bjg_append_credential_helper "$_bjg_credential_key" "$_bjg_credential_helper" ||
+          exit 1
+      done < <("$_bjg_git" config --global --get-regexp \
+        '^credential\.(.*\.)?helper$' 2>/dev/null)
+    fi
+    unset _bjg_credential_helper _bjg_credential_key _bjg_git_exec_path \
+      _bjg_push_url _bjg_push_urls
     _bjg_transport_config=()
+    [[ $_bjg_push_ssh_only == false ]] ||
+      _bjg_transport_config+=( -c protocol.https.allow=never )
     if _bjg_ssh=$(command -p -v ssh); then
       _bjg_ssh_command="$_bjg_ssh -F /dev/null -o ProxyCommand=none -o PermitLocalCommand=no -o BatchMode=yes"
       _bjg_transport_config+=( -c protocol.ssh.allow=always \

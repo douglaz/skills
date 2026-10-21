@@ -261,7 +261,11 @@ repository hooks and commit/push signing are disabled on that guarded path.
 Push also disables credential helpers, askpass, SSH configuration commands, and
 interactive prompts while retaining the caller's SSH agent. For HTTPS, it
 re-enables only system/global credential helpers after refusing a `HOME` or
-`XDG_CONFIG_HOME` inside the driven worktree.
+`XDG_CONFIG_HOME` inside the driven worktree. When every URL the remote pushes
+to is SSH (after `insteadOf`/`pushInsteadOf`), it skips that helper validation,
+since SSH never consults a helper, and turns HTTPS off for the push instead; a
+helper it would refuse, such as a global `!gh auth git-credential` scoped to
+`https://github.com`, therefore no longer blocks an SSH push.
 The runner's audit-tool modes validate every executable exposed by the caller's
 outside-worktree PATH directories at launch (including symbolic and hard-link
 provenance), then execute with only that admitted PATH. This is a static launch
