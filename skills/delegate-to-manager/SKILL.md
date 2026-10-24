@@ -43,8 +43,9 @@ running gates in the repo, stop and hand the work to the manager instead.
      the lane stays off unless the owner asks for it. If memory records a rule about who merges,
      quote it in the question. The answer lasts for this session only: put it in the brief, never
      in memory, and never carry it over from an earlier session.
-3. **Spawn the manager.** Use the Agent tool with `subagent_type: general-purpose`, `model: opus` and
-   `run_in_background: true`. The prompt says: read the brief first and follow it all session, then
+3. **Spawn the manager.** Use the Agent tool with `subagent_type: general-purpose`, `model: opus`,
+   `effort: high` and `run_in_background: true`. Pass the effort explicitly: left out, the manager
+   inherits the session's default, which may be `xhigh`. The prompt says: read the brief first and follow it all session, then
    gives the task in one or two sentences. Use a fresh agent, not a fork: a fork inherits your whole
    context, which defeats the purpose.
 4. Tell the owner in a few lines how the split works, then wait for the notification. Never predict
@@ -97,8 +98,8 @@ owner uses the `ask-matt` skill, ask the manager to apply it. Have it read `ask-
 anything the next manager needs that isn't already on the bead or branch.
 
 - **Continue:** keep sending messages to the same agent.
-- **Clear:** update the brief's state section, then spawn a **new** Agent with the same brief and the
-  next task. A manager near ~150k tokens is due for a clear whatever the tree says.
+- **Clear:** update the brief's state section, then spawn a **new** Agent as in section 1 step 3,
+  with the same brief and the next task. A manager near ~150k tokens is due for a clear whatever the tree says.
 - **Compact:** have the old manager write a summary file to your scratchpad, then spawn a new one
   pointed at it.
 - When the answer is obvious (the context is full and the next phase is unrelated), skip the ask and
