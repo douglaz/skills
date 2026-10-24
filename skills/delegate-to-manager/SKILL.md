@@ -135,6 +135,15 @@ if it did.
   its own deadline. Read any watch script the manager wrote before you run it.
 - **Progress** (rloop rounds): use a Monitor with a tight filter. Show new rounds, failures and the
   exit, not every phase. Re-arm it on its 30-minute expiry.
+- **Arm a wakeup past the usage-limit reset.** When a turn arrives with a "Usage limit reached" grace
+  notice, arm one wakeup that outlives the reset before you end the turn. This cheap poll is the one
+  exception to the notice's "don't start long work". Use a Bash `run_in_background` loop that polls
+  `claude -p "/usage"` every few minutes until its `Current session` line (the 5-hour window, not
+  the weekly ones) reads under 100% used, or use a scheduled wakeup. Take the reading, not the
+  advertised reset time, which has come back hours early. A 30-minute Monitor or a 2-hour waiter can
+  expire inside the limit, so re-arm the wakeup on every expiry until the poll sees the drop. One
+  night several sessions wrapped up under the notice with nothing armed, and sat idle about 12 hours
+  past the reset until the owner typed.
 - **Every terminal state needs a line,** including "unit gone, no exit file". Silence is not success.
 - **Read the result from systemd when unsure.** If an exit file looks wrong, read the unit's result
   with `systemctl --user show <unit> -p LoadState -p Result -p ExecMainStatus` and from its `out`
