@@ -47,7 +47,8 @@ running gates in the repo, stop and hand the work to the manager instead.
    `effort: high` and `run_in_background: true`. Pass the effort explicitly: left out, the manager
    inherits the session's default, which may be `xhigh`. The prompt says: read the brief first and follow it all session, then
    gives the task in one or two sentences. Use a fresh agent, not a fork: a fork inherits your whole
-   context, which defeats the purpose.
+   context, which defeats the purpose. If the owner asked for a sol manager, spawn it as section 7
+   says instead.
 4. Tell the owner in a few lines how the split works, then wait for the notification. Never predict
    or invent what the manager will report.
 
@@ -179,4 +180,61 @@ them for any agent.
   one question; grilling skills that ask "the whole frontier" are overridden to one question per turn.
 - **Don't relay a denied tool call as a workaround request.** If the manager reports a refusal, bring
   it to the owner.
-- **Don't quote the manager's internal agent ID or transcript paths** to the owner.
+- **Don't quote the manager's internal agent ID, thread id or transcript paths** to the owner.
+
+## 7. A sol manager (owner's option)
+
+The manager is the Opus subagent above unless the owner asks for a sol manager ("use a sol
+manager"). Then it is codex `gpt-6.1-sol` at `model_reasoning_effort=xhigh`, run through the codex
+CLI, because the Agent tool only runs Claude models. Don't ask about it; the owner's request lasts
+for this session.
+
+**Every turn is a `systemd-run --user` unit.** A turn can take hours, and a Bash
+`run_in_background` command is stopped at its timeout and with the session. Use one directory and
+one unit per turn, and the same `<repo>` working directory for every turn on a thread, because
+`codex exec resume` filters sessions by directory:
+
+```bash
+C=$(command -v codex)
+D=/var/tmp/manager-units/<repo>-$(date -u +%m%dT%H%M%S); mkdir -p $D
+systemd-run --user --unit=manager-$(basename $D) --collect --expand-environment=no \
+  --working-directory=<repo> -E PATH -p KillMode=mixed -p TimeoutStopSec=120 \
+  -p MemoryMax=16G -p MemorySwapMax=0 -p OOMPolicy=continue \
+  -p "StandardOutput=file:$D/out" -p "StandardError=file:$D/err" \
+  -p "ExecStopPost=/bin/sh -c 'printenv SERVICE_RESULT EXIT_CODE EXIT_STATUS | xargs > $D/exit'" \
+  "$C" exec <resume> --json --dangerously-bypass-approvals-and-sandbox \
+  -m gpt-6.1-sol -c model_reasoning_effort=xhigh -o "$D/report" <thread_id> "<prompt>"
+```
+
+- **Spawn:** leave out `resume` and `<thread_id>`. The prompt is the one from section 1 step 3. The
+  thread id is in the first line of `out`, `{"type":"thread.started","thread_id":"…"}`. Save it
+  beside the brief.
+- **Relay:** where section 2 says `SendMessage`, start a `resume` turn with the thread id and your
+  message.
+- **Clear:** a new spawn turn with the same brief and the next task.
+- **Watch:** every turn is a one-event wait (section 4). Use an until-loop on `$D/exit` with a
+  deadline; the unit has none of its own. `success exited 0` means `$D/report` holds the turn's last
+  message, which is the manager's question, report or wait. Anything else: read `err` and the tail of
+  `out`, and tell the owner. A fresh start prints `Reading additional input from stdin...` on `err`;
+  that is normal, since a unit's stdin is already null. Stop a turn with
+  `systemctl --user stop manager-<dir name>`.
+
+What differs from the subagent:
+
+- **No messages mid-turn.** The thread only reads input when the next `resume` turn starts, so
+  never start a turn while the previous one runs. A new standing rule (section 2) goes into the
+  brief at once and into the next `resume` message. "Hold merges" (section 3) still works, because the
+  manager re-reads the brief's lane line before each merge.
+- **No Skill, Agent or AskUserQuestion tools.** Codex uses a skill when the prompt or brief names
+  it, from `~/.codex/skills`, where `install.sh` installs this repo's skills. For any other skill,
+  including owner-only ones (section 5), give the path to its `SKILL.md`. Steps a skill runs as a
+  Claude subagent, such as panel readers, run as `claude -p` or `codex exec` commands instead.
+- **No sandbox and no deny list.** The bypass flag is required, because sandboxed codex cannot reach
+  the nix daemon socket and cannot run gates (rloop-spec `AGT-10`). The brief's hard safety lines are
+  its only fence. The brief's other rules hold as written: one question per turn, no owner-only
+  skill on its own initiative, launch long jobs and return.
+
+Checked on codex-cli 0.164.0, 2026-10-25, with trivial prompts: a start and a resume turn, both run
+directly and as units like the one above, exited 0. Each resume reported the start's thread id and
+recalled a word given in the start turn. The non-JSON resume banner and the start turns' session
+files under `~/.codex/sessions` record `gpt-6.1-sol` with `xhigh` effort.
