@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+# pr-watch — wait on one PR's review bots and CI, acting on what bot-gate reports instead of
+# sleeping through it. Run it in the background on a checkout of the PR's branch: bot-gate
+# needs local HEAD to be the PR's head. It exits when someone has something to do, or when
+# the PR is admitted.
+#
+# Why a script: on skills PRs #90 and #91 and rloop-bash PR #9, hand-written watch loops lost
+# about 3h40m. One slept 54 minutes on a BLOCKED whose warning named its own remedy (a second
+# `@codex review`). Others ran to a 50-minute deadline while no round had started, or while
+# a round sat "running" and never finished.
+#
+# Each poll runs bot-gate --json and reads the PR's checks, then the first rule that holds wins:
+#
+#   bot-gate missing beside pr-watch   exit 3
+#   gate exit 2 or 4                   exit with the gate's code (§ 7, § 8b)
+#   gate exit 3 three polls running    exit 3 (one transient API failure is retried)
+#   any other gate exit, or no tip in
+#     its JSON (a crashed gate)        exit 9: decide
+#   unresolved bot threads/findings    exit 1: address them (§ 6)
+#   a check failed                     exit 5
+#   gate exit 0, no check pending, and
+#     a second gate run agrees         exit 0: admitted, gate output printed. CodeRabbit's
+#                                      status is not waited on (ADR 0004); its threads block
+#                                      through bot-gate
+#   a summary status the gate can't
+#     read                             exit 9: decide
+#   a round running (a Running summary
+#     row, a PENDING review, or on a
+#     reviewed tip a fresh eyes)       past --stall-after: exit 7
+#   the tip reviewed, the gate wanting
+#     a fresh request (one "not
+#     provably answered", or a retarget
+#     or mark-ready after the review),
+#     and the bot answered after the
+#     newest request                   post one `@codex review` (§ 7's anchoring request);
+#                                      if the bot answers that and the gate still blocks,
+#                                      exit 9
+#   a request no answer is newer than  past --no-round-after from it: exit 6 (bot silent)
+#   no round has named the tip         past --no-round-after from when this run first saw
+#                                      the tip: post one `@codex review` (§ 5's wake-up)
+#   a post refused or failed twice     exit 9: post it by hand
+#   any other gate exit 1              exit 9
+#   past --deadline                    exit 8
+#
+# Timers and the one-post guards are per tip: a push during the run starts them again. It
+# posts only `@codex review`, at most once per tip for each of the two cases, and only to the
+# PR whose head is the tip bot-gate just checked. It never merges: admission (exit 0) hands
+# over to pr-with-codex-bot-review-merge, which re-runs the gate. On a tip no wrapper names,
+# bot-gate reports neither `eyes` nor anyone's `@codex review`, so the wake-up can land on a
+# round already running: bot-gate's documented duplicate-round residual.
+#
+# Usage: pr-watch <pr> [--interval S] [--no-round-after S] [--stall-after S] [--deadline S]
+
+set -uo pipefail
+
+usage() { echo "usage: pr-watch <pr-number> [--interval S] [--no-round-after S] [--stall-after S] [--deadline S]" >&2; exit 2; }
+PR="${1:-}"; shift || true
+INTERVAL=90 NO_ROUND_AFTER=600 STALL_AFTER=1500 DEADLINE=3300
+while [[ $# -gt 0 ]]; do
+  [[ $# -ge 2 ]] || usage
+  case "$1" in
+    --interval)       INTERVAL=$2 ;;
+    --no-round-after) NO_ROUND_AFTER=$2 ;;
+    --stall-after)    STALL_AFTER=$2 ;;
+    --deadline)       DEADLINE=$2 ;;
+    *) echo "unknown arg: $1" >&2; usage ;;
+  esac
+  shift 2
+done
+[[ "$PR" =~ ^[0-9]+$ ]] || usage
+for v in "$INTERVAL" "$NO_ROUND_AFTER" "$STALL_AFTER" "$DEADLINE"; do
+  [[ "$v" =~ ^[0-9]+$ ]] || { echo "durations are whole seconds" >&2; exit 2; }
+done
+
+# The sibling bot-gate, resolved through symlinks: this script is installed beside it.
+GATE="$(dirname "$(readlink -f "$0")")/bot-gate"
+[[ -x "$GATE" ]] || { echo "bot-gate not found beside pr-watch: $GATE" >&2; exit 3; }
+
+log() { echo "$(date -u +%H:%M:%S) $*"; }
+jget() { printf '%s' "$GATE_JSON" | jq -r "$1" 2>/dev/null; }
+now() { date +%s; }
+
+# Post `@codex review` to the PR read from the gate's repository, but only when its head is
+# still the tip the gate just checked.
+# A second refusal on one tip is not transient (a moved head makes the next gate run exit 3),
+# so it exits instead of retrying every poll until the deadline.
+request_review() { # request_review <why>
+  if [[ -n "$URL" && "$HEAD" == "$TIP" ]]; then
+    if gh pr comment "$URL" --body "@codex review" >/dev/null; then
+      log "posted @codex review: $1"; POSTED_AT=$(now); return 0
+    fi
+    log "posting @codex review failed"
+  else
+    log "PR $PR head ${HEAD:0:10} is not the gated tip ${TIP:0:10}; not posting"
+  fi
+  REFUSED=$((REFUSED + 1))
+  if (( REFUSED >= 2 )); then
+    log "could not post @codex review twice on this tip; post it by hand"; "$GATE" "$PR" 2>&1; exit 9
+  fi
+  return 1
+}
+
+START=$SECONDS FAILS3=0
+SEEN_TIP="" SEEN_AT=0 POSTED_ANCHOR=false POSTED_WAKE=false POSTED_AT=0 RUNNING_SINCE="" REFUSED=0
+while :; do
+  GATE_RC=0; GATE_JSON=$("$GATE" "$PR" --json 2>/dev/null) || GATE_RC=$?
+  TIP=$(jget '.tip // ""')
+  if (( GATE_RC == 3 )); then
+    FAILS3=$((FAILS3 + 1))
+    if (( FAILS3 >= 3 )); then log "bot-gate exit 3, $FAILS3 polls running"; "$GATE" "$PR" 2>&1; exit 3; fi
+    log "bot-gate exit 3 (cannot determine); retrying"; sleep "$INTERVAL"; continue
+  fi
+  FAILS3=0
+  case $GATE_RC in 2|4) log "bot-gate exit $GATE_RC"; "$GATE" "$PR" 2>&1; exit "$GATE_RC" ;; esac
+  # bot-gate prints its JSON before every exit 0 or 1, so anything else is a crash.
+  if (( GATE_RC > 1 )) || [[ -z "$TIP" ]]; then
+    log "bot-gate exit $GATE_RC with no tip in its JSON; decide"; "$GATE" "$PR" 2>&1; exit 9
+  fi
+  if [[ "$TIP" != "$SEEN_TIP" ]]; then
+    [[ -z "$SEEN_TIP" ]] || log "the tip moved from ${SEEN_TIP:0:10} to ${TIP:0:10}; timers start again"
+    SEEN_TIP=$TIP SEEN_AT=$(now) POSTED_ANCHOR=false POSTED_WAKE=false POSTED_AT=0 RUNNING_SINCE="" REFUSED=0
+  fi
+
+  # One read for the head, the URL and the checks. Checks of a head that is not the gated tip
+  # describe some other tree, and an unreadable rollup describes nothing: both read as
+  # pending, which never admits. CodeRabbit's status is left out: it is reported, never
+  # waited on (ADR 0004), because a paused CodeRabbit stays PENDING for ever.
+  # Read in the repository the gate resolved (fork or parent): gh's default repository may
+  # carry another PR <N>, or none.
+  REPO=$(jget '.repo // ""')
+  VIEW=""
+  [[ -n "$REPO" ]] && { VIEW=$(gh pr view "$PR" -R "$REPO" --json url,headRefOid,statusCheckRollup 2>/dev/null) || VIEW=""; }
+  URL=$(printf '%s' "$VIEW" | jq -r '.url // ""' 2>/dev/null)
+  HEAD=$(printf '%s' "$VIEW" | jq -r '.headRefOid // ""' 2>/dev/null)
+  ROLL=$(printf '%s' "$VIEW" | jq -er '(.statusCheckRollup // [])[]
+           | select((.name // .context) != "CodeRabbit")
+           | "\(.name // .context)=\(.conclusion // .state // "")"' 2>/dev/null)
+  rollrc=$?
+  (( rollrc == 0 || rollrc == 4 )) || ROLL="?=unreadable"   # jq -e: 4 is an empty rollup
+  [[ -n "$TIP" && "$HEAD" == "$TIP" ]] || ROLL="?=unreadable"   # covers an unreadable view
+  log "gate=$GATE_RC tip=${TIP:0:10} checks: $(printf '%s' "$ROLL" | tr '\n' ' ')"
+
+  threads=$(jget '(.unresolved_bot_threads // 0) + (.undispositioned_finding_comments // 0)')
+  if [[ "$threads" =~ ^[0-9]+$ ]] && (( threads > 0 )); then
+    log "findings to address: $threads"; "$GATE" "$PR" 2>&1; exit 1
+  fi
+  # Here-strings, not `printf | grep -q`: grep quits at the first match, a writer still
+  # blocked on a large rollup dies of SIGPIPE, and pipefail turns the match into a miss.
+  if grep -q -E '=(FAILURE|ERROR|CANCELLED|TIMED_OUT|ACTION_REQUIRED|STARTUP_FAILURE)$' <<< "$ROLL"; then
+    log "a check failed"; printf '%s\n' "$ROLL"; exit 5
+  fi
+  pending=false
+  [[ -n "$ROLL" ]] && grep -q -v -E '=(SUCCESS|NEUTRAL|SKIPPED)$' <<< "$ROLL" && pending=true
+  if (( GATE_RC == 0 )) && ! $pending; then
+    # The printout is a second gate run; admit only if it agrees, on the tip whose checks were
+    # just read, so exit 0 never prints BLOCKED or a tip that moved.
+    if OUT=$("$GATE" "$PR" 2>&1) && [[ "$OUT" =~ (^|$'\n')tip\ +${TIP:0:10}$'\n' ]]; then
+      log "admitted"; printf '%s\n' "$OUT"; exit 0
+    fi
+    log "the second gate run blocked or named another tip; polling again"
+  fi
+
+  # Only an exit 1 can carry a running round, so every other poll ends one.
+  (( GATE_RC == 1 )) || RUNNING_SINCE=""
+  if (( GATE_RC == 1 )); then
+    if [[ $(jget '.summary_unknown_status != null') == true ]]; then
+      log "the summary row has a status the gate cannot read; decide"; "$GATE" "$PR" 2>&1; exit 9
+    fi
+    reviewed=$(jget '(.wrapper_on_tip // 0) > 0')
+    # Both name the same remedy: a fresh `@codex review` once the bot has answered.
+    fresh=$(jget '(.rerun_requested == true) or (.retargeted_after_review == true)')
+    req=$(jget '.last_request_epoch // 0'); wrap=$(jget '.wrapper_epoch // 0')
+    [[ "$req" =~ ^[0-9]+$ ]] || req=0; [[ "$wrap" =~ ^[0-9]+$ ]] || wrap=0
+    # The newest request this tip has to answer: a mention, or this run's own post.
+    (( POSTED_AT > req )) && req=$POSTED_AT
+    if [[ $(jget '(.round_active == true) or (.summary_running != null) or (.pending_review_on_tip == true)') == true ]]; then
+      [[ -n "$RUNNING_SINCE" ]] || RUNNING_SINCE=$SECONDS
+      if (( SECONDS - RUNNING_SINCE >= STALL_AFTER )); then
+        log "a round has been running for $((SECONDS - RUNNING_SINCE))s; push again or re-request"; exit 7
+      fi
+    else
+      RUNNING_SINCE=""
+      if [[ $fresh == true && $reviewed == true ]] && (( wrap > req )); then
+        if $POSTED_ANCHOR; then
+          log "the bot answered this run's request and the gate still blocks; decide"; "$GATE" "$PR" 2>&1; exit 9
+        fi
+        request_review "the bot answered, but the gate needs a fresh request" && POSTED_ANCHOR=true
+      # Same-second counts as unanswered, as bot-gate counts it. On an unreviewed tip a request
+      # older than this run's first sight of it may predate the push, so it is not this tip's
+      # to answer (bot-gate reports none there today; its JSON does not promise that).
+      elif (( req > 0 && req >= wrap )) && { [[ $reviewed == true ]] || (( req >= SEEN_AT )); }; then
+        if (( $(now) - req >= NO_ROUND_AFTER )); then
+          log "no answer $(( $(now) - req ))s after the newest request; the bot is silent"; exit 6
+        fi
+      elif [[ $reviewed != true ]]; then
+        if ! $POSTED_WAKE && (( $(now) - SEEN_AT >= NO_ROUND_AFTER )); then
+          request_review "no round has named the tip $(( $(now) - SEEN_AT ))s after it was first seen" && POSTED_WAKE=true
+        fi
+      else
+        log "blocked for a reason pr-watch does not wait on"; "$GATE" "$PR" 2>&1; exit 9
+      fi
+    fi
+  fi
+
+  if (( SECONDS - START >= DEADLINE )); then
+    log "deadline after $((SECONDS - START))s"; "$GATE" "$PR" 2>&1; exit 8
+  fi
+  sleep "$INTERVAL"
+done
