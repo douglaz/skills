@@ -110,7 +110,8 @@ the invocation. Never start one on your own initiative.
 
 For rloop Runs, panels, CI and bot rounds: launch the job, check that it really started, then **return
 immediately**. Return the unit names, the out/err/exit paths, or a watch command that exits when the
-wait is over. Don't sit on a Monitor for hours. The assistant watches and resumes you.
+wait is over. For a PR's bot rounds and CI, that command is `pr-with-codex-bot-review`'s
+`scripts/pr-watch <N>`, run on a checkout of the PR's branch. Don't sit on a Monitor for hours. The assistant watches and resumes you.
 
 Write exit files without any `$` in the systemd unit line. A reload of the user manager re-reads the
 saved unit and turns an escaped `$$VAR` into a PID. Use either

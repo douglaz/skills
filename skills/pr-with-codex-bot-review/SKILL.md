@@ -433,10 +433,11 @@ ran, and what you deliberately did **not** change. When the codex bot later
 raises something you already considered and rejected, a line in the body saying
 so (with your evidence) is what keeps the next round from relitigating it.
 
-This step is optional when the diff is trivial or docs-only. It earns its keep on
-anything that touches auth, money, migrations, concurrency, or a public API — the
-same classes where a bot round-trip hurts most. If `claude` isn't available, skip
-it and say so rather than pretending the PR got a pre-review.
+This step is optional when the diff is trivial. It earns its keep on anything that
+touches auth, money, migrations, concurrency, or a public API — the same classes where a
+bot round-trip hurts most. A procedure an agent follows (`SKILL.md`, `AGENTS.md`, a brief,
+a spec) is not docs-only: skills PR #90 skipped this and took seven finding rounds. If
+`claude` isn't available, skip it and say so rather than pretending the PR got a pre-review.
 
 ### 3. Push and open the PR with a structured body
 
@@ -524,7 +525,13 @@ gh pr comment <N> --body "@codex review"
 After a force-push, the bot's prior review names the old SHA (and its reaction names
 nothing at all). The
 bot often re-reviews automatically on a new push, but re-comment `@codex review` if
-you don't see a new reaction or review after ~10 min.
+you don't see a new reaction or review after ~10 min. Not right after the push: that
+request is "not provably answered" (§ 7), and the tip needs a second one.
+
+**Wait with `scripts/pr-watch <N>` (beside `bot-gate`, § 7), in the background on the PR's
+branch, not a hand-written loop.** It posts that wake-up request and § 7's anchoring
+second request itself, and exits as soon as someone has to act. Its header lists the
+exit codes.
 
 If reaction is `+1`, also check line comments — the bot can approve on the latest
 SHA while older line comments from a prior round are still attached and outdated.

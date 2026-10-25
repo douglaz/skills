@@ -217,7 +217,10 @@ Opens and lands GitHub pull requests through the `chatgpt-codex-connector`
 review bot, with guidance for CodeRabbit when it is configured. Covers PR body
 drafting, local gates, a local Claude pre-review before push so the bots
 review the good version of the diff, bot re-triggers, review comment handling,
-force-push amends, and squash-merge cleanup.
+force-push amends, and squash-merge cleanup. `scripts/pr-watch` waits on a PR's bot
+rounds and CI in the background. It posts `@codex review` itself when no round starts or
+when `bot-gate` needs its second, anchoring request, and exits as soon as someone has to
+act.
 
 Claude Code:
 

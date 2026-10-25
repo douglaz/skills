@@ -573,6 +573,23 @@ new_fix; wrapper2 "chatgpt-codex-connector[bot]" "$OLD_UTC" "$NOW_UTC" > "$FIX/r
 printf '[[{"user":{"login":"douglaz"},"created_at":"%s","body":"@codex review"}]]' "$MID_UTC" > "$FIX/issues.json"
 check "a rerun requested before the wrapper clears" 0
 
+# The JSON reports, ungated, when the newest wrapper and the newest request landed; pr-watch
+# reads them to tell an answered request from a pending one. Here the wrapper is the newer.
+J=$(PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 --json 2>/dev/null)
+if printf '%s' "$J" | jq -e '(.wrapper_epoch|type)=="number" and (.last_request_epoch|type)=="number"
+                            and .wrapper_epoch > .last_request_epoch' >/dev/null 2>&1; then
+  PASS=$((PASS+1)); echo "  ok   JSON dates the wrapper after the request       (machine-readable)"
+else
+  FAIL=$((FAIL+1)); echo "  FAIL JSON dates the wrapper after the request: $(printf '%s' "$J" | jq -c '{wrapper_epoch,last_request_epoch}' 2>/dev/null)"
+fi
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+J=$(PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 --json 2>/dev/null)
+if printf '%s' "$J" | jq -e '.last_request_epoch == null and (.wrapper_epoch|type)=="number"' >/dev/null 2>&1; then
+  PASS=$((PASS+1)); echo "  ok   JSON reports no request as null                (machine-readable)"
+else
+  FAIL=$((FAIL+1)); echo "  FAIL JSON reports no request as null: $(printf '%s' "$J" | jq -c '{wrapper_epoch,last_request_epoch}' 2>/dev/null)"
+fi
+
 # A request with NO wrapper before it is ambiguous even with no retarget anywhere: the
 # tip's first round may still have been in flight when the request posted, and the single
 # wrapper after it may be THAT round's submission, with the requested round still pending.
