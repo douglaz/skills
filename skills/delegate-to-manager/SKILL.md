@@ -237,4 +237,5 @@ What differs from the subagent:
 Checked on codex-cli 0.164.0, 2026-10-25, with trivial prompts: a start and a resume turn, both run
 directly and as units like the one above, exited 0. Each resume reported the start's thread id and
 recalled a word given in the start turn. The non-JSON resume banner and the start turns' session
-files under `~/.codex/sessions` record `gpt-6.1-sol` with `xhigh` effort.
+files under `~/.codex/sessions` record `gpt-6.1-sol` with `xhigh` effort. The commands, streams and
+results are in [references/sol-manager-check.md](references/sol-manager-check.md).
