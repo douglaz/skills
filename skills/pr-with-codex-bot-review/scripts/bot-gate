@@ -1234,13 +1234,15 @@ else
 fi
 
 if $JSON; then
+  # `repo` is the owner/name the PR was resolved in (fork or parent), so a caller reads the
+  # same PR instead of resolving the number again.
   # Reported, never gated: when the tip's newest wrapper landed and when the newest `@codex`
   # mention did, as epochs or null. A watcher (pr-watch) needs to know whether the bot answered
   # after the newest request; it must not re-parse the comments to find out.
   _WRAPPER_EPOCH=""; [[ -n "$WRAPPER_AT" ]] && _WRAPPER_EPOCH=$(iso_to_epoch "$WRAPPER_AT" 2>/dev/null)
   [[ "$_WRAPPER_EPOCH" =~ ^[0-9]+$ ]] || _WRAPPER_EPOCH=""
   [[ "$T_LAST_LOOSE" =~ ^[0-9]+$ ]] || T_LAST_LOOSE=""
-  jq -n --arg tip "$TIP" --arg v "$VERDICT" --arg cr "$CR_STATE" \
+  jq -n --arg tip "$TIP" --arg repo "$REPO" --arg v "$VERDICT" --arg cr "$CR_STATE" \
         --arg wep "$_WRAPPER_EPOCH" --arg lre "$T_LAST_LOOSE" \
         --argjson w "$WRAPPER_TIP" --argjson u "$UNRESOLVED" --argjson pending "$PENDING_ON_TIP" \
         --arg from "$OBSERVED_FROM" --arg to "$OBSERVED_TO" --arg claim "$CLAIM" \
@@ -1248,7 +1250,7 @@ if $JSON; then
         --arg unattributed "$THUMBS_UNATTRIBUTED" \
         --arg sum_running "$SUMMARY_RUNNING" --arg sum_unknown "$SUMMARY_UNKNOWN_STATUS" \
         --argjson findings "$FINDINGS_OPEN" \
-    '{tip:$tip,verdict:$v,claim:(if $claim=="" then null else $claim end),observed_from:$from,observed_to:$to,
+    '{tip:$tip,repo:$repo,verdict:$v,claim:(if $claim=="" then null else $claim end),observed_from:$from,observed_to:$to,
       wrapper_on_tip:$w,unresolved_bot_threads:$u,
       undispositioned_finding_comments:$findings,
       coderabbit:$cr,coderabbit_skipped:($cr_skipped=="true"),round_active:($round_active=="true"),retargeted_after_review:($retargeted=="true"),

@@ -829,6 +829,19 @@ echo "forkowner/repo" > "$FIX/repo.txt"
 printf 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' > "$FIX/prhead-upstream.txt"
 check "a colliding PR number in the parent is not used" 0
 
+# The JSON names the repository the PR was resolved in, so pr-watch reads the same PR.
+# Here only the parent's PR 16 is at this tree.
+new_fix; wrapper "chatgpt-codex-connector[bot]" "$OLD_UTC" > "$FIX/reviews.json"; threads 0 > "$FIX/threads.json"
+echo "upstream/repo" > "$FIX/upstream.txt"; echo "forkowner/repo" > "$FIX/repo.txt"
+printf '%s' "$TIP" > "$FIX/prhead-upstream.txt"
+printf 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' > "$FIX/prhead.txt"
+J=$(PATH="$WORK/bin:$PATH" FIX="$FIX" "$GATE" 16 --json 2>/dev/null)
+if printf '%s' "$J" | jq -e '.repo == "upstream/repo"' >/dev/null 2>&1; then
+  PASS=$((PASS+1)); echo "  ok   JSON names the resolved repository            (machine-readable)"
+else
+  FAIL=$((FAIL+1)); echo "  FAIL JSON names the resolved repository: $(printf '%s' "$J" | jq -c '.repo' 2>/dev/null)"
+fi
+
 # Both repos can carry PR 16 at the SAME head — the same branch opened against the parent
 # and against the fork. The two PRs have separate reviews and threads, so silently picking
 # the parent can gate one PR while the caller merges the other. Ambiguity is exit 3.

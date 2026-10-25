@@ -80,9 +80,8 @@ log() { echo "$(date -u +%H:%M:%S) $*"; }
 jget() { printf '%s' "$GATE_JSON" | jq -r "$1" 2>/dev/null; }
 now() { date +%s; }
 
-# Post `@codex review` to the PR gh resolved, but only when its head is the tip the gate just
-# checked: bot-gate resolves forks itself and does not report the repository, so a head
-# mismatch means gh may be pointing at another repository's PR <N>.
+# Post `@codex review` to the PR read from the gate's repository, but only when its head is
+# still the tip the gate just checked.
 # A second refusal on one tip is not transient (a moved head makes the next gate run exit 3),
 # so it exits instead of retrying every poll until the deadline.
 request_review() { # request_review <why>
@@ -126,7 +125,11 @@ while :; do
   # describe some other tree, and an unreadable rollup describes nothing: both read as
   # pending, which never admits. CodeRabbit's status is left out: it is reported, never
   # waited on (ADR 0004), because a paused CodeRabbit stays PENDING for ever.
-  VIEW=$(gh pr view "$PR" --json url,headRefOid,statusCheckRollup 2>/dev/null) || VIEW=""
+  # Read in the repository the gate resolved (fork or parent): gh's default repository may
+  # carry another PR <N>, or none.
+  REPO=$(jget '.repo // ""')
+  VIEW=""
+  [[ -n "$REPO" ]] && { VIEW=$(gh pr view "$PR" -R "$REPO" --json url,headRefOid,statusCheckRollup 2>/dev/null) || VIEW=""; }
   URL=$(printf '%s' "$VIEW" | jq -r '.url // ""' 2>/dev/null)
   HEAD=$(printf '%s' "$VIEW" | jq -r '.headRefOid // ""' 2>/dev/null)
   ROLL=$(printf '%s' "$VIEW" | jq -er '(.statusCheckRollup // [])[]

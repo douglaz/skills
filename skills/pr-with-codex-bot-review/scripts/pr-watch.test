@@ -5,7 +5,7 @@
 # answers its Nth `--json` call from $FIX/gate.N (first line the exit code, the rest the
 # JSON), and its human-readable call with $FIX/human-rc (default 0), printing the tip in
 # $FIX/human-tip (default A's 10-hex prefix). The `gh` stub answers
-# its Nth `pr view` from $FIX/view.N and records every `pr comment` as "<target> <body>" in
+# its Nth `pr view -R <$FIX/repo, default o/r>` from $FIX/view.N and records every `pr comment` as "<target> <body>" in
 # $FIX/comments, after failing the first $FIX/comment-fails of them. Both keep answering
 # from the last file once a sequence runs out.
 #
@@ -35,7 +35,9 @@ STUB
 cat > "$WORK/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 case "$1 $2" in
-  "pr view")    f=$(seq-file view); [ -f "$f" ] || exit 1; cat "$f" ;;
+  # Only the repository the gate resolved ($FIX/repo, default o/r) has the PR.
+  "pr view")    case " $* " in *" -R $(cat "$FIX/repo" 2>/dev/null || echo o/r) "*) ;; *) exit 1 ;; esac
+                f=$(seq-file view); [ -f "$f" ] || exit 1; cat "$f" ;;
   "pr comment") n=$(cat "$FIX/comment-fails" 2>/dev/null || echo 0)
                 (( n > 0 )) && { echo $((n - 1)) > "$FIX/comment-fails"; exit 1; }
                 target=$3; shift 3
@@ -52,7 +54,7 @@ URL=https://github.com/o/r/pull/7
 new_fix() { FIX="$WORK/fix"; rm -rf "$FIX"; mkdir -p "$FIX"; }
 gate() { # gate <n> <exit> <jq object over a quiet default; $now is the epoch> [tip]
   local json
-  json=$(jq -cn --arg tip "${4:-$A}" --argjson now "$(date +%s)" '{tip:$tip, wrapper_on_tip:0,
+  json=$(jq -cn --arg tip "${4:-$A}" --argjson now "$(date +%s)" '{tip:$tip, repo:"o/r", wrapper_on_tip:0,
     unresolved_bot_threads:0, undispositioned_finding_comments:0, rerun_requested:false,
     retargeted_after_review:false, round_active:false, pending_review_on_tip:false,
     summary_running:null, summary_unknown_status:null, wrapper_epoch:null,
@@ -101,6 +103,11 @@ check "a null rollup reads as no checks" 0 0 --deadline 2
 
 new_fix; gate 1 0 '{wrapper_on_tip:1}'
 check "an unreadable PR view never admits" 8 0 --deadline 1
+
+# A fork clone whose PR lives in the parent: the gate resolved up/r, and gh's default
+# repository has no such PR. The checks must be read where the gate found the PR.
+new_fix; gate 1 0 '{wrapper_on_tip:1, repo:"up/r"}'; view 1 "$A" "$GREEN"; echo up/r > "$FIX/repo"
+check "checks are read in the repository the gate resolved" 0 0 --deadline 2
 
 # The printout is a second gate run; when it disagrees, exit 0 must not print BLOCKED.
 new_fix; gate 1 0 '{wrapper_on_tip:1}'; view 1 "$A" "$GREEN"; echo 1 > "$FIX/human-rc"
@@ -164,15 +171,17 @@ check "an old request does not make a fresh tip read silent" 8 0 --no-round-afte
 new_fix; gate 1 1 '{summary_running:"abc1234"}'; view 1 "$A" "$GREEN"
 check "a round running past --stall-after exits 7" 7 0 --stall-after 0 --deadline 4
 # Running for two 1-second polls, then not, then running again: the stall timer starts
-# again, so two contiguous seconds never reach a 3-second --stall-after.
+# again, so two contiguous seconds never reach a 3-second --stall-after. The deadline is
+# --stall-after + 1: a poll takes over a second, so the whole-second clock can skip a value,
+# and any wider gap lets a restarted timer reach the stall first.
 new_fix; gate 1 1 '{summary_running:"abc1234"}'; gate 2 1 '{summary_running:"abc1234"}'; gate 3 1 '{}'
 gate 4 1 '{summary_running:"abc1234"}'; view 1 "$A" "$GREEN"
-check "a round that stops running restarts the stall timer" 8 0 --interval 1 --stall-after 3 --no-round-after 3600 --deadline 5
+check "a round that stops running restarts the stall timer" 8 0 --interval 1 --stall-after 3 --no-round-after 3600 --deadline 4
 # The same, with the gate clearing in between while CI is still pending.
 PEND='[{"name":"ci","status":"IN_PROGRESS","conclusion":""}]'
 new_fix; gate 1 1 '{summary_running:"abc1234"}'; gate 2 1 '{summary_running:"abc1234"}'; gate 3 0 '{wrapper_on_tip:1}'
 gate 4 1 '{summary_running:"abc1234"}'; view 1 "$A" "$GREEN"; view 3 "$A" "$PEND"; view 4 "$A" "$GREEN"
-check "a gate that clears during pending CI restarts the stall timer" 8 0 --interval 1 --stall-after 3 --no-round-after 3600 --deadline 5
+check "a gate that clears during pending CI restarts the stall timer" 8 0 --interval 1 --stall-after 3 --no-round-after 3600 --deadline 4
 new_fix; gate 1 1 '{wrapper_on_tip:1, pending_review_on_tip:true}'; view 1 "$A" "$GREEN"
 check "a PENDING review counts as a running round" 7 0 --stall-after 0 --deadline 4
 new_fix; gate 1 1 '{round_active:true}'; view 1 "$A" "$GREEN"
