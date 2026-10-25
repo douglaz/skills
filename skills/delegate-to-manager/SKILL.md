@@ -191,8 +191,7 @@ for this session.
 
 **Every turn is a `systemd-run --user` unit.** A turn can take hours, and a Bash
 `run_in_background` command is stopped at its timeout and with the session. Use one directory and
-one unit per turn, and the same `<repo>` working directory for every turn on a thread, because
-`codex exec resume` filters sessions by directory:
+one unit per turn, and give every turn on a thread the same `<repo>` working directory:
 
 ```bash
 C=$(command -v codex)
@@ -213,7 +212,8 @@ systemd-run --user --unit=manager-$(basename $D) --collect --expand-environment=
   message.
 - **Clear:** a new spawn turn with the same brief and the next task.
 - **Watch:** every turn is a one-event wait (section 4). Use an until-loop on `$D/exit` with a
-  deadline; the unit has none of its own. `success exited 0` means `$D/report` holds the turn's last
+  deadline, and re-arm it on expiry until the exit file appears; the unit has no deadline of its
+  own. `success exited 0` means `$D/report` holds the turn's last
   message, which is the manager's question, report or wait. Anything else: read `err` and the tail of
   `out`, and tell the owner. A fresh start prints `Reading additional input from stdin...` on `err`;
   that is normal, since a unit's stdin is already null. Stop a turn with
