@@ -144,11 +144,13 @@ while :; do
   if [[ "$threads" =~ ^[0-9]+$ ]] && (( threads > 0 )); then
     log "findings to address: $threads"; "$GATE" "$PR" 2>&1; exit 1
   fi
-  if printf '%s\n' "$ROLL" | grep -q -E '=(FAILURE|ERROR|CANCELLED|TIMED_OUT|ACTION_REQUIRED|STARTUP_FAILURE)$'; then
+  # Here-strings, not `printf | grep -q`: grep quits at the first match, a writer still
+  # blocked on a large rollup dies of SIGPIPE, and pipefail turns the match into a miss.
+  if grep -q -E '=(FAILURE|ERROR|CANCELLED|TIMED_OUT|ACTION_REQUIRED|STARTUP_FAILURE)$' <<< "$ROLL"; then
     log "a check failed"; printf '%s\n' "$ROLL"; exit 5
   fi
   pending=false
-  [[ -n "$ROLL" ]] && printf '%s\n' "$ROLL" | grep -q -v -E '=(SUCCESS|NEUTRAL|SKIPPED)$' && pending=true
+  [[ -n "$ROLL" ]] && grep -q -v -E '=(SUCCESS|NEUTRAL|SKIPPED)$' <<< "$ROLL" && pending=true
   if (( GATE_RC == 0 )) && ! $pending; then
     # The printout is a second gate run; admit only if it agrees, on the tip whose checks were
     # just read, so exit 0 never prints BLOCKED or a tip that moved.

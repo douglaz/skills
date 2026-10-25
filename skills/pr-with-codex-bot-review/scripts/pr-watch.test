@@ -104,6 +104,19 @@ check "a null rollup reads as no checks" 0 0 --deadline 2
 new_fix; gate 1 0 '{wrapper_on_tip:1}'
 check "an unreadable PR view never admits" 8 0 --deadline 1
 
+# A rollup larger than a pipe buffer, its first row not green. A `grep -q` that stops at that
+# row while the writer is blocked makes the writer die of SIGPIPE, and under pipefail the
+# match reads as no match: a failed check then admits.
+big_view() { # big_view <first row's conclusion>
+  jq -cn --arg u "$URL" --arg h "$A" --arg c "$1" '{url:$u, headRefOid:$h, statusCheckRollup:
+    ([{name:"first", status:"COMPLETED", conclusion:$c}]
+     + [range(3000) | {name:("check-\(.)-" + ("x" * 60)), status:"COMPLETED", conclusion:"SUCCESS"}])}' > "$FIX/view.1"
+}
+new_fix; gate 1 0 '{wrapper_on_tip:1}'; big_view FAILURE
+check "a failed check in a large rollup is still a failure" 5 0 --deadline 2
+new_fix; gate 1 0 '{wrapper_on_tip:1}'; big_view ""
+check "a pending check in a large rollup still holds admission" 8 0 --deadline 1
+
 # A fork clone whose PR lives in the parent: the gate resolved up/r, and gh's default
 # repository has no such PR. The checks must be read where the gate found the PR.
 new_fix; gate 1 0 '{wrapper_on_tip:1, repo:"up/r"}'; view 1 "$A" "$GREEN"; echo up/r > "$FIX/repo"
