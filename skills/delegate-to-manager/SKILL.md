@@ -194,22 +194,26 @@ for this session.
 one unit per turn, and give every turn on a thread the same `<repo>` working directory:
 
 ```bash
-C=$(command -v codex)
-D=/var/tmp/manager-units/<repo>-$(date -u +%m%dT%H%M%S); mkdir -p $D
+# First write the turn's prompt to <scratchpad>/turn-prompt with your file-writing tool.
+C=$(command -v codex); mkdir -p /var/tmp/manager-units
+D=$(mktemp -d /var/tmp/manager-units/<repo>-$(date -u +%m%dT%H%M)-XXXXXX); echo "$D"
+cp <scratchpad>/turn-prompt $D/prompt
 systemd-run --user --unit=manager-$(basename $D) --collect --expand-environment=no \
   --working-directory=<repo> -E PATH -p KillMode=mixed -p TimeoutStopSec=120 \
   -p MemoryMax=16G -p MemorySwapMax=0 -p OOMPolicy=continue \
   -p "StandardOutput=file:$D/out" -p "StandardError=file:$D/err" \
-  -p "ExecStopPost=/bin/sh -c 'printenv SERVICE_RESULT EXIT_CODE EXIT_STATUS | xargs > $D/exit'" \
+  -p "ExecStopPost=/bin/sh -c 'printenv SERVICE_RESULT EXIT_CODE EXIT_STATUS | xargs > $D/exit.tmp && mv $D/exit.tmp $D/exit'" \
   "$C" exec <resume> --json --dangerously-bypass-approvals-and-sandbox \
-  -m gpt-6.1-sol -c model_reasoning_effort=xhigh -o "$D/report" <thread_id> "<prompt>"
+  -m gpt-6.1-sol -c model_reasoning_effort=xhigh -o "$D/report" <thread_id> "$(cat "$D/prompt")"
 ```
 
-- **Spawn:** leave out `resume` and `<thread_id>`. The prompt is the one from section 1 step 3. The
+- **Spawn:** leave out `resume` and `<thread_id>`. The prompt is the one from section 1 step 3.
+  Write it with your file-writing tool, never by an `echo` or unquoted heredoc: messages carry
+  backticks and `$`, and `"$(cat …)"` passes them to codex literally. The
   thread id is in the first line of `out`, `{"type":"thread.started","thread_id":"…"}`. Save it
   beside the brief.
 - **Relay:** where section 2 says `SendMessage`, start a `resume` turn with the thread id and your
-  message.
+  message as the prompt.
 - **Clear:** a new spawn turn with the same brief and the next task.
 - **Watch:** every turn is a one-event wait (section 4). Use an until-loop on `$D/exit` with a
   deadline, and re-arm it on expiry until the exit file appears; the unit has no deadline of its
@@ -237,5 +241,7 @@ What differs from the subagent:
 Checked on codex-cli 0.164.0, 2026-10-25, with trivial prompts: a start and a resume turn, both run
 directly and as units like the one above, exited 0. Each resume reported the start's thread id and
 recalled a word given in the start turn. The non-JSON resume banner and the start turns' session
-files under `~/.codex/sessions` record `gpt-6.1-sol` with `xhigh` effort. The commands, streams and
+files under `~/.codex/sessions` record `gpt-6.1-sol` with `xhigh` effort. With this exact unit line,
+a start and a resume whose `$D/prompt` held backticks, `$(…)`, `$HOME`, quotes and `%n` echoed
+them back unchanged. The commands, streams and
 results are in [references/sol-manager-check.md](references/sol-manager-check.md).

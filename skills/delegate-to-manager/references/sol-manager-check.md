@@ -29,7 +29,8 @@ codex exec resume --json "${F[@]}" -o "$S/last3.txt" "$T" "Reply with exactly: o
 
 ## As units
 
-The section 7 unit line with `--working-directory=$S`, `"$(command -v codex)" exec …` as above,
+The section 7 unit line as first written (fixed directory per unit, exit file written in place,
+prompt inline) with `--working-directory=$S`, `"$(command -v codex)" exec …` as above,
 and `-o "$D/report"`. Unit 1 (`D=$S/unit1`) started a thread with the prompt
 ``Remember the word: osprey. Then run the shell command `systemctl --user is-system-running` and reply with exactly its output.``
 Unit 2 (`D=$S/unit2`) ran `exec resume --json` on unit 1's thread id with
@@ -39,6 +40,27 @@ Unit 2 (`D=$S/unit2`) ran `exec resume --json` on unit 1's thread id with
 |---|---|---|---|---|
 | 1 | `success exited 0` | `thread.started` `01a174df-032b-7120-85dd-cd4f857979ee`; a `command_execution` of `systemctl --user is-system-running` with output `degraded` | `Reading additional input from stdin...` | `degraded` |
 | 2 | `success exited 0` | `thread.started` with the same thread id; `agent_message` `osprey` | empty | `osprey` |
+
+## Prompt from a file, atomic exit file
+
+The section 7 unit line as committed (per-turn `mktemp -d` directory, `exit.tmp` renamed to
+`exit`, `"$(cat "$D/prompt")"` as the prompt), with `--working-directory=$S`,
+`--skip-git-repo-check`, and `mktemp -d "$S/units/check-$(date -u +%m%dT%H%M)-XXXXXX"` for `D`.
+Each prompt file was written without the shell (the start's) or with `printf '%s\n' '<text>'`
+(the resume's).
+
+- Start, unit `manager-check-1025T2121-yKNDcq`, `$D/prompt`:
+  ``Do not run any command. Reply with exactly the text between the two | marks, nothing else: |cost $HOME `uname` $(echo hi) "q" 'q' 100% %n done|``
+- Resume of that thread (`01a174f0-96d1-7141-bbaa-1375cf34f19a`), unit
+  `manager-check-1025T2121-Q0PhTZ`, `$D/prompt`:
+  `Do not run any command. What text did I ask you to reply with in the first turn? Reply with it again exactly, then a space, then: $USER`
+
+| Unit | `$D` after exit | `$D/exit` | `$D/err` | `$D/report` |
+|---|---|---|---|---|
+| start | `err exit out prompt report` (no `exit.tmp`) | `success exited 0` | `Reading additional input from stdin...` | ``cost $HOME `uname` $(echo hi) "q" 'q' 100% %n done`` |
+| resume | `err exit out prompt report` | `success exited 0` | empty | ``cost $HOME `uname` $(echo hi) "q" 'q' 100% %n done $USER`` |
+
+Both `out` files start with `thread.started` for the same thread id.
 
 ## Model and effort of the start turns
 
