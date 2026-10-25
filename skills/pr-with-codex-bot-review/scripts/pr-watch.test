@@ -3,7 +3,8 @@
 #
 # pr-watch is copied beside a stub bot-gate (it resolves its gate as a sibling). The stub
 # answers its Nth `--json` call from $FIX/gate.N (first line the exit code, the rest the
-# JSON), and its human-readable call with $FIX/human-rc (default 0). The `gh` stub answers
+# JSON), and its human-readable call with $FIX/human-rc (default 0), printing the tip in
+# $FIX/human-tip (default A's 10-hex prefix). The `gh` stub answers
 # its Nth `pr view` from $FIX/view.N and records every `pr comment` as "<target> <body>" in
 # $FIX/comments, after failing the first $FIX/comment-fails of them. Both keep answering
 # from the last file once a sequence runs out.
@@ -27,7 +28,8 @@ echo "$FIX/$1.$n"
 STUB
 cat > "$WORK/scripts/bot-gate" <<'STUB'
 #!/usr/bin/env bash
-[ "${2:-}" = --json ] || { echo "human gate output"; exit "$(cat "$FIX/human-rc" 2>/dev/null || echo 0)"; }
+[ "${2:-}" = --json ] || { printf 'tip              %s\nhuman gate output\n' "$(cat "$FIX/human-tip" 2>/dev/null || echo 1111111111)"
+                           exit "$(cat "$FIX/human-rc" 2>/dev/null || echo 0)"; }
 f=$(seq-file gate); tail -n +2 "$f"; exit "$(head -1 "$f")"
 STUB
 cat > "$WORK/bin/gh" <<'STUB'
@@ -103,6 +105,9 @@ check "an unreadable PR view never admits" 8 0 --deadline 1
 # The printout is a second gate run; when it disagrees, exit 0 must not print BLOCKED.
 new_fix; gate 1 0 '{wrapper_on_tip:1}'; view 1 "$A" "$GREEN"; echo 1 > "$FIX/human-rc"
 check "no admission when the second gate run blocks" 8 0 --deadline 1
+# ...or when it passes a different tip: the head moved after the checks were read.
+new_fix; gate 1 0 '{wrapper_on_tip:1}'; view 1 "$A" "$GREEN"; echo 3333333333 > "$FIX/human-tip"
+check "no admission when the second gate run names another tip" 8 0 --deadline 1
 
 new_fix; gate 1 1 '{wrapper_on_tip:1, unresolved_bot_threads:1}'; view 1 "$A" "$GREEN"
 check "an unresolved bot thread exits 1" 1 0 --deadline 2
@@ -152,6 +157,9 @@ new_fix; gate 1 1 '{}'; view 1 "$A" "$GREEN"
 check "no request before --no-round-after" 8 0 --no-round-after 3600 --deadline 1
 new_fix; gate 1 1 '{}'; view 1 "$A" "$GREEN"
 check "no round: one wake-up request, then exit 6 when still silent" 6 1 --no-round-after 0 --deadline 4
+# A request from before this run first saw an unreviewed tip may predate the push.
+new_fix; gate 1 1 '{rerun_requested:true, last_request_epoch:($now-5000)}'; view 1 "$A" "$GREEN"
+check "an old request does not make a fresh tip read silent" 8 0 --no-round-after 3600 --deadline 1
 
 new_fix; gate 1 1 '{summary_running:"abc1234"}'; view 1 "$A" "$GREEN"
 check "a round running past --stall-after exits 7" 7 0 --stall-after 0 --deadline 4
@@ -160,6 +168,11 @@ check "a round running past --stall-after exits 7" 7 0 --stall-after 0 --deadlin
 new_fix; gate 1 1 '{summary_running:"abc1234"}'; gate 2 1 '{summary_running:"abc1234"}'; gate 3 1 '{}'
 gate 4 1 '{summary_running:"abc1234"}'; view 1 "$A" "$GREEN"
 check "a round that stops running restarts the stall timer" 8 0 --interval 1 --stall-after 3 --no-round-after 3600 --deadline 5
+# The same, with the gate clearing in between while CI is still pending.
+PEND='[{"name":"ci","status":"IN_PROGRESS","conclusion":""}]'
+new_fix; gate 1 1 '{summary_running:"abc1234"}'; gate 2 1 '{summary_running:"abc1234"}'; gate 3 0 '{wrapper_on_tip:1}'
+gate 4 1 '{summary_running:"abc1234"}'; view 1 "$A" "$GREEN"; view 3 "$A" "$PEND"; view 4 "$A" "$GREEN"
+check "a gate that clears during pending CI restarts the stall timer" 8 0 --interval 1 --stall-after 3 --no-round-after 3600 --deadline 5
 new_fix; gate 1 1 '{wrapper_on_tip:1, pending_review_on_tip:true}'; view 1 "$A" "$GREEN"
 check "a PENDING review counts as a running round" 7 0 --stall-after 0 --deadline 4
 new_fix; gate 1 1 '{round_active:true}'; view 1 "$A" "$GREEN"
@@ -205,7 +218,7 @@ new_fix; gate 1 1 "$ANCHOR"; view 1 "$A" "$GREEN"; echo 99 > "$FIX/comment-fails
 check "a post that keeps failing exits 9" 9 0 --deadline 2
 # ...and per tip: a failure on the old tip does not count against the new one.
 new_fix; gate 1 1 "$ANCHOR" "$A"; gate 2 1 "$ANCHOR" "$B"; gate 3 1 "$ANCHOR" "$B"; gate 4 0 '{wrapper_on_tip:2}' "$B"
-view 1 "$A" "$GREEN"; view 2 "$B" "$GREEN"; echo 2 > "$FIX/comment-fails"
+view 1 "$A" "$GREEN"; view 2 "$B" "$GREEN"; echo 2 > "$FIX/comment-fails"; echo 3333333333 > "$FIX/human-tip"
 check "the failed-post count starts again on a new tip" 0 1 --deadline 4
 new_fix; gate 1 0 '{wrapper_on_tip:1}'; view 1 "$OTHER" "$GREEN"
 check "never admits on the checks of a head that is not the gated tip" 8 0 --deadline 1

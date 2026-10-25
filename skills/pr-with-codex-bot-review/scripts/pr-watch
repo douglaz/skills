@@ -147,11 +147,16 @@ while :; do
   pending=false
   [[ -n "$ROLL" ]] && printf '%s\n' "$ROLL" | grep -q -v -E '=(SUCCESS|NEUTRAL|SKIPPED)$' && pending=true
   if (( GATE_RC == 0 )) && ! $pending; then
-    # The printout is a second gate run; admit only if it agrees, so exit 0 never prints BLOCKED.
-    if OUT=$("$GATE" "$PR" 2>&1); then log "admitted"; printf '%s\n' "$OUT"; exit 0; fi
-    log "the second gate run blocked; polling again"
+    # The printout is a second gate run; admit only if it agrees, on the tip whose checks were
+    # just read, so exit 0 never prints BLOCKED or a tip that moved.
+    if OUT=$("$GATE" "$PR" 2>&1) && [[ "$OUT" =~ (^|$'\n')tip\ +${TIP:0:10}$'\n' ]]; then
+      log "admitted"; printf '%s\n' "$OUT"; exit 0
+    fi
+    log "the second gate run blocked or named another tip; polling again"
   fi
 
+  # Only an exit 1 can carry a running round, so every other poll ends one.
+  (( GATE_RC == 1 )) || RUNNING_SINCE=""
   if (( GATE_RC == 1 )); then
     if [[ $(jget '.summary_unknown_status != null') == true ]]; then
       log "the summary row has a status the gate cannot read; decide"; "$GATE" "$PR" 2>&1; exit 9
@@ -175,9 +180,10 @@ while :; do
           log "the bot answered this run's request and the gate still blocks; decide"; "$GATE" "$PR" 2>&1; exit 9
         fi
         request_review "the bot answered, but the gate needs a fresh request" && POSTED_ANCHOR=true
-      # Same-second counts as unanswered, as bot-gate counts it. On an unreviewed tip bot-gate
-      # reports no request, so req there is this run's own post.
-      elif (( req > 0 && req >= wrap )); then
+      # Same-second counts as unanswered, as bot-gate counts it. On an unreviewed tip a request
+      # older than this run's first sight of it may predate the push, so it is not this tip's
+      # to answer (bot-gate reports none there today; its JSON does not promise that).
+      elif (( req > 0 && req >= wrap )) && { [[ $reviewed == true ]] || (( req >= SEEN_AT )); }; then
         if (( $(now) - req >= NO_ROUND_AFTER )); then
           log "no answer $(( $(now) - req ))s after the newest request; the bot is silent"; exit 6
         fi
