@@ -272,9 +272,10 @@ before they reach the owner. The assistant watches long jobs and starts a clean 
 boundary. The manager pushes and opens PRs without asking. On a greenfield or pre-production project
 draining beads, the assistant asks at the start of every session whether to run the drain lane; it
 stays off unless the owner says yes. In the lane the manager also works the bot rounds, merges once
-`bot-gate` exits 0, and moves on to the next ready bead. The manager is an Opus subagent unless the
-owner asks for a sol manager: then each manager turn is a codex `gpt-6.1-sol` turn at `xhigh`, run
-as a `systemd-run --user` unit that the assistant watches.
+`bot-gate` exits 0, and moves on to the next ready bead. There is no default manager: the assistant
+asks the owner unless this session or a memory rule already settles it. It is an Opus subagent or a
+sol manager, whose turns are codex `gpt-6.1-sol` turns at `xhigh`, each run as a
+`systemd-run --user` unit that the assistant watches.
 
 ```text
 /delegate-to-manager triage the next bead

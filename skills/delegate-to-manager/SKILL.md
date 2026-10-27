@@ -43,12 +43,16 @@ running gates in the repo, stop and hand the work to the manager instead.
      the lane stays off unless the owner asks for it. If memory records a rule about who merges,
      quote it in the question. The answer lasts for this session only: put it in the brief, never
      in memory, and never carry it over from an earlier session.
-3. **Spawn the manager.** Use the Agent tool with `subagent_type: general-purpose`, `model: opus`,
+3. **Spawn the manager.** There is no default manager. If the owner named one in this session, or a
+   memory rule records their standing choice for this project, use it and say which in one line.
+   Otherwise ask with `AskUserQuestion`, no option marked recommended: an Opus subagent or a sol
+   manager (section 7). If the project runs rloop, settle its Manager (`--manager`,
+   `--manager-model`) the same way. Put the choices in the brief.
+   For an Opus manager, use the Agent tool with `subagent_type: general-purpose`, `model: opus`,
    `effort: high` and `run_in_background: true`. Pass the effort explicitly: left out, the manager
    inherits the session's default, which may be `xhigh`. The prompt says: read the brief first and follow it all session, then
    gives the task in one or two sentences. Use a fresh agent, not a fork: a fork inherits your whole
-   context, which defeats the purpose. If the owner asked for a sol manager, spawn it as section 7
-   says instead.
+   context, which defeats the purpose. For a sol manager, spawn it as section 7 says.
 4. Tell the owner in a few lines how the split works, then wait for the notification. Never predict
    or invent what the manager will report.
 
@@ -182,12 +186,11 @@ them for any agent.
   it to the owner.
 - **Don't quote the manager's internal agent ID, thread id or transcript paths** to the owner.
 
-## 7. A sol manager (owner's option)
+## 7. A sol manager
 
-The manager is the Opus subagent above unless the owner asks for a sol manager ("use a sol
-manager"). Then it is codex `gpt-6.1-sol` at `model_reasoning_effort=xhigh`, run through the codex
-CLI, because the Agent tool only runs Claude models. Don't ask about it; the owner's request lasts
-for this session.
+When the owner chooses a sol manager (section 1 step 3), it is codex `gpt-6.1-sol` at
+`model_reasoning_effort=xhigh`, run through the codex CLI, because the Agent tool only runs Claude
+models.
 
 **Every turn is a `systemd-run --user` unit.** A turn can take hours, and a Bash
 `run_in_background` command is stopped at its timeout and with the session. Use one directory and
