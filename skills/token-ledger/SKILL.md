@@ -93,7 +93,12 @@ Roles come from each session's first prompt and its location:
 - rloop's own prompts mark the Manager, Implementer, Reviewer and Consultation adviser.
 - A `manager-brief` prompt marks a delegate manager.
 - `claude -p` outside the repo is a panel reader.
-- Interactive sessions are the assistant, and their subagents are assistant subagents.
+- Interactive sessions are the assistant, and their subagents are assistant subagents. For Claude, the
+  transcript's `entrypoint` decides, by an explicit map in the script: `cli` is interactive and
+  `sdk-cli` is `claude -p`.
+  - Any other value is reported in the gaps, and its sessions are classified by their prompt alone,
+    never by a Run's time window.
+  - If one shows up, extend `INTERACTIVE_ENTRY` or `HEADLESS_ENTRY`.
 - A Codex session is `assistant (codex)` when its `session_meta` carries an `originator` other than
   `codex_exec` and its `source` is not a subagent spawn.
   - Older rollouts with no `originator` can't be told apart, so they are classified by their prompt and

@@ -26,6 +26,10 @@ SKIP_PROMPT = ('<command-', '<local-command', '<system-reminder>', '[Request int
 CODEX_INJECTED = ('# AGENTS.md instructions', '<environment_context>', '<user_instructions>', '<permissions',
                   '<INSTRUCTIONS>', '<skills', '<turn_aborted>', '<recommended_plugins>')
 # Roles that belong to an rloop Run: only these may be attributed to a Run by time window.
+# Claude transcript entrypoints seen so far. Extend these from real transcripts; an unmapped value is
+# reported and its sessions are classified by their prompt alone, never by a Run's time window.
+INTERACTIVE_ENTRY = {'cli'}       # a session a person drives
+HEADLESS_ENTRY = {'sdk-cli'}      # claude -p: Run seats, panel readers, probes
 RUN_ROLES = {'rloop Manager', 'rloop Implementer', 'rloop Reviewer', 'rloop adviser', 'probe', 'other (repo cwd)'}
 COLS = ['provider', 'model', 'role', 'seat', 'run', 'bead', 'attribution', 'day', 'ts', 'session',
         'input_uncached', 'cache_write_5m', 'cache_write_1h', 'cache_write_untiered', 'cache_read', 'output',
@@ -474,11 +478,15 @@ def build(o):
                 if f['sub'] else 'assistant'
         else:
             parent = files.get(f"{f['dir']}/{f['session']}.jsonl", f) if f['sub'] else f
-            if parent['entry'] == 'cli':  # an interactive session started in a project dir
+            if parent['entry'] in INTERACTIVE_ENTRY:  # an interactive session started in a project dir
                 role = 'assistant (in project dir)' if not f['sub'] else (
                     'delegate manager' if prompt_role(f['first']) == 'delegate manager' else 'assistant subagent')
-            else:  # claude -p: a Run seat, a panel reader or a probe; subagents inherit the parent's role
+            elif parent['entry'] in HEADLESS_ENTRY:  # a Run seat, a panel reader or a probe; subagents inherit
                 role = prompt_role(parent['first'], in_repo(cwd)) or ('other (repo cwd)' if in_repo(cwd) else 'panel reader')
+                f = parent
+            else:  # an unmapped entrypoint: only an explicit prompt decides, and it is reported
+                notes[f"claude calls with an unmapped entrypoint '{parent['entry'] or '(none)'}' (prompt only, no time window)"] += 1
+                role = prompt_role(parent['first'], in_repo(cwd)) or 'unclassified session'
                 f = parent
         run, how = attribute(role, [f['session']], f['first'], f['dir'], ts, cwd)
         # an assistant session spans many beads, so its first prompt names none of them reliably

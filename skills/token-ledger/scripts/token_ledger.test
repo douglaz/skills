@@ -101,6 +101,10 @@ with tempfile.TemporaryDirectory() as t:
         jl(claude / f'-home-u-p-demo-spec/{sess}.jsonl', [
             user('You are one of five independent Reviewers of an rloop Round', '2026-10-20T10:40:00Z', rcwd),
             asst('em', '2026-10-20T10:40:01Z', rcwd, 'claude-opus-5-5', small)])
+    # an unmapped entrypoint in the repo during the Run window: no time-window Run, and reported
+    jl(claude / '-home-u-p-demo-spec/ide-1.jsonl', [
+        user('tidy the tests', '2026-10-20T10:20:00Z', rcwd, 'claude-ide'),
+        asst('ide1', '2026-10-20T10:20:01Z', rcwd, 'claude-opus-5-5', small, 'claude-ide')])
     # Codex: the Implementer (attributed by time window) with one long-context call, and the sol Reviewer (by .err id)
     meta = lambda sid, cwd: dict(type='session_meta', payload=dict(id=sid, cwd=cwd, timestamp='2026-10-20T10:01:00Z'))
     prompt = lambda text: dict(type='response_item', payload=dict(type='message', role='user', content=[dict(type='input_text', text=text)]))
@@ -240,6 +244,10 @@ with tempfile.TemporaryDirectory() as t:
           len(get(session='rev-2')) == 2 and 'malformed timestamp' in (out / 'report.md').read_text(encoding='utf-8'))
     check('a message repeated in an uncounted fork still counts for the counted session',
           len(get(session='a1', model='claude-opus-5-5')) == 1)
+    ide = get(session='ide-1')
+    check('an unmapped entrypoint is unclassified, gets no Run by time window, and is reported',
+          len(ide) == 1 and ide[0]['role'] == 'unclassified session' and ide[0]['run'] == ''
+          and "unmapped entrypoint 'claude-ide'" in (out / 'report.md').read_text(encoding='utf-8'))
     dup = get(session='cx-dup')
     check('records duplicated across rollouts count once, with no legacy fallback',
           len(dup) == 1 and dup[0]['input_uncached'] == '100')
