@@ -367,7 +367,7 @@ else
   # the exact failure the wrapper was added to catch.
   CLAUDE_RC=0
   "$TO" --kill-after=60 1500 \
-    claude -p "$(cat "$RD/prompt.txt")" \
+    env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW claude -p "$(cat "$RD/prompt.txt")" \
     --model "$CLAUDE_MODEL" --effort high --output-format json \
     --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
     --disallowedTools "Edit,Write,NotebookEdit" \
@@ -419,9 +419,8 @@ while you watch it, and the measured behaviour is that it does not exit on its o
 
 Every reviewer invocation *this skill and the panel skills own* is bounded for the same
 reason. The archived `orchestrating-with-rb-lite` skill documented three unbounded
-`claude -p` reviewer commands that rb-lite itself dispatches; they hang on exactly the
-failure this change removes elsewhere and are tracked in #51 rather than claimed as
-covered here.
+reviewer calls that rb-lite itself dispatches; they hang on exactly the failure this
+change removes elsewhere and are tracked in #51 rather than claimed as covered here.
 
 Triage it exactly like a bot finding: credible hypothesis, verify before agreeing
 or rejecting, fix what's real, and don't build mechanism no requirement needs.

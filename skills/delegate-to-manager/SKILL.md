@@ -144,7 +144,7 @@ if it did.
 - **Arm a wakeup past the usage-limit reset.** When a turn arrives with a "Usage limit reached" grace
   notice, arm one wakeup that outlives the reset before you end the turn. This cheap poll is the one
   exception to the notice's "don't start long work". Use a Bash `run_in_background` loop that polls
-  `claude -p "/usage" </dev/null` every few minutes until its `Current session` line (the 5-hour
+  `env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW claude -p "/usage" </dev/null` every few minutes until its `Current session` line (the 5-hour
   window, not the weekly ones) reads under 100% used, or use a scheduled wakeup. On Claude Code
   2.1.293 that call exits 0 with the line on stdout and nothing on stderr, and it still answers while
   the session is capped. Take the reading, not the advertised reset time, which has come back hours
@@ -235,7 +235,7 @@ What differs from the subagent:
 - **No Skill, Agent or AskUserQuestion tools.** Codex uses a skill when the prompt or brief names
   it, from `~/.codex/skills`, where `install.sh` installs this repo's skills. For any other skill,
   including owner-only ones (section 5), give the path to its `SKILL.md`. Steps a skill runs as a
-  Claude subagent, such as panel readers, run as `claude -p` or `codex exec` commands instead.
+  Claude subagent, such as panel readers, run as `env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW claude -p` or `codex exec` commands instead.
 - **No sandbox and no deny list.** The bypass flag is required, because sandboxed codex cannot reach
   the nix daemon socket and cannot run gates (rloop-spec `AGT-10`). The brief's hard safety lines are
   its only fence. The brief's other rules hold as written: one question per turn, no owner-only

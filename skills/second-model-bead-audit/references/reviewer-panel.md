@@ -587,6 +587,9 @@ if [ -n "$CLAUDE_MODEL_PIN" ]; then export CLAUDE_REVIEWER_MODELS="$CLAUDE_MODEL
 not pay for a probe of a reviewer it excluded — up to 90 seconds per unreachable rung,
 and a real model call.
 
+The audit runner's environment allowlist already excludes the override. The explicit
+`env -u` below keeps the launch policy visible inside that validated tool boundary.
+
 Use this audit's already validated tool boundary for the probe. Do **not** run the
 ambient-tool probe from `multi-reviewer-loop`: its caller-PATH lookup would cross
 the trust boundary before this panel's hardened dispatch.
@@ -607,8 +610,8 @@ if [ -n "$_CLAUDE_PROBE_TIMEOUT" ] \
     && CLAUDE_BIN=$("$BEADS_GIT_RUNNER" resolve-tool claude); then
   for _m in $CLAUDE_MODEL_LADDER; do
     _rc=0
-    "$BEADS_GIT_RUNNER" run-audit-tool "$_CLAUDE_PROBE_TIMEOUT" \
-      --kill-after=15 90 "$CLAUDE_BIN" -p 'Reply with exactly: PANEL_OK' \
+    "$BEADS_GIT_RUNNER" run-audit-tool env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW \
+      "$_CLAUDE_PROBE_TIMEOUT" --kill-after=15 90 "$CLAUDE_BIN" -p 'Reply with exactly: PANEL_OK' \
       --model "$_m" --output-format json \
       --no-session-persistence --safe-mode --strict-mcp-config \
       --mcp-config '{"mcpServers":{}}' \
@@ -709,8 +712,8 @@ fi
 if $RUN_CLAUDE; then
   CLAUDE_BIN=$("$BEADS_GIT_RUNNER" resolve-tool claude) || exit 1
   (
-    "$BEADS_GIT_RUNNER" run-audit-tool "$TIMEOUT_TOOL" \
-      --kill-after=30s 900s "$CLAUDE_BIN" -p "$(<"$AUDIT_PROMPT_FILE")" \
+    "$BEADS_GIT_RUNNER" run-audit-tool env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW \
+      "$TIMEOUT_TOOL" --kill-after=30s 900s "$CLAUDE_BIN" -p "$(<"$AUDIT_PROMPT_FILE")" \
       --model "$CLAUDE_MODEL" \
       --effort high \
       --output-format json \
