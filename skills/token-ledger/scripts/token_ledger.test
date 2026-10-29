@@ -32,8 +32,8 @@ def user(text, ts, cwd, entry='sdk-cli'):
     return dict(type='user', timestamp=ts, cwd=cwd, entrypoint=entry, message=dict(role='user', content=text))
 
 
-def asst(mid, ts, cwd, model, usage, entry='sdk-cli', tool=None):
-    content = [dict(type='tool_use', name='Bash', input=dict(command=tool))] if tool else []
+def asst(mid, ts, cwd, model, usage, entry='sdk-cli', tool=None, tool_id=None):
+    content = [dict(type='tool_use', name='Bash', input=dict(command=tool), **({'id': tool_id} if tool_id else {}))] if tool else []
     return dict(type='assistant', timestamp=ts, cwd=cwd, entrypoint=entry,
                 message=dict(id=mid, model=model, usage=usage, content=content))
 
@@ -74,6 +74,12 @@ with tempfile.TemporaryDirectory() as t:
         asst('a2', '2026-10-22T08:00:02Z', '/home/u', 'claude-mystery-9', small, 'cli', 'ls /var/tmp/demo-manager'),
         asst('a3', '2026-10-22T08:00:03Z', '/home/u', 'claude-opus-5-5-7', small, 'cli'),
         asst('a4', '2026-10-22T08:00:04Z', '/home/u', 'claude-opus-5-5-20261001', small, 'cli')])
+    # one demo tool call repeated in three records, two other-project calls: 1 of 3 distinct refs, so left out
+    jl(claude / '-home-u/c1.jsonl', [user('mixed work', '2026-10-22T09:00:00Z', '/home/u', 'cli')]
+       + [asst('c1', f'2026-10-22T09:00:0{k}Z', '/home/u', 'claude-opus-5-5', small, 'cli', 'ls /home/u/p/demo-spec', 'tu1')
+          for k in (1, 2, 3)]
+       + [asst(f'c{k}', f'2026-10-22T09:00:0{k}Z', '/home/u', 'claude-opus-5-5', small, 'cli', 'ls /home/u/p/other', f'tu{k}')
+          for k in (4, 5)])
     jl(claude / '-home-u/b1.jsonl', [
         user('work on other', '2026-10-22T08:00:00Z', '/home/u', 'cli'),
         asst('b1', '2026-10-22T08:00:01Z', '/home/u', 'claude-opus-5-5', small, 'cli', 'cd /home/u/p/other')])

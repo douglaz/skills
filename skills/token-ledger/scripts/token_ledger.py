@@ -208,6 +208,7 @@ def scan_claude(o):
             rel = os.path.relpath(f, o.claude_root)
             parts = rel.split('/')
             sub = 'subagents' in parts
+            tools_seen = set()
             meta = dict(rel=rel, dir=d, mixed=d in mixed, sub=sub, session=parts[1] if sub else parts[1][:-6],
                         entry='', first=None, queued=None, refs_key=0, refs_any=0, prompts_key=0, cwds=set(), start='', end='')
             with open(f, encoding='utf-8', errors='replace') as fh:
@@ -231,8 +232,12 @@ def scan_claude(o):
                             meta['first'] = t if meta['first'] is None else meta['first']
                             meta['prompts_key'] += o.key in t.lower()
                     elif ty == 'assistant' and m.get('id') and m.get('usage'):
-                        for c in m.get('content') or []:
+                        for n, c in enumerate(m.get('content') or []):
                             if isinstance(c, dict) and c.get('type') == 'tool_use':
+                                tool = c.get('id') or (m['id'], n)  # a repeated record repeats its tool calls
+                                if tool in tools_seen:
+                                    continue
+                                tools_seen.add(tool)
                                 for name in set(o.ref_re.findall(json.dumps(c.get('input', '')))):
                                     meta['refs_any'] += 1
                                     meta['refs_key'] += name.lower().startswith(o.key)
