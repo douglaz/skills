@@ -39,6 +39,8 @@ python3 -I <skill-dir>/scripts/token_ledger.py --project NAME --since 2026-10-22
   example `pv` for provisiond and `tw` or `twr` for tau-web.
   - A match only counts when the tracker knows that id, so a path like `/var/tmp/provisiond-manager` is
     never read as one.
+  - With no tracker, nothing is read as a tracker id unless you pass `--bead-re`. Runs then show as
+    `no tracker id: <brief title>`.
   - `--bead-re` overrides the pattern.
 - Output goes to `/var/tmp/NAME-usage/` by default:
   - `report.md`;
@@ -70,7 +72,8 @@ hand.
 
 ## Which calls belong to the project
 
-- **Claude:** a call counts when its project dir name contains `NAME`.
+- **Claude:** a call counts when its project dir name contains `NAME` as Claude encodes it, with every
+  non-alphanumeric character turned into `-`. So `my_proj` matches `-home-u-p-my-proj`.
 - **Codex:** a call counts when its session cwd contains `NAME`.
 - **Mixed home dir:** sessions started in the encoded `$HOME` dir (for example `-home-user`) mix many
   projects. Such a session counts when at least half (`--assistant-share`) of the project paths its tool
@@ -105,8 +108,9 @@ A call reaches a Run, and through the Run its bead, in one of these ways, strong
 2. the session id in a Run's `.err`;
 3. the Run path in the prompt;
 4. the Run dir name;
-5. last, the time window of a Run in the session's own repo. Only rloop roles can be attributed this
-   way, and when two Runs in that repo overlap, the call is left without a Run.
+5. last, the time window of a Run in the session's own repo, judged by each call's own timestamp. Only
+   rloop roles can be attributed this way. When two Runs in that repo overlap at that moment, the call
+   is left without a Run, even if its parent session's calls matched one.
 
 When no Run matches, the bead comes from the first tracker id in the prompt or the dir name. Short
 forms like `panel-abc56-r1`, meaning `<prefix>-abc.56`, count too.
@@ -155,5 +159,9 @@ call something expensive from token counts alone.
   by an order of magnitude or more. Don't report it as spend.
 - **Missing tools:** tools that leave no local token records, such as grok, are absent. Say so rather
   than estimating them.
+- **Bad timestamps:** a call with a missing or malformed timestamp is left out and counted in the
+  report's gaps, and a timestamp with no timezone is read as UTC.
+- **Forked sessions:** a forked Claude session repeats message ids in another file. Each id counts
+  once, in the first file whose session counts.
 - **Other machines:** calls under a second home dir (for example `/home/master`) usually mean
   transcripts copied from another machine, so history from before the copy may be partial.

@@ -1,7 +1,7 @@
 {
   "as_of": "2026-10-29",
   "unit": "USD per million tokens, standard tier",
-  "note": "List rates gathered from public pricing pages and pricing aggregators on the as_of date. Refresh before quoting a cost. A model missing here is reported as unpriced, never guessed. Keys match exact model ids or their dated variants (key + '-...'). A Claude model may also set web_search_per_request (USD per request) and fast_multiplier.",
+  "note": "List rates gathered from public pricing pages and pricing aggregators on the as_of date. Refresh before quoting a cost. A model missing here is reported as unpriced, never guessed. Keys match an exact model id, a dated snapshot (key-YYYYMMDD) or a bracketed tier (key[...]); never a bare prefix. A Claude model may also set web_search_per_request (USD per request) and fast_multiplier.",
   "assumed": [
     "claude-opus-5 cache writes: 1.25x (5m) and 2x (1h) input, the usual ratios",
     "claude-fable-5 cache_read: 4x claude-fable-5-1, from the reported 75% cut",

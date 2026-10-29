@@ -57,7 +57,8 @@ def parse_args(argv):
     o.out = Path(o.out or f'/var/tmp/{o.project}-usage')
     o.claude_root = Path(os.path.expanduser(o.claude_root))
     o.codex_root = Path(os.path.expanduser(o.codex_root))
-    o.mixed_dir = o.mixed_dir or [str(Path.home()).replace('/', '-').replace('.', '-')]
+    o.dir_key = re.sub(r'[^a-z0-9]', '-', o.key)  # Claude names a project dir after its cwd, every non-alphanumeric as '-'
+    o.mixed_dir = o.mixed_dir or [re.sub(r'[^a-zA-Z0-9]', '-', str(Path.home()))]
     o.ref_re = re.compile(o.ref_re)
     return o
 
@@ -74,7 +75,12 @@ def text_of(c):
 
 
 def parse_ts(s):
-    return dt.datetime.fromisoformat(s.replace('Z', '+00:00')) if s else None
+    """An aware datetime, or None for a missing or malformed stamp; a naive stamp is taken as UTC."""
+    try:
+        t = dt.datetime.fromisoformat(s.replace('Z', '+00:00'))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return t if t.tzinfo else t.replace(tzinfo=dt.timezone.utc)
 
 
 # ---------- rloop Runs ----------
@@ -190,7 +196,7 @@ def seat_of(model):
 
 def scan_claude(o):
     roots = os.listdir(o.claude_root) if o.claude_root.is_dir() else []  # a Codex-only machine has none
-    dirs = [d for d in roots if o.key in d.lower() and d not in o.mixed_dir]
+    dirs = [d for d in roots if o.dir_key in d.lower() and d not in o.mixed_dir]
     mixed = [d for d in o.mixed_dir if (o.claude_root / d).is_dir()]
     files, msgs = {}, {}
     for d in dirs + mixed:
@@ -231,7 +237,9 @@ def scan_claude(o):
                                 for name in set(o.ref_re.findall(json.dumps(c.get('input', '')))):
                                     meta['refs_any'] += 1
                                     meta['refs_key'] += name.lower().startswith(o.key)
-                        msgs[m['id']] = (rel, ts, m.get('model', ''), r.get('cwd', ''), m['usage'])  # last record wins
+                        rels = msgs[m['id']][0] if m['id'] in msgs else []
+                        rels = rels if rel in rels else rels + [rel]  # a forked session repeats ids in another file
+                        msgs[m['id']] = (rels, ts, m.get('model', ''), r.get('cwd', ''), m['usage'])  # last usage wins
             meta['first'] = meta['first'] or meta['queued'] or ''
             files[rel] = meta
     return files, msgs
@@ -240,8 +248,9 @@ def scan_claude(o):
 def claude_usage_rows(usage, model):
     """Yield (model, kind, counts) for the message and each advisor iteration (not in the top-level usage)."""
     def counts(u):
-        cc = u.get('cache_creation') or {}
-        w5, w1 = cc.get('ephemeral_5m_input_tokens'), cc.get('ephemeral_1h_input_tokens')
+        parts = [i for i in u.get('iterations') or [] if i.get('type') == 'message'] or [u]
+        w5 = sum((i.get('cache_creation') or {}).get('ephemeral_5m_input_tokens') or 0 for i in parts)
+        w1 = sum((i.get('cache_creation') or {}).get('ephemeral_1h_input_tokens') or 0 for i in parts)
         total_w = u.get('cache_creation_input_tokens', 0) or 0
         tiered = (w5 or 0) + (w1 or 0)
         return dict(input_uncached=u.get('input_tokens', 0) or 0, cache_write_5m=w5 or 0, cache_write_1h=w1 or 0,
@@ -264,11 +273,11 @@ def scan_codex(o):
                 meta = json.loads(fh.readline())['payload']
             except (ValueError, KeyError, TypeError):
                 continue
-            cwd, sid = meta.get('cwd') or '', meta.get('id') or meta.get('session_id')
+            cwd, sid = meta.get('cwd') or '', meta.get('id') or meta.get('session_id') or Path(f).stem
             ours = o.key in cwd.lower()
             prompt, model, records, totals, has_records = None, '', [], [], False
             # codex exec (Run seats, panels, sol managers) says originator codex_exec; a subagent's source is a dict
-            interactive = meta.get('originator') not in (None, 'codex_exec') and not isinstance(meta.get('source'), dict)
+            interactive = meta.get('originator') not in (None, 'codex_exec')
             src = meta.get('source')  # a string ('exec', 'cli'), or a dict whose 'subagent' may be a string too
             sub = src.get('subagent') if isinstance(src, dict) else None
             spawn = sub.get('thread_spawn') if isinstance(sub, dict) else None
@@ -297,9 +306,11 @@ def scan_codex(o):
                     prompt = codex_user_text(p)
                 elif ty == 'token_usage_record':
                     has_records = True  # even when every record is a duplicate, this is no legacy file
-                    if p.get('response_id') in seen:
-                        continue
-                    seen.add(p.get('response_id'))
+                    rid = p.get('response_id')
+                    if rid is not None:
+                        if rid in seen:
+                            continue
+                        seen.add(rid)
                     records.append((ts, model, p.get('usage') or {}))
                 elif ty == 'event_msg' and p.get('type') == 'token_count' and p.get('info'):
                     totals.append((ts, model, p['info'].get('total_token_usage') or {}))
@@ -308,16 +319,20 @@ def scan_codex(o):
         if not has_records:  # older rollouts: per-call usage = growth of the running total
             prev = {}
             for ts, m, tot in totals:
-                if tot.get('total_tokens', 0) > prev.get('total_tokens', 0):
-                    if (sid, ts, tot.get('total_tokens')) not in seen:  # a copied legacy file counts once
-                        seen.add((sid, ts, tot.get('total_tokens')))
-                        records.append((ts, m, {k: tot.get(k, 0) - prev.get(k, 0) for k in tot}))
-                    prev = tot
-        s = sessions.setdefault(sid, dict(cwd=cwd, start=meta.get('timestamp', ''), first=prompt or '', files=0,
+                total = tot.get('total_tokens', 0)
+                if total == prev.get('total_tokens', 0):
+                    continue  # the same total repeated
+                base = prev if total > prev.get('total_tokens', 0) else {}  # a drop: the total restarted at this call
+                if (sid, ts, total) not in seen:  # a copied legacy file counts once
+                    seen.add((sid, ts, total))
+                    records.append((ts, m, {k: tot.get(k, 0) - base.get(k, 0) for k in tot}))
+                prev = tot
+        start = meta.get('timestamp') or ''
+        s = sessions.setdefault(sid, dict(cwd=cwd, start=start, first=prompt or '', files=0,
                                           interactive=interactive,
                                           parent=spawn.get('parent_thread_id') if isinstance(spawn, dict) else None))
-        if meta.get('timestamp', '') < s['start'] or not s['first']:  # role comes from the earliest rollout
-            s.update(start=meta.get('timestamp', ''), first=prompt or s['first'])
+        if start < s['start'] or not s['first']:  # role comes from the earliest rollout
+            s.update(start=start, first=prompt or s['first'])
         s['files'] += 1
         calls += [(sid, ts, m, u) for ts, m, u in records]
     return sessions, calls, maybe
@@ -381,8 +396,8 @@ def build(o):
     bead_re = re.compile(o.bead_re or r'\b(?:' + '|'.join(map(re.escape, sorted(prefixes, key=len, reverse=True)))
                          + r')-[a-z0-9]{3,8}(?:\.\d+)*\b')
 
-    def find_bead(text):  # the first id that the tracker knows (any match when no tracker was found)
-        return next((m.group(0) for m in bead_re.finditer(text or '') if not known or m.group(0) in known), '')
+    def find_bead(text):  # the first id the tracker knows; with no tracker (and no --bead-re), none
+        return next((m.group(0) for m in bead_re.finditer(text or '') if m.group(0) in known or (o.bead_re and not known)), '')
 
     runs, seat_runs = load_runs(repos, find_bead)
     by_mgr = {r['mgr']: rid for rid, r in runs.items() if r['mgr']}
@@ -439,10 +454,14 @@ def build(o):
         if f['refs_any'] and f['refs_key'] / f['refs_any'] >= o.assistant_share:
             counted.add(s)
     counted -= set(o.exclude_session)
-    for mid, (rel, ts, model, cwd, usage) in msgs.items():
-        if not ts or not in_window(o, ts) or model == '<synthetic>':
+    for mid, (rels, ts, model, cwd, usage) in msgs.items():
+        if parse_ts(ts) is None:
+            notes['calls with a missing or malformed timestamp (left out)'] += 1
             continue
-        f = files[rel]
+        if not in_window(o, ts) or model == '<synthetic>':
+            continue
+        # an id in several files (a forked session): take the first file whose session counts
+        f = files[next((r for r in rels if not files[r]['mixed'] or files[r]['session'] in counted), rels[-1])]
         if f['session'] in o.exclude_session:
             continue
         if f['mixed']:
@@ -478,7 +497,10 @@ def build(o):
 
     # Codex
     for sid, ts, model, u in calls:
-        if not ts or not in_window(o, ts):
+        if parse_ts(ts) is None:
+            notes['calls with a missing or malformed timestamp (left out)'] += 1
+            continue
+        if not in_window(o, ts):
             continue
         s = sessions[sid]
         if sid in o.exclude_session:
@@ -487,14 +509,15 @@ def build(o):
         while root.get('parent') in sessions and root['parent'] not in chain:
             chain.append(root['parent'])
             root = sessions[root['parent']]
-        if root['interactive']:
-            role = 'assistant (codex)' if root is s else 'assistant subagent (codex)'
+        if root['interactive']:  # a child whose parent rollout is missing still knows it was spawned
+            role = 'assistant (codex)' if root is s and not s['parent'] else 'assistant subagent (codex)'
         elif any(c in by_mgr for c in chain):
             role = 'rloop Manager'
         else:
             role = prompt_role(root['first'], in_repo(root['cwd'])) or ('other (repo cwd)' if in_repo(root['cwd']) else 'panel reader')
         run, how = attribute(role, chain, root['first'] + '\n' + s['first'], '', ts, s['cwd'])
-        bead = runs[run]['bead'] if run else '' if role == 'assistant (codex)' else bead_from(s['first'], root['first'], s['cwd'])
+        bead = runs[run]['bead'] if run else '' if role == 'assistant (codex)' else \
+            bead_from(s['first'], s['cwd']) if role == 'assistant subagent (codex)' else bead_from(s['first'], root['first'], s['cwd'])
         how = how if run else ('id in prompt or dir name' if bead else how)
         # input_tokens includes the cached and cache-write parts (cache writes were 0 in every rollout seen so far)
         i, ca, cw = (u.get(k, 0) or 0 for k in ('input_tokens', 'cached_input_tokens', 'cache_write_input_tokens'))
