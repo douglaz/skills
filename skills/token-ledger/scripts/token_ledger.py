@@ -147,6 +147,7 @@ def load_runs(repos, find_bead):
                     seat_of_session[m.group(1)] = rid
                 err_tok += sum(int(x.replace(',', '')) for x in re.findall(r'^tokens used\n([\d,]+)', txt, re.M))
         runs[rid] = dict(start=start, end=end, bead=bead, status=status, mgr=mgr, err_tok=err_tok,
+                         repo=os.path.realpath(d.parent.parent.parent),
                          rounds=sum(1 for n in files if re.fullmatch(r'implementer-\d+\.out', n)))
     return runs, seat_of_session
 
@@ -156,12 +157,14 @@ def home_of(cwd):
     return m.group(0) if m else ''
 
 
-def window_run(runs, ts):
-    t = parse_ts(ts)
-    hit = [rid for rid, r in runs.items() if t and r['start'] <= t <= r['end']]
-    if not hit:
-        return '', ''
-    return max(hit, key=lambda rid: runs[rid]['start']), 'time window' + (' (overlap)' if len(hit) > 1 else '')
+def window_run(runs, ts, cwd):
+    """The one Run of the session's own repo whose window holds ts. Overlapping Runs are ambiguous: none."""
+    t, rc = parse_ts(ts), os.path.realpath(cwd) if cwd else ''
+    hit = [rid for rid, r in runs.items()
+           if t and r['start'] <= t <= r['end'] and (rc == r['repo'] or rc.startswith(r['repo'] + '/'))]
+    if len(hit) == 1:
+        return hit[0], 'time window'
+    return '', 'time window overlap (no Run)' if hit else ''
 
 
 # ---------- roles ----------
@@ -410,7 +413,7 @@ def build(o):
         rc = os.path.realpath(cwd) if cwd else ''
         return any(rc == r or rc.startswith(r + '/') for r in repos)
 
-    def attribute(role, session_ids, first, dirname, ts):
+    def attribute(role, session_ids, first, dirname, ts, cwd):
         if role not in RUN_ROLES and role != 'delegate manager':
             return '', ''
         for s in session_ids:
@@ -426,7 +429,7 @@ def build(o):
             if rid in runs:
                 return rid, 'run dir name'
         if role in RUN_ROLES:
-            return window_run(runs, ts)
+            return window_run(runs, ts, cwd)
         return '', ''
 
     ledger, notes = [], collections.Counter()
@@ -458,10 +461,10 @@ def build(o):
             else:  # claude -p: a Run seat, a panel reader or a probe; subagents inherit the parent's role
                 role = prompt_role(parent['first'], in_repo(cwd)) or ('other (repo cwd)' if in_repo(cwd) else 'panel reader')
                 f = parent
-        run, how = attribute(role, [f['session']], f['first'], f['dir'], ts)
+        run, how = attribute(role, [f['session']], f['first'], f['dir'], ts, cwd)
         # an assistant session spans many beads, so its first prompt names none of them reliably
         bead = runs[run]['bead'] if run else '' if role.startswith('assistant (') or role == 'assistant' else bead_from(f['first'], f['dir'])
-        how = how or ('id in prompt or dir name' if bead else '')
+        how = how if run else ('id in prompt or dir name' if bead else how)
         for m2, kind, c, fast in claude_usage_rows(usage, model):
             if not any(c[k] for k in ('input_uncached', 'cache_write_5m', 'cache_write_1h', 'cache_write_untiered', 'cache_read', 'output')):
                 continue
@@ -487,9 +490,9 @@ def build(o):
             prompt_role(s['first'], in_repo(s['cwd'])) or ('other (repo cwd)' if in_repo(s['cwd']) else 'panel reader')
         if sid in by_mgr:
             role = 'rloop Manager'
-        run, how = attribute(role, [sid], s['first'], '', ts)
+        run, how = attribute(role, [sid], s['first'], '', ts, s['cwd'])
         bead = runs[run]['bead'] if run else '' if s['interactive'] else bead_from(s['first'], s['cwd'])
-        how = how or ('id in prompt or dir name' if bead else '')
+        how = how if run else ('id in prompt or dir name' if bead else how)
         # input_tokens includes the cached and cache-write parts (cache writes were 0 in every rollout seen so far)
         i, ca, cw = (u.get(k, 0) or 0 for k in ('input_tokens', 'cached_input_tokens', 'cache_write_input_tokens'))
         c = dict(input_uncached=i - ca - cw, cache_write_5m=0, cache_write_1h=0, cache_write_untiered=cw, cache_read=ca,

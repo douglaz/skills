@@ -103,6 +103,12 @@ with tempfile.TemporaryDirectory() as t:
     for name in ('old-a', 'old-b'):
         jl(codex / f'2026/10/20/rollout-{name}.jsonl', [meta('cx-old', rcwd), ctx, prompt('/goal implement the task'),
             tc('2026-10-20T10:09:00Z', 100), tc('2026-10-20T10:10:00Z', 250)])
+    # a code repo beside the spec repo, with a Run that starts later and overlaps: each session keeps its own repo's Run
+    code, run_id2 = t / 'home/u/p/demo-code', '20261020T100200.000000000Z-43'
+    (code / '.rloop/runs' / run_id2).mkdir(parents=True)
+    (code / '.rloop/runs' / run_id2 / 'task-1.md').write_text('# dm-qrs - code side\n', encoding='utf-8')
+    jl(codex / '2026/10/20/rollout-code.jsonl', [meta('cx-code', str(code)), ctx, prompt('/goal implement the task'),
+        rec('r7', '2026-10-20T10:04:00Z', 100, 0, 0)])
     jl(codex / '2026/10/20/rollout-other.jsonl', [meta('cx-x', '/home/u/p/other'), ctx, prompt('demo question — ação ✓'),
         rec('r4', '2026-10-20T11:00:00Z', 9, 0, 9)])
 
@@ -150,6 +156,9 @@ with tempfile.TemporaryDirectory() as t:
     short = [r for r in impl if r['long_context'] == '0']
     check('cached input is split from uncached (100K at $2, 150K at $0.10)',
           short and abs(float(short[0]['usd']) - 0.215) < 1e-9)
+    cx_code = get(session='cx-code')
+    check('a session in the code repo takes the code repo\'s overlapping Run, not the spec repo\'s',
+          len(cx_code) == 1 and cx_code[0]['run'] == run_id2 and cx_code[0]['bead'] == 'dm-qrs')
     rev = get(session='cx-rev')
     check('the codex Reviewer is attributed by the session id in the run .err',
           rev and rev[0]['role'] == 'rloop Reviewer' and rev[0]['attribution'] == 'session id in run .err')

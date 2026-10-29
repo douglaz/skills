@@ -103,7 +103,8 @@ A call reaches a Run, and through the Run its bead, in one of these ways, strong
 2. the session id in a Run's `.err`;
 3. the Run path in the prompt;
 4. the Run dir name;
-5. last, the Run's time window. Only rloop roles can be attributed by time window.
+5. last, the time window of a Run in the session's own repo. Only rloop roles can be attributed this
+   way, and when two Runs in that repo overlap, the call is left without a Run.
 
 When no Run matches, the bead comes from the first tracker id in the prompt or the dir name. Short
 forms like `panel-abc56-r1`, meaning `<prefix>-abc.56`, count too.
