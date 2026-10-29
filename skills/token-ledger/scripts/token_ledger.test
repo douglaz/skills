@@ -105,6 +105,14 @@ with tempfile.TemporaryDirectory() as t:
     jl(claude / '-home-u-p-demo-spec/ide-1.jsonl', [
         user('tidy the tests', '2026-10-20T10:20:00Z', rcwd, 'claude-ide'),
         asst('ide1', '2026-10-20T10:20:01Z', rcwd, 'claude-opus-5-5', small, 'claude-ide')])
+    # an unmapped entrypoint whose prompt is a Reviewer's: the role, but still no Run by time window
+    jl(claude / '-home-u-p-demo-spec/ide-2.jsonl', [
+        user('You are one of five independent Reviewers of an rloop Round', '2026-10-20T10:21:00Z', rcwd, 'claude-ide'),
+        asst('ide2', '2026-10-20T10:21:01Z', rcwd, 'claude-opus-5-5', small, 'claude-ide')])
+    # a stamp with a -02:00 offset: 23:30 local on 10-20 is 01:30 UTC on 10-21
+    jl(claude / '-home-u-p-demo-spec/tz-1.jsonl', [
+        user('You are one of five independent Reviewers of an rloop Round', '2026-10-20T23:29:00-02:00', rcwd),
+        asst('tz1', '2026-10-20T23:30:00-02:00', rcwd, 'claude-opus-5-5', small)])
     # Codex: the Implementer (attributed by time window) with one long-context call, and the sol Reviewer (by .err id)
     meta = lambda sid, cwd: dict(type='session_meta', payload=dict(id=sid, cwd=cwd, timestamp='2026-10-20T10:01:00Z'))
     prompt = lambda text: dict(type='response_item', payload=dict(type='message', role='user', content=[dict(type='input_text', text=text)]))
@@ -248,6 +256,10 @@ with tempfile.TemporaryDirectory() as t:
     check('an unmapped entrypoint is unclassified, gets no Run by time window, and is reported',
           len(ide) == 1 and ide[0]['role'] == 'unclassified session' and ide[0]['run'] == ''
           and "unmapped entrypoint 'claude-ide'" in (out / 'report.md').read_text(encoding='utf-8'))
+    ide2 = get(session='ide-2')
+    check('an unmapped entrypoint with a Reviewer prompt keeps the role but gets no time-window Run',
+          len(ide2) == 1 and ide2[0]['role'] == 'rloop Reviewer' and ide2[0]['run'] == '')
+    check('days are UTC days, whatever offset the stamp carries', [r['day'] for r in get(session='tz-1')] == ['2026-10-21'])
     dup = get(session='cx-dup')
     check('records duplicated across rollouts count once, with no legacy fallback',
           len(dup) == 1 and dup[0]['input_uncached'] == '100')

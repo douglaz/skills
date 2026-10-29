@@ -67,8 +67,13 @@ def parse_args(argv):
     return o
 
 
+def utc_day(ts):
+    """The UTC calendar day of a stamp (callers have checked that it parses)."""
+    return parse_ts(ts).astimezone(dt.timezone.utc).strftime('%Y-%m-%d')
+
+
 def in_window(o, ts):
-    day = ts[:10]
+    day = utc_day(ts)
     return (not o.since or day >= o.since) and (not o.until or day <= o.until)
 
 
@@ -431,7 +436,7 @@ def build(o):
         rc = os.path.realpath(cwd) if cwd else ''
         return any(rc == r or rc.startswith(r + '/') for r in repos)
 
-    def attribute(role, session_ids, first, dirname, ts, cwd):
+    def attribute(role, session_ids, first, dirname, ts, cwd, window=True):
         if role not in RUN_ROLES and role != 'delegate manager':
             return '', ''
         for s in session_ids:
@@ -446,7 +451,7 @@ def build(o):
             rid = dirname.split('rloop-runs-')[1].replace('-', '.', 1)
             if rid in runs:
                 return rid, 'run dir name'
-        if role in RUN_ROLES:
+        if role in RUN_ROLES and window:
             return window_run(runs, ts, cwd)
         return '', ''
 
@@ -467,6 +472,7 @@ def build(o):
         if not in_window(o, ts) or model == '<synthetic>':
             continue
         # an id in several files (a forked session): take the first file whose session counts
+        mapped = True  # an unmapped entrypoint keeps explicit Run evidence but never the time window
         f = files[next((r for r in rels if files[r]['session'] not in o.exclude_session
                         and (not files[r]['mixed'] or files[r]['session'] in counted)), rels[-1])]
         if f['session'] in o.exclude_session:
@@ -485,10 +491,11 @@ def build(o):
                 role = prompt_role(parent['first'], in_repo(cwd)) or ('other (repo cwd)' if in_repo(cwd) else 'panel reader')
                 f = parent
             else:  # an unmapped entrypoint: only an explicit prompt decides, and it is reported
+                mapped = False
                 notes[f"claude calls with an unmapped entrypoint '{parent['entry'] or '(none)'}' (prompt only, no time window)"] += 1
                 role = prompt_role(parent['first'], in_repo(cwd)) or 'unclassified session'
                 f = parent
-        run, how = attribute(role, [f['session']], f['first'], f['dir'], ts, cwd)
+        run, how = attribute(role, [f['session']], f['first'], f['dir'], ts, cwd, window=mapped)
         # an assistant session spans many beads, so its first prompt names none of them reliably
         bead = runs[run]['bead'] if run else '' if role.startswith('assistant (') or role == 'assistant' else bead_from(f['first'], f['dir'])
         how = how if run else ('id in prompt or dir name' if bead else how)
@@ -503,7 +510,7 @@ def build(o):
             notes['claude web searches (unpriced unless prices.json sets web_search_per_request)'] += c['web_searches']
             notes['home ' + home_of(cwd)] += bool(home_of(cwd))
             ledger.append(dict(provider='claude', model=name, role=role, seat=seat_of(m2) if 'rloop' in role or role == 'panel reader' else '',
-                               run=run, bead=bead or 'unattributed', attribution=how, day=ts[:10], ts=ts, session=f['session'],
+                               run=run, bead=bead or 'unattributed', attribution=how, day=utc_day(ts), ts=ts, session=f['session'],
                                **c, fast=int(fast), long_context=0, weight=weight(c), usd=usd))
 
     # Codex
@@ -539,7 +546,7 @@ def build(o):
         notes['unpriced codex ' + model] += usd is None
         notes['home ' + home_of(s['cwd'])] += bool(home_of(s['cwd']))
         ledger.append(dict(provider='codex', model=model, role=role, seat=seat_of(model) if 'rloop' in role or role == 'panel reader' else '',
-                           run=run, bead=bead or 'unattributed', attribution=how, day=ts[:10], ts=ts, session=sid,
+                           run=run, bead=bead or 'unattributed', attribution=how, day=utc_day(ts), ts=ts, session=sid,
                            **c, fast=0, long_context=int(long), weight=weight(c), usd=usd))
     return ledger, runs, mains, counted, maybe, notes, prices
 
