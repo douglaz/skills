@@ -67,14 +67,6 @@ def in_window(o, ts):
     return (not o.since or day >= o.since) and (not o.until or day <= o.until)
 
 
-def skip_file(o, path):
-    """A file last written before --since holds nothing inside the window."""
-    if not o.since:
-        return False
-    mtime = dt.datetime.fromtimestamp(os.path.getmtime(path), dt.timezone.utc).strftime('%Y-%m-%d')
-    return mtime < o.since
-
-
 def text_of(c):
     if isinstance(c, str):
         return c
@@ -203,8 +195,6 @@ def scan_claude(o):
     files, msgs = {}, {}
     for d in dirs + mixed:
         for f in sorted(glob.glob(f'{o.claude_root}/{d}/**/*.jsonl', recursive=True)):
-            if skip_file(o, f):
-                continue
             rel = os.path.relpath(f, o.claude_root)
             parts = rel.split('/')
             sub = 'subagents' in parts
@@ -269,8 +259,6 @@ def claude_usage_rows(usage, model):
 def scan_codex(o):
     sessions, calls, maybe, seen = {}, [], [], set()
     for f in sorted(glob.glob(f'{o.codex_root}/**/rollout-*.jsonl', recursive=True)):
-        if skip_file(o, f):
-            continue
         with open(f, encoding='utf-8', errors='replace') as fh:
             try:
                 meta = json.loads(fh.readline())['payload']
@@ -281,6 +269,9 @@ def scan_codex(o):
             prompt, model, records, totals, has_records = None, '', [], [], False
             # codex exec (Run seats, panels, sol managers) says originator codex_exec; a subagent's source is a dict
             interactive = meta.get('originator') not in (None, 'codex_exec') and not isinstance(meta.get('source'), dict)
+            src = meta.get('source')  # a string ('exec', 'cli'), or a dict whose 'subagent' may be a string too
+            sub = src.get('subagent') if isinstance(src, dict) else None
+            spawn = sub.get('thread_spawn') if isinstance(sub, dict) else None
             for line in fh:
                 if not ours:  # peek at the first real prompt only, to list possible strays
                     if '"user"' not in line:
@@ -323,7 +314,8 @@ def scan_codex(o):
                         records.append((ts, m, {k: tot.get(k, 0) - prev.get(k, 0) for k in tot}))
                     prev = tot
         s = sessions.setdefault(sid, dict(cwd=cwd, start=meta.get('timestamp', ''), first=prompt or '', files=0,
-                                          interactive=interactive))
+                                          interactive=interactive,
+                                          parent=spawn.get('parent_thread_id') if isinstance(spawn, dict) else None))
         if meta.get('timestamp', '') < s['start'] or not s['first']:  # role comes from the earliest rollout
             s.update(start=meta.get('timestamp', ''), first=prompt or s['first'])
         s['files'] += 1
@@ -491,12 +483,18 @@ def build(o):
         s = sessions[sid]
         if sid in o.exclude_session:
             continue
-        role = 'assistant (codex)' if s['interactive'] else \
-            prompt_role(s['first'], in_repo(s['cwd'])) or ('other (repo cwd)' if in_repo(s['cwd']) else 'panel reader')
-        if sid in by_mgr:
+        chain, root = [sid], s  # a subagent's role and Run come from the session that spawned it
+        while root.get('parent') in sessions and root['parent'] not in chain:
+            chain.append(root['parent'])
+            root = sessions[root['parent']]
+        if root['interactive']:
+            role = 'assistant (codex)' if root is s else 'assistant subagent (codex)'
+        elif any(c in by_mgr for c in chain):
             role = 'rloop Manager'
-        run, how = attribute(role, [sid], s['first'], '', ts, s['cwd'])
-        bead = runs[run]['bead'] if run else '' if s['interactive'] else bead_from(s['first'], s['cwd'])
+        else:
+            role = prompt_role(root['first'], in_repo(root['cwd'])) or ('other (repo cwd)' if in_repo(root['cwd']) else 'panel reader')
+        run, how = attribute(role, chain, root['first'] + '\n' + s['first'], '', ts, s['cwd'])
+        bead = runs[run]['bead'] if run else '' if role == 'assistant (codex)' else bead_from(s['first'], root['first'], s['cwd'])
         how = how if run else ('id in prompt or dir name' if bead else how)
         # input_tokens includes the cached and cache-write parts (cache writes were 0 in every rollout seen so far)
         i, ca, cw = (u.get(k, 0) or 0 for k in ('input_tokens', 'cached_input_tokens', 'cache_write_input_tokens'))

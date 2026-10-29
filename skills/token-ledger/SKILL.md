@@ -97,6 +97,8 @@ Roles come from each session's first prompt and its location:
     location like any other call.
   - If one lands as `other (repo cwd)` and picks up Run spend it shouldn't have, say so, or pass
     `--exclude-session` for it.
+- A Codex subagent takes its role and Run from the session that spawned it, following
+  `parent_thread_id` up to the root. A child of an interactive session is `assistant subagent (codex)`.
 
 A call reaches a Run, and through the Run its bead, in one of these ways, strongest first:
 1. the Run's `session` file;

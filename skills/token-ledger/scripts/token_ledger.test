@@ -99,6 +99,15 @@ with tempfile.TemporaryDirectory() as t:
     jl(codex / '2026/10/20/rollout-tui.jsonl', [dict(type='session_meta', payload=dict(
         id='cx-tui', cwd=rcwd, timestamp='2026-10-20T10:02:00Z', originator='codex_cli_rs', source='cli')), ctx,
         prompt('look at dm-qrs for me'), rec('r5', '2026-10-20T10:07:00Z', 1_000, 0, 0)])
+    # a subagent the interactive session spawned: an assistant subagent, never the Run's
+    jl(codex / '2026/10/20/rollout-tui-child.jsonl', [dict(type='session_meta', payload=dict(
+        id='cx-tui-child', cwd=rcwd, timestamp='2026-10-20T10:03:00Z', originator='codex_exec',
+        source=dict(subagent=dict(thread_spawn=dict(parent_thread_id='cx-tui', depth=1))))), ctx,
+        prompt('check the tests'), rec('r8', '2026-10-20T10:07:30Z', 1_000, 0, 0)])
+    # a subagent source that is not a thread spawn (seen in real rollouts): no crash, classified by its prompt
+    jl(codex / '2026/10/20/rollout-review-sub.jsonl', [dict(type='session_meta', payload=dict(
+        id='cx-revsub', cwd=rcwd, timestamp='2026-10-20T10:03:00Z', originator='codex_exec', source=dict(subagent='review'))),
+        ctx, prompt('/goal implement the task'), rec('r10', '2026-10-20T10:07:40Z', 10, 0, 0)])
     # the same records in two rollouts (a copied or resumed file), each with running totals too
     tc = lambda ts, i: dict(type='event_msg', timestamp=ts, payload=dict(type='token_count', info=dict(
         total_token_usage=dict(input_tokens=i, cached_input_tokens=0, output_tokens=0, total_tokens=i))))
@@ -171,6 +180,11 @@ with tempfile.TemporaryDirectory() as t:
     tui = get(session='cx-tui')
     check('an interactive Codex session is the assistant, with no Run and no bead',
           len(tui) == 1 and tui[0]['role'] == 'assistant (codex)' and tui[0]['run'] == '' and tui[0]['bead'] == 'unattributed')
+    child = get(session='cx-tui-child')
+    check('a subagent of an interactive Codex session is an assistant subagent, with no Run',
+          len(child) == 1 and child[0]['role'] == 'assistant subagent (codex)' and child[0]['run'] == '')
+    check('a string-valued subagent source is classified by its prompt',
+          [r['role'] for r in get(session='cx-revsub')] == ['rloop Implementer'])
     dup = get(session='cx-dup')
     check('records duplicated across rollouts count once, with no legacy fallback',
           len(dup) == 1 and dup[0]['input_uncached'] == '100')
@@ -189,6 +203,19 @@ with tempfile.TemporaryDirectory() as t:
     codex_only = list(csv.DictReader(open(t / 'out2/ledger.csv', encoding='utf-8'))) if p2.returncode == 0 else []
     check('a missing Claude root still yields the Codex ledger',
           p2.returncode == 0 and codex_only and {r['provider'] for r in codex_only} == {'codex'})
+
+    # --since: a mixed-dir parent last written before the window still decides its in-window subagent
+    old_parent = claude / '-home-u/p2.jsonl'
+    jl(old_parent, [user('demo work', '2026-10-01T08:00:00Z', '/home/u', 'cli'),
+                    asst('p2a', '2026-10-01T08:00:01Z', '/home/u', 'claude-opus-5-5', small, 'cli', 'ls /home/u/p/demo-spec', 'tp2')])
+    jl(claude / '-home-u/p2/subagents/agent-q.jsonl', [user('summarise', '2026-10-25T08:00:00Z', '/home/u', 'cli'),
+        asst('p2b', '2026-10-25T08:00:01Z', '/home/u', 'claude-opus-5-5', small, 'cli')])
+    os.utime(old_parent, (1759305600, 1759305600))  # 2025-10-01: the parent's file predates the window
+    p4 = subprocess.run(cmd + ['--since', '2026-10-20', '--out', str(t / 'out4')], capture_output=True, text=True, env=env)
+    since = list(csv.DictReader(open(t / 'out4/ledger.csv', encoding='utf-8'))) if p4.returncode == 0 else []
+    check('with --since, an in-window subagent of an older parent session still counts',
+          any(r['session'] == 'p2' and r['role'] == 'assistant subagent' for r in since)
+          and all(r['day'] >= '2026-10-20' for r in since))
 
     # no tracker at all, and a Run brief naming a dotted file: the ledger still runs, the Run unattributed to a bead
     run2 = t / 'home/u/p/solo/.rloop/runs/20261020T100000.000000000Z-7'
