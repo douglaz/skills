@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+"""token_ledger.test: offline checks for token_ledger.py on a synthetic transcript tree.
+
+Builds fake ~/.claude/projects, ~/.codex/sessions and an rloop Run, then checks deduping, advisor rows,
+cache-write tiers, role and Run attribution, mixed-dir session selection, Codex long-context pricing and
+the unpriced-model path. Usage: ./skills/token-ledger/scripts/token_ledger.test (exits 0 if all pass)
+"""
+import csv
+import json
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+fails = 0
+
+
+def check(desc, ok):
+    global fails
+    print(('  ok   ' if ok else '  FAIL ') + desc)
+    fails += not ok
+
+
+def jl(path, records):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(''.join(json.dumps(r) + '\n' for r in records))
+
+
+def user(text, ts, cwd, entry='sdk-cli'):
+    return dict(type='user', timestamp=ts, cwd=cwd, entrypoint=entry, message=dict(role='user', content=text))
+
+
+def asst(mid, ts, cwd, model, usage, entry='sdk-cli', tool=None):
+    content = [dict(type='tool_use', name='Bash', input=dict(command=tool))] if tool else []
+    return dict(type='assistant', timestamp=ts, cwd=cwd, entrypoint=entry,
+                message=dict(id=mid, model=model, usage=usage, content=content))
+
+
+with tempfile.TemporaryDirectory() as t:
+    t = Path(t)
+    # the Run repo is found from the sessions' cwds, and its tracker prefix (dm) differs from the project key
+    claude, codex, repo, out = t / 'claude', t / 'codex', t / 'home/u/p/demo-spec', t / 'out'
+    run_id = '20261020T100000.000000000Z-42'
+    run = repo / '.rloop/runs' / run_id
+    run.mkdir(parents=True)
+    (run / 'task-1.md').write_text('# dm-abc.7 - add the thing\n')
+    (repo / '.beads').mkdir()
+    (repo / '.beads/issues.jsonl').write_text(''.join(json.dumps(dict(id=i)) + '\n' for i in ('dm-abc', 'dm-abc.7', 'dm-qrs')))
+    (run / 'implementer-1.out').write_text('done\n')
+    (run / 'session').write_text('mgr-1\n')
+    (run / 'reviewer-1-sol.err').write_text('session id: cx-rev\n...\ntokens used\n1,500\n')
+    rcwd = str(repo)
+    u1 = dict(input_tokens=10, cache_creation_input_tokens=1_000_000, cache_read_input_tokens=0, output_tokens=0,
+              cache_creation=dict(ephemeral_5m_input_tokens=0, ephemeral_1h_input_tokens=1_000_000))
+    # rloop Manager on Claude: two records share one message id (the last wins), one advisor iteration
+    adv = dict(u1, iterations=[dict(type='advisor_message', model='claude-opus-5-5', input_tokens=1_000_000,
+                                    output_tokens=0, cache_read_input_tokens=0, cache_creation_input_tokens=0)])
+    jl(claude / '-home-u-p-demo-spec/mgr-1.jsonl', [
+        user(f'You are the Manager of an rloop Run. Record: .rloop/runs/{run_id}/', '2026-10-20T10:00:01Z', rcwd),
+        asst('m1', '2026-10-20T10:00:02Z', rcwd, 'claude-opus-5-5', dict(u1, output_tokens=5)),
+        asst('m1', '2026-10-20T10:00:03Z', rcwd, 'claude-opus-5-5', adv)])
+    # a panel reader outside the repo, bead named in its dir
+    pr = dict(input_tokens=0, cache_creation_input_tokens=0, cache_read_input_tokens=1_000_000, output_tokens=1_000_000)
+    jl(claude / '-var-tmp-demo-panel-abc7-fable/p1.jsonl', [
+        user('You are advising the owner on dm-zzz9 (not in the tracker)', '2026-10-21T09:00:00Z', '/var/tmp/demo-panel-abc7/fable'),
+        asst('p1', '2026-10-21T09:00:01Z', '/var/tmp/demo-panel-abc7/fable', 'claude-fable-5-1', pr)])
+    # mixed dir: one demo session (counted), one other-project session (left out)
+    small = dict(input_tokens=1_000_000, cache_creation_input_tokens=0, cache_read_input_tokens=0, output_tokens=0)
+    jl(claude / '-home-u/a1.jsonl', [
+        user('continue demo, then dm-qrs', '2026-10-22T08:00:00Z', '/home/u', 'cli'),
+        asst('a1', '2026-10-22T08:00:01Z', '/home/u', 'claude-opus-5-5', small, 'cli', 'cd /home/u/p/demo && ls'),
+        asst('a2', '2026-10-22T08:00:02Z', '/home/u', 'claude-mystery-9', small, 'cli', 'ls /var/tmp/demo-manager')])
+    jl(claude / '-home-u/b1.jsonl', [
+        user('work on other', '2026-10-22T08:00:00Z', '/home/u', 'cli'),
+        asst('b1', '2026-10-22T08:00:01Z', '/home/u', 'claude-opus-5-5', small, 'cli', 'cd /home/u/p/other')])
+    # Codex: the Implementer (attributed by time window) with one long-context call, and the sol Reviewer (by .err id)
+    meta = lambda sid, cwd: dict(type='session_meta', payload=dict(id=sid, cwd=cwd, timestamp='2026-10-20T10:01:00Z'))
+    prompt = lambda text: dict(type='response_item', payload=dict(type='message', role='user', content=[dict(type='input_text', text=text)]))
+    rec = lambda rid, ts, i, c, o: dict(type='token_usage_record', timestamp=ts, payload=dict(
+        response_id=rid, usage=dict(input_tokens=i, cached_input_tokens=c, output_tokens=o, reasoning_output_tokens=0)))
+    ctx = dict(type='turn_context', payload=dict(model='gpt-6.1-sol'))
+    jl(codex / '2026/10/20/rollout-impl.jsonl', [meta('cx-impl', rcwd), ctx, prompt('/goal implement the task in task-1.md'),
+        rec('r1', '2026-10-20T10:05:00Z', 1_000_000, 0, 0),
+        rec('r2', '2026-10-20T10:06:00Z', 250_000, 150_000, 0),
+        rec('r2', '2026-10-20T10:06:00Z', 250_000, 150_000, 0)])
+    jl(codex / '2026/10/20/rollout-rev.jsonl', [meta('cx-rev', rcwd), ctx,
+        prompt('You are one of five independent Reviewers of an rloop Round'), rec('r3', '2026-10-20T10:20:00Z', 0, 0, 100_000)])
+    jl(codex / '2026/10/20/rollout-other.jsonl', [meta('cx-x', '/home/u/p/other'), ctx, prompt('demo question'),
+        rec('r4', '2026-10-20T11:00:00Z', 9, 0, 9)])
+
+    # fixture rates, so a refresh of the shipped prices.json never reddens this test
+    prices = t / 'prices.json'
+    prices.write_text(json.dumps(dict(as_of='fixture', claude={
+        'claude-opus-5-5': dict(input=4, cache_read=0.2, cache_write_5m=5, cache_write_1h=8, output=20),
+        'claude-fable-5-1': dict(input=10, cache_read=0.25, cache_write_5m=12.5, cache_write_1h=20, output=50)},
+        codex={'gpt-6.1-sol': dict(input=2, cached_input=0.1, cache_write=2.5, output=10, long_context=dict(
+            threshold=272000, input=4, cached_input=0.2, cache_write=5, output=15))})))
+    cmd = [sys.executable, '-I', str(HERE / 'token_ledger.py'), '--project', 'demo', '--out', str(out), '--prices', str(prices),
+           '--claude-root', str(claude), '--codex-root', str(codex), '--mixed-dir=-home-u']
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    check('script exits 0', p.returncode == 0)
+    if p.returncode:
+        print(p.stdout, p.stderr)
+        sys.exit(1)
+    rows = list(csv.DictReader(open(out / 'ledger.csv')))
+    get = lambda **kw: [r for r in rows if all(r[k] == v for k, v in kw.items())]
+    mgr = get(session='mgr-1', model='claude-opus-5-5')
+    check('one row per Claude message id (last record wins)', len(mgr) == 1)
+    check('the 1h cache write is priced at 1h ($8 per M)', mgr and abs(float(mgr[0]['usd']) - 8.00004) < 1e-9)
+    check('the Manager row is attributed to its Run by the session file',
+          mgr and mgr[0]['run'] == run_id and mgr[0]['attribution'] == 'run session file' and mgr[0]['bead'] == 'dm-abc.7')
+    advr = get(session='mgr-1', model='claude-opus-5-5 [advisor]')
+    check('the advisor iteration is its own row ($4)', len(advr) == 1 and abs(float(advr[0]['usd']) - 4) < 1e-6)
+    pan = get(role='panel reader', provider='claude')
+    check('a claude -p call outside the repo is a panel reader, bead from the dir name\'s short form',
+          len(pan) == 1 and pan[0]['bead'] == 'dm-abc.7' and abs(float(pan[0]['usd']) - 50.25) < 1e-6)
+    check('the demo assistant session counts and the other project session does not',
+          {r['session'] for r in get(role='assistant')} == {'a1'})
+    check('an assistant session takes no bead from its first prompt',
+          {r['bead'] for r in get(role='assistant')} == {'unattributed'})
+    check('an unknown model is unpriced, not guessed', get(model='claude-mystery-9')[0]['usd'] == '')
+    impl = get(session='cx-impl')
+    check('codex calls dedupe by response id', len(impl) == 2)
+    check('the Implementer is attributed by time window', all(r['run'] == run_id and r['attribution'] == 'time window' for r in impl))
+    long = [r for r in impl if r['long_context'] == '1']
+    check('only the call over 272K input pays long-context rates ($4 per M)',
+          len(long) == 1 and abs(float(long[0]['usd']) - 4) < 1e-6)
+    short = [r for r in impl if r['long_context'] == '0']
+    check('cached input is split from uncached (100K at $2, 150K at $0.10)',
+          short and abs(float(short[0]['usd']) - 0.215) < 1e-9)
+    rev = get(session='cx-rev')
+    check('the codex Reviewer is attributed by the session id in the run .err',
+          rev and rev[0]['role'] == 'rloop Reviewer' and rev[0]['attribution'] == 'session id in run .err')
+    check('a codex session outside the project cwd is not counted', not get(session='cx-x'))
+    maybe = list(csv.DictReader(open(out / 'codex_maybe.csv')))
+    check('but it is listed in codex_maybe.csv', [m['session'] for m in maybe] == ['cx-x'])
+    rep = (out / 'report.md').read_text()
+    check('report.md states the total and the unpriced model', 'Estimated API cost' in rep and 'unpriced claude claude-mystery-9' in rep)
+
+print('all passed' if not fails else f'{fails} failed')
+sys.exit(1 if fails else 0)

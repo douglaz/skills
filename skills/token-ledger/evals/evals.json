@@ -1,0 +1,39 @@
+{
+  "skill_name": "token-ledger",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "how much have we burned on tau-web so far, tokens and what it'd cost on the API? quick breakdown pls",
+      "expected_output": "Totals by provider with an API-cost estimate, top roles/models, costliest beads, trend, caveats; notes that tau-web also matches tau-web-rust and says how it handled that",
+      "files": [],
+      "assertions": [
+        "A report.md was produced by token_ledger.py",
+        "The answer gives an API-cost total in dollars",
+        "The answer splits Claude and Codex",
+        "The answer states the price table date or age",
+        "The answer says grok is not counted",
+        "The answer notes that tau-web-rust is included",
+        "The answer flags unpriced models instead of guessing",
+        "The script ran on its defaults, with no wrapper or pattern overrides"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "give me the token spend for provisiond over the last 7 days (since 2026-10-22), split by role and bead, and flag anything that looks wasteful",
+      "expected_output": "A --since run limited to the window, role and bead tables with dollars, attribution quality, and concrete waste candidates (multi-Round beads, long-context calls)",
+      "files": [],
+      "assertions": [
+        "A report.md was produced by token_ledger.py",
+        "The answer gives an API-cost total in dollars",
+        "The answer splits Claude and Codex",
+        "The answer states the price table date or age",
+        "The answer says grok is not counted",
+        "The ledger covers only 2026-10-22 onwards",
+        "The answer breaks spend down by role",
+        "The answer breaks spend down by bead (pv- ids)",
+        "The answer flags concrete waste candidates",
+        "The script ran on its defaults, with no wrapper or pattern overrides"
+      ]
+    }
+  ]
+}
