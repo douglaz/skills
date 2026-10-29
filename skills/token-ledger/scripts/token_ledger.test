@@ -7,6 +7,7 @@ the unpriced-model path. Usage: ./skills/token-ledger/scripts/token_ledger.test 
 """
 import csv
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -24,7 +25,7 @@ def check(desc, ok):
 
 def jl(path, records):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(''.join(json.dumps(r) + '\n' for r in records))
+    path.write_text(''.join(json.dumps(r, ensure_ascii=False) + '\n' for r in records), encoding='utf-8')
 
 
 def user(text, ts, cwd, entry='sdk-cli'):
@@ -70,7 +71,9 @@ with tempfile.TemporaryDirectory() as t:
     jl(claude / '-home-u/a1.jsonl', [
         user('continue demo, then dm-qrs', '2026-10-22T08:00:00Z', '/home/u', 'cli'),
         asst('a1', '2026-10-22T08:00:01Z', '/home/u', 'claude-opus-5-5', small, 'cli', 'cd /home/u/p/demo && ls'),
-        asst('a2', '2026-10-22T08:00:02Z', '/home/u', 'claude-mystery-9', small, 'cli', 'ls /var/tmp/demo-manager')])
+        asst('a2', '2026-10-22T08:00:02Z', '/home/u', 'claude-mystery-9', small, 'cli', 'ls /var/tmp/demo-manager'),
+        asst('a3', '2026-10-22T08:00:03Z', '/home/u', 'claude-opus-5-5-7', small, 'cli'),
+        asst('a4', '2026-10-22T08:00:04Z', '/home/u', 'claude-opus-5-5-20261001', small, 'cli')])
     jl(claude / '-home-u/b1.jsonl', [
         user('work on other', '2026-10-22T08:00:00Z', '/home/u', 'cli'),
         asst('b1', '2026-10-22T08:00:01Z', '/home/u', 'claude-opus-5-5', small, 'cli', 'cd /home/u/p/other')])
@@ -86,7 +89,7 @@ with tempfile.TemporaryDirectory() as t:
         rec('r2', '2026-10-20T10:06:00Z', 250_000, 150_000, 0)])
     jl(codex / '2026/10/20/rollout-rev.jsonl', [meta('cx-rev', rcwd), ctx,
         prompt('You are one of five independent Reviewers of an rloop Round'), rec('r3', '2026-10-20T10:20:00Z', 0, 0, 100_000)])
-    jl(codex / '2026/10/20/rollout-other.jsonl', [meta('cx-x', '/home/u/p/other'), ctx, prompt('demo question'),
+    jl(codex / '2026/10/20/rollout-other.jsonl', [meta('cx-x', '/home/u/p/other'), ctx, prompt('demo question — ação ✓'),
         rec('r4', '2026-10-20T11:00:00Z', 9, 0, 9)])
 
     # fixture rates, so a refresh of the shipped prices.json never reddens this test
@@ -96,14 +99,16 @@ with tempfile.TemporaryDirectory() as t:
         'claude-fable-5-1': dict(input=10, cache_read=0.25, cache_write_5m=12.5, cache_write_1h=20, output=50)},
         codex={'gpt-6.1-sol': dict(input=2, cached_input=0.1, cache_write=2.5, output=10, long_context=dict(
             threshold=272000, input=4, cached_input=0.2, cache_write=5, output=15))})))
-    cmd = [sys.executable, '-I', str(HERE / 'token_ledger.py'), '--project', 'demo', '--out', str(out), '--prices', str(prices),
+    # an ASCII locale with UTF-8 mode off, so any output written without an explicit encoding fails here
+    env = dict(os.environ, LC_ALL='C', LANG='C')
+    cmd = [sys.executable, '-I', '-X', 'utf8=0', str(HERE / 'token_ledger.py'), '--project', 'demo', '--out', str(out), '--prices', str(prices),
            '--claude-root', str(claude), '--codex-root', str(codex), '--mixed-dir=-home-u']
-    p = subprocess.run(cmd, capture_output=True, text=True)
+    p = subprocess.run(cmd, capture_output=True, text=True, env=env)
     check('script exits 0', p.returncode == 0)
     if p.returncode:
         print(p.stdout, p.stderr)
         sys.exit(1)
-    rows = list(csv.DictReader(open(out / 'ledger.csv')))
+    rows = list(csv.DictReader(open(out / 'ledger.csv', encoding='utf-8')))
     get = lambda **kw: [r for r in rows if all(r[k] == v for k, v in kw.items())]
     mgr = get(session='mgr-1', model='claude-opus-5-5')
     check('one row per Claude message id (last record wins)', len(mgr) == 1)
@@ -120,6 +125,8 @@ with tempfile.TemporaryDirectory() as t:
     check('an assistant session takes no bead from its first prompt',
           {r['bead'] for r in get(role='assistant')} == {'unattributed'})
     check('an unknown model is unpriced, not guessed', get(model='claude-mystery-9')[0]['usd'] == '')
+    check('a newer minor version is unpriced, not priced as its parent', get(model='claude-opus-5-5-7')[0]['usd'] == '')
+    check('a dated snapshot takes its model\'s rates ($4)', abs(float(get(model='claude-opus-5-5-20261001')[0]['usd']) - 4) < 1e-9)
     impl = get(session='cx-impl')
     check('codex calls dedupe by response id', len(impl) == 2)
     check('the Implementer is attributed by time window', all(r['run'] == run_id and r['attribution'] == 'time window' for r in impl))
@@ -133,10 +140,17 @@ with tempfile.TemporaryDirectory() as t:
     check('the codex Reviewer is attributed by the session id in the run .err',
           rev and rev[0]['role'] == 'rloop Reviewer' and rev[0]['attribution'] == 'session id in run .err')
     check('a codex session outside the project cwd is not counted', not get(session='cx-x'))
-    maybe = list(csv.DictReader(open(out / 'codex_maybe.csv')))
-    check('but it is listed in codex_maybe.csv', [m['session'] for m in maybe] == ['cx-x'])
-    rep = (out / 'report.md').read_text()
+    maybe = list(csv.DictReader(open(out / 'codex_maybe.csv', encoding='utf-8')))
+    check('but it is listed in codex_maybe.csv, its non-ASCII prompt intact',
+          [m['session'] for m in maybe] == ['cx-x'] and '— ação ✓' in maybe[0]['first_prompt'])
+    rep = (out / 'report.md').read_text(encoding='utf-8')
     check('report.md states the total and the unpriced model', 'Estimated API cost' in rep and 'unpriced claude claude-mystery-9' in rep)
+
+    p2 = subprocess.run(cmd[:cmd.index('--claude-root') + 1] + [str(t / 'no-such-root')] + cmd[cmd.index('--claude-root') + 2:]
+                        + ['--out', str(t / 'out2')], capture_output=True, text=True, env=env)
+    codex_only = list(csv.DictReader(open(t / 'out2/ledger.csv', encoding='utf-8'))) if p2.returncode == 0 else []
+    check('a missing Claude root still yields the Codex ledger',
+          p2.returncode == 0 and codex_only and {r['provider'] for r in codex_only} == {'codex'})
 
 print('all passed' if not fails else f'{fails} failed')
 sys.exit(1 if fails else 0)

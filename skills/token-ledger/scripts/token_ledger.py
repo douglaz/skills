@@ -111,7 +111,7 @@ def tracker_ids(dirs):
     for d in dirs:
         f = Path(d) / '.beads' / 'issues.jsonl'
         if f.is_file():
-            for line in f.open(errors='replace'):
+            for line in f.open(encoding='utf-8', errors='replace'):
                 try:
                     ids.add(json.loads(line).get('id', ''))
                 except ValueError:
@@ -131,17 +131,17 @@ def load_runs(repos, find_bead):
         end = max([dt.datetime.fromtimestamp(p.stat().st_mtime, dt.timezone.utc) for p in files.values()] or [start])
         bead = '(pick only; no brief)'
         if 'task-1.md' in files:
-            t1 = files['task-1.md'].read_text(errors='replace')
+            t1 = files['task-1.md'].read_text(encoding='utf-8', errors='replace')
             first = t1.splitlines()[0] if t1 else ''
             bead = find_bead(first) or find_bead(t1) or 'no tracker id: ' + first.lstrip('# ')[:50]
         status = ''
         if 'finished.md' in files:
-            status = files['finished.md'].read_text(errors='replace').split('\n', 1)[0].replace('STATUS: ', '').strip()
-        mgr = files['session'].read_text().strip() if 'session' in files else ''
+            status = files['finished.md'].read_text(encoding='utf-8', errors='replace').split('\n', 1)[0].replace('STATUS: ', '').strip()
+        mgr = files['session'].read_text(encoding='utf-8', errors='replace').strip() if 'session' in files else ''
         err_tok = 0
         for name, p in files.items():
             if name.endswith('.err'):
-                txt = p.read_text(errors='replace')
+                txt = p.read_text(encoding='utf-8', errors='replace')
                 m = re.search(r'^session id: (\S+)', txt, re.M)
                 if m:
                     seat_of_session[m.group(1)] = rid
@@ -194,7 +194,8 @@ def seat_of(model):
 # ---------- Claude ----------
 
 def scan_claude(o):
-    dirs = [d for d in os.listdir(o.claude_root) if o.key in d.lower() and d not in o.mixed_dir]
+    roots = os.listdir(o.claude_root) if o.claude_root.is_dir() else []  # a Codex-only machine has none
+    dirs = [d for d in roots if o.key in d.lower() and d not in o.mixed_dir]
     mixed = [d for d in o.mixed_dir if (o.claude_root / d).is_dir()]
     files, msgs = {}, {}
     for d in dirs + mixed:
@@ -326,8 +327,10 @@ def codex_user_text(p):
 # ---------- pricing ----------
 
 def lookup(table, model):
+    """Exact id, a dated snapshot (key-YYYYMMDD) or a bracketed tier (key[1m]). Never a bare prefix:
+    claude-opus-5-6 is not claude-opus-5, and pricing it so would hide that it is unpriced."""
     m = model.replace(' [advisor]', '')
-    keys = [k for k in table if m == k or m.startswith(k + '-') or m.startswith(k + '[')]
+    keys = [k for k in table if m == k or re.fullmatch(re.escape(k) + r'(?:-\d{8}|\[[^\]]*\])', m)]
     return table[max(keys, key=len)] if keys else None
 
 
@@ -360,7 +363,7 @@ def weight(c):
 # ---------- ledger ----------
 
 def build(o):
-    prices = json.load(open(o.prices))
+    prices = json.load(open(o.prices, encoding='utf-8'))
     files, msgs = scan_claude(o)
     sessions, calls, maybe = scan_codex(o)
     cwds = {c for f in files.values() if not f['mixed'] for c in f['cwds']} | {s['cwd'] for s in sessions.values()}
@@ -492,7 +495,7 @@ def build(o):
 
 
 def write_csv(path, header, rows):
-    with open(path, 'w', newline='') as fh:
+    with open(path, 'w', newline='', encoding='utf-8') as fh:
         w = csv.writer(fh)
         w.writerow(header)
         w.writerows(rows)
@@ -538,7 +541,7 @@ def report(o, ledger, runs, mains, counted, maybe, notes, prices):
     write_csv(o.out / 'codex_maybe.csv', ['session', 'cwd', 'file', 'first_prompt'], maybe)
 
     if not ledger:
-        (o.out / 'report.md').write_text(f'# Token ledger: {o.project}\n\nNo calls found.\n')
+        (o.out / 'report.md').write_text(f'# Token ledger: {o.project}\n\nNo calls found.\n', encoding='utf-8')
         return
     tsr = sorted(L['ts'] for L in ledger)
     out = [f'# Token ledger: {o.project}', '',
@@ -591,7 +594,7 @@ def report(o, ledger, runs, mains, counted, maybe, notes, prices):
             '- rloop prints "tokens used N" as uncached input plus output only; it understates real volume.',
             f"- Prices are list rates from prices.json as of {prices.get('as_of', '?')}, applied to all history (a price "
             'cut since then makes older work look cheaper than it was billed). Check the date and its `assumed` list before quoting.'] + gaps
-    (o.out / 'report.md').write_text('\n'.join(out) + '\n')
+    (o.out / 'report.md').write_text('\n'.join(out) + '\n', encoding='utf-8')
 
 
 def main(argv=None):
