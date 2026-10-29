@@ -306,6 +306,8 @@ def scan_codex(o):
                     prompt = codex_user_text(p)
                 elif ty == 'token_usage_record':
                     has_records = True  # even when every record is a duplicate, this is no legacy file
+                    if sid in o.exclude_session:
+                        continue  # an excluded session never claims a shared response id
                     rid = p.get('response_id')
                     if rid is not None:
                         if rid in seen:
@@ -316,7 +318,7 @@ def scan_codex(o):
                     totals.append((ts, model, p['info'].get('total_token_usage') or {}))
         if not ours:
             continue
-        if not has_records:  # older rollouts: per-call usage = growth of the running total
+        if not has_records and sid not in o.exclude_session:  # older rollouts: per-call usage = growth of the running total
             prev = {}
             for ts, m, tot in totals:
                 total = tot.get('total_tokens', 0)

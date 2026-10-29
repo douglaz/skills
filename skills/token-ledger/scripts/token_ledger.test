@@ -144,6 +144,10 @@ with tempfile.TemporaryDirectory() as t:
     jl(codex / '2026/10/20/rollout-reset.jsonl', [meta('cx-reset', rcwd), ctx, prompt('/goal implement the task'),
         tc('2026-10-20T10:11:00Z', 100), tc('2026-10-20T10:12:00Z', 200), tc('2026-10-20T10:13:00Z', 50),
         tc('2026-10-20T10:14:00Z', 150)])
+    # one response in two rollouts of different sessions; with the first excluded, the second owns it
+    for name, sid in (('sh-a', 'cx-sha'), ('sh-b', 'cx-shb')):
+        jl(codex / f'2026/10/20/rollout-{name}.jsonl', [meta(sid, rcwd), ctx, prompt('/goal implement the task'),
+            rec('rshare', '2026-10-20T10:08:30Z', 30, 0, 0)])
     # the same records in two rollouts (a copied or resumed file), each with running totals too
     for name in ('dup-a', 'dup-b'):
         jl(codex / f'2026/10/20/rollout-{name}.jsonl', [meta('cx-dup', rcwd), ctx, prompt('/goal implement the task'),
@@ -268,10 +272,13 @@ with tempfile.TemporaryDirectory() as t:
           any(r['session'] == 'p2' and r['role'] == 'assistant subagent' for r in since)
           and all(r['day'] >= '2026-10-20' for r in since))
 
-    p6 = subprocess.run(cmd + ['--exclude-session', 'e1', '--out', str(t / 'out6')], capture_output=True, text=True, env=env)
+    p6 = subprocess.run(cmd + ['--exclude-session', 'e1', '--exclude-session', 'cx-sha', '--out', str(t / 'out6')],
+                        capture_output=True, text=True, env=env)
     excl = list(csv.DictReader(open(t / 'out6/ledger.csv', encoding='utf-8'))) if p6.returncode == 0 else []
     check('a message shared with an excluded session is owned by the other transcript',
           [r['session'] for r in excl if r['session'] in ('e1', 'e2')] == ['e2'])
+    check('a Codex response shared with an excluded session is owned by the other rollout',
+          [r['session'] for r in excl if r['session'] in ('cx-sha', 'cx-shb')] == ['cx-shb'])
 
     # no tracker at all, and a Run brief naming a dotted file: the ledger still runs, the Run unattributed to a bead
     run2 = t / 'home/u/p/solo/.rloop/runs/20261020T100000.000000000Z-7'
