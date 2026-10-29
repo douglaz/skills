@@ -461,7 +461,8 @@ def build(o):
         if not in_window(o, ts) or model == '<synthetic>':
             continue
         # an id in several files (a forked session): take the first file whose session counts
-        f = files[next((r for r in rels if not files[r]['mixed'] or files[r]['session'] in counted), rels[-1])]
+        f = files[next((r for r in rels if files[r]['session'] not in o.exclude_session
+                        and (not files[r]['mixed'] or files[r]['session'] in counted)), rels[-1])]
         if f['session'] in o.exclude_session:
             continue
         if f['mixed']:

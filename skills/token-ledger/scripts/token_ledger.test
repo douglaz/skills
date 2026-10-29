@@ -96,6 +96,11 @@ with tempfile.TemporaryDirectory() as t:
         user('You are one of five independent Reviewers of an rloop Round', '2026-10-20T10:30:00Z', rcwd),
         asst('t1', '2026-10-20T10:30:01Z', rcwd, 'claude-opus-5-5', tiers),
         asst('t2', 'garbage', rcwd, 'claude-opus-5-5', small), asst('t3', '2026-10-20T10:31:00', rcwd, 'claude-opus-5-5', small)])
+    # one message in two project transcripts (a fork); with the first session excluded, the second owns it
+    for sess in ('e1', 'e2'):
+        jl(claude / f'-home-u-p-demo-spec/{sess}.jsonl', [
+            user('You are one of five independent Reviewers of an rloop Round', '2026-10-20T10:40:00Z', rcwd),
+            asst('em', '2026-10-20T10:40:01Z', rcwd, 'claude-opus-5-5', small)])
     # Codex: the Implementer (attributed by time window) with one long-context call, and the sol Reviewer (by .err id)
     meta = lambda sid, cwd: dict(type='session_meta', payload=dict(id=sid, cwd=cwd, timestamp='2026-10-20T10:01:00Z'))
     prompt = lambda text: dict(type='response_item', payload=dict(type='message', role='user', content=[dict(type='input_text', text=text)]))
@@ -262,6 +267,11 @@ with tempfile.TemporaryDirectory() as t:
     check('with --since, an in-window subagent of an older parent session still counts',
           any(r['session'] == 'p2' and r['role'] == 'assistant subagent' for r in since)
           and all(r['day'] >= '2026-10-20' for r in since))
+
+    p6 = subprocess.run(cmd + ['--exclude-session', 'e1', '--out', str(t / 'out6')], capture_output=True, text=True, env=env)
+    excl = list(csv.DictReader(open(t / 'out6/ledger.csv', encoding='utf-8'))) if p6.returncode == 0 else []
+    check('a message shared with an excluded session is owned by the other transcript',
+          [r['session'] for r in excl if r['session'] in ('e1', 'e2')] == ['e2'])
 
     # no tracker at all, and a Run brief naming a dotted file: the ledger still runs, the Run unattributed to a bead
     run2 = t / 'home/u/p/solo/.rloop/runs/20261020T100000.000000000Z-7'
