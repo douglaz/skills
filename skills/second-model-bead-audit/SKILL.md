@@ -71,7 +71,7 @@ The default panel is:
 | Reviewer | Invocation | Role |
 |---|---|---|
 | `codex` | `codex exec`, `gpt-6.1-sol`, `model_reasoning_effort="xhigh"`, read-only sandbox | Independent plan/graph audit with a custom rubric |
-| `claude` | `claude -p`, `--model "$CLAUDE_MODEL" --effort high`, read-only tool set | Independent plan/graph audit with the same rubric |
+| `claude` | `env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW claude -p`, `--model "$CLAUDE_MODEL" --effort high`, read-only tool set | Independent plan/graph audit with the same rubric |
 
 `$CLAUDE_MODEL` is resolved by the ladder probe in
 [multi-reviewer-loop/references/reviewer-panel.md](../multi-reviewer-loop/references/reviewer-panel.md)

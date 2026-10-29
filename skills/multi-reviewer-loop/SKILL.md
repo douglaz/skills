@@ -40,7 +40,7 @@ The default panel is two reviewers, run in parallel every pass:
 | Reviewer | Command | Notes |
 |---|---|---|
 | `codex` | `codex review --base "$DIFF_BASE" -c 'model="gpt-6.1-sol"' -c 'model_reasoning_effort="xhigh"'` | Diff-scoped, structured `[P*]` output |
-| `claude` | `claude -p "<review prompt>" --model "$CLAUDE_MODEL" --effort high --output-format json` | Repo-aware, reads beyond the diff |
+| `claude` | `env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW claude -p "<review prompt>" --model "$CLAUDE_MODEL" --effort high --output-format json` | Repo-aware, reads beyond the diff |
 
 **The Claude slot is a role, not a model.** `$CLAUDE_MODEL` is resolved once per run
 by a bounded probe down a ladder — `fable`, then `opus`, or a user pin that *replaces*
@@ -474,7 +474,7 @@ For each pass `N` from `1` to `MAX_PASSES`:
      </dev/null >"$REVIEW_DIR/pass-${PASS_ID}.codex.txt" 2>"$REVIEW_DIR/pass-${PASS_ID}.codex.stderr.txt" &
    CODEX_PID=$!
    "$TO" --kill-after=60 1500 \
-     claude -p "$(cat "$CLAUDE_PROMPT_FILE")" --model "$CLAUDE_MODEL" --effort high --output-format json \
+     env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW claude -p "$(cat "$CLAUDE_PROMPT_FILE")" --model "$CLAUDE_MODEL" --effort high --output-format json \
      --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
      --disallowedTools "Edit,Write,NotebookEdit" \
      </dev/null >"$REVIEW_DIR/pass-${PASS_ID}.claude.raw.json" 2>"$REVIEW_DIR/pass-${PASS_ID}.claude.stderr.txt" &

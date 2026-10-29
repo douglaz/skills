@@ -1349,9 +1349,16 @@ case $1 in
     ;;
   run-audit-tool)
     shift
+    _probe_drop=0
+    if [ "$1" = env ]; then
+      [ "$2" = -u ] && [ "$3" = CLAUDE_CODE_AUTO_COMPACT_WINDOW ] || exit 93
+      _probe_drop=1
+      shift 3
+    fi
     [ "$1" = timeout ] || exit 2
     case " $* " in
       *" /validated/claude "*)
+        [ "$_probe_drop" = 1 ] || exit 93
         _probe_args=" $* "
         for _probe_required in --no-session-persistence --safe-mode \
           --strict-mcp-config --mcp-config --tools --allowedTools; do
