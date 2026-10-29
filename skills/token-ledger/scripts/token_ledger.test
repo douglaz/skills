@@ -89,6 +89,20 @@ with tempfile.TemporaryDirectory() as t:
         rec('r2', '2026-10-20T10:06:00Z', 250_000, 150_000, 0)])
     jl(codex / '2026/10/20/rollout-rev.jsonl', [meta('cx-rev', rcwd), ctx,
         prompt('You are one of five independent Reviewers of an rloop Round'), rec('r3', '2026-10-20T10:20:00Z', 0, 0, 100_000)])
+    # an interactive Codex session in the repo during the Run: the assistant, never the Run's
+    jl(codex / '2026/10/20/rollout-tui.jsonl', [dict(type='session_meta', payload=dict(
+        id='cx-tui', cwd=rcwd, timestamp='2026-10-20T10:02:00Z', originator='codex_cli_rs', source='cli')), ctx,
+        prompt('look at dm-qrs for me'), rec('r5', '2026-10-20T10:07:00Z', 1_000, 0, 0)])
+    # the same records in two rollouts (a copied or resumed file), each with running totals too
+    tc = lambda ts, i: dict(type='event_msg', timestamp=ts, payload=dict(type='token_count', info=dict(
+        total_token_usage=dict(input_tokens=i, cached_input_tokens=0, output_tokens=0, total_tokens=i))))
+    for name in ('dup-a', 'dup-b'):
+        jl(codex / f'2026/10/20/rollout-{name}.jsonl', [meta('cx-dup', rcwd), ctx, prompt('/goal implement the task'),
+            rec('r6', '2026-10-20T10:08:00Z', 100, 0, 0), tc('2026-10-20T10:08:00Z', 100)])
+    # a legacy rollout (running totals only), also copied: two calls, counted once
+    for name in ('old-a', 'old-b'):
+        jl(codex / f'2026/10/20/rollout-{name}.jsonl', [meta('cx-old', rcwd), ctx, prompt('/goal implement the task'),
+            tc('2026-10-20T10:09:00Z', 100), tc('2026-10-20T10:10:00Z', 250)])
     jl(codex / '2026/10/20/rollout-other.jsonl', [meta('cx-x', '/home/u/p/other'), ctx, prompt('demo question — ação ✓'),
         rec('r4', '2026-10-20T11:00:00Z', 9, 0, 9)])
 
@@ -139,6 +153,15 @@ with tempfile.TemporaryDirectory() as t:
     rev = get(session='cx-rev')
     check('the codex Reviewer is attributed by the session id in the run .err',
           rev and rev[0]['role'] == 'rloop Reviewer' and rev[0]['attribution'] == 'session id in run .err')
+    tui = get(session='cx-tui')
+    check('an interactive Codex session is the assistant, with no Run and no bead',
+          len(tui) == 1 and tui[0]['role'] == 'assistant (codex)' and tui[0]['run'] == '' and tui[0]['bead'] == 'unattributed')
+    dup = get(session='cx-dup')
+    check('records duplicated across rollouts count once, with no legacy fallback',
+          len(dup) == 1 and dup[0]['input_uncached'] == '100')
+    old = get(session='cx-old')
+    check('a legacy rollout yields per-call growth, and its copy adds nothing',
+          sorted(r['input_uncached'] for r in old) == ['100', '150'])
     check('a codex session outside the project cwd is not counted', not get(session='cx-x'))
     maybe = list(csv.DictReader(open(out / 'codex_maybe.csv', encoding='utf-8')))
     check('but it is listed in codex_maybe.csv, its non-ASCII prompt intact',

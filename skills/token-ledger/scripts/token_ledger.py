@@ -270,7 +270,9 @@ def scan_codex(o):
                 continue
             cwd, sid = meta.get('cwd') or '', meta.get('id') or meta.get('session_id')
             ours = o.key in cwd.lower()
-            prompt, model, records, totals = None, '', [], []
+            prompt, model, records, totals, has_records = None, '', [], [], False
+            # codex exec (Run seats, panels, sol managers) says originator codex_exec; a subagent's source is a dict
+            interactive = meta.get('originator') not in (None, 'codex_exec') and not isinstance(meta.get('source'), dict)
             for line in fh:
                 if not ours:  # peek at the first real prompt only, to list possible strays
                     if '"user"' not in line:
@@ -295,6 +297,7 @@ def scan_codex(o):
                 elif ty == 'response_item' and prompt is None:
                     prompt = codex_user_text(p)
                 elif ty == 'token_usage_record':
+                    has_records = True  # even when every record is a duplicate, this is no legacy file
                     if p.get('response_id') in seen:
                         continue
                     seen.add(p.get('response_id'))
@@ -303,13 +306,16 @@ def scan_codex(o):
                     totals.append((ts, model, p['info'].get('total_token_usage') or {}))
         if not ours:
             continue
-        if not records:  # older rollouts: per-call usage = growth of the running total
+        if not has_records:  # older rollouts: per-call usage = growth of the running total
             prev = {}
             for ts, m, tot in totals:
                 if tot.get('total_tokens', 0) > prev.get('total_tokens', 0):
-                    records.append((ts, m, {k: tot.get(k, 0) - prev.get(k, 0) for k in tot}))
+                    if (sid, ts, tot.get('total_tokens')) not in seen:  # a copied legacy file counts once
+                        seen.add((sid, ts, tot.get('total_tokens')))
+                        records.append((ts, m, {k: tot.get(k, 0) - prev.get(k, 0) for k in tot}))
                     prev = tot
-        s = sessions.setdefault(sid, dict(cwd=cwd, start=meta.get('timestamp', ''), first=prompt or '', files=0))
+        s = sessions.setdefault(sid, dict(cwd=cwd, start=meta.get('timestamp', ''), first=prompt or '', files=0,
+                                          interactive=interactive))
         if meta.get('timestamp', '') < s['start'] or not s['first']:  # role comes from the earliest rollout
             s.update(start=meta.get('timestamp', ''), first=prompt or s['first'])
         s['files'] += 1
@@ -474,11 +480,12 @@ def build(o):
         s = sessions[sid]
         if sid in o.exclude_session:
             continue
-        role = prompt_role(s['first'], in_repo(s['cwd'])) or ('other (repo cwd)' if in_repo(s['cwd']) else 'panel reader')
+        role = 'assistant (codex)' if s['interactive'] else \
+            prompt_role(s['first'], in_repo(s['cwd'])) or ('other (repo cwd)' if in_repo(s['cwd']) else 'panel reader')
         if sid in by_mgr:
             role = 'rloop Manager'
         run, how = attribute(role, [sid], s['first'], '', ts)
-        bead = runs[run]['bead'] if run else bead_from(s['first'], s['cwd'])
+        bead = runs[run]['bead'] if run else '' if s['interactive'] else bead_from(s['first'], s['cwd'])
         how = how or ('id in prompt or dir name' if bead else '')
         # input_tokens includes the cached and cache-write parts (cache writes were 0 in every rollout seen so far)
         i, ca, cw = (u.get(k, 0) or 0 for k in ('input_tokens', 'cached_input_tokens', 'cache_write_input_tokens'))

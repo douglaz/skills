@@ -91,6 +91,7 @@ Roles come from each session's first prompt and its location:
 - A `manager-brief` prompt marks a delegate manager.
 - `claude -p` outside the repo is a panel reader.
 - Interactive sessions are the assistant, and their subagents are assistant subagents.
+- An interactive Codex session, whose `originator` is not `codex_exec`, is `assistant (codex)`.
 
 A call reaches a Run, and through the Run its bead, in one of these ways, strongest first:
 1. the Run's `session` file;
@@ -102,9 +103,9 @@ A call reaches a Run, and through the Run its bead, in one of these ways, strong
 When no Run matches, the bead comes from the first tracker id in the prompt or the dir name. Short
 forms like `panel-abc56-r1`, meaning `<prefix>-abc.56`, count too.
 
-Assistant main threads never take a bead this way, because one session spans many beads, and labelling
-it by its first prompt once put two weeks of assistant work on a single bead. Their spend stays
-unattributed.
+Assistant main threads, Claude or Codex, never take a bead this way. One session spans many beads, and
+labelling it by its first prompt once put two weeks of assistant work on a single bead. Assistant
+threads are never matched to a Run by time window either, so their spend stays unattributed.
 
 `by_attribution.csv` shows how much spend each method carried. A large time-window or unattributed
 share is a caveat worth stating.
@@ -139,6 +140,9 @@ call something expensive from token counts alone.
   `long_context.threshold` pay the long-context rate for the whole request.
 - **Older rollouts:** older Codex rollouts have no per-call records, so per-call usage is the growth of
   the running total.
+  - That fallback is only for files with no per-call records at all.
+  - A copied or resumed rollout whose records were all duplicates must not fall back, or it would add
+    its running totals a second time.
 - **rloop's "tokens used N":** this line is uncached input plus output only. It understates real volume
   by an order of magnitude or more. Don't report it as spend.
 - **Missing tools:** tools that leave no local token records, such as grok, are absent. Say so rather
