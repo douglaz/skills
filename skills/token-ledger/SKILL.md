@@ -91,7 +91,12 @@ Roles come from each session's first prompt and its location:
 - A `manager-brief` prompt marks a delegate manager.
 - `claude -p` outside the repo is a panel reader.
 - Interactive sessions are the assistant, and their subagents are assistant subagents.
-- An interactive Codex session, whose `originator` is not `codex_exec`, is `assistant (codex)`.
+- A Codex session is `assistant (codex)` when its `session_meta` carries an `originator` other than
+  `codex_exec` and its `source` is not a subagent spawn.
+  - Older rollouts with no `originator` can't be told apart, so they are classified by their prompt and
+    location like any other call.
+  - If one lands as `other (repo cwd)` and picks up Run spend it shouldn't have, say so, or pass
+    `--exclude-session` for it.
 
 A call reaches a Run, and through the Run its bead, in one of these ways, strongest first:
 1. the Run's `session` file;
