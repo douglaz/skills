@@ -175,5 +175,21 @@ with tempfile.TemporaryDirectory() as t:
     check('a missing Claude root still yields the Codex ledger',
           p2.returncode == 0 and codex_only and {r['provider'] for r in codex_only} == {'codex'})
 
+    # no tracker at all, and a Run brief naming a dotted file: the ledger still runs, the Run unattributed to a bead
+    run2 = t / 'home/u/p/solo/.rloop/runs/20261020T100000.000000000Z-7'
+    run2.mkdir(parents=True)
+    (run2 / 'task-1.md').write_text('# Fix config.toml loading\n', encoding='utf-8')
+    (run2 / 'session').write_text('solo-mgr\n', encoding='utf-8')
+    scwd = str(t / 'home/u/p/solo')
+    jl(t / 'claude3/-home-u-p-solo/solo-mgr.jsonl', [
+        user('You are the Manager of an rloop Run.', '2026-10-20T10:00:01Z', scwd),
+        asst('s1', '2026-10-20T10:00:02Z', scwd, 'claude-opus-5-5', small)])
+    p3 = subprocess.run([sys.executable, '-I', str(HERE / 'token_ledger.py'), '--project', 'solo', '--out', str(t / 'out3'),
+                         '--prices', str(prices), '--claude-root', str(t / 'claude3'), '--codex-root', str(t / 'none'),
+                         '--mixed-dir=-home-u'], capture_output=True, text=True, env=env)
+    solo = list(csv.DictReader(open(t / 'out3/ledger.csv', encoding='utf-8'))) if p3.returncode == 0 else []
+    check('without a tracker, a Run brief naming a dotted file does not abort the ledger',
+          p3.returncode == 0 and len(solo) == 1 and solo[0]['bead'].startswith('no tracker id: Fix config.toml'))
+
 print('all passed' if not fails else f'{fails} failed')
 sys.exit(1 if fails else 0)

@@ -386,7 +386,10 @@ def build(o):
 
     runs, seat_runs = load_runs(repos, find_bead)
     by_mgr = {r['mgr']: rid for rid, r in runs.items() if r['mgr']}
-    epics = {i.split('.')[0] for i in known if '.' in i} or {b.split('.')[0] for r in runs.values() for b in [r['bead']] if '.' in b}
+    # epic ids (prefix-code) whose children are numbered; without a tracker, only Run labels that are ids count,
+    # never a fallback label such as 'no tracker id: Fix config.toml loading'
+    epics = {i.split('.')[0] for i in (known or {r['bead'] for r in runs.values() if bead_re.fullmatch(r['bead'])})
+             if '.' in i and '-' in i.split('.')[0]}
     short_re = re.compile(r'(?<![a-z0-9])(' + '|'.join(re.escape(e.rsplit('-', 1)[1]) for e in sorted(epics)) + r')\.?(\d+)(?!\d)') \
         if epics else None
     epic_of = {e.rsplit('-', 1)[1]: e for e in epics}
