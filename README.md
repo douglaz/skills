@@ -286,6 +286,29 @@ while you keep only the decisions. `references/manager-brief-template.md` is the
 manager reads first. It keeps memory reads per activity, because a manager that read everything up
 front used about 110k tokens before starting work.
 
+### token-ledger
+
+Measures how many tokens a project consumed across Claude Code and Codex. It builds the figures from
+local transcripts (`~/.claude/projects`, `~/.codex/sessions`) and estimates the cost at API list
+prices. Every call lands in a per-call ledger, attributed to:
+- a provider and model;
+- a role: rloop Manager, Implementer, Reviewer seat, panel reader, delegate manager or assistant;
+- a day;
+- an rloop Run, and that Run's tracker bead.
+
+The report gives totals, the costliest beads with their Rounds, the trend by week, and the gaps. The
+gaps include tools that leave no token records, sessions shared across projects, and an outdated
+price table.
+
+```text
+/token-ledger provisiond
+python3 -I skills/token-ledger/scripts/token_ledger.py --project provisiond --since 2026-10-22
+```
+
+It reads files only, and on about 60k calls it took 22 seconds. Prices live in
+`scripts/prices.json`, with their date and sources; a model missing there is reported as unpriced,
+never guessed. Cache reads are usually over 90% of tokens but a much smaller share of the cost.
+
 ### galtland-architecture
 
 Applies or reviews a Rust async architecture: platform-split crates (a

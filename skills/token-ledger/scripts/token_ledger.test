@@ -1,0 +1,331 @@
+#!/usr/bin/env python3
+"""token_ledger.test: offline checks for token_ledger.py on a synthetic transcript tree.
+
+Builds fake ~/.claude/projects, ~/.codex/sessions and an rloop Run, then checks deduping, advisor rows,
+cache-write tiers, role and Run attribution, mixed-dir session selection, Codex long-context pricing and
+the unpriced-model path. Usage: ./skills/token-ledger/scripts/token_ledger.test (exits 0 if all pass)
+"""
+import csv
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+fails = 0
+
+
+def check(desc, ok):
+    global fails
+    print(('  ok   ' if ok else '  FAIL ') + desc)
+    fails += not ok
+
+
+def jl(path, records):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(''.join(json.dumps(r, ensure_ascii=False) + '\n' for r in records), encoding='utf-8')
+
+
+def user(text, ts, cwd, entry='sdk-cli'):
+    return dict(type='user', timestamp=ts, cwd=cwd, entrypoint=entry, message=dict(role='user', content=text))
+
+
+def asst(mid, ts, cwd, model, usage, entry='sdk-cli', tool=None, tool_id=None):
+    content = [dict(type='tool_use', name='Bash', input=dict(command=tool), **({'id': tool_id} if tool_id else {}))] if tool else []
+    return dict(type='assistant', timestamp=ts, cwd=cwd, entrypoint=entry,
+                message=dict(id=mid, model=model, usage=usage, content=content))
+
+
+with tempfile.TemporaryDirectory() as t:
+    t = Path(t)
+    # the Run repo is found from the sessions' cwds, and its tracker prefix (dm) differs from the project key
+    claude, codex, repo, out = t / 'claude', t / 'codex', t / 'home/u/p/demo-spec', t / 'out'
+    run_id = '20261020T100000.000000000Z-42'
+    run = repo / '.rloop/runs' / run_id
+    run.mkdir(parents=True)
+    (run / 'task-1.md').write_text('# dm-abc.7 - add the thing\n')
+    (repo / '.beads').mkdir()
+    (repo / '.beads/issues.jsonl').write_text(''.join(json.dumps(dict(id=i)) + '\n' for i in ('dm-abc', 'dm-abc.7', 'dm-qrs')))
+    (run / 'implementer-1.out').write_text('done\n')
+    (run / 'session').write_text('mgr-1\n')
+    (run / 'reviewer-1-sol.err').write_text('session id: cx-rev\n...\ntokens used\n1,500\n')
+    rcwd = str(repo)
+    u1 = dict(input_tokens=10, cache_creation_input_tokens=1_000_000, cache_read_input_tokens=0, output_tokens=0,
+              cache_creation=dict(ephemeral_5m_input_tokens=0, ephemeral_1h_input_tokens=1_000_000))
+    # rloop Manager on Claude: two records share one message id (the last wins), one advisor iteration
+    adv = dict(u1, iterations=[dict(type='advisor_message', model='claude-opus-5-5', input_tokens=1_000_000,
+                                    output_tokens=0, cache_read_input_tokens=0, cache_creation_input_tokens=0)])
+    jl(claude / '-home-u-p-demo-spec/mgr-1.jsonl', [
+        user(f'You are the Manager of an rloop Run. Record: .rloop/runs/{run_id}/', '2026-10-20T10:00:01Z', rcwd),
+        asst('m1', '2026-10-20T10:00:02Z', rcwd, 'claude-opus-5-5', dict(u1, output_tokens=5)),
+        asst('m1', '2026-10-20T10:00:03Z', rcwd, 'claude-opus-5-5', adv)])
+    # a panel reader outside the repo, bead named in its dir
+    pr = dict(input_tokens=0, cache_creation_input_tokens=0, cache_read_input_tokens=1_000_000, output_tokens=1_000_000)
+    jl(claude / '-var-tmp-demo-panel-abc7-fable/p1.jsonl', [
+        user('You are advising the owner on dm-zzz9 (not in the tracker)', '2026-10-21T09:00:00Z', '/var/tmp/demo-panel-abc7/fable'),
+        asst('p1', '2026-10-21T09:00:01Z', '/var/tmp/demo-panel-abc7/fable', 'claude-fable-5-1', pr)])
+    # mixed dir: one demo session (counted), one other-project session (left out)
+    small = dict(input_tokens=1_000_000, cache_creation_input_tokens=0, cache_read_input_tokens=0, output_tokens=0)
+    jl(claude / '-home-u/a1.jsonl', [
+        user('continue demo, then dm-qrs', '2026-10-22T08:00:00Z', '/home/u', 'cli'),
+        asst('a1', '2026-10-22T08:00:01Z', '/home/u', 'claude-opus-5-5', small, 'cli', 'cd /home/u/p/demo && ls'),
+        asst('a2', '2026-10-22T08:00:02Z', '/home/u', 'claude-mystery-9', small, 'cli', 'ls /var/tmp/demo-manager'),
+        asst('a3', '2026-10-22T08:00:03Z', '/home/u', 'claude-opus-5-5-7', small, 'cli'),
+        asst('a4', '2026-10-22T08:00:04Z', '/home/u', 'claude-opus-5-5-20261001', small, 'cli')])
+    # one demo tool call repeated in three records, two other-project calls: 1 of 3 distinct refs, so left out
+    jl(claude / '-home-u/c1.jsonl', [user('mixed work', '2026-10-22T09:00:00Z', '/home/u', 'cli')]
+       + [asst('c1', f'2026-10-22T09:00:0{k}Z', '/home/u', 'claude-opus-5-5', small, 'cli', 'ls /home/u/p/demo-spec', 'tu1')
+          for k in (1, 2, 3)]
+       + [asst(f'c{k}', f'2026-10-22T09:00:0{k}Z', '/home/u', 'claude-opus-5-5', small, 'cli', 'ls /home/u/p/other', f'tu{k}')
+          for k in (4, 5)])
+    jl(claude / '-home-u/b1.jsonl', [
+        user('work on other', '2026-10-22T08:00:00Z', '/home/u', 'cli'),
+        asst('b1', '2026-10-22T08:00:01Z', '/home/u', 'claude-opus-5-5', small, 'cli', 'cd /home/u/p/other')])
+    # a fork of the counted session repeats message a1 in a file whose session is not counted: a1 still counts once
+    jl(claude / '-home-u/z-fork.jsonl', [user('other things', '2026-10-22T08:00:00Z', '/home/u', 'cli'),
+        asst('a1', '2026-10-22T08:00:01Z', '/home/u', 'claude-opus-5-5', small, 'cli', 'cd /home/u/p/other', 'tz1')])
+    # one message over two iterations: 1h writes in the first, 5m writes in the second
+    tiers = dict(input_tokens=0, cache_creation_input_tokens=3377, cache_read_input_tokens=0, output_tokens=0,
+                 cache_creation=dict(ephemeral_5m_input_tokens=0, ephemeral_1h_input_tokens=1281), iterations=[
+                     dict(type='message', cache_creation=dict(ephemeral_5m_input_tokens=0, ephemeral_1h_input_tokens=1281)),
+                     dict(type='message', cache_creation=dict(ephemeral_5m_input_tokens=2096, ephemeral_1h_input_tokens=0))])
+    # a malformed and a naive timestamp: the first is left out, the second read as UTC
+    jl(claude / '-home-u-p-demo-spec/rev-2.jsonl', [
+        user('You are one of five independent Reviewers of an rloop Round', '2026-10-20T10:30:00Z', rcwd),
+        asst('t1', '2026-10-20T10:30:01Z', rcwd, 'claude-opus-5-5', tiers),
+        asst('t2', 'garbage', rcwd, 'claude-opus-5-5', small), asst('t3', '2026-10-20T10:31:00', rcwd, 'claude-opus-5-5', small)])
+    # one message in two project transcripts (a fork); with the first session excluded, the second owns it
+    for sess in ('e1', 'e2'):
+        jl(claude / f'-home-u-p-demo-spec/{sess}.jsonl', [
+            user('You are one of five independent Reviewers of an rloop Round', '2026-10-20T10:40:00Z', rcwd),
+            asst('em', '2026-10-20T10:40:01Z', rcwd, 'claude-opus-5-5', small)])
+    # an unmapped entrypoint in the repo during the Run window: no time-window Run, and reported
+    jl(claude / '-home-u-p-demo-spec/ide-1.jsonl', [
+        user('tidy the tests', '2026-10-20T10:20:00Z', rcwd, 'claude-ide'),
+        asst('ide1', '2026-10-20T10:20:01Z', rcwd, 'claude-opus-5-5', small, 'claude-ide')])
+    # an unmapped entrypoint whose prompt is a Reviewer's: the role, but still no Run by time window
+    jl(claude / '-home-u-p-demo-spec/ide-2.jsonl', [
+        user('You are one of five independent Reviewers of an rloop Round', '2026-10-20T10:21:00Z', rcwd, 'claude-ide'),
+        asst('ide2', '2026-10-20T10:21:01Z', rcwd, 'claude-opus-5-5', small, 'claude-ide')])
+    # a stamp with a -02:00 offset: 23:30 local on 10-20 is 01:30 UTC on 10-21
+    jl(claude / '-home-u-p-demo-spec/tz-1.jsonl', [
+        user('You are one of five independent Reviewers of an rloop Round', '2026-10-20T23:29:00-02:00', rcwd),
+        asst('tz1', '2026-10-20T23:30:00-02:00', rcwd, 'claude-opus-5-5', small)])
+    # Codex: the Implementer (attributed by time window) with one long-context call, and the sol Reviewer (by .err id)
+    meta = lambda sid, cwd: dict(type='session_meta', payload=dict(id=sid, cwd=cwd, timestamp='2026-10-20T10:01:00Z'))
+    prompt = lambda text: dict(type='response_item', payload=dict(type='message', role='user', content=[dict(type='input_text', text=text)]))
+    rec = lambda rid, ts, i, c, o: dict(type='token_usage_record', timestamp=ts, payload=dict(
+        response_id=rid, usage=dict(input_tokens=i, cached_input_tokens=c, output_tokens=o, reasoning_output_tokens=0)))
+    ctx = dict(type='turn_context', payload=dict(model='gpt-6.1-sol'))
+    jl(codex / '2026/10/20/rollout-impl.jsonl', [meta('cx-impl', rcwd), ctx, prompt('/goal implement the task in task-1.md'),
+        rec('r1', '2026-10-20T10:05:00Z', 1_000_000, 0, 0),
+        rec('r2', '2026-10-20T10:06:00Z', 250_000, 150_000, 0),
+        rec('r2', '2026-10-20T10:06:00Z', 250_000, 150_000, 0)])
+    jl(codex / '2026/10/20/rollout-rev.jsonl', [meta('cx-rev', rcwd), ctx,
+        prompt('You are one of five independent Reviewers of an rloop Round'), rec('r3', '2026-10-20T10:20:00Z', 0, 0, 100_000)])
+    # an interactive Codex session in the repo during the Run: the assistant, never the Run's
+    jl(codex / '2026/10/20/rollout-tui.jsonl', [dict(type='session_meta', payload=dict(
+        id='cx-tui', cwd=rcwd, timestamp='2026-10-20T10:02:00Z', originator='codex_cli_rs', source='cli')), ctx,
+        prompt('look at dm-qrs for me'), rec('r5', '2026-10-20T10:07:00Z', 1_000, 0, 0)])
+    # a subagent the interactive session spawned: an assistant subagent, never the Run's
+    jl(codex / '2026/10/20/rollout-tui-child.jsonl', [dict(type='session_meta', payload=dict(
+        id='cx-tui-child', cwd=rcwd, timestamp='2026-10-20T10:03:00Z', originator='codex_exec',
+        source=dict(subagent=dict(thread_spawn=dict(parent_thread_id='cx-tui', depth=1))))), ctx,
+        prompt('check the tests'), rec('r8', '2026-10-20T10:07:30Z', 1_000, 0, 0)])
+    # a subagent source that is not a thread spawn (seen in real rollouts): no crash, classified by its prompt
+    jl(codex / '2026/10/20/rollout-review-sub.jsonl', [dict(type='session_meta', payload=dict(
+        id='cx-revsub', cwd=rcwd, timestamp='2026-10-20T10:03:00Z', originator='codex_exec', source=dict(subagent='review'))),
+        ctx, prompt('/goal implement the task'), rec('r10', '2026-10-20T10:07:40Z', 10, 0, 0)])
+    tc = lambda ts, i: dict(type='event_msg', timestamp=ts, payload=dict(type='token_count', info=dict(
+        total_token_usage=dict(input_tokens=i, cached_input_tokens=0, output_tokens=0, total_tokens=i))))
+    # a child whose parent rollout is missing but whose own originator is interactive
+    jl(codex / '2026/10/20/rollout-orphan.jsonl', [dict(type='session_meta', payload=dict(
+        id='cx-orphan', cwd=rcwd, timestamp='2026-10-20T10:03:00Z', originator='codex-tui',
+        source=dict(subagent=dict(thread_spawn=dict(parent_thread_id='cx-gone'))))), ctx,
+        prompt('/goal implement the task'), rec('r11', '2026-10-20T10:07:50Z', 10, 0, 0)])
+    # a rollout with no id and no start stamp: no crash, and it re-roots nothing
+    jl(codex / '2026/10/20/rollout-noid.jsonl', [dict(type='session_meta', payload=dict(cwd=rcwd, timestamp=None,
+        originator='codex-tui')), ctx, prompt('hello'), rec('r12', '2026-10-20T10:07:55Z', 10, 0, 0)])
+    # two records without a response id both count
+    norid = lambda ts: dict(type='token_usage_record', timestamp=ts, payload=dict(usage=dict(input_tokens=7, output_tokens=0)))
+    jl(codex / '2026/10/20/rollout-norid.jsonl', [meta('cx-norid', rcwd), ctx, prompt('/goal implement the task'),
+        norid('2026-10-20T10:08:10Z'), norid('2026-10-20T10:08:20Z')])
+    # a legacy running total that restarts: 100, 200, then 50 and 150
+    jl(codex / '2026/10/20/rollout-reset.jsonl', [meta('cx-reset', rcwd), ctx, prompt('/goal implement the task'),
+        tc('2026-10-20T10:11:00Z', 100), tc('2026-10-20T10:12:00Z', 200), tc('2026-10-20T10:13:00Z', 50),
+        tc('2026-10-20T10:14:00Z', 150)])
+    # one response in two rollouts of different sessions; with the first excluded, the second owns it
+    for name, sid in (('sh-a', 'cx-sha'), ('sh-b', 'cx-shb')):
+        jl(codex / f'2026/10/20/rollout-{name}.jsonl', [meta(sid, rcwd), ctx, prompt('/goal implement the task'),
+            rec('rshare', '2026-10-20T10:08:30Z', 30, 0, 0)])
+    # the same records in two rollouts (a copied or resumed file), each with running totals too
+    for name in ('dup-a', 'dup-b'):
+        jl(codex / f'2026/10/20/rollout-{name}.jsonl', [meta('cx-dup', rcwd), ctx, prompt('/goal implement the task'),
+            rec('r6', '2026-10-20T10:08:00Z', 100, 0, 0), tc('2026-10-20T10:08:00Z', 100)])
+    # a legacy rollout (running totals only), also copied: two calls, counted once
+    for name in ('old-a', 'old-b'):
+        jl(codex / f'2026/10/20/rollout-{name}.jsonl', [meta('cx-old', rcwd), ctx, prompt('/goal implement the task'),
+            tc('2026-10-20T10:09:00Z', 100), tc('2026-10-20T10:10:00Z', 250)])
+    # a code repo beside the spec repo, with a Run that starts later and overlaps: each session keeps its own repo's Run
+    code, run_id2 = t / 'home/u/p/demo-code', '20261020T100200.000000000Z-43'
+    (code / '.rloop/runs' / run_id2).mkdir(parents=True)
+    (code / '.rloop/runs' / run_id2 / 'task-1.md').write_text('# dm-qrs - code side\n', encoding='utf-8')
+    jl(codex / '2026/10/20/rollout-code.jsonl', [meta('cx-code', str(code)), ctx, prompt('/goal implement the task'),
+        rec('r7', '2026-10-20T10:04:00Z', 100, 0, 0)])
+    jl(codex / '2026/10/20/rollout-other.jsonl', [meta('cx-x', '/home/u/p/other'), ctx, prompt('demo question — ação ✓'),
+        rec('r4', '2026-10-20T11:00:00Z', 9, 0, 9)])
+
+    # fixture rates, so a refresh of the shipped prices.json never reddens this test
+    prices = t / 'prices.json'
+    prices.write_text(json.dumps(dict(as_of='fixture', claude={
+        'claude-opus-5-5': dict(input=4, cache_read=0.2, cache_write_5m=5, cache_write_1h=8, output=20),
+        'claude-fable-5-1': dict(input=10, cache_read=0.25, cache_write_5m=12.5, cache_write_1h=20, output=50)},
+        codex={'gpt-6.1-sol': dict(input=2, cached_input=0.1, cache_write=2.5, output=10, long_context=dict(
+            threshold=272000, input=4, cached_input=0.2, cache_write=5, output=15))})))
+    # an ASCII locale with UTF-8 mode off, so any output written without an explicit encoding fails here
+    env = dict(os.environ, LC_ALL='C', LANG='C')
+    cmd = [sys.executable, '-I', '-X', 'utf8=0', str(HERE / 'token_ledger.py'), '--project', 'demo', '--out', str(out), '--prices', str(prices),
+           '--claude-root', str(claude), '--codex-root', str(codex), '--mixed-dir=-home-u']
+    p = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    check('script exits 0', p.returncode == 0)
+    if p.returncode:
+        print(p.stdout, p.stderr)
+        sys.exit(1)
+    rows = list(csv.DictReader(open(out / 'ledger.csv', encoding='utf-8')))
+    get = lambda **kw: [r for r in rows if all(r[k] == v for k, v in kw.items())]
+    mgr = get(session='mgr-1', model='claude-opus-5-5')
+    check('one row per Claude message id (last record wins)', len(mgr) == 1)
+    check('the 1h cache write is priced at 1h ($8 per M)', mgr and abs(float(mgr[0]['usd']) - 8.00004) < 1e-9)
+    check('the Manager row is attributed to its Run by the session file',
+          mgr and mgr[0]['run'] == run_id and mgr[0]['attribution'] == 'run session file' and mgr[0]['bead'] == 'dm-abc.7')
+    advr = get(session='mgr-1', model='claude-opus-5-5 [advisor]')
+    check('the advisor iteration is its own row ($4)', len(advr) == 1 and abs(float(advr[0]['usd']) - 4) < 1e-6)
+    pan = get(role='panel reader', provider='claude')
+    check('a claude -p call outside the repo is a panel reader, bead from the dir name\'s short form',
+          len(pan) == 1 and pan[0]['bead'] == 'dm-abc.7' and abs(float(pan[0]['usd']) - 50.25) < 1e-6)
+    check('the demo assistant session counts and the other project session does not',
+          {r['session'] for r in get(role='assistant')} == {'a1'})
+    check('an assistant session takes no bead from its first prompt',
+          {r['bead'] for r in get(role='assistant')} == {'unattributed'})
+    check('an unknown model is unpriced, not guessed', get(model='claude-mystery-9')[0]['usd'] == '')
+    check('a newer minor version is unpriced, not priced as its parent', get(model='claude-opus-5-5-7')[0]['usd'] == '')
+    check('a dated snapshot takes its model\'s rates ($4)', abs(float(get(model='claude-opus-5-5-20261001')[0]['usd']) - 4) < 1e-9)
+    impl = get(session='cx-impl')
+    check('codex calls dedupe by response id', len(impl) == 2)
+    check('the Implementer is attributed by time window', all(r['run'] == run_id and r['attribution'] == 'time window' for r in impl))
+    long = [r for r in impl if r['long_context'] == '1']
+    check('only the call over 272K input pays long-context rates ($4 per M)',
+          len(long) == 1 and abs(float(long[0]['usd']) - 4) < 1e-6)
+    short = [r for r in impl if r['long_context'] == '0']
+    check('cached input is split from uncached (100K at $2, 150K at $0.10)',
+          short and abs(float(short[0]['usd']) - 0.215) < 1e-9)
+    cx_code = get(session='cx-code')
+    check('a session in the code repo takes the code repo\'s overlapping Run, not the spec repo\'s',
+          len(cx_code) == 1 and cx_code[0]['run'] == run_id2 and cx_code[0]['bead'] == 'dm-qrs')
+    rev = get(session='cx-rev')
+    check('the codex Reviewer is attributed by the session id in the run .err',
+          rev and rev[0]['role'] == 'rloop Reviewer' and rev[0]['attribution'] == 'session id in run .err')
+    tui = get(session='cx-tui')
+    check('an interactive Codex session is the assistant, with no Run and no bead',
+          len(tui) == 1 and tui[0]['role'] == 'assistant (codex)' and tui[0]['run'] == '' and tui[0]['bead'] == 'unattributed')
+    child = get(session='cx-tui-child')
+    check('a subagent of an interactive Codex session is an assistant subagent, with no Run',
+          len(child) == 1 and child[0]['role'] == 'assistant subagent (codex)' and child[0]['run'] == '')
+    check('a string-valued subagent source is classified by its prompt',
+          [r['role'] for r in get(session='cx-revsub')] == ['rloop Implementer'])
+    check('a subagent of an interactive Codex session takes no bead from the parent\'s prompt',
+          child and child[0]['bead'] == 'unattributed')
+    orphan = get(session='cx-orphan')
+    check('a spawned child with a missing parent and an interactive originator is an assistant subagent',
+          len(orphan) == 1 and orphan[0]['role'] == 'assistant subagent (codex)' and orphan[0]['run'] == '')
+    check('a rollout with no id or start stamp is read, keyed by its file name',
+          [r['role'] for r in get(session='rollout-noid')] == ['assistant (codex)'])
+    check('records without a response id all count', len(get(session='cx-norid')) == 2)
+    check('a restarted running total keeps counting (100 + 100 + 50 + 100)',
+          sorted(int(r['input_uncached']) for r in get(session='cx-reset')) == [50, 100, 100, 100])
+    tier = get(session='rev-2', input_uncached='0')
+    check('cache-write tiers are summed over a message\'s iterations (1281 at 1h, 2096 at 5m)',
+          len(tier) == 1 and tier[0]['cache_write_5m'] == '2096' and tier[0]['cache_write_untiered'] == '0')
+    check('a malformed stamp is left out, a naive one read as UTC',
+          len(get(session='rev-2')) == 2 and 'malformed timestamp' in (out / 'report.md').read_text(encoding='utf-8'))
+    check('a message repeated in an uncounted fork still counts for the counted session',
+          len(get(session='a1', model='claude-opus-5-5')) == 1)
+    ide = get(session='ide-1')
+    check('an unmapped entrypoint is unclassified, gets no Run by time window, and is reported',
+          len(ide) == 1 and ide[0]['role'] == 'unclassified session' and ide[0]['run'] == ''
+          and "unmapped entrypoint 'claude-ide'" in (out / 'report.md').read_text(encoding='utf-8'))
+    ide2 = get(session='ide-2')
+    check('an unmapped entrypoint with a Reviewer prompt keeps the role but gets no time-window Run',
+          len(ide2) == 1 and ide2[0]['role'] == 'rloop Reviewer' and ide2[0]['run'] == '')
+    check('days are UTC days, whatever offset the stamp carries', [r['day'] for r in get(session='tz-1')] == ['2026-10-21'])
+    dup = get(session='cx-dup')
+    check('records duplicated across rollouts count once, with no legacy fallback',
+          len(dup) == 1 and dup[0]['input_uncached'] == '100')
+    old = get(session='cx-old')
+    check('a legacy rollout yields per-call growth, and its copy adds nothing',
+          sorted(r['input_uncached'] for r in old) == ['100', '150'])
+    check('a codex session outside the project cwd is not counted', not get(session='cx-x'))
+    maybe = list(csv.DictReader(open(out / 'codex_maybe.csv', encoding='utf-8')))
+    check('but it is listed in codex_maybe.csv, its non-ASCII prompt intact',
+          [m['session'] for m in maybe] == ['cx-x'] and '— ação ✓' in maybe[0]['first_prompt'])
+    rep = (out / 'report.md').read_text(encoding='utf-8')
+    check('report.md states the total and the unpriced model', 'Estimated API cost' in rep and 'unpriced claude claude-mystery-9' in rep)
+
+    p2 = subprocess.run(cmd[:cmd.index('--claude-root') + 1] + [str(t / 'no-such-root')] + cmd[cmd.index('--claude-root') + 2:]
+                        + ['--out', str(t / 'out2')], capture_output=True, text=True, env=env)
+    codex_only = list(csv.DictReader(open(t / 'out2/ledger.csv', encoding='utf-8'))) if p2.returncode == 0 else []
+    check('a missing Claude root still yields the Codex ledger',
+          p2.returncode == 0 and codex_only and {r['provider'] for r in codex_only} == {'codex'})
+
+    # --since: a mixed-dir parent last written before the window still decides its in-window subagent
+    old_parent = claude / '-home-u/p2.jsonl'
+    jl(old_parent, [user('demo work', '2026-10-01T08:00:00Z', '/home/u', 'cli'),
+                    asst('p2a', '2026-10-01T08:00:01Z', '/home/u', 'claude-opus-5-5', small, 'cli', 'ls /home/u/p/demo-spec', 'tp2')])
+    jl(claude / '-home-u/p2/subagents/agent-q.jsonl', [user('summarise', '2026-10-25T08:00:00Z', '/home/u', 'cli'),
+        asst('p2b', '2026-10-25T08:00:01Z', '/home/u', 'claude-opus-5-5', small, 'cli')])
+    os.utime(old_parent, (1759305600, 1759305600))  # 2025-10-01: the parent's file predates the window
+    p4 = subprocess.run(cmd + ['--since', '2026-10-20', '--out', str(t / 'out4')], capture_output=True, text=True, env=env)
+    since = list(csv.DictReader(open(t / 'out4/ledger.csv', encoding='utf-8'))) if p4.returncode == 0 else []
+    check('with --since, an in-window subagent of an older parent session still counts',
+          any(r['session'] == 'p2' and r['role'] == 'assistant subagent' for r in since)
+          and all(r['day'] >= '2026-10-20' for r in since))
+
+    p6 = subprocess.run(cmd + ['--exclude-session', 'e1', '--exclude-session', 'cx-sha', '--out', str(t / 'out6')],
+                        capture_output=True, text=True, env=env)
+    excl = list(csv.DictReader(open(t / 'out6/ledger.csv', encoding='utf-8'))) if p6.returncode == 0 else []
+    check('a message shared with an excluded session is owned by the other transcript',
+          [r['session'] for r in excl if r['session'] in ('e1', 'e2')] == ['e2'])
+    check('a Codex response shared with an excluded session is owned by the other rollout',
+          [r['session'] for r in excl if r['session'] in ('cx-sha', 'cx-shb')] == ['cx-shb'])
+
+    # no tracker at all, and a Run brief naming a dotted file: the ledger still runs, the Run unattributed to a bead
+    run2 = t / 'home/u/p/solo/.rloop/runs/20261020T100000.000000000Z-7'
+    run2.mkdir(parents=True)
+    (run2 / 'task-1.md').write_text('# Fix config.toml loading\n', encoding='utf-8')
+    (run2 / 'session').write_text('solo-mgr\n', encoding='utf-8')
+    scwd = str(t / 'home/u/p/solo')
+    jl(t / 'claude3/-home-u-p-solo/solo-mgr.jsonl', [
+        user('You are the Manager of an rloop Run.', '2026-10-20T10:00:01Z', scwd),
+        asst('s1', '2026-10-20T10:00:02Z', scwd, 'claude-opus-5-5', small)])
+    jl(t / 'claude3/-var-tmp-solo-manager/m1.jsonl', [user('read the brief', '2026-10-21T10:00:00Z', '/var/tmp/solo-manager'),
+        asst('s2', '2026-10-21T10:00:01Z', '/var/tmp/solo-manager', 'claude-opus-5-5', small)])
+    p3 = subprocess.run([sys.executable, '-I', str(HERE / 'token_ledger.py'), '--project', 'solo', '--out', str(t / 'out3'),
+                         '--prices', str(prices), '--claude-root', str(t / 'claude3'), '--codex-root', str(t / 'none'),
+                         '--mixed-dir=-home-u'], capture_output=True, text=True, env=env)
+    solo = list(csv.DictReader(open(t / 'out3/ledger.csv', encoding='utf-8'))) if p3.returncode == 0 else []
+    check('without a tracker, a Run brief naming a dotted file does not abort the ledger',
+          p3.returncode == 0 and [r['bead'] for r in solo if r['session'] == 'solo-mgr'][0].startswith('no tracker id: Fix config.toml'))
+    check('without a tracker, a path like /var/tmp/solo-manager is not read as a bead',
+          [r['bead'] for r in solo if r['session'] == 'm1'] == ['unattributed'])
+    jl(t / 'claude5/-home-u-p-my-proj/x1.jsonl', [user('You are the Manager of an rloop Run.', '2026-10-20T10:00:01Z', '/home/u/p/my_proj'),
+        asst('u1', '2026-10-20T10:00:02Z', '/home/u/p/my_proj', 'claude-opus-5-5', small)])
+    p5 = subprocess.run([sys.executable, '-I', str(HERE / 'token_ledger.py'), '--project', 'my_proj', '--out', str(t / 'out5'),
+                         '--prices', str(prices), '--claude-root', str(t / 'claude5'), '--codex-root', str(t / 'none'),
+                         '--mixed-dir=-home-u'], capture_output=True, text=True, env=env)
+    check('a project key with an underscore matches Claude\'s dash-encoded dir',
+          p5.returncode == 0 and len(list(csv.DictReader(open(t / 'out5/ledger.csv', encoding='utf-8')))) == 1)
+
+print('all passed' if not fails else f'{fails} failed')
+sys.exit(1 if fails else 0)
