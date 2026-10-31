@@ -32,7 +32,7 @@ them — it is copied everywhere, so bloat gets the whole thing ignored.
 
 ### multi-reviewer-loop
 
-Runs an iterative multi-reviewer review/fix/re-review loop on your current branch. Detects a review base, runs two reviewers in parallel — `codex review` (`gpt-6.1-sol` at `xhigh`) and a Claude reviewer at high effort — merges and dedupes their findings, treats findings as credible until disproven, fixes accepted items, validates the changed code, and repeats until both reviewers are clean on the current diff. A final consistency pass then reads the changed files — plus the untouched docs that describe them — as one artifact and asks whether they still agree — the class of defect a diff-scoped loop structurally cannot see, such as a summary table that no longer matches the behaviour it describes, or a rule in one file that forbids what another file requires. `CLEAN` requires both.
+Runs an iterative multi-reviewer review/fix/re-review loop on your current branch. Detects a review base, runs two reviewers in parallel — `codex review` (`gpt-6.1-sol` at `high`) and a Claude reviewer at high effort — merges and dedupes their findings, treats findings as credible until disproven, fixes accepted items, validates the changed code, and repeats until both reviewers are clean on the current diff. A final consistency pass then reads the changed files — plus the untouched docs that describe them — as one artifact and asks whether they still agree — the class of defect a diff-scoped loop structurally cannot see, such as a summary table that no longer matches the behaviour it describes, or a rule in one file that forbids what another file requires. `CLEAN` requires both.
 
 ```
 /multi-reviewer-loop              # up to 6 passes (default), both reviewers
@@ -191,7 +191,7 @@ Use the bead-polish-loop skill on the current bead graph.
 
 Provides the default final audit of a polished bead graph against the plan, with
 blocking findings first and exact bead-level fixes when obvious. It runs a
-read-only reviewer panel in parallel — Codex `gpt-6.1-sol` at `xhigh` plus a Claude
+read-only reviewer panel in parallel — Codex `gpt-6.1-sol` at `high` plus a Claude
 reviewer at high effort — then merges findings as `BOTH`, `CODEX`, `CLAUDE`, or
 `CONFLICT` and reconciles them against the plan and graph. One unavailable
 reviewer produces a clearly labeled degraded audit; with neither external
@@ -274,7 +274,7 @@ draining beads, the assistant asks at the start of every session whether to run 
 stays off unless the owner says yes. In the lane the manager also works the bot rounds, merges once
 `bot-gate` exits 0, and moves on to the next ready bead. There is no default manager: the assistant
 asks the owner unless this session or a memory rule already settles it. It is an Opus subagent or a
-sol manager, whose turns are codex `gpt-6.1-sol` turns at `xhigh`, each run as a
+sol manager, whose turns are codex `gpt-6.1-sol` turns at `high`, each run as a
 `systemd-run --user` unit that the assistant watches.
 
 ```text

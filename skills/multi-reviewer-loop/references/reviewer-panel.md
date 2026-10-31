@@ -342,7 +342,7 @@ RC_TIMEOUT=1500   # 25 min; a normal pass is 5-15
 
 "$TO" --kill-after=60 "$RC_TIMEOUT" \
   codex review --base "$DIFF_BASE" \
-  -c 'model="gpt-6.1-sol"' -c 'model_reasoning_effort="xhigh"' \
+  -c 'model="gpt-6.1-sol"' -c 'model_reasoning_effort="high"' \
   </dev/null >"$CODEX_OUT" 2>"$CODEX_ERR" &
 CODEX_PID=$!
 
@@ -533,7 +533,7 @@ Notes on the flags:
   are mutually exclusive at the CLI level — passing both exits immediately with
   `error: the argument '[PROMPT]' cannot be used with '--base <BRANCH>'`, before
   any review runs. Focus text goes into the Claude reviewer's prompt only (the
-  `if [ -n "${FOCUS:-}" ]` block above). For a *focused* codex pass you need `codex exec`
+  `if [ -n "${FOCUS:-}" ]` block above). For a *focused* codex pass you need `codex exec -c model_reasoning_effort=high`
   with your own prompt instead, which gives up `codex review`'s structured
   output — usually not worth it inside the loop.
 - `--model "$CLAUDE_MODEL"` carries whatever the ladder resolved — never a literal
@@ -892,7 +892,7 @@ untried. On a 124/137 or `is_error`, re-resolve once (advancing past the failed 
 per § Resolving) and rerun this pass before concluding it cannot be run.
 
 On a `--reviewers codex` pinned run, use
-`codex exec --sandbox read-only "$(cat ...)" </dev/null` with the same prompt instead
+`codex exec --sandbox read-only -c model_reasoning_effort=high "$(cat ...)" </dev/null` with the same prompt instead
 (the `</dev/null` for the same reason as the panel invocations above — a reviewer that
 decides to read stdin blocks until the timeout kills it, which looks like a slow review
 rather than a stuck one) —

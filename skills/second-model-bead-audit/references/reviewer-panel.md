@@ -702,7 +702,7 @@ if $RUN_CODEX; then
     --ignore-user-config \
     -c 'mcp_servers={}' \
     -m gpt-6.1-sol \
-    -c 'model_reasoning_effort="xhigh"' \
+    -c 'model_reasoning_effort="high"' \
     --output-last-message "$CODEX_OUT" \
     "$(<"$AUDIT_PROMPT_FILE")" \
     </dev/null >"$CODEX_TRACE" 2>"$CODEX_ERR" &

@@ -39,7 +39,7 @@ The default panel is two reviewers, run in parallel every pass:
 
 | Reviewer | Command | Notes |
 |---|---|---|
-| `codex` | `codex review --base "$DIFF_BASE" -c 'model="gpt-6.1-sol"' -c 'model_reasoning_effort="xhigh"'` | Diff-scoped, structured `[P*]` output |
+| `codex` | `codex review --base "$DIFF_BASE" -c 'model="gpt-6.1-sol"' -c 'model_reasoning_effort="high"'` | Diff-scoped, structured `[P*]` output |
 | `claude` | `env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW claude -p "<review prompt>" --model "$CLAUDE_MODEL" --effort high --output-format json` | Repo-aware, reads beyond the diff |
 
 **The Claude slot is a role, not a model.** `$CLAUDE_MODEL` is resolved once per run
@@ -67,13 +67,15 @@ nothing and never exiting.
   to a later ladder entry, the panel is still two independent reviewers and can
   reach plain `CLEAN`; report which model filled the slot. `DEGRADED` is for a slot
   left **empty** — every ladder candidate failed, or codex did.
-- Default to `gpt-6.1-sol` at `xhigh` for codex and the first reachable ladder entry
+- Default to `gpt-6.1-sol` at `high` for codex and the first reachable ladder entry
   at `--effort high` for Claude. If the user or repo pins different models, honor
   that — a pin replaces the ladder rather than prefixing it, so a pinned model that
   cannot be reached is a failure to report, not a licence to substitute. If
   `gpt-6.1-sol` is unavailable, retry once with the environment default model and
-  note the fallback. If a flag is not recognized, retry without it and note the
-  incompatibility; both CLIs change between versions.
+  note the fallback. Every codex call, including model overrides and fallbacks,
+  must explicitly set `model_reasoning_effort=high`; if unsupported, report the
+  reviewer unavailable. If another flag is not recognized, retry without it and
+  note the incompatibility; both CLIs change between versions.
 - Web search is enabled by default in current Codex CLI releases, so do not pass
   `--enable web_search_cached`.
 
@@ -470,7 +472,7 @@ For each pass `N` from `1` to `MAX_PASSES`:
    # calls then die instantly on `--kill-after` with nothing naming the dependency.
    [ -n "${TO:-}" ] || { echo "no validated GNU timeout — see references/reviewer-panel.md"; exit 1; }
    "$TO" --kill-after=60 1500 codex review --base "$DIFF_BASE" \
-     -c 'model="gpt-6.1-sol"' -c 'model_reasoning_effort="xhigh"' \
+     -c 'model="gpt-6.1-sol"' -c 'model_reasoning_effort="high"' \
      </dev/null >"$REVIEW_DIR/pass-${PASS_ID}.codex.txt" 2>"$REVIEW_DIR/pass-${PASS_ID}.codex.stderr.txt" &
    CODEX_PID=$!
    "$TO" --kill-after=60 1500 \
@@ -889,7 +891,7 @@ recommendation of CUT / SIMPLIFY / MARK-OPTIONAL.
 whole repo rather than just the diff, so it can see what already covers a case —
 which is exactly the judgment a cut decision needs. `codex review` takes no
 custom prompt alongside `--base` (they are mutually exclusive), so an inverted
-codex pass needs `codex exec` instead. The audit prompt is in
+codex pass needs `codex exec -c model_reasoning_effort=high` instead. The audit prompt is in
 [references/reviewer-panel.md](references/reviewer-panel.md).
 
 Then **reconcile, don't obey** — accepting every cut is the same credulity in
@@ -921,7 +923,7 @@ file per pass and never re-read the file that summarises it.
 
 **Who runs it:** a reviewer that accepts a custom prompt. The Claude slot by default
 — it opens files the diff does not show, which is what cross-file agreement needs. On
-a `--reviewers codex` pinned run use `codex exec --sandbox read-only` with the
+a `--reviewers codex` pinned run use `codex exec --sandbox read-only -c model_reasoning_effort=high` with the
 same prompt (it takes one; `codex review --base` does not — and the sandbox flag
 matters, since `codex exec` is a general coding agent that may try to *fix* a
 contradiction and mutate the tree during the final check). If no available

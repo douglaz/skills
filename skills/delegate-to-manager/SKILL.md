@@ -189,7 +189,7 @@ them for any agent.
 ## 7. A sol manager
 
 When the owner chooses a sol manager (section 1 step 3), it is codex `gpt-6.1-sol` at
-`model_reasoning_effort=xhigh`, run through the codex CLI, because the Agent tool only runs Claude
+`model_reasoning_effort=high`, run through the codex CLI, because the Agent tool only runs Claude
 models.
 
 **Every turn is a `systemd-run --user` unit.** A turn can take hours, and a Bash
@@ -207,7 +207,7 @@ systemd-run --user --unit=manager-$(basename $D) --collect --expand-environment=
   -p "StandardOutput=file:$D/out" -p "StandardError=file:$D/err" \
   -p "ExecStopPost=/bin/sh -c 'printenv SERVICE_RESULT EXIT_CODE EXIT_STATUS | xargs > $D/exit.tmp && mv $D/exit.tmp $D/exit'" \
   "$C" exec <resume> --json --dangerously-bypass-approvals-and-sandbox \
-  -m gpt-6.1-sol -c model_reasoning_effort=xhigh -o "$D/report" <thread_id> "$(cat "$D/prompt")"
+  -m gpt-6.1-sol -c model_reasoning_effort=high -o "$D/report" <thread_id> "$(cat "$D/prompt")"
 ```
 
 - **Spawn:** leave out `resume` and `<thread_id>`. The prompt is the one from section 1 step 3.
@@ -235,7 +235,7 @@ What differs from the subagent:
 - **No Skill, Agent or AskUserQuestion tools.** Codex uses a skill when the prompt or brief names
   it, from `~/.codex/skills`, where `install.sh` installs this repo's skills. For any other skill,
   including owner-only ones (section 5), give the path to its `SKILL.md`. Steps a skill runs as a
-  Claude subagent, such as panel readers, run as `env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW claude -p` or `codex exec` commands instead.
+  Claude subagent, such as panel readers, run as `env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW claude -p` or `codex exec -c model_reasoning_effort=high` commands instead.
 - **No sandbox and no deny list.** The bypass flag is required, because sandboxed codex cannot reach
   the nix daemon socket and cannot run gates (rloop-spec `AGT-10`). The brief's hard safety lines are
   its only fence. The brief's other rules hold as written: one question per turn, no owner-only
@@ -248,3 +248,8 @@ files under `~/.codex/sessions` record `gpt-6.1-sol` with `xhigh` effort. With t
 a start and a resume whose `$D/prompt` held backticks, `$(…)`, `$HOME`, quotes and `%n` echoed
 them back unchanged. The commands, streams and
 results are in [references/sol-manager-check.md](references/sol-manager-check.md).
+
+*Amended 2026-10-31: the owner requires exactly `model_reasoning_effort=high` for every
+codex manager turn. Running turns keep their current setting until they restart. The
+2026-10-25 check above records the earlier `xhigh` invocation; it is not a check of
+the amended command line.*
