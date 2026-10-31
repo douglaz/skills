@@ -115,7 +115,7 @@ companion_dependencies() {
     multi-reviewer-loop-delegating-edits)
       printf '%s\n' multi-reviewer-loop
       ;;
-    bead-polish-loop|plan-to-beads-transfer|second-model-bead-audit)
+    bead-polish-loop|plan-to-beads-transfer)
       printf '%s\n' beads-jsonl-path
       ;;
     pr-with-codex-bot-review)
