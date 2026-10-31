@@ -71,3 +71,11 @@ grep -o '"model":"[^"]*"\|"effort":"[^"]*"' ~/.codex/sessions/2026/10/25/rollout
 ```
 
 For both thread ids this printed only `"model":"gpt-6.1-sol"` and `"effort":"xhigh"` lines.
+
+## Amendment, 2026-10-31
+
+The owner now requires exactly `model_reasoning_effort=high` for every codex call.
+The commands and observations above are the 2026-10-25 record, kept as measured;
+for a new check, set `F` with `-c model_reasoning_effort=high` instead. Running
+turns keep their current setting until they restart. This amendment records the
+policy change, not a new live check.
