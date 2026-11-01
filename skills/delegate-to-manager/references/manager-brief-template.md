@@ -49,12 +49,8 @@ the owner named>. Take each ready bead within that scope:
 1. Branch from freshly pulled <base>.
 2. Implement it. With rloop, use one Run per bead, never `--auto`: rloop commits onto the checked-out
    branch and never branches, pushes or opens PRs.
-3. Before you push, check that the bead is closed in the committed JSONL. Run the resolver from the
-   exact skill `beads-jsonl-path` in its default clean mode. It succeeds only when the file's HEAD
-   and worktree bytes agree, so the record in the file it prints is the committed one. Don't use
-   `br show`: it reads the database every branch shares. If the record isn't closed, close and
-   flush it through that skill, commit the file with its Git runner, and check again. Otherwise the
-   same bead comes back after the merge.
+3. Resolve the JSONL with `beads-jsonl-path`; inspect `git show HEAD:<relative-path>` with `jq -se --arg id "$ID" '[.[] | select(.id == $id)] | length == 1 and .[0].status == "closed"'` to prove committed closure.
+   If needed, close/flush/review through that companion, commit only the JSONL (`git commit --only -m "<message>" -- <path>`), and recheck HEAD.
 4. Push, open the PR, and work the bot rounds with `pr-with-codex-bot-review`.
 5. Read `bot-gate`'s exit code:
    - 1: do what its warnings name, such as fixing or answering an unresolved thread, or a second

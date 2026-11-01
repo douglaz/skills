@@ -457,15 +457,16 @@ directories created by `--migrate-existing`.
 - `jq` on `PATH` to build `second-model-bead-audit` graph snapshots and unwrap
   Claude reviewer JSON in `multi-reviewer-loop`, `second-model-bead-audit`,
   and `pr-with-codex-bot-review`
-- SHA-256 tooling (`sha256sum` or `shasum`) for
-  `second-model-bead-audit` snapshot integrity
+- `git` on `PATH` for `beads-jsonl-path` and `second-model-bead-audit`;
+  their native JSONL commands also require `jq`
 - GNU `timeout` with `--kill-after` support (named `timeout`, or `gtimeout` from
   Homebrew coreutils) to bound each reviewer in `multi-reviewer-loop` — both CLIs can
   hang with no output and no exit, and a backgrounded one has nothing to reap it —
   and for `second-model-bead-audit` unconditionally
-- `br` (≥ 0.1.45) and `bv` on `PATH`, plus a repo that uses `.beads/`, for
+- `br` on `PATH` (tested with 0.7.4; `vcs-status --json` schema
+  `br.vcs-export-status.v2` required), plus a repo that uses `.beads/`, for
   `plan-to-beads-transfer`, `bead-polish-loop`, and `second-model-bead-audit`.
-  Older `br` corrupts its DB after branch resets
+- `bv` on `PATH` for `plan-to-beads-transfer` and `bead-polish-loop`
 - `gh` authenticated for `pr-with-codex-bot-review`
 - [gstack](https://github.com/garrytan/gstack) with its `browse` skill built
   (`gstack/browse/dist/browse` under one of the skills roots, or `BROWSE_BIN`)
