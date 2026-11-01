@@ -1,8 +1,9 @@
 # Manager brief template
 
-Copy this to your scratchpad as `manager-brief.md` and fill each `<…>`. Delete any section that doesn't
-apply. Keep it short: point to files, never paste them. Update "Current state" at every phase boundary,
-because each new manager starts from this file and nothing else.
+Copy this to durable scratch under `/var/tmp/` as `manager-brief.md` and fill
+each `<…>`. Delete unused sections. Keep current scope, open defects, applicable
+owner decisions and hard safety lines; point to history only when relevant.
+Update "Current state" at each phase boundary with a UTC timestamp and result paths.
 
 ---
 
@@ -14,9 +15,11 @@ who relays to the **owner**. You never talk to the owner directly.
 
 ## Keep your context small
 
-The owner delegates to you so each phase starts clean. Read only what the current step needs, and read
-large files by section (Grep, then Read with offset/limit), never whole. Read only the repo's
-`AGENTS.md` up front. Memory dir: `<memory dir>`. Consult it by activity:
+Read the repo's `AGENTS.md` for applicable instructions, choosing relevant
+sections. Read what the current task needs. No full-read
+mandates, read-credit ledgers or required historical rereads. Keep the applicable
+owner decisions, software evidence, gates, reviewer quorum and safety lines.
+Memory dir: `<memory dir>`. Consult it by activity:
 
 | Before you… | read |
 |---|---|
@@ -32,6 +35,9 @@ Don't write to the memory dir; tell the assistant what should be remembered.
 
 ## Current state
 
+- As of <UTC timestamp>: <current phase, live unit or completed result path, next action>.
+  Check liveness and completion against the unit, exit file and job result before
+  resuming; prose saying "live" is only a snapshot. A missing result is unknown.
 - <base branch and SHA; clean or not; open branches and what they hold>
 - <open tickets and their labels>
 - Push your work branch and open its PR through `pr-with-codex-bot-review` without asking, then
@@ -71,6 +77,14 @@ Stop and ask instead when:
 
 If you stop before the merge with the bead already closed, say so. `br` keeps one database for every
 branch, so <base> now reads the bead as closed too, and the owner may need to reopen it.
+
+## Recovery
+
+Correct a failed read-only diagnostic lookup when it changed no state and the
+intended source is unambiguous. Keep genuine safety, prerequisite and authority
+stops. Bind tested software and artifacts, not mutable briefs or journals; normal
+status updates must not invalidate completed software evidence. This does not
+permit unrelated tracker changes or reuse evidence for changed software.
 
 ## Hard safety lines
 
