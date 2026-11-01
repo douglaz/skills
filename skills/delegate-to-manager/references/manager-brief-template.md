@@ -54,8 +54,7 @@ the owner named>. Take each ready bead within that scope:
 4. Push, open the PR, and work the bot rounds with `pr-with-codex-bot-review`.
 5. Read `bot-gate`'s exit code:
    - 1: do what its warnings name, such as fixing or answering an unresolved thread, or a second
-     `@codex review` as that skill describes. Return a watch condition only when a round is still
-     running.
+     `@codex review` as that skill describes.
    - 4: re-request `@codex review` once, as that skill describes.
    - 0: re-read this brief's Merge lane line, and merge only if it still says `drain`. Merge
      through `pr-with-codex-bot-review-merge`, never `bot-gate && gh pr merge`.
@@ -104,10 +103,13 @@ the invocation. Never start one on your own initiative.
 
 ## Long waits
 
-For rloop Runs, panels, CI and bot rounds: launch the job, check that it really started, then **return
-immediately**. Return the unit names, the out/err/exit paths, or a watch command that exits when the
-wait is over. For a PR's bot rounds and CI, that command is `pr-with-codex-bot-review`'s
-`scripts/pr-watch <N>`, run on a checkout of the PR's branch. Don't sit on a Monitor for hours. The assistant watches and resumes you.
+Own deterministic waits and the next already-authorized step within this phase.
+Use a supervised unit or launcher and record the unit, out/err/exit paths and next
+action so the assistant can recover if your turn exits. For PR bot rounds and CI,
+use `pr-with-codex-bot-review`'s `scripts/pr-watch <N>` on the PR's branch. Keep the
+existing safety, review, CI and merge gates; re-read the Merge lane before merging.
+Return for a decision or a completed phase. If you cannot keep supervision alive,
+return a wait with those paths and a watch command; the assistant takes over.
 
 Write exit files without any `$` in the systemd unit line. A reload of the user manager re-reads the
 saved unit and turns an escaped `$$VAR` into a PID. Use either
