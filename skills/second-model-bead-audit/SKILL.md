@@ -129,7 +129,7 @@ much the second opinion is worth should not have to infer it.
 
 1. Launch verdict: `FAIL`, `CONDITIONAL PASS`, or `PASS`; `NONE` when panel
    health is `BLOCKED`. State whether the § 3b coherence pass was run and what it
-   found — a verdict on text nobody read end to end is worth less than it looks.
+   found.
 2. Audit quality: `FULL PANEL`, `DEGRADED`, `PINNED PANEL`, or `BLOCKED`.
 3. Panel roster, model settings, exit health, and independence labels.
 4. One merged report with blockers first and every finding tagged `BOTH`,
@@ -219,7 +219,7 @@ record it as out of scope rather than expanding the graph reflexively.
 Use [references/review-report-template.md](references/review-report-template.md)
 for the synthesis.
 
-### 3b. The coherence pass — read each bead end to end
+### 3b. The coherence pass
 
 Every panel round re-reads the beads, which sounds like it should catch anything. It
 does not catch the defect class that a *long* loop creates: an edit that is correct
@@ -231,11 +231,10 @@ bead already said.
 rounds. The second trigger is the important one — do not wait for a clean panel to
 check coherence, because incoherence is what keeps the panel from going clean.
 
-**How, and this is the whole point: read, do not grep.** Open each bead's full text
-and read it top to bottom, in order, as an implementer would. Targeted edits at cited
-line numbers are what introduced the drift; more targeted edits will not find it. If
-you catch yourself grepping for the phrase a reviewer quoted, you are repeating the
-mistake.
+Check coherence within each bead and across the audited set, including unchanged
+sections that could contradict a fix. Choose the reads and searches needed to
+check those relationships; no prescribed full-file read or proof of reading is
+required. Finding the reviewer's phrase alone does not establish coherence.
 
 Check, per bead and then across the set:
 
