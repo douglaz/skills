@@ -145,6 +145,17 @@ if it did.
 - Independently watch the manager's exit so its death cannot strand a child job.
   If it exits with an unfinished job, take over the job's watcher and resume from
   the recorded state. Watch the child directly when the manager returns a wait.
+- For a manager unit, have that same watcher wake after 30 minutes without new
+  output (`$D/out` mtime; count from launch if empty). Silence triggers inspection,
+  not a stall verdict: read `err` and the tail of `out`. Use the running command's
+  `item.started` event and any referenced launcher to find the child's unit, result
+  paths and deadline; inspect that state before classifying the silence.
+  If a bounded child wait explains it, keep watching the manager's exit and restart
+  the 30 minutes at the child's result or deadline. Otherwise re-check `out` mtime
+  just before stopping; if it changed, keep watching. If unchanged, stop the manager
+  turn and confirm it has exited before taking over unfinished jobs' watchers and
+  resuming from recorded state. Never start a replacement while the old manager can
+  still act.
 - Use one event-driven wait with a deadline for a terminal result or an action
   someone must take. Avoid periodic assistant turns solely to re-arm a monitor.
   If a watcher expires or dies, re-arm it or explicitly hand off supervision.
@@ -226,8 +237,9 @@ systemd-run --user --unit=manager-$(basename $D) --collect --expand-environment=
 - **Relay:** where section 2 says `SendMessage`, start a `resume` turn with the thread id and your
   message as the prompt.
 - **Clear:** a new spawn turn with the same brief and the next task.
-- **Watch:** the assistant watches `$D/exit` with a deadline and re-arms on expiry
-  (section 4). The manager supervises its phase's job waits within its own unit;
+- **Watch:** the assistant watches `$D/exit` and the silence trigger in section 4
+  with one watcher, and re-arms on expiry. The manager supervises its phase's job
+  waits within its own unit;
   the assistant takes over unfinished jobs if that unit exits. `success exited 0` means `$D/report` holds the turn's last
   message, which is the manager's question, report or wait. Anything else: read `err` and the tail of
   `out`, and tell the owner. A fresh start prints `Reading additional input from stdin...` on `err`;
