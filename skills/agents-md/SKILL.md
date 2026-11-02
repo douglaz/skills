@@ -50,9 +50,10 @@ much worse outcome than not running at all.
 
 ### 0. Resolve the target repo
 
-Default to the current repo. If the user named a path, `cd` there first and confirm it is
-a git repository — every step below reads and writes relative to the working directory, so
-running them against the wrong repo is the one mistake that cannot be undone by re-running.
+Locate this installed skill's directory and set `SKILL_DIR` to its absolute path
+before changing directories; its references are not relative to the target repo.
+Default to the current repo. If the user named a path, `cd` there first and confirm
+the repository root. Work at that root for the steps below.
 
 ```bash
 [ -n "$TARGET" ] && cd "$TARGET"
@@ -66,40 +67,27 @@ git rev-parse --show-toplevel || { echo "not a git repository"; exit 1; }
 grep -n '<!--' AGENTS.md 2>/dev/null        # which managed blocks exist
 ```
 
-If `AGENTS.md` exists, read it in full before writing. You need to know what the
-humans said so the block you add does not contradict it — and if it *does*
-contradict something, say so rather than silently adding a competing rule.
+Inspect the existing markers and the project guidance relevant to gates,
+verification, safety and ownership. Choose the sections needed to check for
+conflicts; no full-file reading or read ledger is required. Report an unresolved
+conflict rather than inserting a competing rule.
 
 Some repos put this content in `CLAUDE.md` instead, and a few have both. If both
 exist, put the block in `AGENTS.md` and leave `CLAUDE.md` alone: Codex reads only
 the former, and duplicating rules across two files is how they drift apart.
 
-### 2. Detect the gate
+### 2. Resolve the gate
 
-The block carries one project-specific line — the command that proves the repo is
-healthy — because "run the gate" is useless advice without naming it.
+Use the project's documented gate and CI configuration as the source. Check that
+the named script, recipe or package-manager command exists and covers the checks
+the project requires. Do not choose `just check`, `npm test`, a Cargo command or a
+Nix wrapper from the presence of a manifest alone. Preserve an existing gate only
+after checking it against the current project guidance.
 
-```bash
-GATE=""
-if   [ -x ./check.sh ];                   then GATE="./check.sh"
-elif [ -f justfile ] || [ -f Justfile ];  then GATE="just check"   # confirm the recipe exists
-elif [ -f Cargo.toml ];                   then GATE="cargo clippy --all-targets -- -D warnings && cargo test"
-elif [ -f package.json ];                 then GATE="npm test"     # confirm scripts.test is real
-elif [ -f go.mod ];                       then GATE="go test ./..."
-fi
-# Only wrap a gate that exists. `nix develop -c bash -c ''` runs nothing and exits 0
-# — a permanently green gate recorded in every future agent's instructions, which is
-# the exact failure this block warns about.
-if [ -n "$GATE" ] && [ -f flake.nix ] && command -v nix >/dev/null 2>&1; then
-  GATE="nix develop -c bash -c '$GATE'"
-fi
-```
-
-Verify the command actually exists before writing it in — a `justfile` without a
-`check` recipe, or npm's default `"no test specified" && exit 1` scaffold, would
-pin a permanently red gate into every future agent's instructions. If you cannot
-find a real gate, drop the line and say so; a missing gate line is honest, a
-wrong one is worse than nothing.
+Set `GATE` to the verified command, or to an empty string when none is known.
+Omit the gate line when empty and report the gap. Finding the command is not a
+claim that it has run or passed; do not run expensive project gates merely to
+edit this documentation unless the task requires it.
 
 ### 2a. `--check` stops here
 
@@ -111,36 +99,38 @@ worse than one that refuses to run.
 ### 3. Write or update the block
 
 The canonical text is in
-[references/discipline-block.md](references/discipline-block.md). Substitute
-`{{GATE}}` — but **not with `sed`**. In a `sed` replacement string `&` means "the
-whole match", so a gate containing `&&` (which most do) silently expands into two
-copies of the placeholder and the command is corrupted with no error. Use a
-substitution that treats the replacement as a literal:
+[references/discipline-block.md](references/discipline-block.md). Extract it from
+the installed skill directory and substitute literally. For example:
 
 ```bash
-# Take only the canonical text — everything before <!-- BLOCK-START --> is
-# commentary for the block's maintainer and must not land in a repo's AGENTS.md.
-GATE="$GATE" python3 -c '
-import os,sys
-t=sys.stdin.read().split("<!-- BLOCK-START -->",1)[1]
-sys.stdout.write(t.replace("{{GATE}}", os.environ["GATE"]))
-' < references/discipline-block.md > /tmp/block.md
-grep -F "$GATE" /tmp/block.md >/dev/null || { echo "substitution failed"; exit 1; }
-grep -q 'canonical text' /tmp/block.md && { echo "commentary leaked into block"; exit 1; }
+GATE="$GATE" python3 -B - "$SKILL_DIR/references/discipline-block.md" <<'PY' > /tmp/block.md
+import os, sys
+from pathlib import Path
+source = Path(sys.argv[1]).read_text()
+marker = "<!-- BLOCK-START -->"
+assert source.count(marker) == 1
+text = source.split(marker, 1)[1]
+gate = os.environ["GATE"]
+assert text.count("{{GATE}}") == 1
+if not gate:
+    text = text.replace("Gate for this repo: `{{GATE}}`\n", "")
+text = text.replace("{{GATE}}", gate)
+assert "{{GATE}}" not in text
+assert gate in text if gate else "Gate for this repo:" not in text
+sys.stdout.write(text)
+PY
 ```
-
-That `grep -F` is the point: it is the difference between substituting and
-*believing* you substituted. Then:
 
 - **No block yet** → append it at the end of `AGENTS.md`, or create the file with
   a `# AGENTS.md` heading if there is none.
 - **Block already present** → replace everything between the markers, inclusive
   of neither marker. Do not append a second copy.
 
-Use your harness's edit tool. If you script it instead, follow the block's own
-rule: assert the markers exist, then read the file back and confirm both markers
-still appear exactly once. This skill writes the rule about silent edit failures;
-introducing one while doing so would be its own kind of comedy.
+Before replacing a block, require exactly one opening marker and one closing
+marker, in that order. If only one exists, or either is duplicated, stop without
+writing and report the malformed region. Use your harness's edit tool or an
+asserted replacement. Confirm both markers occur once afterwards and the diff
+changes only the intended region.
 
 ### 4. Delegate the beads block
 

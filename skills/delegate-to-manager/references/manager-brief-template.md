@@ -1,8 +1,9 @@
 # Manager brief template
 
-Copy this to your scratchpad as `manager-brief.md` and fill each `<…>`. Delete any section that doesn't
-apply. Keep it short: point to files, never paste them. Update "Current state" at every phase boundary,
-because each new manager starts from this file and nothing else.
+Copy this to durable scratch under `/var/tmp/` as `manager-brief.md` and fill
+each `<…>`. Delete unused sections. Keep current scope, open defects, applicable
+owner decisions and hard safety lines; point to history only when relevant.
+Update "Current state" at each phase boundary with a UTC timestamp and result paths.
 
 ---
 
@@ -14,9 +15,11 @@ who relays to the **owner**. You never talk to the owner directly.
 
 ## Keep your context small
 
-The owner delegates to you so each phase starts clean. Read only what the current step needs, and read
-large files by section (Grep, then Read with offset/limit), never whole. Read only the repo's
-`AGENTS.md` up front. Memory dir: `<memory dir>`. Consult it by activity:
+Read the repo's `AGENTS.md` for applicable instructions, choosing relevant
+sections. Read what the current task needs. No full-read
+mandates, read-credit ledgers or required historical rereads. Keep the applicable
+owner decisions, software evidence, gates, reviewer quorum and safety lines.
+Memory dir: `<memory dir>`. Consult it by activity:
 
 | Before you… | read |
 |---|---|
@@ -32,6 +35,9 @@ Don't write to the memory dir; tell the assistant what should be remembered.
 
 ## Current state
 
+- As of <UTC timestamp>: <current phase, live unit or completed result path, next action>.
+  Check liveness and completion against the unit, exit file and job result before
+  resuming; prose saying "live" is only a snapshot. A missing result is unknown.
 - <base branch and SHA; clean or not; open branches and what they hold>
 - <open tickets and their labels>
 - Push your work branch and open its PR through `pr-with-codex-bot-review` without asking, then
@@ -54,8 +60,7 @@ the owner named>. Take each ready bead within that scope:
 4. Push, open the PR, and work the bot rounds with `pr-with-codex-bot-review`.
 5. Read `bot-gate`'s exit code:
    - 1: do what its warnings name, such as fixing or answering an unresolved thread, or a second
-     `@codex review` as that skill describes. Return a watch condition only when a round is still
-     running.
+     `@codex review` as that skill describes.
    - 4: re-request `@codex review` once, as that skill describes.
    - 0: re-read this brief's Merge lane line, and merge only if it still says `drain`. Merge
      through `pr-with-codex-bot-review-merge`, never `bot-gate && gh pr merge`.
@@ -72,6 +77,14 @@ Stop and ask instead when:
 
 If you stop before the merge with the bead already closed, say so. `br` keeps one database for every
 branch, so <base> now reads the bead as closed too, and the owner may need to reopen it.
+
+## Recovery
+
+Correct a failed read-only diagnostic lookup when it changed no state and the
+intended source is unambiguous. Keep genuine safety, prerequisite and authority
+stops. Bind tested software and artifacts, not mutable briefs or journals; normal
+status updates must not invalidate completed software evidence. This does not
+permit unrelated tracker changes or reuse evidence for changed software.
 
 ## Hard safety lines
 
@@ -104,10 +117,13 @@ the invocation. Never start one on your own initiative.
 
 ## Long waits
 
-For rloop Runs, panels, CI and bot rounds: launch the job, check that it really started, then **return
-immediately**. Return the unit names, the out/err/exit paths, or a watch command that exits when the
-wait is over. For a PR's bot rounds and CI, that command is `pr-with-codex-bot-review`'s
-`scripts/pr-watch <N>`, run on a checkout of the PR's branch. Don't sit on a Monitor for hours. The assistant watches and resumes you.
+Own deterministic waits and the next already-authorized step within this phase.
+Use a supervised unit or launcher and record the unit, out/err/exit paths and next
+action so the assistant can recover if your turn exits. For PR bot rounds and CI,
+use `pr-with-codex-bot-review`'s `scripts/pr-watch <N>` on the PR's branch. Keep the
+existing safety, review, CI and merge gates; re-read the Merge lane before merging.
+Return for a decision or a completed phase. If you cannot keep supervision alive,
+return a wait with those paths and a watch command; the assistant takes over.
 
 Write exit files without any `$` in the systemd unit line. A reload of the user manager re-reads the
 saved unit and turns an escaped `$$VAR` into a PID. Use either

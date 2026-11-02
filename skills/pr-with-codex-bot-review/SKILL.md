@@ -23,21 +23,8 @@ allowed-tools:
 Drive a PR through CI and the `chatgpt-codex-connector` review bot to a clean merge,
 without bouncing off the bot's quirks.
 
-> **If you are recalling this procedure rather than reading it now, stop and re-read the
-> on-disk `SKILL.md` first.** The merge decision moved out of prose and into
-> **`scripts/bot-gate`**. A copy of this skill loaded earlier in a session — or carried
-> through a context summarisation — may still describe the manual procedure it replaced:
-> `gh api .../reactions`, `gh api .../pulls/N/comments`, judge by hand. Following that
-> from memory is not "a slightly older doc". `bot-gate`'s own header records that this
-> logic *"was written three times as prose and was wrong three different ways"* — an
-> unenforcing version, an unsatisfiable version, and one that broke past 100 comments —
-> so remembered prose is one of three known-wrong gates. This has already cost a real
-> merge: a PR landed on a `+1` and a human-pasted approval while the only wrapper the API
-> held named the **parent** of the merged head. The gate would have blocked it; it was
-> never run.
->
-> The countermeasure is in § 8: a merge report must **quote `bot-gate`'s output**. An
-> agent that skipped the gate cannot produce that quote, which is the point.
+Use the on-disk `scripts/bot-gate` for merge admission and quote its output in
+the merge report. Reactions and remembered manual checks cannot replace it.
 
 ## When this applies
 
@@ -486,66 +473,16 @@ current PR.
 
 ### 5. Wait for the bot to finish a round
 
-Read the reaction as a **one-way** signal, and only in one direction: a fresh `eyes` means
-a round is running, so wait. Its **absence means nothing** — the bot may never react at
-all, and on this repo's PR #16 `+1` fired zero times across 19 rounds. Treating "no
-reaction" as "not picked up" and waiting or retriggering is how landing stalls forever,
-because the state you are waiting for may never arrive.
+Run `<skill-dir>/scripts/pr-watch <N>` on the PR's branch under the phase's
+supervisor. It collects bot and CI state, handles the supported review requests,
+and exits when someone must act. Use its documented exit code to decide the next
+step; do not add a competing reaction poll or duplicate `@codex review` requests.
+If the watcher fails or is unavailable, report that failure rather than replacing
+it with a timing or reaction heuristic.
 
-What actually advances the decision is the review wrapper naming the tip and `bot-gate`'s
-verdict (§ 7). Don't fall back to "wait some minutes and assume" either — but check the
-reaction to see whether to *hold*, not whether to *go*:
-
-```bash
-gh api repos/<owner>/<repo>/issues/<N>/reactions \
-  | jq -r '.[] | select(.user.login == "chatgpt-codex-connector[bot]") | "\(.content) at \(.created_at)"'
-```
-
-| Reaction | Meaning | Action |
-|---|---|---|
-| (empty) | **Unknown.** The bot may not have started, or may have finished a round and simply not reacted — measured, `+1` fired zero times in 19 rounds | Go to § 7. Do not wait and do not retrigger: the signal you would be waiting for may never arrive, and a retrigger just starts a duplicate round |
-| `eyes` | Bot is reviewing | Wait — this is the one row that means hold |
-| `+1` | Bot approves with no concerns — **of the tree it read**, which is not always the tip | Go to § 7; do not merge from here |
-
-Typical bot timing: 5-30 minutes from open. It does sometimes react on docs-only or tiny
-PRs — `+1` landed on PR #191's pure-docs change about 20 minutes after open. Do not read
-that as "wait longer and one will come": later measurement found `+1` firing **zero** times
-across 19 rounds on PR #16, so no waiting period reliably produces one. The #191
-observation is real; the rule once drawn from it — that silence only means impatience — is
-not, and it is why § 7 decides on the wrapper instead.
-
-To explicitly trigger or re-trigger (after a force-push, or if the bot appears
-stuck):
-
-```bash
-gh pr comment <N> --body "@codex review"
-```
-
-After a force-push, the bot's prior review names the old SHA (and its reaction names
-nothing at all). The
-bot often re-reviews automatically on a new push, but re-comment `@codex review` if
-you don't see a new reaction or review after ~10 min. Not right after the push: that
-request is "not provably answered" (§ 7), and the tip needs a second one.
-
-**Wait with `scripts/pr-watch <N>` (beside `bot-gate`, § 7), in the background on the PR's
-branch, not a hand-written loop.** It posts that wake-up request and § 7's anchoring
-second request itself, and exits as soon as someone has to act. Its header lists the
-exit codes.
-
-If reaction is `+1`, also check line comments — the bot can approve on the latest
-SHA while older line comments from a prior round are still attached and outdated.
-Look at each comment's `commit_id` to see whether it's against the current head:
-
-```bash
-gh api repos/<owner>/<repo>/pulls/<N>/comments \
-  | jq -r '.[] | "\(.commit_id[0:8]) \(.body | split("\n")[0])"'
-```
-
-**`+1` plus green CI is not the merge condition — § 7 is.** This section only tells you
-the bot is *finished*; § 7 decides whether it finished on the tree you are about to merge.
-Two things checked nowhere in this section can each make a `+1` misleading: the reaction
-carries no SHA, so after a force-push it may belong to the previous head, and CodeRabbit
-returns `SUCCESS` when it *skips* a review entirely. Read § 7 before merging, always.
+Address findings through § 6. Before merging, run `scripts/bot-gate` as § 7 requires
+and follow the merge companion in § 8. A watcher result, reaction or green CI does
+not authorize a merge or replace those checks.
 
 ### 6. Address findings, if any
 
@@ -1077,23 +1014,3 @@ the commit message anyway, so the PR title is mostly cosmetic.
 - **Don't let the local reviewer become an extra ratchet.** It hunts defects, so
   it will always find *something* to add. Apply the same over-specification test
   you'd apply to a bot finding: if skipping it breaks nothing real, skip it.
-
-## Reference: real PR examples from this session
-
-These are observations from real PRs, kept as history. Where a lesson here reads as
-advice about *reactions*, § 5 and § 7 supersede it: reactions were the doctrine when
-these were written, and measuring 19 rounds later showed `+1` firing zero times. The
-events are still accurate; the conclusions drawn from them at the time were not.
-
-| PR | What happened | Lesson |
-|---|---|---|
-| #186 | Small schema fix; bot reacted `+1` 4 min after merge (raced) | The merge beat the round. A reaction cannot tell you this — it carries no SHA; § 7's wrapper check is what would have caught it |
-| #187 | 9ni.8.5 reconciliation; bot left review wrapper, no findings, no reaction in window | Sometimes the bot doesn't react at all on substantial PRs; line comments are then the source of truth |
-| #189 | Issue #188 first attempt; bot left findings, addressed; final reaction `+1` | Standard happy-path flow |
-| #190 | 9ni.8.6 parsimonious-creation; CI failed on rebase clippy, fixed with amend, second pass green; bot `+1` | Rebase before squash to catch lint regressions |
-| #191 | README docs; bot reacted `+1` 13 min before I merged but I didn't check | I was looking at the wrong API. Cheap to read — but a `+1` is not the merge condition, and later measurement found it fires on almost no round at all |
-| #192 | force-complete amendment loss; bot found P2 about empty-amendment status text → fixed → `+1` | P2 still worth addressing |
-| #193 | Issue #188 reopen attempt; bot pass-2 found P1 about retry session; addressed → `+1` | Saw "addressing P1 introduces new P1" |
-| #194 | `contains` injection; bot's two rounds both flagged subschema issues, merged anyway, then OpenAI rejected the schema in production → reverted | Bot can't catch what local tests don't catch; reality bites |
-| #195 | Revert + replacement (codex-only enum narrowing), CI flake on rerun → green; bot `+1` | Distinguish flake from regression |
-| #196 | Drop `--output-schema` entirely (architectural fix); bot reacted `+1` 30 min after open; I almost waited another cycle for nothing | Do not wait on a cycle you cannot observe. Running § 7 answers it; waiting for a reaction that may never come is the stall this table used to recommend |

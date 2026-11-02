@@ -19,7 +19,7 @@ Three roles:
 | Role | Who | Does |
 |---|---|---|
 | **Owner** | the human | makes the decisions |
-| **Assistant** | you, the main session | keeps the brief, relays, filters, watches waits, decides boundaries, writes memory |
+| **Assistant** | you, the main session | keeps the brief, relays decisions, watches manager exits, decides boundaries, writes memory |
 | **Manager** | a fresh background subagent | all the repo work: reads, grills, triages, runs panels and rloop, edits, reviews, PRs |
 
 The point is context hygiene and less repetitive steering. Every phase starts in an empty manager
@@ -85,8 +85,10 @@ changed. You own memory writes; the manager only suggests them.
 **A new standing rule from the owner** (for example "always panel technical questions first"): send
 it to the live manager now, add it to the brief so the next manager inherits it, and save it to memory.
 
-**A wait** (rloop Run, panel, CI, bot round). The manager has launched the job and handed you a watch
-condition. You do the mechanical watching (section 4).
+**A wait.** The manager normally owns deterministic waits and already-authorized
+continuations within its phase. It returns a wait only when it cannot keep
+supervision alive, giving the job's unit, result paths and next action. You then
+own the fallback watcher (section 4). A required decision still ends the turn.
 
 Reply to the manager with `SendMessage`, using the agent ID from the spawn result. Keep the message
 short:
@@ -137,10 +139,16 @@ if it did.
 
 ## 4. Watching long jobs
 
-- **One event** ("tell me when the exit file appears"): use a Bash `run_in_background` until-loop with
-  its own deadline. Read any watch script the manager wrote before you run it.
-- **Progress** (rloop rounds): use a Monitor with a tight filter. Show new rounds, failures and the
-  exit, not every phase. Re-arm it on its 30-minute expiry.
+- The phase's manager or its supervised launcher owns job waits, bot-state
+  collection and the next authorized step. Keep all gate, review and merge checks;
+  waiting grants no new authority. Return once for a decision or the completed phase.
+- Independently watch the manager's exit so its death cannot strand a child job.
+  If it exits with an unfinished job, take over the job's watcher and resume from
+  the recorded state. Watch the child directly when the manager returns a wait.
+- Use one event-driven wait with a deadline for a terminal result or an action
+  someone must take. Avoid periodic assistant turns solely to re-arm a monitor.
+  If a watcher expires or dies, re-arm it or explicitly hand off supervision.
+  Read any supplied watch script before running it.
 - **Arm a wakeup past the usage-limit reset.** When a turn arrives with a "Usage limit reached" grace
   notice, arm one wakeup that outlives the reset before you end the turn. This cheap poll is the one
   exception to the notice's "don't start long work". Use a Bash `run_in_background` loop that polls
@@ -158,7 +166,7 @@ if it did.
   file. Trust `Result` only beside `LoadState=loaded`. A `--collect` unit is unloaded once it exits,
   and `show` then prints `LoadState=not-found`, `Result=success` and `ExecMainStatus=0`, even for a
   unit that failed. Then `out` and `err` are the only record.
-- When the wait ends, send the manager the result line and the next instruction.
+- When a fallback wait ends, send the manager the result and the next instruction.
 - The owner sees one short line per meaningful event. Report a round starting over, or an exit;
   don't narrate probes.
 
@@ -218,9 +226,9 @@ systemd-run --user --unit=manager-$(basename $D) --collect --expand-environment=
 - **Relay:** where section 2 says `SendMessage`, start a `resume` turn with the thread id and your
   message as the prompt.
 - **Clear:** a new spawn turn with the same brief and the next task.
-- **Watch:** every turn is a one-event wait (section 4). Use an until-loop on `$D/exit` with a
-  deadline, and re-arm it on expiry until the exit file appears; the unit has no deadline of its
-  own. `success exited 0` means `$D/report` holds the turn's last
+- **Watch:** the assistant watches `$D/exit` with a deadline and re-arms on expiry
+  (section 4). The manager supervises its phase's job waits within its own unit;
+  the assistant takes over unfinished jobs if that unit exits. `success exited 0` means `$D/report` holds the turn's last
   message, which is the manager's question, report or wait. Anything else: read `err` and the tail of
   `out`, and tell the owner. A fresh start prints `Reading additional input from stdin...` on `err`;
   that is normal, since a unit's stdin is already null. Stop a turn with
@@ -238,8 +246,8 @@ What differs from the subagent:
   Claude subagent, such as panel readers, run as `env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW claude -p` or `codex exec -c model_reasoning_effort=high` commands instead.
 - **No sandbox and no deny list.** The bypass flag is required, because sandboxed codex cannot reach
   the nix daemon socket and cannot run gates (rloop-spec `AGT-10`). The brief's hard safety lines are
-  its only fence. The brief's other rules hold as written: one question per turn, no owner-only
-  skill on its own initiative, launch long jobs and return.
+  its only fence. The brief's other rules hold as written: one question per turn,
+  no owner-only skill on its own initiative, and supervised waits within the authorized phase.
 
 Checked on codex-cli 0.164.0, 2026-10-25, with trivial prompts: a start and a resume turn, both run
 directly and as units like the one above, exited 0. Each resume reported the start's thread id and
