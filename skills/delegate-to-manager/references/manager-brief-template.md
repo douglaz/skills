@@ -1,6 +1,6 @@
 # Manager brief template
 
-Copy this to durable scratch under `/var/tmp/` as `manager-brief.md` and fill
+Copy this to a `mktemp -d /var/tmp/<project>-manager-XXXXXX` folder as `manager-brief.md` and fill
 each `<…>`. Delete unused sections. Keep current scope, open defects, applicable
 owner decisions and hard safety lines; point to history only when relevant.
 Update "Current state" at each phase boundary with a UTC timestamp and result paths.
@@ -88,10 +88,14 @@ permit unrelated tracker changes or reuse evidence for changed software.
 
 ## Hard safety lines
 
+- Follow and quote in every Run instruction: "Only delete what you created with `mktemp`; never
+  print the whole environment; give each unit run a fresh `mktemp -d` log folder, never clear a
+  reused one with a wildcard; delete the build output in your `mktemp` folders before the Run ends."
+- Gate in a `mktemp -d` clone, logs outside it; delete the whole clone once its verdict is recorded.
 - <production systems or accounts never to touch, by name>
 - <what must be redacted from anything committed to a public repo>
 - <where raw logs and secrets stay>
-- <how credentials are fetched, e.g. `bwp` into a 0600 file deleted afterwards>
+- <how credentials are fetched, e.g. `bwp` into a `mktemp` 0600 file deleted afterwards>
 
 ## Owner-only skills
 
@@ -113,7 +117,7 @@ the invocation. Never start one on your own initiative.
 - When something finishes, end your turn with a short report: what changed (files, commits, ticket
   states), what's next, and anything the owner must decide. Leave out mechanical detail unless it
   failed.
-- If a tool call is denied, report it. Don't work around it.
+- If a tool call is denied, report the whole command. Don't work around it.
 
 ## Long waits
 
@@ -124,6 +128,8 @@ use `pr-with-codex-bot-review`'s `scripts/pr-watch <N>` on the PR's branch. Keep
 existing safety, review, CI and merge gates; re-read the Merge lane before merging.
 Return for a decision or a completed phase. If you cannot keep supervision alive,
 return a wait with those paths and a watch command; the assistant takes over.
+As a subagent manager, run long jobs (`pr-watch` too) as units that write a result file, never
+behind a Monitor or background shell; if one is still running at turn end, return a wait naming it.
 
 Write exit files without any `$` in the systemd unit line. A reload of the user manager re-reads the
 saved unit and turns an escaped `$$VAR` into a PID. Use either
