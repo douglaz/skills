@@ -88,7 +88,7 @@ permit unrelated tracker changes or reuse evidence for changed software.
 
 ## Hard safety lines
 
-- Follow and quote in every Run instruction: "Only delete what you created with `mktemp`; never
+- Follow and quote in every Run instruction: "Only delete scratch you created with `mktemp`; never
   print the whole environment; give each unit run a fresh `mktemp -d` log folder, never clear a
   reused one with a wildcard; delete the build output in your `mktemp` folders before the Run ends."
 - Gate in a `mktemp -d` clone, logs outside it; delete the whole clone once its verdict is recorded.
