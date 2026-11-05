@@ -89,6 +89,8 @@ it to the live manager now, add it to the brief so the next manager inherits it,
 continuations within its phase. It returns a wait only when it cannot keep
 supervision alive, giving the job's unit, result paths and next action. You then
 own the fallback watcher (section 4). A required decision still ends the turn.
+A subagent manager uses no Monitor or background shell for job waits. It runs long jobs as units
+that write a result file and, if one is still running when its turn ends, returns a wait naming it.
 
 Reply to the manager with `SendMessage`, using the agent ID from the spawn result. Keep the message
 short:
@@ -124,6 +126,7 @@ delegate merging too. The lane is off unless the owner turned it on when this se
 (section 1). The owner's go-ahead is the human merge decision `pr-with-codex-bot-review` asks for.
 The manager takes each bead from base to merged PR, then ends its turn. It stops early on the
 conditions in the brief's "Drain lane" section. After each merge, you:
+- check scratch with `du` and free disk with `df`, and tell the owner if disk is low;
 - give the owner one line with the PR, the bead, and `bot-gate`'s verdict, tip and observation
   window, quoted as the manager reported them;
 - clear, and spawn a new manager on the next ready bead in the drain scope. That scope is what the
