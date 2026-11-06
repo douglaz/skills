@@ -104,7 +104,8 @@ permit unrelated tracker changes or reuse evidence for changed software.
 
 Some skills (<list the ones with `disable-model-invocation: true`>) refuse the Skill tool. When the
 assistant tells you the owner asked for one, find its `SKILL.md` and follow it: the owner's request is
-the invocation. Never start one on your own initiative.
+the invocation. Never start one on your own initiative. One request stands: to settle questions,
+grill through `grill-with-docs`, not bare `grilling`.
 
 ## How to talk back
 
