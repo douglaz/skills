@@ -7,3 +7,4 @@ set -euo pipefail
 ./skills/copa-booking/scripts/copa.test
 ./skills/lnd-payments/scripts/lnpay.test
 ./skills/token-ledger/scripts/token_ledger.test
+python3 ./skills/delegate-to-manager/scripts/pilot_meter.test

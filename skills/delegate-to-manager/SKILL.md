@@ -27,6 +27,11 @@ context, so it reasons sharply. Your own context stays thin because file dumps, 
 skill bodies land in the manager's window, not yours. If you catch yourself reading spec files or
 running gates in the repo, stop and hand the work to the manager instead.
 
+**Optional pilot:** only a brief with the exact line `Manager context pilot: lean-native-r2`
+and its owner-approved repository scope activates [the native pilot](references/lean-native-pilot.md).
+Read that reference before starting a new pilot manager. It does not change other projects or
+already-running managers; without that explicit opt-in, follow the ordinary workflow below.
+
 ## 1. Set up
 
 1. **Orient lightly.** Find the repo, its tracker, its `AGENTS.md`, and the owner's memory entries

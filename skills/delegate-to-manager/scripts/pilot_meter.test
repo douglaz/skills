@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+"""Synthetic accounting fixtures; no real home directories or network access."""
+import importlib.util
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+
+sys.dont_write_bytecode = True
+SCRIPT = Path(__file__).with_name("pilot_meter.py")
+spec = importlib.util.spec_from_file_location("pilot_meter", SCRIPT)
+meter = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(meter)
+PRICES = {"claude": {"sample": dict(input=4, cache_read=.2, cache_write_5m=5, cache_write_1h=8, output=20)},
+          "codex": {"sample": dict(input=2, cached_input=.1, output=10,
+                    long_context=dict(threshold=100, input=4, cached_input=.2, output=15))}}
+START, END = "2026-01-01T00:00:00Z", "2026-01-01T00:01:00Z"
+
+
+class MeterTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+
+    def write(self, name, rows):
+        path = self.root / name
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        return str(path)
+
+    def message(self, ident="one", ts="2026-01-01T00:00:10Z", output=10):
+        return dict(type="assistant", timestamp=ts, message=dict(id=ident, model="sample",
+                    content=[dict(type="text", text="DO_NOT_EMIT_MESSAGE_TEXT")], usage=dict(
+                    input_tokens=2, cache_creation_input_tokens=20, cache_read_input_tokens=30,
+                    output_tokens=output, cache_creation=dict(ephemeral_5m_input_tokens=10,
+                                                             ephemeral_1h_input_tokens=10))))
+
+    def scan(self, paths):
+        return meter.scan_sources([dict(path=p, role="manager") for p in paths],
+                                  meter.timestamp(START), meter.timestamp(END), PRICES)
+
+    def attempt(self):
+        path = self.write("manager.jsonl", [self.message()])
+        journal = self.write("reads.jsonl", [])
+        return dict(id="a1", phase_id="phase-one", phase_type="decision", status="accepted", since=START, until=END,
+                    sources=[dict(path=path, role="manager")], read_journal=journal, coverage_complete=True,
+                    manager_activity=[dict(since=START, until=END)])
+
+    def test_streaming_and_fork_deduplication_and_window(self):
+        rows = [self.message(output=1), self.message(output=10), self.message("outside", END),
+                dict(type="system", subtype="compact_boundary", uuid="compact", timestamp=START,
+                     compactMetadata=dict(preTokens=117000))]
+        result = self.scan([self.write("a.jsonl", rows), self.write("copy.jsonl", rows)])
+        self.assertEqual(result["usage"][0]["calls"], 1)
+        self.assertAlmostEqual(result["known_usd"], (2*4 + 10*5 + 10*8 + 30*.2 + 10*20)/1e6)
+        self.assertEqual(len(result["compactions"]), 1)
+        self.assertNotIn("DO_NOT_EMIT_MESSAGE_TEXT", json.dumps(result))
+
+    def test_codex_cumulative_identity_and_long_price(self):
+        usage = dict(input_tokens=120, cached_input_tokens=100, output_tokens=10)
+        row = dict(type="event_msg", timestamp=START, payload=dict(type="token_count",
+                   info=dict(last_token_usage=usage, total_token_usage=usage)))
+        path = self.write("codex.jsonl", [dict(type="session_meta", payload=dict(id="session")),
+                    dict(type="turn_context", payload=dict(model="sample")), row, row])
+        result = self.scan([path])
+        self.assertEqual(result["usage"][0]["calls"], 1)
+        self.assertAlmostEqual(result["known_usd"], (20*4 + 100*.2 + 10*15)/1e6)
+
+    def test_partial_overlaps_are_rereads_and_duplicate_events_are_not(self):
+        base = dict(ts=START, attempt="a1", role="manager", sha256="same")
+        events = [dict(base, id="a", start=0, bytes=10), dict(base, id="b", start=5, bytes=10),
+                  dict(base, id="b", start=5, bytes=10), dict(base, id="c", start=0, bytes=20),
+                  dict(base, id="d", sha256="new-version", start=0, bytes=10)]
+        path = self.write("reads.jsonl", events)
+        result = meter.source_reads(path, "a1", meter.timestamp(START), meter.timestamp(END))
+        self.assertEqual(result, dict(source_bytes=50, reread_bytes=20, events=4))
+
+    def test_missing_coverage_is_unknown_and_blocks(self):
+        a = self.attempt()
+        a.pop("read_journal")
+        a.pop("manager_activity")
+        result = meter.report(dict(pilot="lean-native-r2", repository="example/project", attempts=[a]), PRICES, END)
+        self.assertIsNone(result["attempts"][0]["reads"]["reread_bytes"])
+        self.assertEqual(result["attempts"][0]["active_basis"], "attempt_wall_upper_bound")
+        self.assertIn("a1:incomplete_metering", result["stop_reasons"])
+
+    def test_all_four_ceilings_and_quality_stop(self):
+        a = self.attempt()
+        manifest = dict(pilot="lean-native-r2", repository="example/project", attempts=[a])
+        original = dict(meter.LIMITS)
+        self.addCleanup(lambda: meter.LIMITS.update(original))
+        meter.LIMITS.update(accepted=1, attempts=1, usd=.0001, active_seconds=60)
+        a["quality"] = dict(material_regression=True)
+        result = meter.report(manifest, PRICES, END)
+        self.assertTrue(set(["accepted_ceiling", "attempts_ceiling", "usd_ceiling", "active_seconds_ceiling",
+                             "a1:material_quality_regression"]) <= set(result["stop_reasons"]))
+
+    def test_duplicate_assignment_and_unpriced_model(self):
+        a = self.attempt()
+        b = dict(a, id="a2")
+        with self.assertRaisesRegex(ValueError, "multiple attempts"):
+            meter.report(dict(pilot="lean-native-r2", repository="example/project", attempts=[a,b]), PRICES, END)
+        result = meter.report(dict(pilot="lean-native-r2", repository="example/project", attempts=[a]), {}, END)
+        self.assertEqual(result["attempts"][0]["unpriced"], ["claude:sample"])
+        self.assertEqual(result["next_attempt"], "STOP")
+
+    def test_running_attempt_and_overlap_prevent_replacement(self):
+        a = self.attempt()
+        a["status"] = "running"
+        a.pop("until")
+        a["manager_activity"] *= 2
+        result = meter.report(dict(pilot="lean-native-r2", repository="example/project", attempts=[a]), PRICES, END)
+        self.assertIn("a1:overlapping_manager_activity", result["stop_reasons"])
+        self.assertIn("a1:still_running", result["stop_reasons"])
+
+    def test_card_rejects_oversize_and_reversed_markers(self):
+        path = self.root / "answer.txt"
+        path.write_text("BEGIN CARD\n" + "word "*251 + "\nEND CARD")
+        result = subprocess.run([sys.executable, str(SCRIPT), "card", str(path)], capture_output=True)
+        self.assertEqual(result.returncode, 1)
+        path.write_text("END CARD\nBEGIN CARD")
+        result = subprocess.run([sys.executable, str(SCRIPT), "card", str(path)], capture_output=True)
+        self.assertEqual(result.returncode, 2)
+
+    def test_read_emits_exact_range_and_journals_it(self):
+        source = self.root / "source"
+        source.write_bytes(b"abcdefghij")
+        journal = self.root / "journal.jsonl"
+        result = subprocess.run([sys.executable, str(SCRIPT), "read", "--source", str(source),
+                    "--journal", str(journal), "--attempt", "a1", "--start", "2", "--bytes", "4"], capture_output=True)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, b"cdef")
+        event = json.loads(journal.read_text())
+        self.assertEqual((event["start"], event["bytes"]), (2,4))
+        self.assertNotIn("source", event)
+
+    def test_card_offsets_preserve_unicode_and_crlf(self):
+        path = self.root / "answer.txt"
+        body = "Préface\r\nBEGIN CARD\r\nVote: accepté\r\nEND CARD\r\nDetails".encode()
+        path.write_bytes(body)
+        result = subprocess.run([sys.executable, str(SCRIPT), "card", str(path)], capture_output=True)
+        self.assertEqual(result.returncode, 0)
+        metadata = json.loads(result.stdout)
+        self.assertEqual(body[metadata["start"]:metadata["start"]+metadata["bytes"]], "\r\nVote: accepté\r\n".encode())
+
+    def test_unpriced_search_fee_is_not_zero_complete_cost(self):
+        row = self.message()
+        row["message"]["usage"]["server_tool_use"] = dict(web_search_requests=1)
+        result = self.scan([self.write("web.jsonl", [row])])
+        self.assertIn("claude:sample:web_search_fee", result["unpriced"])
+
+    def test_zero_cost_error_placeholder_does_not_block_accounting(self):
+        placeholder = self.message("error")
+        placeholder["message"]["model"] = "<synthetic>"
+        placeholder["message"]["usage"] = dict(input_tokens=0, output_tokens=0)
+        result = self.scan([self.write("notice.jsonl", [self.message(), placeholder])])
+        self.assertEqual(result["unpriced"], [])
+        self.assertEqual(sum(row["calls"] for row in result["usage"]), 1)
+
+    def test_advisor_does_not_inherit_parent_fast_multiplier(self):
+        row = self.message()
+        row["message"]["usage"].update(speed="fast", iterations=[dict(
+            type="advisor_message", model="sample", input_tokens=100, output_tokens=10)])
+        prices = {"claude": {"sample": dict(PRICES["claude"]["sample"], fast_multiplier=2)}}
+        result = meter.scan_sources([dict(path=self.write("advisor.jsonl", [row]), role="manager")],
+                                    meter.timestamp(START), meter.timestamp(END), prices)
+        parent = (2*4 + 10*5 + 10*8 + 30*.2 + 10*20)/1e6
+        self.assertAlmostEqual(result["known_usd"], 2*parent + (100*4 + 10*20)/1e6)
+
+    def test_handoff_retains_phase_read_history_and_setup_is_separate(self):
+        a = self.attempt()
+        a["status"] = "stopped"
+        later = "2026-01-01T00:02:00Z"
+        b = dict(a, id="a2", status="accepted", since=END, until=later,
+                 sources=[dict(path=self.write("next.jsonl", [self.message("two", END)]), role="manager")],
+                 manager_activity=[dict(since=END, until=later)])
+        journal = self.write("shared.jsonl", [dict(id="first", ts=START, attempt="a1", role="manager",
+                         sha256="same", start=0, bytes=10), dict(id="second", ts=END, attempt="a2", role="manager",
+                         sha256="same", start=0, bytes=10)])
+        a["read_journal"] = b["read_journal"] = journal
+        result = meter.report(dict(pilot="lean-native-r2", repository="example/project", setup_usd=1000,
+                                   attempts=[b,a]), PRICES, later)
+        self.assertEqual(result["totals"]["reread_bytes"], 10)
+        self.assertEqual(result["totals"]["source_bytes"], 20)
+        self.assertNotIn("usd_ceiling", result["stop_reasons"])
+
+    def test_narrow_handoff_windows_exclude_other_calls_and_can_repeat_source(self):
+        path = self.write("mixed.jsonl", [self.message("first", "2026-01-01T00:00:05Z"),
+                  self.message("unrelated", "2026-01-01T00:00:30Z"),
+                  self.message("second", "2026-01-01T00:00:50Z")])
+        sources = [dict(path=path, role="handoff", since=START, until="2026-01-01T00:00:10Z"),
+                   dict(path=path, role="handoff", since="2026-01-01T00:00:45Z", until=END)]
+        result = meter.scan_sources(sources, meter.timestamp(START), meter.timestamp(END), PRICES)
+        self.assertEqual(result["usage"][0]["calls"], 2)
+        self.assertEqual({c["identity"][1] for c in result["calls"]}, {"first", "second"})
+
+    def test_report_cli_exit_distinguishes_admission_from_control_stop(self):
+        attempt = self.attempt()
+        manifest = self.root / "state.json"
+        prices = self.root / "prices.json"
+        prices.write_text(json.dumps(PRICES))
+        state = dict(pilot="lean-native-r2", repository="example/project", attempts=[attempt])
+        command = [sys.executable, str(SCRIPT), "--prices", str(prices), "report", str(manifest), "--at", END]
+        manifest.write_text(json.dumps(state))
+        result = subprocess.run(command, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        attempt["control_failures"] = ["missed_hold"]
+        manifest.write_text(json.dumps(state))
+        result = subprocess.run(command, capture_output=True)
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertIn("a1:missed_hold", json.loads(result.stdout)["stop_reasons"])
+
+    def test_orphan_or_out_of_window_read_cannot_disappear(self):
+        for attempt_id, stamp in [("a9", START), ("a1", "2026-01-01T00:01:30Z")]:
+            with self.subTest(attempt=attempt_id):
+                attempt = self.attempt()
+                self.write("reads.jsonl", [dict(id="read", ts=stamp, attempt=attempt_id, role="manager",
+                           sha256="source", start=0, bytes=5000)])
+                with self.assertRaises(ValueError):
+                    meter.report(dict(pilot="lean-native-r2", repository="example/project", attempts=[attempt]), PRICES, END)
+
+    def test_codex_reported_cache_writes_have_their_distinct_price(self):
+        usage = dict(input_tokens=120, cached_input_tokens=0, cache_write_input_tokens=120, output_tokens=0)
+        path = self.write("cache-write.jsonl", [dict(type="session_meta", payload=dict(id="session")),
+                     dict(type="turn_context", payload=dict(model="sample")),
+                     dict(type="event_msg", timestamp=START, payload=dict(type="token_count",
+                          info=dict(last_token_usage=usage, total_token_usage=usage)))])
+        prices = {"codex": {"sample": dict(input=2, cached_input=.1, output=10, cache_write=2.5,
+                            long_context=dict(threshold=100, input=4, cached_input=.2, cache_write=5, output=15))}}
+        result = meter.scan_sources([dict(path=path, role="reader")], meter.timestamp(START), meter.timestamp(END), prices)
+        self.assertAlmostEqual(result["known_usd"], 120*5/1e6)
+
+
+if __name__ == "__main__":
+    unittest.main()
