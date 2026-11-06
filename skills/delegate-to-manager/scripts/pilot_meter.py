@@ -47,16 +47,38 @@ def claude_counts(usage):
                 web_searches=(usage.get("server_tool_use") or {}).get("web_search_requests", 0))
 
 
+def codex_counts(usage):
+    cached, writes = usage.get("cached_input_tokens", 0), usage.get("cache_write_input_tokens", 0)
+    return dict(input_uncached=usage.get("input_tokens", 0)-cached-writes,
+                cache_read=cached, cache_write_untiered=writes, output=usage.get("output_tokens", 0))
+
+
 def scan_sources(sources, since, until, prices):
-    """Last streaming record wins; deduplicate copied messages across sources."""
+    """Keep finalized usage across streaming records and stale transcript copies."""
     calls, boundaries = {}, {}
+    modern_sessions = set()
+    modern_signatures = set()
 
     def remember(collection, key, value):
         previous = collection.get(key)
         if previous and previous["role"] != value["role"]:
             raise ValueError("one usage identity has conflicting role assignments")
-        value["bounds"] = (previous["bounds"] if previous else set()) | {value["bounds"]}
-        collection[key] = value
+        scopes = (previous["bounds"] if previous else set()) | {value["bounds"]}
+        chosen = value
+        if previous and "counts" in value:
+            if (previous["model"], previous["fast"]) != (value["model"], value["fast"]):
+                raise ValueError("conflicting model or speed for one usage identity")
+            fields = previous["counts"].keys() | value["counts"].keys()
+            old, new = previous["counts"], value["counts"]
+            if value.get("format") == "counter" and old != new:
+                raise ValueError("conflicting cumulative usage copies")
+            old_ge = all(old.get(k, 0) >= new.get(k, 0) for k in fields)
+            new_ge = all(new.get(k, 0) >= old.get(k, 0) for k in fields)
+            if not old_ge and not new_ge:
+                raise ValueError("incomparable usage copies; cannot identify finalized counts")
+            if old_ge and (not new_ge or timestamp(previous["ts"]) > timestamp(value["ts"])):
+                chosen = previous
+        collection[key] = dict(chosen, bounds=scopes)
 
     for source in sources:
         path, role = Path(source["path"]), source.get("role", "unattributed")
@@ -67,12 +89,13 @@ def scan_sources(sources, since, until, prices):
         if not path.is_file() or path.suffix != ".jsonl":
             raise ValueError(f"missing or non-JSONL transcript: {path}")
         model, session = "unknown", str(path.resolve())
+        has_records, counters, no_id = False, [], defaultdict(int)
         for entry in records(path):
             kind = entry.get("type")
             payload = entry.get("payload") or {}
             ts = entry.get("timestamp")
             if kind == "session_meta":
-                session = payload.get("id", session)
+                session = payload.get("id") or payload.get("session_id") or session
             elif kind == "turn_context":
                 model = payload.get("model", model)
             elif kind == "assistant":
@@ -89,30 +112,53 @@ def scan_sources(sources, since, until, prices):
                         if part.get("type") == "advisor_message":
                             remember(calls, base + (index,), dict(ts=ts, model=part.get("model", "unknown"),
                                 role=role, counts=claude_counts(part), fast=False, bounds=bounds))
+            elif kind == "token_usage_record":
+                has_records = True
+                modern_sessions.add(session)
+                usage = payload.get("usage")
+                if not usage:
+                    raise ValueError("Codex per-call record lacks usage")
+                response = payload.get("response_id")
+                if response is None:
+                    no_id[ts] += 1
+                    key = ("codex", session, "no-response", ts, no_id[ts])
+                else:
+                    key = ("codex", "response", response)
+                remember(calls, key, dict(ts=ts, model=model, role=role, fast=False, bounds=bounds,
+                         session=session, format="record", counts=codex_counts(usage)))
+                modern_signatures.add((session, timestamp(ts), model, tuple(sorted(codex_counts(usage).items()))))
             elif kind == "event_msg" and payload.get("type") == "token_count":
                 info = payload.get("info") or {}
-                usage = info.get("last_token_usage")
-                if usage:
-                    total = info.get("total_token_usage")
-                    if not total:
-                        raise ValueError("Codex token_count missing cumulative identity; cannot deduplicate")
-                    key = ("codex", session, json.dumps(total, sort_keys=True))
-                    remember(calls, key, dict(ts=ts, model=model, role=role, fast=False, bounds=bounds,
-                        counts=dict(input_uncached=usage.get("input_tokens", 0) - usage.get("cached_input_tokens", 0)
-                                    - usage.get("cache_write_input_tokens", 0),
-                                    cache_write_untiered=usage.get("cache_write_input_tokens", 0),
-                                    cache_read=usage.get("cached_input_tokens", 0), output=usage.get("output_tokens", 0))))
-                elif info.get("total_token_usage"):
-                    raise ValueError("legacy Codex usage lacks per-call counts; use the token ledger to recover it")
+                if info.get("total_token_usage"):
+                    counters.append((ts, model, info["total_token_usage"]))
+                elif info.get("last_token_usage"):
+                    raise ValueError("Codex counter record lacks cumulative usage")
             if kind == "system" and entry.get("subtype") == "compact_boundary":
                 key = ("claude", entry.get("uuid") or (str(path), ts))
                 metadata = entry.get("compactMetadata") or {}
                 remember(boundaries, key, dict(ts=ts, role=role, pre_tokens=metadata.get("preTokens"), bounds=bounds))
             elif kind == "event_msg" and payload.get("type") == "context_compacted":
                 remember(boundaries, ("codex", session, ts), dict(ts=ts, role=role, pre_tokens=None, bounds=bounds))
+        if not has_records:
+            previous, previous_total = {}, 0
+            for ts, counter_model, total in counters:
+                current_total = total.get("total_tokens", total.get("input_tokens", 0)+total.get("output_tokens", 0))
+                if current_total == previous_total:
+                    continue
+                base = previous if current_total > previous_total else {}
+                delta = {k:total.get(k, 0)-base.get(k, 0) for k in total}
+                key = ("codex", session, "counter", ts, json.dumps(total, sort_keys=True))
+                remember(calls, key, dict(ts=ts, model=counter_model, role=role, fast=False, bounds=bounds,
+                         session=session, format="counter", counts=codex_counts(delta)))
+                previous, previous_total = total, current_total
     totals = defaultdict(lambda: defaultdict(float))
     selected, unknown = [], set()
     for key, call in calls.items():
+        if call.get("format") == "counter" and call.get("session") in modern_sessions:
+            signature = (call["session"], timestamp(call["ts"]), call["model"], tuple(sorted(call["counts"].items())))
+            if signature in modern_signatures:
+                continue
+            raise ValueError("mixed record/counter copies lack corroborating per-call usage")
         if not call["ts"]:
             raise ValueError("usage record missing timestamp")
         if not any(a <= timestamp(call["ts"]) < b for a,b in call["bounds"]):

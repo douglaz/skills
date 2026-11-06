@@ -67,6 +67,9 @@ inconclusive pilot. Missing usage or an unpriced model is unknown, not zero.
 `scripts/pilot_meter.py` uses the sibling token-ledger price snapshot, or an
 explicit `--prices FILE`. Check its date/rates before quoting dollars. It reads
 transcript usage/compaction metadata, never message bodies, prompts or tool inputs.
+Per-call Codex usage records take precedence over cumulative fallback events;
+response IDs deduplicate copies. Finalized usage is preserved across stale copies,
+and conflicting copies without a clear finalized record fail closed.
 It does not infer that cache tokens are source rereads. Raw standalone scans cannot
 recover rereads, phase acceptance, quality or active turn time; those stay unknown.
 They show the fixed ceilings but no pilot admission; use `report` with the attempt

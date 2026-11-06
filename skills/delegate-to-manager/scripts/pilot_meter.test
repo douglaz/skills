@@ -232,6 +232,73 @@ class MeterTest(unittest.TestCase):
         result = meter.scan_sources([dict(path=path, role="reader")], meter.timestamp(START), meter.timestamp(END), prices)
         self.assertAlmostEqual(result["known_usd"], 120*5/1e6)
 
+    def test_per_call_codex_records_cannot_escape_the_budget(self):
+        attempt = self.attempt()
+        path = self.write("reader.jsonl", [dict(type="session_meta", payload=dict(id="reader")),
+                   dict(type="turn_context", payload=dict(model="sample")),
+                   dict(type="token_usage_record", timestamp=START, payload=dict(response_id="response",
+                        usage=dict(input_tokens=0, output_tokens=11_000_000)))])
+        attempt["sources"].append(dict(path=path, role="reader"))
+        result = meter.report(dict(pilot="lean-native-r2", repository="example/project", attempts=[attempt]), PRICES, END)
+        self.assertIn("usd_ceiling", result["stop_reasons"])
+        self.assertGreater(result["totals"]["usd"], 110)
+
+    def test_final_usage_is_not_overwritten_by_a_stale_copy(self):
+        full = self.write("full.jsonl", [self.message(output=1), self.message(output=100)])
+        stale = self.write("stale.jsonl", [self.message(output=1)])
+        for paths in [[full,stale], [stale,full]]:
+            self.assertEqual(self.scan(paths)["usage"][0]["output"], 100)
+
+    def test_response_ids_deduplicate_without_charging_fallback_copies(self):
+        header = [dict(type="session_meta", payload=dict(id="same-session")),
+                  dict(type="turn_context", payload=dict(model="sample"))]
+        usage = dict(input_tokens=100, cached_input_tokens=0, output_tokens=10)
+        explicit = dict(type="token_usage_record", timestamp=START,
+                        payload=dict(response_id="one-response", usage=usage))
+        fallback = dict(type="event_msg", timestamp=START, payload=dict(type="token_count",
+                        info=dict(total_token_usage=usage)))
+        full = self.write("records.jsonl", header+[explicit,explicit,fallback])
+        copied = self.write("record-copy.jsonl", header+[explicit,fallback])
+        old_copy = self.write("counter-copy.jsonl", header+[fallback])
+        for paths in [[old_copy,full,copied],[copied,full,old_copy]]:
+            result = self.scan(paths)
+            self.assertEqual(result["usage"][0]["calls"], 1)
+            self.assertAlmostEqual(result["known_usd"], (100*2+10*10)/1e6)
+
+    def test_distinct_records_without_response_ids_are_counted(self):
+        header = [dict(type="session_meta", payload=dict(id="same-session")),
+                  dict(type="turn_context", payload=dict(model="sample"))]
+        row = dict(type="token_usage_record", timestamp=START, payload=dict(usage=dict(input_tokens=7)))
+        result = self.scan([self.write("no-ids.jsonl", header+[row,row])])
+        self.assertEqual(result["usage"][0]["calls"], 2)
+        self.assertAlmostEqual(result["known_usd"], 14*2/1e6)
+
+    def test_legacy_counter_reset_does_not_drop_equal_totals_in_a_new_epoch(self):
+        rows = [dict(type="session_meta", payload=dict(id="legacy")),
+                dict(type="turn_context", payload=dict(model="sample"))]
+        for second,value in enumerate([100,200,100,200],1):
+            rows.append(dict(type="event_msg", timestamp=f"2026-01-01T00:00:0{second}Z",
+                        payload=dict(type="token_count", info=dict(total_token_usage=dict(input_tokens=value,total_tokens=value)))))
+        result = self.scan([self.write("reset.jsonl", rows)])
+        self.assertEqual(result["usage"][0]["calls"], 4)
+        self.assertEqual(result["usage"][0]["input_uncached"], 400)
+
+    def test_incomparable_usage_copies_fail_closed(self):
+        one,other = self.message(),self.message()
+        other["message"]["usage"].update(input_tokens=1,output_tokens=100)
+        with self.assertRaisesRegex(ValueError,"incomparable"):
+            self.scan([self.write("one.jsonl",[one]),self.write("other.jsonl",[other])])
+
+    def test_partial_modern_copy_cannot_hide_an_unmatched_legacy_bill(self):
+        header = [dict(type="session_meta", payload=dict(id="same-session")),
+                  dict(type="turn_context", payload=dict(model="sample"))]
+        modern = self.write("partial.jsonl", header+[dict(type="token_usage_record", timestamp=START,
+                       payload=dict(response_id="small", usage=dict(input_tokens=1)))])
+        legacy = self.write("legacy.jsonl", header+[dict(type="event_msg", timestamp=START,
+                       payload=dict(type="token_count", info=dict(total_token_usage=dict(input_tokens=0,output_tokens=11_000_000))))])
+        with self.assertRaisesRegex(ValueError,"mixed"):
+            self.scan([modern,legacy])
+
 
 if __name__ == "__main__":
     unittest.main()
