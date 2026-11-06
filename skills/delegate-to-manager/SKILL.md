@@ -99,7 +99,7 @@ short:
 - what to end its turn with;
 - what not to do, such as "don't merge" or "don't implement yet".
 
-## 3. Phase boundaries
+## 3. Phase boundaries and returns
 
 When a phase ends (triage done, Run done, review done, PR merged), decide continue or clear. If the
 owner uses the `ask-matt` skill, ask the manager to apply it. Have it read `ask-matt/SKILL.md` and its
@@ -107,12 +107,50 @@ owner uses the `ask-matt` skill, ask the manager to apply it. Have it read `ask-
 anything the next manager needs that isn't already on the bead or branch.
 
 - **Continue:** keep sending messages to the same agent.
-- **Clear:** update the brief's state section, then spawn a **new** Agent as in section 1 step 3,
-  with the same brief and the next task. A manager near ~150k tokens is due for a clear whatever the tree says.
+- **Clear:** follow "Clearing safely" below: the brief's state section first, then a **new** Agent as in
+  section 1 step 3, with the same brief and the next task.
 - **Compact:** have the old manager write a summary file to your scratchpad, then spawn a new one
   pointed at it.
-- When the answer is obvious (the context is full and the next phase is unrelated), skip the ask and
-  tell the owner you skipped it.
+- When the answer is obvious (the manager is over its context budget and the next phase is
+  unrelated), skip the ask and tell the owner you skipped it.
+
+**Context budget.** Every return (question, report or wait) is a continue-or-clear point, not only
+the end of a phase.
+- **Reading:** the notification that a manager's turn ended carries
+  `<usage><subagent_tokens>N</subagent_tokens>…`, and N is the manager's context at that return
+  ([references/context-budget-check.md](references/context-budget-check.md)). If a notification
+  lacks it, treat the reading as unavailable and say so. Don't estimate it from call or tool counts.
+  A sol manager (section 7) has no reading, so clear it at phase boundaries as before.
+- **Budget:** a subagent manager inherits your session's `CLAUDE_CODE_AUTO_COMPACT_WINDOW`. At 500000
+  or more, or unset, use a soft budget of 150k: the hard window is emergency headroom, not a target.
+  Auto-compaction fires about 33k below a configured window on 2.1.293 (150000 compacts near 117k),
+  so under a smaller window set the budget well below that trigger: about 90k for 150000.
+- **Over budget at a return:** clear by default, especially when the next step starts a new rloop Run,
+  panel sequence or PR bot cycle. Continue only when the next step is short and needs what the
+  manager holds, and say so in one line.
+- **What the budget can't do:** it acts only when a turn ends. Don't promise to stop a manager before
+  it compacts, don't add returns just to check its size, and never stop a turn or a job to clear. A
+  single long turn can grow past any budget.
+
+**Clearing safely.**
+1. The old manager's turn has ended and nothing can wake it: it has no background shell or Monitor
+   still running, because their completion resumes it. Each unit it
+   launched has finished or is named in its wait, with out/err/exit paths, and your watcher owns it.
+   While a unit that writes to the worktree (an rloop Run) is still running, the new manager may
+   watch it but must not edit that worktree. If ownership of a job is unclear, ask the manager
+   rather than clearing.
+2. Update the brief's "Current state" with:
+   - a UTC timestamp and the phase;
+   - the branch and base SHA, open tickets and decisions taken;
+   - live units with their result paths, plus test results and blockers;
+   - an open question with the owner's answer, and any questions the manager queued;
+   - the next authorized action.
+
+   Check a unit with systemd before writing "running", and take "done" from its exit file and
+   `out`/`err` (section 4). A unit gone with no exit file is "unknown"; a stale note proves nothing.
+3. Spawn one replacement with the same brief, the session's merge lane unchanged, and a short
+   continuation task: a new Agent as in section 1 step 3, never a fork, or for a sol manager the new
+   spawn turn in section 7.
 
 **Keep going in an authorised lane.** If the standing workflow already authorises the next step (for
 example, triage marked it ready-for-agent, so an rloop Run follows), start it, mention that you did,
@@ -239,7 +277,8 @@ systemd-run --user --unit=manager-$(basename $D) --collect --expand-environment=
   beside the brief.
 - **Relay:** where section 2 says `SendMessage`, start a `resume` turn with the thread id and your
   message as the prompt.
-- **Clear:** a new spawn turn with the same brief and the next task.
+- **Clear:** section 3's "Clearing safely" steps; its step 3 is one new spawn turn with the same
+  brief and the next task.
 - **Watch:** the assistant watches `$D/exit` and the silence trigger in section 4
   with one watcher, and re-arms on expiry. The manager supervises its phase's job
   waits within its own unit;
