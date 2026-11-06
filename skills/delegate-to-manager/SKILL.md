@@ -233,8 +233,9 @@ them for any agent.
   `find ~/.claude/plugins/cache ~/.claude/skills -path '*/<name>/SKILL.md'`) and follows it. The
   owner's request is the invocation. The brief says the manager never starts one on its own initiative.
 - Skills without the flag (`grilling`, `domain-modeling`, `code-review`, `tdd`, the PR skills) are
-  invoked normally with the Skill tool. `grill-with-docs` only wraps `grilling` and `domain-modeling`,
-  so a manager can grill without it.
+  invoked normally with the Skill tool. To settle questions, grill through `grill-with-docs`, not
+  bare `grilling`: the owner's standing rule is the invocation, and its `SKILL.md` calls `grilling`
+  and `domain-modeling`.
 
 ## 6. Don'ts
 
