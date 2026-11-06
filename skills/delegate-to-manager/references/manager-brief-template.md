@@ -3,7 +3,8 @@
 Copy this to a `mktemp -d /var/tmp/<project>-manager-XXXXXX` folder as `manager-brief.md` and fill
 each `<…>`. Delete unused sections. Keep current scope, open defects, applicable
 owner decisions and hard safety lines; point to history only when relevant.
-Update "Current state" at each phase boundary with a UTC timestamp and result paths.
+Update "Current state" at each phase boundary and before every clear, with the items SKILL.md
+section 3 "Clearing safely" lists.
 
 ---
 
@@ -40,6 +41,8 @@ Don't write to the memory dir; tell the assistant what should be remembered.
   resuming; prose saying "live" is only a snapshot. A missing result is unknown.
 - <base branch and SHA; clean or not; open branches and what they hold>
 - <open tickets and their labels>
+- <decisions taken this phase; test results; blockers; an open question with its answer, and any
+  queued questions>
 - Push your work branch and open its PR through `pr-with-codex-bot-review` without asking, then
   report the link. Never commit or push to <base> directly.
 - Merge lane: <owner | drain>. `owner`: never merge a PR, because merging is the owner's call.

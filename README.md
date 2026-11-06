@@ -269,7 +269,8 @@ subagent does the repo work: grilling, triage, panels, rloop Runs, edits, review
 assistant relays both ways and filters out mechanical noise. It answers a question itself only when a
 recorded decision already settles it, and says which one. Technical questions go to a reviewer panel
 before they reach the owner. The assistant watches long jobs and starts a clean manager at each phase
-boundary. The manager pushes and opens PRs without asking. On a greenfield or pre-production project
+boundary, and considers one at any return where the manager is over its context budget. The manager
+pushes and opens PRs without asking. On a greenfield or pre-production project
 draining beads, the assistant asks at the start of every session whether to run the drain lane; it
 stays off unless the owner says yes. In the lane the manager also works the bot rounds, merges once
 `bot-gate` exits 0, and moves on to the next ready bead. There is no default manager: the assistant
