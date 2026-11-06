@@ -53,6 +53,12 @@ def codex_counts(usage):
                 cache_read=cached, cache_write_untiered=writes, output=usage.get("output_tokens", 0))
 
 
+def price_value(value, positive=False):
+    if not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0 or (positive and value == 0):
+        raise ValueError("invalid price rate or modifier")
+    return value
+
+
 def scan_sources(sources, since, until, prices):
     """Keep finalized usage across streaming records and stale transcript copies."""
     calls, boundaries = {}, {}
@@ -61,9 +67,8 @@ def scan_sources(sources, since, until, prices):
 
     def remember(collection, key, value):
         previous = collection.get(key)
-        if previous and previous["role"] != value["role"]:
-            raise ValueError("one usage identity has conflicting role assignments")
         scopes = (previous["bounds"] if previous else set()) | {value["bounds"]}
+        owners = (previous["owners"] if previous else set()) | {(value["role"], *value["bounds"])}
         chosen = value
         if previous and "counts" in value:
             if (previous["model"], previous["fast"]) != (value["model"], value["fast"]):
@@ -78,7 +83,16 @@ def scan_sources(sources, since, until, prices):
                 raise ValueError("incomparable usage copies; cannot identify finalized counts")
             if old_ge and (not new_ge or timestamp(previous["ts"]) > timestamp(value["ts"])):
                 chosen = previous
-        collection[key] = dict(chosen, bounds=scopes)
+        collection[key] = dict(chosen, bounds=scopes, owners=owners)
+
+    def scoped_role(value):
+        if not value["ts"]:
+            raise ValueError("usage or compaction record missing timestamp")
+        stamp = timestamp(value["ts"])
+        roles = {role for role,a,b in value["owners"] if a <= stamp < b}
+        if len(roles) > 1:
+            raise ValueError("one in-window usage identity has conflicting role assignments")
+        return next(iter(roles)) if roles else None
 
     for source in sources:
         path, role = Path(source["path"]), source.get("role", "unattributed")
@@ -152,17 +166,19 @@ def scan_sources(sources, since, until, prices):
                          session=session, format="counter", counts=codex_counts(delta)))
                 previous, previous_total = total, current_total
     totals = defaultdict(lambda: defaultdict(float))
-    selected, unknown = [], set()
+    selected, unknown, late = [], set(), []
     for key, call in calls.items():
+        role = scoped_role(call)
+        if any(r in {"manager", "reader", "summary"} for r,a,b in call["owners"]) and timestamp(call["ts"]) >= until:
+            late.append(dict(provider=key[0], ts=call["ts"], identity=list(key)))
+        if role is None:
+            continue
+        call = dict(call, role=role)
         if call.get("format") == "counter" and call.get("session") in modern_sessions:
             signature = (call["session"], timestamp(call["ts"]), call["model"], tuple(sorted(call["counts"].items())))
             if signature in modern_signatures:
                 continue
             raise ValueError("mixed record/counter copies lack corroborating per-call usage")
-        if not call["ts"]:
-            raise ValueError("usage record missing timestamp")
-        if not any(a <= timestamp(call["ts"]) < b for a,b in call["bounds"]):
-            continue
         counts, provider = call["counts"], key[0]
         if any(not isinstance(n, (int, float)) or not math.isfinite(n) or n < 0 for n in counts.values()):
             raise ValueError("invalid token count")
@@ -188,16 +204,17 @@ def scan_sources(sources, since, until, prices):
                 if not value or field == "web_searches":
                     continue
                 rate = rates[names.get(field, field)]
-                if not math.isfinite(rate) or rate < 0:
-                    raise ValueError("invalid price rate")
-                cost += value * rate / 1e6
+                cost += value * price_value(rate) / 1e6
             if call["fast"]:
-                cost *= rates.get("fast_multiplier", 1)
+                if "fast_multiplier" not in rates:
+                    unknown.add(provider + ":" + model + ":fast_multiplier")
+                else:
+                    cost *= price_value(rates["fast_multiplier"], positive=True)
             if counts.get("web_searches"):
                 if "web_search_per_request" not in rates:
                     unknown.add(provider + ":" + model + ":web_search_fee")
                 else:
-                    cost += counts["web_searches"] * rates["web_search_per_request"]
+                    cost += counts["web_searches"] * price_value(rates["web_search_per_request"])
         else:
             unknown.add(provider + ":" + model)
         bucket = totals[(provider, call["role"], model)]
@@ -206,12 +223,14 @@ def scan_sources(sources, since, until, prices):
         bucket["calls"] += 1
         bucket["known_usd"] += cost or 0
         selected.append(dict(identity=list(key), ts=call["ts"], role=call["role"], input=context))
-    compact = [dict(provider=key[0], **{k:v for k,v in value.items() if k != "bounds"})
-               for key, value in boundaries.items()
-               if value["ts"] and any(a <= timestamp(value["ts"]) < b for a,b in value["bounds"])]
+    compact = []
+    for key,value in boundaries.items():
+        role = scoped_role(value)
+        if role:
+            compact.append(dict(provider=key[0], ts=value["ts"], role=role, pre_tokens=value["pre_tokens"]))
     return dict(usage=[dict(provider=k[0], role=k[1], model=k[2], **v) for k, v in sorted(totals.items())],
                 known_usd=sum(v["known_usd"] for v in totals.values()), unpriced=sorted(unknown),
-                compactions=compact, calls=selected)
+                compactions=compact, calls=selected, late_usage=late)
 
 
 def source_reads(path, attempt, since, until, seen=None):
@@ -262,15 +281,26 @@ def attempt_report(attempt, prices, snapshot, read_history=None):
             raise ValueError("manager activity must fit the attempt window")
         if index and a < spans[index - 1][1]:
             issues.append("overlapping_manager_activity")
-    active = sum((b - a).total_seconds() for a, b in spans) if spans else (end - start).total_seconds()
-    complete = (attempt.get("coverage_complete") is True and not result["unpriced"] and bool(result["calls"])
-                and bool(spans) and reads["source_bytes"] is not None)
     managers = [c for c in result["calls"] if c["role"] == "manager"]
+    receipt = Path(attempt["zero_usage_evidence"]) if attempt.get("zero_usage_evidence") else None
+    zero_failure = (attempt["status"] == "failed" and attempt.get("zero_usage_verified") is True
+                    and receipt is not None and receipt.is_file() and receipt.stat().st_size > 0 and not attempt["sources"]
+                    and not result["calls"] and not spans and reads["source_bytes"] == 0)
+    active = (0 if zero_failure else sum((b-a).total_seconds() for a,b in spans)
+              if spans else (end-start).total_seconds())
+    gaps = []
+    if any(not any(a <= timestamp(c["ts"]) <= b for a,b in spans) for c in managers):
+        gaps.append("manager_usage_outside_activity")
+    if attempt["status"] != "running" and result["late_usage"]:
+        gaps.append("usage_after_closed_attempt")
+    complete = (attempt.get("coverage_complete") is True and not result["unpriced"] and not gaps
+                and (zero_failure or (bool(managers) and bool(spans) and reads["source_bytes"] is not None)))
     latest = max(managers, key=lambda c: timestamp(c["ts"])) if managers else None
     return dict(id=attempt["id"], phase_id=attempt["phase_id"], phase_type=attempt["phase_type"], status=attempt["status"],
                 since=start.isoformat(), until=end.isoformat(), **result, reads=reads,
                 active_seconds=active, active_basis="recorded_turn_intervals" if spans else "attempt_wall_upper_bound",
                 coverage_complete=complete, control_failures=issues,
+                metering_gaps=gaps, zero_usage_failure=zero_failure,
                 latest_manager_input=latest["input"] if latest else None,
                 quality=attempt.get("quality", {}), metering_lag=attempt.get("metering_lag", "not reported"))
 
@@ -321,6 +351,9 @@ def report(manifest, prices, snapshot):
     return dict(snapshot=snapshot, repository=manifest["repository"], pilot=manifest["pilot"],
                 attempts=attempts, totals=totals, ceilings=LIMITS, stop_reasons=reasons,
                 next_attempt="STOP" if reasons else "WITHIN_RECORDED_LIMITS",
+                stop_current=(totals["usd"] >= LIMITS["usd"] or totals["active_seconds"] >= LIMITS["active_seconds"]
+                              or totals["accepted"] >= LIMITS["accepted"]
+                              or any(a["control_failures"] or not a["coverage_complete"] for a in attempts)),
                 cost_per_accepted_phase=totals["usd"] / totals["accepted"] if totals["accepted"] else None,
                 setup_usd=manifest.get("setup_usd"),
                 note="Sampled API-equivalent accounting; not a hard billing cap. Unknown coverage is not zero.")
@@ -350,20 +383,22 @@ def main():
     if args.command == "read":
         if args.start < 0 or args.bytes < 0:
             raise ValueError("negative source range")
-        digest = hashlib.sha256()
+        digest, selected, position = hashlib.sha256(), bytearray(), 0
         with args.source.open("rb") as stream:
             for chunk in iter(lambda: stream.read(1024 * 1024), b""):
                 digest.update(chunk)
-            stream.seek(args.start)
-            selected = stream.read(args.bytes)
-        sys.stdout.buffer.write(selected)
-        sys.stdout.buffer.flush()
+                lo, hi = max(0, args.start-position), min(len(chunk), args.start+args.bytes-position)
+                if lo < hi:
+                    selected.extend(chunk[lo:hi])
+                position += len(chunk)
         event = dict(id=str(uuid.uuid4()), ts=now(), attempt=args.attempt, role="manager",
                      sha256=digest.hexdigest(), start=args.start, bytes=len(selected))
         args.journal.parent.mkdir(parents=True, exist_ok=True)
         with args.journal.open("a") as stream:
             fcntl.flock(stream, fcntl.LOCK_EX)
             stream.write(json.dumps(event) + "\n")
+        sys.stdout.buffer.write(selected)
+        sys.stdout.buffer.flush()
         return 0
     if args.command == "card":
         body = args.source.read_bytes()
@@ -397,6 +432,8 @@ def main():
                 source["path"] = str(args.manifest.resolve().parent / source["path"])
             if attempt.get("read_journal"):
                 attempt["read_journal"] = str(args.manifest.resolve().parent / attempt["read_journal"])
+            if attempt.get("zero_usage_evidence"):
+                attempt["zero_usage_evidence"] = str(args.manifest.resolve().parent / attempt["zero_usage_evidence"])
         result = report(manifest, prices, args.at or now())
     print(json.dumps(result, indent=2))
     return 3 if args.command == "report" and result["next_attempt"] == "STOP" else 0

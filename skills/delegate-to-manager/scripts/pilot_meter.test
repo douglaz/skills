@@ -7,6 +7,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import io
+from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 SCRIPT = Path(__file__).with_name("pilot_meter.py")
@@ -85,6 +88,7 @@ class MeterTest(unittest.TestCase):
         self.assertIsNone(result["attempts"][0]["reads"]["reread_bytes"])
         self.assertEqual(result["attempts"][0]["active_basis"], "attempt_wall_upper_bound")
         self.assertIn("a1:incomplete_metering", result["stop_reasons"])
+        self.assertTrue(result["stop_current"])
 
     def test_all_four_ceilings_and_quality_stop(self):
         a = self.attempt()
@@ -298,6 +302,100 @@ class MeterTest(unittest.TestCase):
                        payload=dict(type="token_count", info=dict(total_token_usage=dict(input_tokens=0,output_tokens=11_000_000))))])
         with self.assertRaisesRegex(ValueError,"mixed"):
             self.scan([modern,legacy])
+
+    def test_shared_pre_window_context_does_not_create_a_role_conflict(self):
+        shared = self.message("shared", "2025-12-31T23:59:00Z")
+        sources = [dict(path=self.write("manager.jsonl", [shared,self.message("manager")]),role="manager"),
+                   dict(path=self.write("reader.jsonl", [shared,self.message("reader")]),role="reader")]
+        result = meter.scan_sources(sources,meter.timestamp(START),meter.timestamp(END),PRICES)
+        self.assertEqual(sum(r["calls"] for r in result["usage"]),2)
+
+    def test_manager_usage_is_required_for_complete_coverage(self):
+        attempt = self.attempt()
+        attempt["sources"][0]["role"] = "reader"
+        result = meter.report(dict(pilot="lean-native-r2",repository="example/project",attempts=[attempt]),PRICES,END)
+        self.assertFalse(result["attempts"][0]["coverage_complete"])
+
+    def test_usage_outside_manager_activity_blocks_admission(self):
+        attempt = self.attempt()
+        attempt["manager_activity"][0]["until"] = "2026-01-01T00:00:05Z"
+        result = meter.report(dict(pilot="lean-native-r2",repository="example/project",attempts=[attempt]),PRICES,END)
+        self.assertFalse(result["attempts"][0]["coverage_complete"])
+
+    def test_late_dedicated_usage_blocks_closed_attempt(self):
+        attempt = self.attempt()
+        self.write("manager.jsonl",[self.message(),self.message("late","2026-01-01T00:01:01Z")])
+        result = meter.report(dict(pilot="lean-native-r2",repository="example/project",attempts=[attempt]),PRICES,END)
+        self.assertFalse(result["attempts"][0]["coverage_complete"])
+
+    def test_attempt_ceiling_does_not_abort_an_admitted_attempt(self):
+        attempt = self.attempt()
+        attempt["status"] = "running"
+        original = dict(meter.LIMITS)
+        self.addCleanup(lambda:meter.LIMITS.update(original))
+        meter.LIMITS["attempts"] = 1
+        result = meter.report(dict(pilot="lean-native-r2",repository="example/project",attempts=[attempt]),PRICES,END)
+        self.assertIn("attempts_ceiling",result["stop_reasons"])
+        self.assertFalse(result.get("stop_current",True))
+
+    def test_fast_pricing_without_multiplier_is_unpriced(self):
+        row = self.message()
+        row["message"]["usage"]["speed"] = "fast"
+        result = self.scan([self.write("fast.jsonl",[row])])
+        self.assertIn("claude:sample:fast_multiplier",result["unpriced"])
+
+    def test_negative_or_nonfinite_price_modifiers_fail_closed(self):
+        for key,value in [("fast_multiplier",-1),("fast_multiplier",float("nan")),
+                          ("web_search_per_request",-1),("web_search_per_request",float("nan"))]:
+            with self.subTest(key=key,value=value):
+                row = self.message()
+                if key == "fast_multiplier":row["message"]["usage"]["speed"]="fast"
+                else:row["message"]["usage"]["server_tool_use"]={"web_search_requests":1}
+                prices={"claude":{"sample":dict(PRICES["claude"]["sample"],**{key:value})}}
+                with self.assertRaises(ValueError):
+                    meter.scan_sources([dict(path=self.write("modifier.jsonl",[row]),role="manager")],
+                                       meter.timestamp(START),meter.timestamp(END),prices)
+
+    def test_compaction_without_timestamp_is_not_silently_dropped(self):
+        path=self.write("compact.jsonl",[self.message(),dict(type="system",subtype="compact_boundary",uuid="c")])
+        with self.assertRaises(ValueError):self.scan([path])
+
+    def test_verified_failure_before_launch_counts_without_inventing_usage(self):
+        attempt=self.attempt()
+        receipt=self.root/"receipt.json"
+        receipt.write_text('{"failed_before_provider_call":true}')
+        attempt.update(status="failed",sources=[],manager_activity=[],zero_usage_verified=True,
+                       zero_usage_evidence=str(receipt))
+        result=meter.report(dict(pilot="lean-native-r2",repository="example/project",attempts=[attempt]),PRICES,END)
+        self.assertTrue(result["attempts"][0]["coverage_complete"])
+        self.assertEqual(result["totals"]["attempts"],1)
+        self.assertEqual(result["totals"]["active_seconds"],0)
+
+    def test_journal_failure_cannot_emit_source_bytes(self):
+        source=self.root/"source"
+        source.write_bytes(b"secret-source")
+        result=subprocess.run([sys.executable,str(SCRIPT),"read","--source",str(source),"--journal",str(self.root),
+                               "--attempt","a1","--bytes","6"],capture_output=True)
+        self.assertEqual(result.returncode,2)
+        self.assertEqual(result.stdout,b"")
+
+    def test_hash_and_selected_bytes_use_the_same_capture(self):
+        source=self.root/"source"
+        source.write_bytes(b"abcdefghij")
+        journal=self.root/"reads.jsonl"
+        original_open=Path.open
+        class ChangesOnSeek(io.BytesIO):
+            def seek(self,offset,whence=0):
+                self.getbuffer()[:]=b"XXXXXXXXXX"
+                return super().seek(offset,whence)
+        def open_source(path,*args,**kwargs):
+            return ChangesOnSeek(b"abcdefghij") if path==source else original_open(path,*args,**kwargs)
+        output=io.BytesIO()
+        args=[str(SCRIPT),"read","--source",str(source),"--journal",str(journal),"--attempt","a1",
+              "--start","2","--bytes","4"]
+        with patch.object(Path,"open",open_source),patch.object(sys,"argv",args),patch.object(sys,"stdout",SimpleNamespace(buffer=output)):
+            self.assertEqual(meter.main(),0)
+        self.assertEqual(output.getvalue(),b"cdef")
 
 
 if __name__ == "__main__":

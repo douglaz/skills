@@ -27,6 +27,8 @@ accounting. Keep all raw evidence and paths outside the repository.
 First check the existing manifest's admission result, then register the new
 running attempt before its initial spawn. Do not use its own `still_running` result
 to launch a second manager or to skip the initial admission check.
+One supervising session owns this manifest and admission/registration. Concurrent
+supervisors are outside this pilot; stop if that exclusive ownership is uncertain.
 
 The four ceilings are **five accepted comparable phases, ten total attempts,
 $100 API-equivalent recurring cost, and eight cumulative manager active hours**,
@@ -54,9 +56,10 @@ inconclusive pilot. Missing usage or an unpriced model is unknown, not zero.
   decisions, citations, ownership and job watchers. Confirm that the previous
   manager and action-capable descendants cannot act, or explicitly transfer their
   outstanding jobs, before replacement. Restarts may increase cost.
-- Keep independent reviewers in separate processes with
-  `env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW claude -p ... </dev/null` and their normal
-  model/effort. Do not constrain them to 150k or replace required readers with
+- Keep independent reviewers in separate processes with their normal provider,
+  model and effort. For Claude readers use
+  `env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW claude -p ... </dev/null`; other providers
+  keep their existing launch commands. Do not constrain readers to 150k or replace required readers with
   summaries. Existing unit memory, swap and supervision requirements still apply.
 - Meter source/answer/log reads through the helper below. Record bypassed or
   truncated reads as incomplete coverage rather than reporting zero rereads.
@@ -96,6 +99,10 @@ the subsequent metered `read`, including when the answer uses Unicode or CRLF.
 2 on invalid/unreadable accounting. Preserve the exit status before inspecting its
 JSON. A `still_running` reason blocks a replacement, not continued sampling of the
 registered manager; a cost/time ceiling or control failure stops current work too.
+The attempt-count ceiling blocks an eleventh attempt; it does not abort an already
+admitted tenth attempt. `stop_current` distinguishes cost/time/quality/accounting stops from
+new-attempt admission. A transient partial live JSONL tail returns 2: wait for the
+writer to finish and resample, without treating that failure as zero usage.
 
 Byte ranges are measured bytes emitted to the manager, not semantic comprehension
 or tokenizer counts. An overlapping byte range of the same content hash is a
@@ -138,6 +145,11 @@ the report green. The report also rejects missing files, duplicate call assignme
 unpriced models and missing journals/intervals. A running attempt blocks starting
 another, not continued sampling of that same attempt. `WITHIN_RECORDED_LIMITS`
 is an accounting result, not authorization to work or a quality verdict.
+Coverage requires manager usage within its recorded turn intervals. A failed launch
+before any provider call can instead set `zero_usage_verified: true` and point
+`zero_usage_evidence` to a nonempty failure receipt, with no sources or manager
+activity and an empty read journal. This is an explicit supervisor attestation;
+missing evidence stays incomplete, and the failed attempt still counts.
 
 Recompute at manager tool boundaries, before another costly batch, at every turn
 end/handoff and after late usage arrives. Record the sampling lag; re-read the most
@@ -147,8 +159,16 @@ an atomic billing cap. Close attempts with an exclusive `until`, status `accepte
 review findings/misses, rounds, handoff failures and actual control checks. A
 `quality.material_regression` flag, or any `control_failures` entry (ownership
 overlap, missed hold, unauthorized action), stops the pilot.
+Close only after all participating workers and their final usage have finished.
+Dedicated manager/reader/summary usage appearing after a closed attempt blocks
+coverage; reconcile it before another attempt. Do not reuse those dedicated
+transcripts for later phases. Shared supervising transcripts need their explicit
+attributable source windows and late-usage attestation; timing alone cannot prove
+their attribution. Failed or truncated read commands invalidate read coverage even
+if a journal entry exists; never simply attest them away.
 
-Stop at a scope ceiling or a material quality/control failure. Incomplete metering
+Stop at the accepted-phase, cost or active-time ceiling or a material quality/control
+failure; the attempt ceiling prevents starting another attempt. Incomplete metering
 blocks additional work until accounted for; preserve the evidence and report the
 gap. Count failed work in recurring cost per accepted phase and compare like phase
 types. Report setup separately. A small observational sample cannot prove quality
