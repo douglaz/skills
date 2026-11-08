@@ -32,7 +32,8 @@ running gates in the repo, stop and hand the work to the manager instead.
 1. **Orient lightly.** Find the repo, its tracker, its `AGENTS.md`, and the owner's memory entries
    for the project (grep `MEMORY.md`). Don't read large files yourself.
 2. **Write the brief.** Fill in [references/manager-brief-template.md](references/manager-brief-template.md)
-   and save it to your scratchpad as `manager-brief.md`.
+   and save it as `manager-brief.md` where the template says, under `/var/tmp`. Never use the
+   scratchpad, which can vanish mid-session.
    - Keep it lean. It points to files and never inlines them. Memory files are read **per activity**
      through the table in the template, not all up front. A manager told to read every memory file up
      front used about 110k tokens before it started work.
@@ -79,11 +80,15 @@ The manager ends each turn with exactly one of three things: a **question**, a *
   its strongest argument, plus any claim of yours or the manager's that a reader broke.
 
 **A report.** Summarise it for the owner in a few lines: what changed, what's next, and what they
-must decide. Update the brief's "Current state" section, and the project memory if durable state
-changed. You own memory writes; the manager only suggests them.
+must decide. Rewrite the brief's "Current state" section and add a line to its log, as the
+template's header says. Update the project memory if durable state changed. You own the brief and
+memory writes; the manager only suggests them. If you have a manager record its own step, it appends
+one line to `brief-log.md` and never edits the brief.
 
 **A new standing rule from the owner** (for example "always panel technical questions first"): send
-it to the live manager now, add it to the brief so the next manager inherits it, and save it to memory.
+it to the live manager now, add it to the brief's "Owner decisions in force" so the next manager
+inherits it, and save it to memory. If it replaces an older rule, it takes that rule's place and the
+old text goes to the log.
 
 **A wait.** The manager normally owns deterministic waits and already-authorized
 continuations within its phase. It returns a wait only when it cannot keep
@@ -139,7 +144,7 @@ the end of a phase.
    While a unit that writes to the worktree (an rloop Run) is still running, the new manager may
    watch it but must not edit that worktree. If ownership of a job is unclear, ask the manager
    rather than clearing.
-2. Update the brief's "Current state" with:
+2. Rewrite the brief's "Current state" (replace it; the log keeps what happened) with:
    - a UTC timestamp and the phase;
    - the branch and base SHA, open tickets and decisions taken;
    - live units with their result paths, plus test results and blockers;
@@ -148,6 +153,7 @@ the end of a phase.
 
    Check a unit with systemd before writing "running", and take "done" from its exit file and
    `out`/`err` (section 4). A unit gone with no exit file is "unknown"; a stale note proves nothing.
+   Then check the brief's size, as the template's header says, before you spawn.
 3. Spawn one replacement with the same brief, the session's merge lane unchanged, and a short
    continuation task: a new Agent as in section 1 step 3, never a fork, or for a sol manager the new
    spawn turn in section 7.
@@ -293,8 +299,11 @@ What differs from the subagent:
 
 - **No messages mid-turn.** The thread only reads input when the next `resume` turn starts, so
   never start a turn while the previous one runs. A new standing rule (section 2) goes into the
-  brief at once and into the next `resume` message. "Hold merges" (section 3) still works, because the
-  manager re-reads the brief's lane line before each merge.
+  brief at once and into the next `resume` message. A turn prompt never asks the manager to edit the
+  brief; to record a step it appends one line to `brief-log.md`. When the brief changed since the
+  thread's last turn, the next `resume` message says to re-read it and names what changed. "Hold
+  merges" (section 3) still works, because the manager re-reads the brief's lane line before each
+  merge.
 - **No Skill, Agent or AskUserQuestion tools.** Codex uses a skill when the prompt or brief names
   it, from `~/.codex/skills`, where `install.sh` installs this repo's skills. For any other skill,
   including owner-only ones (section 5), give the path to its `SKILL.md`. Steps a skill runs as a

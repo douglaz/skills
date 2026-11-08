@@ -3,8 +3,28 @@
 Copy this to a `mktemp -d /var/tmp/<project>-manager-XXXXXX` folder as `manager-brief.md` and fill
 each `<…>`. Delete unused sections. Keep current scope, open defects, applicable
 owner decisions and hard safety lines; point to history only when relevant.
-Update "Current state" at each phase boundary and before every clear, with the items SKILL.md
-section 3 "Clearing safely" lists.
+
+The brief says what holds now. `brief-log.md`, beside it, says what happened.
+- Only the assistant edits the brief. Managers append to the log when the assistant or this brief
+  asks, and still report results, blockers and decisions to the assistant. Log entries and old
+  copies grant no current authority.
+- Rewrite "Current state" at each phase boundary and before every clear, with the items SKILL.md
+  section 3 "Clearing safely" lists. Replace it rather than append to it; keep it to about 4 KB.
+  If the old Current state still holds an owner decision, a safety line or the lane line (every
+  brief written before this text does), move each to its own section first; replacing is what
+  drops them. Before replacing it, append to `brief-log.md` each past event it records that the
+  log lacks, with its evidence path.
+- A decision leaves the brief only when the owner's newer words replace it (only the part they
+  replace), it was a one-off now carried out, or it has expired. Its old text goes to the log. If
+  unsure, keep it and ask. Only the owner's words turn the drain lane on or widen its scope.
+  Setting the lane to `owner` needs no owner words: do it on "hold merges", when the drain scope is
+  empty, and in any session where the owner hasn't chosen drain.
+- The log is append-only, one line per event: `- <UTC timestamp> <what happened>; <evidence path>`.
+  Put evidence in files and give their paths. Grep the log or read its tail; don't read it whole.
+- Before each spawn, sol resume turn or clear, check the brief with `wc -c`. Over 32 KB, trim it
+  first: move what no longer holds to the log. Never drop an in-force decision, a safety line or
+  state needed to resume just to get under; if those don't fit, keep them and tell the owner the
+  size.
 
 ---
 
@@ -30,19 +50,19 @@ Memory dir: `<memory dir>`. Consult it by activity:
 | launch an rloop Run | `<rloop launch files>` |
 | run gates | `<gate rules, e.g. no-pipe>` |
 | open or land a PR | `<PR / bot-gate files>` |
-| need project history | `<project memory file>` (grep it; don't read it whole) |
+| need what happened earlier | `brief-log.md` beside this brief, then `<project memory file>` (grep them; don't read them whole) |
 
-Don't write to the memory dir; tell the assistant what should be remembered.
+Don't write to the memory dir; tell the assistant what should be remembered. Only the assistant
+edits this brief. Record finished steps and job paths as one line each in `brief-log.md`.
 
-## Current state
+## Owner decisions in force
 
-- As of <UTC timestamp>: <current phase, live unit or completed result path, next action>.
-  Check liveness and completion against the unit, exit file and job result before
-  resuming; prose saying "live" is only a snapshot. A missing result is unknown.
-- <base branch and SHA; clean or not; open branches and what they hold>
-- <open tickets and their labels>
-- <decisions taken this phase; test results; blockers; an open question with its answer, and any
-  queued questions>
+- <one bullet per standing owner rule or decision this work depends on: the owner's words verbatim,
+  the date, and where it lands (a spec id, ADR or memory file)>. No status or progress lines here;
+  they go to the log.
+
+## Merge lane
+
 - Push your work branch and open its PR through `pr-with-codex-bot-review` without asking, then
   report the link. Never commit or push to <base> directly.
 - Merge lane: <owner | drain>. `owner`: never merge a PR, because merging is the owner's call.
@@ -127,7 +147,7 @@ grill through `grill-with-docs`, not bare `grilling`.
 
 Own deterministic waits and the next already-authorized step within this phase.
 Use a supervised unit or launcher and record the unit, out/err/exit paths and next
-action so the assistant can recover if your turn exits. For PR bot rounds and CI,
+action in `brief-log.md` so the assistant can recover if your turn exits. For PR bot rounds and CI,
 use `pr-with-codex-bot-review`'s `scripts/pr-watch <N>` on the PR's branch. Keep the
 existing safety, review, CI and merge gates; re-read the Merge lane before merging.
 Return for a decision or a completed phase. If you cannot keep supervision alive,
@@ -139,3 +159,13 @@ Write exit files without any `$` in the systemd unit line. A reload of the user 
 saved unit and turns an escaped `$$VAR` into a PID. Use either
 `ExecStopPost=/bin/sh -c 'printenv SERVICE_RESULT EXIT_CODE EXIT_STATUS | xargs > <dir>/exit'` or a
 helper script.
+
+## Current state
+
+- As of <UTC timestamp>: <current phase, live unit or completed result path, next action>.
+  Check liveness and completion against the unit, exit file and job result before
+  resuming; prose saying "live" is only a snapshot. A missing result is unknown.
+- <base branch and SHA; clean or not; open branches and what they hold>
+- <open tickets and their labels>
+- <decisions taken this phase; test results; blockers; an open question with its answer, and any
+  queued questions>
