@@ -78,8 +78,12 @@ the owner named>. Take each ready bead within that scope:
 1. Branch from freshly pulled <base>.
 2. Implement it. With rloop, use one Run per bead, never `--auto`: rloop commits onto the checked-out
    branch and never branches, pushes or opens PRs.
-3. Resolve the JSONL with `beads-jsonl-path`; inspect `git show HEAD:<relative-path>` with `jq -se --arg id "$ID" '[.[] | select(.id == $id)] | length == 1 and .[0].status == "closed"'` to prove committed closure.
-   If needed, close/flush/review through that companion, commit only the JSONL (`git commit --only -m "<message>" -- <path>`), and recheck HEAD.
+3. If a Run implemented the bead, review its commits as "Run instructions" says, and close the bead
+   only when that review finds no defect. For that close, and for a bead that had no Run, resolve the
+   JSONL with `beads-jsonl-path`; inspect `git show HEAD:<relative-path>` with
+   `jq -se --arg id "$ID" '[.[] | select(.id == $id)] | length == 1 and .[0].status == "closed"'`
+   to prove committed closure. If needed, close/flush/review through that companion, commit only the
+   JSONL (`git commit --only -m "<message>" -- <path>`), and recheck HEAD.
 4. Push, open the PR, and work the bot rounds with `pr-with-codex-bot-review`.
 5. Read `bot-gate`'s exit code:
    - 1: do what its warnings name, such as fixing or answering an unresolved thread, or a second
@@ -101,6 +105,36 @@ Stop and ask instead when:
 If you stop before the merge with the bead already closed, say so. `br` keeps one database for every
 branch, so <base> now reads the bead as closed too, and the owner may need to reopen it.
 
+## Run instructions
+
+<Delete this section unless the project runs rloop.> Write every rloop Run instruction as two
+sections, in this order:
+
+- `## Task`: the governing text. Say what to build, what done looks like, how to verify it and what
+  is out of scope. Quote verbatim each owner decision it rests on, and the hard safety line below.
+- `## For the Manager`: this paragraph, verbatim:
+
+  > The Task section is this task's governing text. Adopt it as the task brief, adding only each
+  > choice a Consultation settles and its record, or block if it is ambiguous or contradictory, in
+  > itself or against the specifications. Each round brief keeps the Task section and every settled
+  > choice unchanged, then states the current state and a Repairs list. A Reviewer demand beyond the
+  > Task section is a note in the Finished File, not a repair and not a block, unless it is a genuine
+  > defect against the Task section or the specifications, or shows them ambiguous or contradictory.
+
+Save each instruction as a file, and log its path and the Run Directory in `brief-log.md`.
+
+Launch every Run with `--no-close`. The Manager then commits the accepted work but leaves the bead
+open, and you close it after your own review. An rloop build older than `--no-close` refuses the
+flag and spawns nothing; refresh the build.
+
+When the Run ends `done`, review its commits (`git diff <base>..HEAD`) against the Task section.
+- If you find a defect, leave the bead open and send the defect back through another Run.
+- Otherwise close it: resolve the JSONL with `beads-jsonl-path`; inspect
+  `git show HEAD:<relative-path>` with
+  `jq -se --arg id "$ID" '[.[] | select(.id == $id)] | length == 1 and .[0].status == "closed"'`
+  to prove committed closure. If needed, close/flush/review through that companion, commit only the
+  JSONL (`git commit --only -m "<message>" -- <path>`), and recheck HEAD.
+
 ## Recovery
 
 Correct a failed read-only diagnostic lookup when it changed no state and the
@@ -111,9 +145,10 @@ permit unrelated tracker changes or reuse evidence for changed software.
 
 ## Hard safety lines
 
-- Follow and quote in every Run instruction: "Only delete scratch you created with `mktemp`; never
-  print the whole environment; give each unit run a fresh `mktemp -d` log folder, never clear a
-  reused one with a wildcard; delete the build output in your `mktemp` folders before the Run ends."
+- Follow, and quote in every Run instruction's `## Task` section: "Only delete scratch you created
+  with `mktemp`; never print the whole environment; give each unit run a fresh `mktemp -d` log
+  folder, never clear a reused one with a wildcard; delete the build output in your `mktemp` folders
+  before the Run ends."
 - Gate in a `mktemp -d` clone, logs outside it; delete the whole clone once its verdict is recorded.
 - <production systems or accounts never to touch, by name>
 - <what must be redacted from anything committed to a public repo>
