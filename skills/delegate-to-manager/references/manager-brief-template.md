@@ -76,8 +76,8 @@ delegated merging for this session. That go-ahead is the human merge decision
 the owner named>. Take each ready bead within that scope:
 
 1. Branch from freshly pulled <base>.
-2. Implement it. With rloop, use one Run per bead, never `--auto`: rloop commits onto the checked-out
-   branch and never branches, pushes or opens PRs.
+2. Implement it. With rloop, never use `--auto`: rloop commits onto the checked-out branch and never
+   branches, pushes or opens PRs.
 3. If a Run implemented the bead, review its commits as "Run instructions" says, and close the bead
    only when that review finds no defect. For that close, and for a bead that had no Run, resolve the
    JSONL with `beads-jsonl-path`; inspect `git show HEAD:<relative-path>` with
