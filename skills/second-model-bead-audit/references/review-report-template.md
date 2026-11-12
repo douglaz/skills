@@ -69,9 +69,8 @@ Load this file when merging the panel's findings and writing the final verdict.
 
 ## Severity rules
 
-- **BLOCKER = P0**, **IMPORTANT = P1**, on the shared severity rubric. Only
-  introduced or brief-blocking P0/P1 holds launch; older P0/P1 outside the brief
-  is a non-blocking `review-preexisting` follow-up in the report.
+- **BLOCKER = P0**, **IMPORTANT = P1**, on the shared severity rubric. Every
+  accepted P0/P1 holds launch, as before.
 - **NIT carries P2 or P3**. A P2 NIT becomes a comment on each affected bead;
   a P3 NIT becomes a priority-3 `task` bead labelled `review-nit`, naming the
   affected bead, with a one-line comment on that bead naming the nit bead ID.

@@ -141,10 +141,8 @@ P2 NITs become orchestrator comments on affected beads. Each distinct P3 NIT
 becomes a priority-3 review-nit bead naming the affected bead, with a one-line
 backlink comment naming the nit bead ID. Reviewers only report; do not write.
 FAIL means at least one P0 (BLOCKER). CONDITIONAL PASS means no P0 but at least
-one P1 (IMPORTANT). PASS means neither remains. These are reviewer votes: the
-orchestrator re-rates and applies the change/brief acceptance rule. Report older
-P0/P1 with the same tags and evidence that it predates the change and is outside
-the brief; it does not hold launch after the orchestrator's disposition.
+one P1 (IMPORTANT). PASS means neither remains. These are reviewer votes; the
+orchestrator re-rates every finding.
 If there are no findings, after the rationale output exactly: No findings.
 EOF
 } >"$AUDIT_PROMPT_FILE"

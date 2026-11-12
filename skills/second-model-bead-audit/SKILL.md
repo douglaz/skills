@@ -226,11 +226,9 @@ Re-rate every finding on the
 A Reviewer's tag is evidence, not a verdict. Lowering P0/P1 needs a one-line
 reason with file:line evidence (including the snapshotted bead/plan location);
 raising to P0/P1 names the applicable clause. BLOCKER = P0, IMPORTANT = P1;
-NIT must carry P2 or P3. Only P0/P1 introduced by the audited changes or leaving
-the plan/brief unmet holds launch; older P0/P1 outside the brief is reported as
-`review-preexisting`, without blocking this work. Use the repository's tracker
-for it under the filing rule, but do not expand normal-mode graph writes beyond
-the comments/nit beads below; report any such item needing other writes.
+NIT must carry P2 or P3. Every accepted P0 or P1 holds launch, as before: the
+audit judges the whole exported graph against the plan, so no P0/P1 in it is
+outside the work under review.
 
 At the finish, verify follow-ups still hold in the graph and repository with the
 work accepted, committed or not. A P2 NIT becomes a comment on each affected bead.
@@ -287,7 +285,7 @@ Check, per bead and then across the set:
 - **Across the set:** every cross-bead dependency rationale. A bead that says "depends
   on X because Y" is wrong the moment X's own text stops claiming Y.
 
-For introduced or brief-blocking P0/P1, fix through `bead-polish-loop` by
+For P0/P1, fix through `bead-polish-loop` by
 **re-authoring the bead** when the contradictions are structural rather than
 local. A bead carrying half a dozen of them has been patched past the point where
 patching converges; rewriting it from the settled decisions is faster and leaves
@@ -305,9 +303,9 @@ requirement forbade, and a smoke-conversion count wrong by a factor of two — a
 resolved more than the previous two rounds combined. `multi-reviewer-loop` § 4b makes
 the same argument for diffs; bead graphs need it more, because prose has no compiler.
 
-- `FAIL`: an introduced or brief-blocking P0 (BLOCKER) remains.
-- `CONDITIONAL PASS`: no such P0, but an introduced or brief-blocking P1
-  (IMPORTANT) remains and must be fixed before launch.
+- `FAIL`: an accepted P0 (BLOCKER) remains.
+- `CONDITIONAL PASS`: no P0, but an accepted P1 (IMPORTANT) remains and must be
+  fixed before launch.
 - `PASS`: no blocking or important findings remain; optional nits may remain, AND
   § 3b has been run on the current text. A panel can only see what it was asked to
   look at; a bead that contradicts itself can pass every round, because each reviewer
@@ -325,10 +323,10 @@ writes; reviewers are always read-only:
 
 - `PASS`: proceed to implementation.
 - `CONDITIONAL PASS` or `FAIL`: send accepted findings into
-  `bead-polish-loop`'s ledger, fix introduced or brief-blocking P0/P1 there, then
+  `bead-polish-loop`'s ledger, fix the P0/P1 there, then
   rerun the full panel. P2/P3 remain follow-ups, never repairs in this change.
 
-If the user asks for fixes, apply reconciled introduced or brief-blocking P0/P1
+If the user asks for fixes, apply reconciled P0/P1
 through `bead-polish-loop`, review every write, flush, and rerun the audit.
 
 Bound an automatic polish/audit cycle to three panel runs. Stop earlier when the
