@@ -108,9 +108,10 @@ Output contract:
 1. First line: VERDICT: FAIL | CONDITIONAL PASS | PASS
 2. One-sentence rationale.
 3. Findings, one per item, beginning with exactly one of:
-     [BLOCKER] <claim>
-     [IMPORTANT] <claim>
-     [NIT] <claim>
+     [BLOCKER] [P0] <claim>
+     [IMPORTANT] [P1] <claim>
+     [NIT] [P2] <claim>
+     [NIT] [P3] <claim>
    Under each item include:
      Evidence: <plan section + bead IDs>
      Why: <concrete execution or launch risk>
@@ -120,8 +121,28 @@ Output contract:
      DEPENDENCIES: <short notes>
      VERIFICATION: <short notes>
 
-FAIL means at least one blocker. CONDITIONAL PASS means no blocker but named
-important conditions remain. PASS means no blocker or important condition remains.
+Severity measures the defect, not the bead's scheduling priority.
+BLOCKER = P0, IMPORTANT = P1; NIT carries P2 or P3.
+- P0: data or money loss, a secret exposed, a security hole, a crash or corruption of core function, or the
+  deliverable fundamentally fails the brief.
+- P1: should block acceptance: wrong behaviour in a supported case, a requirement of the brief not met, a test
+  or gate that cannot fail or fails for the wrong reason, or a requirement the change makes false or
+  contradictory (an implementation that follows the text would behave wrongly, or two requirements cannot both
+  hold). Any defect that can lose or misdirect money, expose a secret or corrupt data on a reachable
+  path is at least P1.
+- P2: a real defect that does not block, such as an edge case beyond the brief, a missing test the brief does
+  not require, or a statement that is wrong in a way that matters.
+- P3: changes neither what the software does, what the specifications require, nor whether a check can catch a
+  defect.
+
+Verify before you claim; what you could not verify is a question, not a finding. A follow-up the brief already
+lists is not a finding again unless you rate it P0 or P1; say why.
+P2 NITs become orchestrator comments on affected beads. Each distinct P3 NIT
+becomes a priority-3 review-nit bead naming the affected bead, with a one-line
+backlink comment naming the nit bead ID. Reviewers only report; do not write.
+FAIL means at least one P0 (BLOCKER). CONDITIONAL PASS means no P0 but at least
+one P1 (IMPORTANT). PASS means neither remains. These are reviewer votes; the
+orchestrator re-rates every finding.
 If there are no findings, after the rationale output exactly: No findings.
 EOF
 } >"$AUDIT_PROMPT_FILE"
@@ -443,6 +464,9 @@ validate_audit_output() {
     }
     /^[[:space:]]*\[(BLOCKER|IMPORTANT|NIT)\]/ {
       finish()
+      if ($0 ~ /^[[:space:]]*\[BLOCKER\]/ && $0 !~ /\[BLOCKER\] \[P0\]/) exit 1
+      if ($0 ~ /^[[:space:]]*\[IMPORTANT\]/ && $0 !~ /\[IMPORTANT\] \[P1\]/) exit 1
+      if ($0 ~ /^[[:space:]]*\[NIT\]/ && $0 !~ /\[NIT\] \[P[23]\]/) exit 1
       in_item=1
       have_evidence=have_why=have_fix=0
       next
@@ -493,8 +517,10 @@ fi
 
 ## Verdict scope
 
-Votes apply to the copied export and authority sources. Any subsequent graph or
-source edit requires a new audit before implementation.
+Votes apply to the copied export and authority sources. Any subsequent
+substantive graph or source edit requires a new audit before implementation. Permitted
+orchestrator follow-up comments and nit beads are audit metadata and do not
+require another audit.
 
 ## Recovery
 
@@ -520,14 +546,15 @@ Merge duplicate claims into one finding and tag source:
 ```markdown
 | # | Severity | Source | Claim | Evidence | Disposition |
 |---|---|---|---|---|---|
-| 1 | BLOCKER | BOTH | Recovery workflow is unowned | Plan §4; bd-12, bd-18 | UPHELD |
-| 2 | IMPORTANT | CLAUDE | bd-31 has no executable acceptance signal | Plan §7; bd-31 | UPHELD |
-| 3 | NIT | CODEX | Two tiny docs beads could merge | Plan §9; bd-42, bd-43 | REJECTED |
-| 4 | IMPORTANT | CONFLICT | Whether rollout blocks the API epic | Plan §8; bd-7, bd-20 | RESOLVED: CODEX |
+| 1 | BLOCKER P0 | BOTH | Recovery workflow is unowned | Plan §4; bd-12, bd-18 | UPHELD |
+| 2 | IMPORTANT P1 | CLAUDE | bd-31 has no executable acceptance signal | Plan §7; bd-31 | UPHELD |
+| 3 | NIT P3 | CODEX | Two tiny docs beads could merge | Plan §9; bd-42, bd-43 | REJECTED |
+| 4 | IMPORTANT P1 | CONFLICT | Whether rollout blocks the API epic | Plan §8; bd-7, bd-20 | RESOLVED: CODEX |
 ```
 
 `BOTH` is a confidence and ordering signal, not automatic truth. A single-source
-finding keeps its severity until evidence changes it. Silence is not
+finding is re-rated by the orchestrator on the shared rubric; lowering P0/P1
+needs a one-line reason with file:line evidence, raising to P0/P1 names the clause. Silence is not
 counter-evidence. Resolve `CONFLICT` from the plan and graph, with citations.
 
 Write the complete reconciled report from

@@ -174,7 +174,8 @@ conditions in the brief's "Drain lane" section. After each merge, you:
 - give the owner one line with the PR, the bead, and `bot-gate`'s verdict, tip and observation
   window, quoted as the manager reported them;
 - clear, and spawn a new manager on the next ready bead in the drain scope. That scope is what the
-  owner asked for (an epic, a label, a list of beads), or every ready bead if they named none;
+  owner asked for (an epic, a label, a list of beads), or every ready bead if they named none,
+  excluding `review-nit` and `review-followup` unless the owner names them;
 - don't ask in between.
 
 A stop condition pauses the lane until the owner answers. The lane ends when the scope is empty,

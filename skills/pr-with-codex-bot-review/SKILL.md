@@ -318,6 +318,21 @@ verify it, mark it a QUESTION, not a finding. One finding per line starting with
 [P0]/[P1]/[P2]/[P3], then file:line, then the claim, then indented detail. Do not
 propose mechanism no correctness/security/data-loss requirement needs. Do not
 modify any file. Output exactly "No findings." if clean.
+
+- P0: data or money loss, a secret exposed, a security hole, a crash or corruption of core function, or the
+  deliverable fundamentally fails the brief.
+- P1: should block acceptance: wrong behaviour in a supported case, a requirement of the brief not met, a test
+  or gate that cannot fail or fails for the wrong reason, or a requirement the change makes false or
+  contradictory (an implementation that follows the text would behave wrongly, or two requirements cannot both
+  hold). Any defect that can lose or misdirect money, expose a secret or corrupt data on a reachable
+  path is at least P1.
+- P2: a real defect that does not block, such as an edge case beyond the brief, a missing test the brief does
+  not require, or a statement that is wrong in a way that matters.
+- P3: changes neither what the software does, what the specifications require, nor whether a check can catch a
+  defect.
+
+Verify before you claim; what you could not verify is a question, not a finding. A follow-up the brief already
+lists is not a finding again unless you rate it P0 or P1; say why.
 EOF
 
 # Validate, do not merely locate — the same rule the probe follows. A busybox `timeout`
@@ -409,10 +424,18 @@ reason. The archived `orchestrating-with-rb-lite` skill documented three unbound
 reviewer calls that rb-lite itself dispatches; they hang on exactly the failure this
 change removes elsewhere and are tracked in #51 rather than claimed as covered here.
 
-Triage it exactly like a bot finding: credible hypothesis, verify before agreeing
-or rejecting, fix what's real, and don't build mechanism no requirement needs.
-Fix accepted findings *before* opening the PR so the bots review the good version
-— the first diff the bots see is the one their reaction attaches to.
+Triage it exactly like a bot finding: verify and re-rate every finding on the
+rubric above; a Reviewer's or bot's tag is evidence, not a verdict. Lowering a
+P0/P1 needs a one-line reason with file:line evidence; raising to P0/P1 names
+the applicable clause. A false requirement is P1 when following it would behave
+wrongly, otherwise at least P2; a false code comment is P3.
+
+Before opening, fix each P0/P1 the whole PR introduces since its base or that
+leaves its brief unmet. Put P2/P3 and older P0/P1 outside the brief in the PR
+body's "Follow-ups" section (older P0/P1 labelled `review-preexisting`). Never
+repair P2/P3 in this PR, even beside a P0/P1 repair or on the same lines. An
+accepted suggestion is listed once in the report, not filed; if judged a P0–P3
+defect, handle it as that finding. Don't build mechanism no requirement needs.
 
 Two things worth saying out loud in the PR body afterwards: that a local review
 ran, and what you deliberately did **not** change. When the codex bot later
@@ -441,6 +464,13 @@ codex-review #193 P1 (...).">
 ## Trade-offs accepted
 <be honest about what this fix doesn't solve. The bot rewards epistemic
 honesty in commit messages with kinder reviews.>
+
+## Follow-ups
+<P2: review-followup; P3: review-nit; older P0/P1: review-preexisting.
+For each: defect, severity and why not higher, file:line at the observed commit,
+Reviewers, smallest fix, verification and source task/PR. Keep this list through
+later rounds; already listed follow-ups are not findings again unless rated
+P0/P1 with a reason. Use "None" if empty.>
 
 ## Test plan
 - [x] `nix develop -c cargo test --features test-stub --locked` passes
@@ -486,7 +516,22 @@ not authorize a merge or replace those checks.
 
 ### 6. Address findings, if any
 
-For each P-badge finding:
+For each finding, including CodeRabbit prose severities, verify and re-rate on
+§ 2's rubric. A badge is evidence, not a verdict. Record a one-line reason with
+file:line evidence for lowering a P0/P1; name the applicable clause when raising
+to P0/P1. Only a P0/P1 introduced by the whole PR since its base or leaving the
+brief unmet sends this PR back.
+
+- **P2/P3**: reply with the rating and one-line reason, add the finding to the PR
+  body's Follow-ups, then resolve the thread or hide the comment as below. No
+  fix and no push. A push for a P0/P1 must not carry P2/P3 fixes either.
+- **Older P0/P1 outside the brief**: record in Follow-ups as
+  `review-preexisting`, name it in the report, and answer and resolve it without
+  holding this PR. File it after the merge with the other follow-ups.
+- **Introduced or brief-blocking P0/P1**: fix, regression-test, and push as below.
+  Stop for a product or architecture decision if a safe fix needs one.
+
+For each finding:
 
 - **Verify, don't reflexively agree.** The finding is a credible hypothesis. Read the
   code referenced. If the bot misread the diff, write a follow-up comment with
@@ -506,7 +551,7 @@ For each P-badge finding:
   environment for this repo", which starts no review round. Observed twice: on PR #90 as a
   thread reply, and on PR #91 for a mention in the PR body, where no automatic round ran on
   PR open either. To ask for a round, post `@codex review` as a top-level PR comment.
-- **If accepted, fix it AND add a regression test that pins the new behavior.** The
+- **For an accepted introduced or brief-blocking P0/P1, fix it AND add a regression test that pins the new behavior.** The
   test serves as a counter-claim if the bot raises the same concern next round — but
   only if it can fail. **Invert the fix and watch that test go red before you push**,
   then revert the inversion. A test written for "the bot found X" that also passes
@@ -531,11 +576,11 @@ For each P-badge finding:
     the inverted build can perform the harmful operation before the assertion notices.
     Disposable environment, non-destructive mutation, or say plainly that the red run
     could not be done safely — never a broken build against live state.
-- **Cite the finding in the commit message.** Future readers (and the next bot
+- **For a P0/P1 repair, cite the finding in the commit message.** Future readers (and the next bot
   review) need to know which feedback this commit addressed. Use a phrase like
   "Addresses codex-review #194 P1 (first round)" — round number matters when the bot
   re-reviews after force-push.
-- **Amend, don't stack commits, for one-shot fixes.** Cleaner squash-merge history.
+- **For a P0/P1 repair, amend, don't stack commits, for one-shot fixes.** Cleaner squash-merge history.
   `git commit --amend --no-edit` then `git push --force-with-lease`. For larger
   follow-ups, separate commits are fine — the squash absorbs them.
 
@@ -795,6 +840,7 @@ Don't merge when:
 
 - Codex bot reaction is `eyes` (still reviewing) — wait, even if CI is green.
 - Codex bot has unaddressed line comments (`P0`/`P1`/`P2`/`P3`) referencing the current head.
+  A comment answered under the severity policy and resolved counts as addressed.
 - A codex finding comment (channel 6) is not hidden — see § 6.
 - No wrapper for the current tip yet — `@codex review` to wake it up. (A missing *reaction*
   is not itself a blocker; see the merge conditions above.)
@@ -829,6 +875,8 @@ merge-queue wait, evidence capture, and safe reset remain mandatory. § 8a gover
 reporting in either case.
 **Companion unavailable: stop, rerun the same installer command once, reload it, and do
 not improvise this procedure.**
+
+A PR closed without merging files only its older P0/P1 items, each that still holds on the base branch, through the merge companion's filing step.
 
 ### 8a. The merge report must quote the gate
 
@@ -995,6 +1043,9 @@ ignore the warning. If not, retry once. The squash-merge subject defaults to
 the commit message anyway, so the PR title is mostly cosmetic.
 
 ## Anti-patterns
+
+- **Don't push for a P2 or P3.** List it in Follow-ups, answer and resolve it.
+  Never include its fix in a P0/P1 push.
 
 - **Don't `gh pr merge --merge`** when the project squashes — creates noise on
   master. Use `--squash` to match the project's convention.

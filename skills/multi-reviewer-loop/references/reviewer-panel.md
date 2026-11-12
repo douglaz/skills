@@ -262,7 +262,7 @@ reference it by name.
 
 ## The Claude reviewer prompt
 
-Write it to a file once per run and pass it with `"$(cat ...)"`. Building this
+Rewrite it before each pass with the current FILE follow-up list and pass it with `"$(cat ...)"`. Building this
 string inline in the shell invites quoting bugs that silently truncate the
 rubric.
 
@@ -280,6 +280,8 @@ backticks inside the focus text — and focus text quoting code (`focus on the
   printf -- '  `git status --short` and read any that are real source files.\n'
   printf -- '- Read CLAUDE.md / AGENTS.md and nearby code when a finding depends on them.\n'
   if [ -n "${FOCUS:-}" ]; then printf '\nFocus for this pass: %s\n' "$FOCUS"; fi
+  printf '\nFollow-ups (filed when the work ends; do not fix, do not report again):\n'
+  cat "$REVIEW_DIR/follow-ups.md"  # initialize to "None." before the first pass
   cat <<'EOF'
 
 Report real defects in the CHANGED code: correctness bugs, security holes, data
@@ -297,12 +299,23 @@ Rules:
     [P1] src/foo.rs:42 - <claim>
   Then indented detail lines: why it is wrong, and the concrete failure it
   causes (inputs or state -> wrong result).
-- Severity: P0 catastrophic (data loss, security break, guaranteed corruption);
-  P1 serious defect in the changed path; P2 real but narrow or lower impact;
-  P3 nit.
+- P0: data or money loss, a secret exposed, a security hole, a crash or corruption of core function, or the
+  deliverable fundamentally fails the brief.
+- P1: should block acceptance: wrong behaviour in a supported case, a requirement of the brief not met, a test
+  or gate that cannot fail or fails for the wrong reason, or a requirement the change makes false or
+  contradictory (an implementation that follows the text would behave wrongly, or two requirements cannot both
+  hold). Any defect that can lose or misdirect money, expose a secret or corrupt data on a reachable
+  path is at least P1.
+- P2: a real defect that does not block, such as an edge case beyond the brief, a missing test the brief does
+  not require, or a statement that is wrong in a way that matters.
+- P3: changes neither what the software does, what the specifications require, nor whether a check can catch a
+  defect.
+
+Verify before you claim; what you could not verify is a question, not a finding. A follow-up the brief already
+lists is not a finding again unless you rate it P0 or P1; say why.
 - Do not propose new mechanism, config, abstraction, or hardening that no real
   correctness, security, or data-loss requirement needs. Report defects, not a
-  wishlist. Style opinions with no rule behind them are not findings.
+  wishlist. Style opinions with no rule behind them are not findings. Tag wording and style defects P3; accepted suggestions are reported once, not filed.
 - Do not modify, create, or delete any file. This is a read-only review.
 - If you find nothing, output exactly: No findings.
 EOF
@@ -654,6 +667,11 @@ Clean signals:
   `No findings.` (allow surrounding whitespace) — it *is* prompted, so this is
   contractual.
 
+These are reviewer-health checks, separate from the loop's acceptance rule.
+A healthy pass counts as clean for the loop when every finding is dispositioned
+FILE or rejected (including a justified CUT); no introduced or brief-blocking
+P0/P1 remains open. A failed or ambiguous reviewer remains failed or ambiguous.
+
 Anything else with zero findings is **ambiguous**, not clean. Surface the log.
 Note the asymmetry: a broken parser plus an unpinned clean signal is what turns a
 healthy codex pass into "ambiguous". Suspect the parser before the reviewer.
@@ -668,8 +686,8 @@ they name the same defect in the same code path, even if one says
 | # | Sev | Source | File:line | Claim | Disposition |
 |---|-----|--------|-----------|-------|-------------|
 | 1 | P1  | BOTH   | src/pay.rs:88 | Retry path double-charges on 409 | FIX |
-| 2 | P2  | CLAUDE | src/db.rs:12  | Migration lacks rollback | DEFER |
-| 3 | P2  | CODEX  | src/api.rs:40 | Unbounded response buffer | FIX |
+| 2 | P2  | CLAUDE | src/db.rs:12  | Migration lacks rollback | FILE |
+| 3 | P2  | CODEX  | src/api.rs:40 | Unbounded response buffer | FILE |
 ```
 
 When the two reviewers agree a defect exists but disagree about the remedy,
@@ -722,7 +740,9 @@ simplified, or deferred. For each item give:
 2. Why it is not strictly required — name what already covers the case (an
    existing code path, a simpler choice, the stated threat model), or why the
    case does not matter here.
-3. A recommendation, tagged: [P2] CUT / [P2] SIMPLIFY / [P2] MARK-OPTIONAL.
+3. A recommendation, tagged: [SUGGESTION] CUT / SIMPLIFY / MARK-OPTIONAL.
+   These suggestions are listed once, not implemented or filed unless the
+   orchestrator judges one a P0–P3 defect under the severity policy.
 
 Do not flag missing behavior, bugs, or absent tests. Do not modify any file.
 If the diff is already minimal for its goal, output exactly: No findings.
@@ -830,8 +850,28 @@ Report only contradictions:
 4. An example, template, or schema that no longer matches what it documents.
 5. A documented flag, path, command, section number, or field that does not exist.
 
-For each: both locations (file:line), the exact contradiction, and which side you
-believe is correct and why.
+Start each finding with [P0], [P1], [P2] or [P3], then both locations
+(file:line), the exact contradiction, what you verified by reading or running,
+and which side you believe is correct and why.
+
+- P0: data or money loss, a secret exposed, a security hole, a crash or corruption of core function, or the
+  deliverable fundamentally fails the brief.
+- P1: should block acceptance: wrong behaviour in a supported case, a requirement of the brief not met, a test
+  or gate that cannot fail or fails for the wrong reason, or a requirement the change makes false or
+  contradictory (an implementation that follows the text would behave wrongly, or two requirements cannot both
+  hold). Any defect that can lose or misdirect money, expose a secret or corrupt data on a reachable
+  path is at least P1.
+- P2: a real defect that does not block, such as an edge case beyond the brief, a missing test the brief does
+  not require, or a statement that is wrong in a way that matters.
+- P3: changes neither what the software does, what the specifications require, nor whether a check can catch a
+  defect.
+
+Verify before you claim; what you could not verify is a question, not a finding. A follow-up the brief already
+lists is not a finding again unless you rate it P0 or P1; say why.
+
+Already dispositioned FILE follow-ups (do not report again unless rated P0/P1,
+with a reason):
+$(cat "$REVIEW_DIR/follow-ups.md")
 
 Do not propose new features or mechanism. Do not modify any file.
 If they are consistent with each other, output exactly: No findings.
@@ -903,6 +943,7 @@ the final check so that any `CLEAN` no longer describes the reviewed tree. Re-ru
 overwrite these files; keep the round in the name (`consistency-02.*`) if you
 want the history.
 
-Fix findings the same way as any other: verify first, and prefer correcting
-whichever side is genuinely wrong over editing both until they match — matching
-two wrong things is still wrong.
+Re-rate and disposition consistency findings as in § 3: fix only introduced or
+brief-blocking P0/P1, then re-run the panel and consistency pass. FILE P2/P3 and
+older P0/P1 outside the brief. Verify first, and correct whichever side is wrong
+rather than editing both until they match.

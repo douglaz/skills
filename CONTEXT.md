@@ -15,6 +15,31 @@ Two or more independent reviewers reading the same tree in parallel, whose findi
 merged before any are acted on.
 _Avoid_: review, reviewer, pass
 
+**Severity**:
+A finding's P0–P3 rating measures what the defect does, not where it sits. P0 is
+critical (data or money loss, secrets, security, core crash/corruption, brief
+fundamentally failed). P1 blocks acceptance: wrong supported behaviour, unmet
+brief, a test/gate that cannot fail or fails for the wrong reason, or false or
+contradictory requirements. Reachable money-loss/misdirection, secret-exposure or
+data-corruption defects are at least P1. P2 is a real non-blocking defect; P3
+changes neither behaviour, requirements nor a check's ability to catch defects.
+The judge re-rates; lowering P0/P1 needs file:line evidence, raising to P0/P1
+names the clause. Only introduced or brief-blocking P0/P1 sends work back.
+_Avoid_: bead priority (a separate scheduling field), reviewer verdict
+
+**Follow-up**:
+An accepted P2/P3, or older P0/P1 outside the brief, filed when the work ends, if it still holds then.
+Each skill names its filing reference state. P2/P3 are never repaired in the same
+change, even alongside P0/P1 repairs. One issue per distinct defect, deduped only
+against the same defect open at equal or higher priority: P2 priority 2
+`review-followup`, P3 priority 3 `review-nit`, older P0/P1 its own priority
+`review-preexisting`. Drains skip `review-nit` unless asked; delegated drains also
+exclude `review-followup` until named. An accepted suggestion is reported once,
+not filed, unless judged a P0–P3 defect. No tracker means a list in the report or
+PR body. See the [filing rules](skills/multi-reviewer-loop/references/disposition-rules.md#filing-follow-ups)
+for required evidence and deduplication.
+_Avoid_: repair, blocker, suggestion
+
 **Clearance**:
 A panel having found nothing on a specific tree. Attaches to that tree alone — a later
 commit does not inherit it.

@@ -8,20 +8,42 @@ two.
 
 ## Classification
 
-Before editing, classify each finding as `FIX`, `DEFER`, `REJECT`, or
-`CUT/SIMPLIFY`.
+Before editing, re-rate every finding P0–P3 on the Reviewer rubric. The
+orchestrator judges: a Reviewer's tag is evidence, not a verdict. Lowering a
+Reviewer's P0/P1 needs a one-line reason with file:line evidence; raising a rating
+to P0/P1 names the applicable clause in one line.
 
-- **FIX**: default outcome. The finding is plausible, in scope, and can be
-  addressed safely in this loop. A `FIX` for an *untested-behavior* finding is
+P0 is critical: data or money loss, a secret exposed, a security hole, a crash or
+corruption of core function, or the deliverable fundamentally fails its brief.
+P1 blocks acceptance: wrong behaviour in a supported case, a brief requirement
+unmet, a test or gate that cannot fail or fails for the wrong reason, or a
+requirement made false or contradictory (following it would behave wrongly, or
+two requirements cannot both hold). Any reachable money-loss, misdirected-money,
+secret-exposure or data-corruption defect is at least P1. P2 is a real defect
+that does not block; P3 changes neither behaviour, requirements nor a check's
+ability to catch a defect. A false requirement is P1 if following it would behave
+wrongly, otherwise at least P2; a false code comment is P3. The former
+"no cosmetic beads" bar now separates P2 from P3, not filed from unfiled.
+
+Only P0/P1 defects introduced by the whole change since `DIFF_BASE`, or leaving
+the brief unmet, send work back. Classify each finding as `FIX`, `FILE`, `DEFER`,
+`REJECT`, or `CUT/SIMPLIFY`.
+
+- **FIX**: default for an introduced or brief-blocking P0/P1 only. The finding
+  is plausible, in scope, and can be addressed safely in this loop. A `FIX` for an *untested-behavior* finding is
   not complete until a mutation has failed **for every property the test claims**
   — invert each one in turn and watch *that property's assertion* go red, not
   merely something. A test that stays green against the very defect it was
   written for has closed nothing; one that reddens on an unrelated panic has
   proved nothing either; and one red run across a test asserting two independent
   properties leaves the second untested while looking verified.
-- **DEFER**: the finding still looks real or plausible, but the safe fix needs
-  a broader refactor, product decision, policy call, or cross-team
-  coordination. Keep it open. Do not call it a false positive.
+- **FILE**: every verified P2/P3 and every older P0/P1 that predates the change
+  and is outside its brief. Keep it as a follow-up; never repair a P2/P3 in this
+  change, even alongside a P0/P1 repair or when its fix touches the same lines.
+  Older P0/P1 findings are also named in the report and do not hold this work.
+- **DEFER**: an introduced or brief-blocking P0/P1 whose safe fix needs a broader
+  refactor, product decision, policy call, or cross-team coordination. Keep it
+  open and stop for that decision. Do not call it a false positive.
 - **REJECT**: allowed only when you have direct counter-evidence from code,
   tests, docs, or the diff. (The finding is *wrong*.)
 - **CUT/SIMPLIFY**: the finding may be correct *as stated*, but implementing it
@@ -42,7 +64,7 @@ split one slot's findings across two tag names: `BOTH` would then be reachable f
 a single slot reviewed twice, and the one thing the tag is for — two *independent*
 reads agreeing — is exactly what that would not be.
 
-- **`BOTH`** — two independent reads found the same defect. Fix these first.
+- **`BOTH`** — two independent reads found the same defect. Among P0/P1 repairs, fix these first.
   Agreement raises confidence that the defect is real; it says nothing about
   whether the proposed remedy is right, so the over-specification test still
   applies. Two reviewers can both talk you into building something no
@@ -76,8 +98,6 @@ evidence for at least one of these:
 - the issue is already handled by current code or tests
 - the behavior is explicitly intended by user instructions, repo docs, or
   nearby code comments
-- the reported problem is pre-existing in `DIFF_BASE` and unrelated to this
-  branch's changes
 - the finding depends on an outdated or incorrect assumption about the
   framework, API, or code path
 
@@ -85,7 +105,7 @@ evidence for at least one of these:
 
 Do not reject a finding for any of these reasons:
 
-- it is "only" P2 or P3
+- it is "only" P2 or P3 — it is `FILE` instead
 - you could not reproduce it quickly
 - the fix feels inconvenient, noisy, or higher churn than you want
 - the change might be intentional, but you have no proof
@@ -104,12 +124,15 @@ or abstraction. Ask: **if I simply don't do this, what actually breaks — a rea
 correctness / security / data-loss / broken-trust problem, or merely an
 operational inconvenience or a not-strictly-needed nicety?**
 
-- Real correctness / security / data-loss / trust break → `FIX` (or `DEFER` if
-  the safe fix is broad).
+- Real correctness / security / data-loss / trust break → rate it, then `FIX`
+  (or `DEFER` if the safe fix needs a decision) only for an introduced or
+  brief-blocking P0/P1; otherwise `FILE`.
 - Only operational, defense-in-depth, or "would be nicer" → `CUT`, `SIMPLIFY`,
   or `MARK-OPTIONAL`. Name what already covers the case (an existing path, a
   simpler choice, the user's stated threat model) or why the case doesn't
-  matter, and record it like a rejection.
+  matter, and record it like a rejection. An accepted suggestion is listed once
+  in the report, not filed. If it is actually a P0–P3 defect, use that finding's
+  disposition; `CUT` cannot bypass `FILE` for a verified P2/P3.
 
 Watch the asymmetry: a review loop almost always pushes toward *adding*. Nothing
 in it pushes back toward simplicity unless you do. A finding that is "valid" yet
@@ -157,19 +180,54 @@ it still applies at every site of the class, per the per-finding workflow below.
 
 ## Priority guidance
 
-- **P0/P1**: fix unless you can directly disprove the finding.
-- **P2/P3**: fix when the issue is concrete and the remedy is low or medium risk.
-  If the finding remains plausible but the fix is broader or riskier, mark it
-  `DEFER` and surface it at the end instead of dismissing it.
+- **P0/P1**: fix unless disproved when introduced by the change or leaving its
+  brief unmet; older P0/P1 outside the brief are `FILE` (`review-preexisting`).
+- **P2**: `FILE` (`review-followup`).
+- **P3**: `FILE` (`review-nit`).
+- A P2/P3 is `FILE` even in a pass that fixes a P0/P1, even on the same lines.
 - **Subjective style-only feedback** can be skipped only when no project rule,
   concrete bug risk, or user preference supports it.
 - Missing validation, missing tests for changed behavior, unhandled enum or
   state cases, missing error handling, and missing guards are not "subjective"
   just because they are lower priority.
 
+## Filing follow-ups
+
+Keep the accepted FILE list across passes and supply it to prompted reviewers
+under "Follow-ups (filed when the work ends; do not fix, do not report again)".
+A listed follow-up is not a finding again unless rated P0/P1 with a reason.
+Recheck before each next brief or prompted pass and at the workflow's finish;
+keep only follow-ups that still hold in the repository with the accepted work.
+The owning skill specifies the reference state. Report items a later repair removed as
+resolved, not filed.
+
+First search open issues. File one issue per distinct defect: only the same
+defect already covered by an open issue of equal or higher priority becomes a
+comment on that issue. Sharing a requirement or code path is not enough. Two
+distinct P3s are two beads.
+
+Each filed item carries what is wrong, file:line evidence at the commit where it
+was seen (identify uncommitted evidence too), the Reviewers that raised it, its
+severity and a one-line reason it is not higher, the smallest fix and how to
+verify it, and its source task, Run Directory or PR.
+
+| Kind | Priority | Type | Label | Link |
+|---|---|---|---|---|
+| P2 | 2 | `task` | `review-followup` | `related` to source bead |
+| P3 | 3 | `task` | `review-nit` | `related` to source bead |
+| Older P0/P1 outside the brief | 0 or 1, its own | `task` | `review-preexisting` | `related` to source bead |
+
+For beads writes, load [`beads-jsonl-path`](../../beads-jsonl-path/SKILL.md),
+resolve and check the JSONL before writing, review every write and flush through
+that companion. Drains skip `review-nit` unless the owner asks
+(`br ready --exclude-label review-nit`); a delegated drain also excludes
+`review-followup` until the owner names it. No drain excludes `review-preexisting`.
+Without beads use the repository's tracker; without any tracker, put the list in
+the report or PR body. Do not create a tracker for this purpose.
+
 ## Per-finding workflow
 
-For each finding you `FIX` or `DEFER`:
+For each finding you `FIX` (a `DEFER` stops before editing):
 
 1. Read the referenced code and nearby context
 2. Inspect any claimed safeguard, test, or doc before deciding
@@ -188,7 +246,7 @@ For each `CONFLICT`:
 2. Record the winner and the evidence in `"$PASS_NOTES"` — this is the one
    disposition always worth surfacing in chat, because a confident reviewer was
    wrong about code you are shipping
-3. Dispose of the surviving claim normally (`FIX` / `DEFER` / `REJECT` / `CUT`)
+3. Dispose of the surviving claim normally (`FIX` / `FILE` / `DEFER` / `REJECT` / `CUT`)
 
 For each finding you `REJECT`:
 
@@ -197,14 +255,22 @@ For each finding you `REJECT`:
 2. Mention it in chat only if it affects the pass outcome
 
 If you cannot point to concrete evidence, do not reject it. Leave it as
-`FIX` or `DEFER`.
+`FIX` or `DEFER` for an introduced or brief-blocking P0/P1; verify other
+findings and `FILE` them when upheld.
+
+For each finding you `FILE`:
+
+1. Verify and record its evidence, rating, source and proposed smallest fix in
+   `"$PASS_NOTES"`; keep it in the follow-up list for later prompted passes.
+2. Do not edit it. At the finish, apply the filing procedure above.
 
 For each finding you `CUT/SIMPLIFY`:
 
 1. Record the over-specification test result in `"$PASS_NOTES"`: what would
    break if omitted (nothing real), and what already covers the case.
-2. If you `SIMPLIFY` rather than skip, make the minimal change and note why the
-   smaller shape is sufficient.
+2. If you `SIMPLIFY` an introduced or brief-blocking P0/P1 remedy, make the
+   minimal change and note why the smaller shape is sufficient. P2/P3 remain
+   FILE; accepted suggestions are only listed, not implemented.
 3. Surface cuts in the finish report alongside rejections, so the user can see
    what was deliberately not built.
 
