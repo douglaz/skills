@@ -312,6 +312,16 @@ def crop_tables(pages, work, dpi):
             groups.append(cur)
         regions = []
         for i, grp in enumerate(groups):
+            # A row with a single cell has no column gap, so it is not tagged
+            # as a table line -- yet it sits inside the crop. Left as text it
+            # prints a second time, out of order, after the picture.
+            lo, hi = grp[0]['c'], grp[-1]['c']
+            x0, x1 = min(l['left'] for l in grp), max(l['right'] for l in grp)
+            for l in p['lines']:
+                if (l['kind'] in ('body', 'note', 'quote') and lo < l['c'] < hi
+                        and l['left'] >= x0 - 10 and l['right'] <= x1 + 10):
+                    l['kind'] = 'table'
+                    grp.append(l)
             name = f'tbl-{p["n"]}-{i}.png'
             path = os.path.join(work, name)
             if not os.path.exists(path):
@@ -363,10 +373,65 @@ def hyphen_join(prev, nxt, vocab):
     return prev + nxt
 
 
+CLOSING = re.compile(r'(?:\s*</[bi]>)+\s*$')
+
+
+def split_tail(s):
+    """Separate trailing closing tags: 'demo\\xad</i>' -> ('demo\\xad', '</i>').
+
+    A hyphen inside an italic run sits *before* the </i>, so a plain
+    endswith() check misses it and the halves get joined with a space --
+    "demo ra" for "demora".
+    """
+    m = CLOSING.search(s)
+    if not m:
+        return s.rstrip(), ''
+    return s[:m.start()].rstrip(), re.sub(r'\s+', '', m.group(0))
+
+
+def join_lines(prev, nxt, vocab):
+    core, tail = split_tail(prev)
+    nxt = nxt.lstrip()
+    if core.endswith('\xad'):
+        # soft hyphen: join without a space. Left to a converter this becomes
+        # "impor tante".
+        return core[:-1] + tail + nxt
+    if core.endswith('-'):
+        return hyphen_join(core, tail + nxt, vocab)
+    return core + tail + ' ' + nxt
+
+
+MARKER = re.compile(r'^\s*(?:[•●▪■◦‣·]|\(?(?:\d{1,3}|[a-zA-Z]|[ivxlcIVXLC]{1,6})[.)])\s*$')
+
+
+OPEN_END = re.compile(r'[.!?:;…"”»)\]*]$')
+PROSE_LINE = 35         # characters: a line of running prose, not a cell or label
+LIST_HEAD = re.compile(r'(?:[a-z]|[ivx]{1,4})[.)]\s')
+
+
+def runs_on(prev, nxt):
+    """True when `prev` stops mid-sentence and `nxt` carries on in lower case."""
+    a = html.unescape(re.sub(r'<[^>]+>', '', prev)).replace('\xad', '').rstrip()
+    b = html.unescape(re.sub(r'<[^>]+>', '', nxt)).lstrip()
+    return bool(a and b and not OPEN_END.search(a)
+                and b[0].islower() and not LIST_HEAD.match(b))
+
+
+def marker_left(l):
+    """Where a list item's words start, if the line opens with a bullet or
+    a number set as its own run ('•' at 85, 'Embora ...' at 111); else None."""
+    runs = l['runs']
+    if len(runs) > 1 and MARKER.match(txt_of(runs[0][4])):
+        return runs[1][0]
+    if re.match(r'\s*[•●▪■◦‣]', txt_of(l['html'])):
+        return l['left']
+    return None
+
+
 def build_html(pages, body, opt, h1s, h2s, vocab=frozenset()):
     blocks = []
-    flows = {'p': {'cur': None, 'gap': None}, 'q': {'cur': None, 'gap': None},
-             'fn': {'cur': None, 'gap': None}}
+    flows = {k: {'cur': None, 'gap': None, 'bgap': None, 'base': None, 'item': False,
+                 'last': 0} for k in ('p', 'q', 'fn')}
     pending = []            # footnotes wait for the paragraph they interrupted
     code = []
 
@@ -396,6 +461,9 @@ def build_html(pages, body, opt, h1s, h2s, vocab=frozenset()):
         for src in p['imgs']:
             boundary()
             blocks.append(('img', src))
+
+        for f in flows.values():
+            f['base'] = None            # line positions are per page
 
         # margins per flow: a page with both a quote and a footnote has two
         # different left margins at the same font size
@@ -441,23 +509,50 @@ def build_html(pages, body, opt, h1s, h2s, vocab=frozenset()):
                     close(other)
             f = flows[which]
             cur, prev = f['cur'], f['gap']
-            new = (cur is None
-                   or l['left'] - bl >= opt.indent          # first line is indented
-                   or prev is None or prev >= opt.short)    # previous line fell short
+            ml = marker_left(l)
+            tl = (ml if ml is not None else l['left']) - bl
+            if cur is None or ml is not None:
+                new = True                              # nothing open, or a list item
+            elif split_tail(cur[1])[0].endswith('\xad'):
+                new = False                             # a hyphenated word runs on
+            elif prev is None or prev >= opt.short:
+                new = True                              # previous line fell short
+            elif f['base'] is None:
+                # No continuation line of this paragraph on this page yet:
+                # judge against the page margin, letting a bulleted item's
+                # wrapped lines sit anywhere in its hanging indent.
+                new = not (tl < opt.indent or (f['item'] and tl > 0))
+            else:
+                # Against the leftmost continuation line on this page, not the
+                # margin: list items wrap at a hanging indent, and some PDFs
+                # jitter each line's start by several px -- the minimum
+                # absorbs the jitter. It resets per page, so a page whose
+                # margin was misjudged cannot carry a wrong base onward.
+                new = tl - f['base'] >= opt.indent
+            if (new and cur is not None and ml is None and f['bgap'] is not None
+                    and f['last'] >= PROSE_LINE
+                    and (f['bgap'] < 3 * opt.short or getattr(opt, 'ragged_prose', False))
+                    and runs_on(cur[1], l['html'])):
+                # Geometry said "new paragraph", but the text says the sentence
+                # is still going: no closing punctuation, then lower case.
+                # Dialogue with a hanging speaker name and inset blocks fool the
+                # geometry; this does not. Only after a prose line -- long in
+                # characters *and* reaching near the page's body measure. The
+                # body measure, not the flow's own: an inset poem or a column
+                # of index entries sets its own right edge, and its lines must
+                # stay line by line. A ragged-right prose box looks exactly like
+                # that poem, so rejoining it is opt-in (--ragged-prose).
+                new = False
             if new:
                 close(which)
                 cur = f['cur'] = [l['size'], l['html']]
+                f['item'], f['base'] = ml is not None, None
             else:
-                prev, nxt = cur[1].rstrip(), l['html'].lstrip()
-                if prev.endswith('\xad'):
-                    # soft hyphen: join without a space. Left to a converter
-                    # this becomes "impor tante".
-                    cur[1] = prev[:-1] + nxt
-                elif prev.endswith('-'):
-                    cur[1] = hyphen_join(prev, nxt, vocab)
-                else:
-                    cur[1] = prev + ' ' + nxt
+                f['base'] = tl if f['base'] is None else min(f['base'], tl)
+                cur[1] = join_lines(cur[1], l['html'], vocab)
             f['gap'] = br - l['right']
+            f['bgap'] = geo.get('body', (bl, br))[1] - l['right']
+            f['last'] = len(txt_of(l['html']))
 
         # A footnote belongs to the page it sits on, so close it here rather
         # than waiting for the next heading or image -- left open it drifts
@@ -475,6 +570,7 @@ def build_html(pages, body, opt, h1s, h2s, vocab=frozenset()):
     boundary()
 
     def clean(s):
+        s = re.sub(r'</([bi])>(\s*)<\1>', r'\2', s)     # one italic run, not one per line
         return re.sub(r'[ \t\xa0]{2,}', ' ', s.replace('­', '')).strip()
 
     out = ['<html><head><meta charset="utf-8"/><title>book</title>',
@@ -550,6 +646,37 @@ def verify(epub, plain_txt):
             words += re.findall(WORD, html.unescape(t))
     bad = [w for w in words if w.lower() not in vocab]
     return len(words), bad
+
+
+ITEM_START = re.compile(r'(?:[•●▪■◦‣·–-]|\(?(?:\d{1,3}|[a-zA-Z]|[ivxlcIVXLC]{1,6})[.)])\s')
+
+
+def midsentence_breaks(blocks):
+    """Paragraphs that stop without closing punctuation while another
+    paragraph follows: one paragraph cut in two.
+
+    The vocabulary check cannot see this -- every word is intact -- yet it is
+    the failure a reader hits first. Deliberately blind to how the next
+    paragraph starts: `runs_on` already repairs breaks before a lower-case
+    word, so a check on that would only re-ask its question and could never
+    fail. What it cannot repair -- "dos Estados" | "Unidos", or every line
+    split by a bad --short -- shows here. Some hits are legitimate (verse,
+    captions, table text), hence a rate, not a zero. Two kinds are not
+    counted: paragraphs under ten words, since a cut paragraph holds at least
+    a line of prose while captions, cells and verse lines are short; and a
+    break before a list item, since unpunctuated list items are normal.
+    """
+    out, prev = [], None
+    for kind, t in blocks:
+        if kind not in ('p', 'q'):
+            prev = None if kind != 'fn' else prev    # notes sit outside the flow
+            continue
+        s = re.sub(r'\s+', ' ', html.unescape(re.sub(r'<[^>]+>', '', t)).replace('\xad', '')).strip()
+        if (prev and s and len(prev.split()) >= 10 and not OPEN_END.search(prev)
+                and not ITEM_START.match(s)):
+            out.append((prev, s))
+        prev = s
+    return out
 
 
 # ---------------------------------------------------------------------- main
@@ -642,6 +769,10 @@ def main():
                     help='px inset marking small type as a block quote, not a footnote')
     ap.add_argument('--indent', type=int, default=6, help='px indent starting a paragraph')
     ap.add_argument('--short', type=int, default=18, help='px short of margin ending one')
+    ap.add_argument('--ragged-prose', action='store_true',
+                    help='rejoin a prose-length line (35+ chars) to a lower-case next line '
+                         'even far from the margin: for ragged inset prose boxes; merges '
+                         'free verse, so leave off for books with poetry')
     ap.add_argument('--table-gap', type=int, default=40,
                     help='px gap between runs marking a line as tabular; 0 disables')
     ap.add_argument('--table-sizes',
@@ -690,7 +821,8 @@ def main():
     h2s = ({int(x) for x in opt.h2_sizes.split(',')} if opt.h2_sizes
            else ({eligible[1]} if len(eligible) > 1 else set()))
 
-    doc, counts, _ = build_html(pages, body, opt, h1s, h2s, load_vocab(work))
+    doc, counts, blocks = build_html(pages, body, opt, h1s, h2s, load_vocab(work))
+    broken = midsentence_breaks(blocks)
 
     # page 1 art is nearly always the front cover; inline it and the reader
     # meets the same image twice
@@ -733,6 +865,14 @@ def main():
     print(f'table crops rendered: {made}   TOC entries: {toc}')
     print(f'words: {total}   not in PDF vocabulary: {len(bad)} '
           f'({len(bad) / max(total, 1) * 100:.2f}%)')
+    paras = counts['p'] + counts['q']
+    print(f'paragraphs ending mid-sentence: {len(broken)} of {paras} '
+          f'({len(broken) / max(paras, 1) * 100:.1f}%)')
+    if paras and len(broken) / paras > 0.04:
+        print('  ^ above ~4% means lines are still being cut into separate paragraphs; '
+              'check --indent / --short against the line positions in book.xml')
+        for a, b in broken[:5]:
+            print(f'    ...{a[-40:]!r} | {b[:40]!r}...')
     if total and len(bad) / total > 0.01:
         print('  ^ above ~1% usually means words are still being split; '
               'check hyphen joining and the sample paragraphs in analyze mode')

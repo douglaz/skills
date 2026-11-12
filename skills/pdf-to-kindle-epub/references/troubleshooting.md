@@ -7,6 +7,7 @@ arrives.
 ## Contents
 
 - [Text breaks mid-sentence](#text-breaks-mid-sentence)
+- [Every line of a list is its own paragraph](#every-line-of-a-list-is-its-own-paragraph)
 - [Words split in half](#words-split-in-half)
 - [A block of text is smaller than the rest](#a-block-of-text-is-smaller-than-the-rest)
 - [A footnote interrupts a sentence](#a-footnote-interrupts-a-sentence)
@@ -14,6 +15,7 @@ arrives.
 - [Table of contents is wrong or starts partway in](#table-of-contents-is-wrong-or-starts-partway-in)
 - [Headings mashed together or full of page numbers](#headings-mashed-together-or-full-of-page-numbers)
 - [A table came out as gibberish](#a-table-came-out-as-gibberish)
+- [Table text repeats after the picture](#table-text-repeats-after-the-picture)
 - [Font size won't change on the Kindle](#font-size-wont-change-on-the-kindle)
 - [File too large to email](#file-too-large-to-email)
 - [Stray PNGs appeared next to the PDF](#stray-pngs-appeared-next-to-the-pdf)
@@ -39,13 +41,39 @@ because the tags are where the damage is:
 ```
 
 **Fix:** use `pdf2epub.py`, which rebuilds paragraphs from line geometry. If it
-is still happening *through* the script, the page's margins are being misread —
-check the sample paragraphs in `analyze`, then try adjusting `--short` (how far
-short of the right margin ends a paragraph, default 18px) or `--indent`.
+is still happening *through* the script, the convert report's "paragraphs
+ending mid-sentence" figure will be high and its examples show where. Look at
+the `left` and `width` of those lines in `book.xml`:
+
+- **Line-start jitter** — some PDFs place each line a few px off the margin.
+  Once a paragraph has a continuation line the script measures indents against
+  the leftmost one, which absorbs it, but a paragraph's second line is still
+  judged against the margin. Histogram each body line's offset from its page's
+  most common `left`: a real indent is a clear cluster (22–28px in one book),
+  jitter a tail below it (up to ~13px there). Keep `--indent` between the two.
+- **Ragged or narrow blocks** — inset prose boxes whose lines stop well short
+  of the page's body measure. By default the lower-case rule does not rejoin
+  them, because an inset poem looks the same. If the book has such boxes and
+  no poetry, pass `--ragged-prose`, which rejoins lines of 35+ characters
+  wherever they end; shorter lines still stay apart (table cells, labels).
 
 A caution learned the hard way: when checking output, strip tags with a
 *space* replacement and it will look correct whether or not it is broken. Look
 at the raw markup.
+
+## Every line of a list is its own paragraph
+
+> "each bullet point is chopped up line by line"
+
+A list item wraps at a hanging indent — bullet at 85px, text at 111px, every
+continuation line at 108px — so measured against the page margin each wrapped
+line looks indented.
+
+**Fix:** handled when the bullet or number is set as its own run: it opens a
+new item, the item's wrapped lines may sit anywhere in its hanging indent, and
+later indents are measured against the item's own continuation lines. A
+number set in the same run as its text is not recognised as a marker, so such
+items can still break; check `marker_left` in the script.
 
 ## Words split in half
 
@@ -60,7 +88,11 @@ they are ambiguous: `self-` / `interest` must *keep* its hyphen. The script
 resolves it by asking whether `pdftotext` -- which dehyphenates correctly --
 knows the joined word.
 
-**Fix:** handled automatically, both kinds. If it persists, check the
+A third variant hides inside italics: the soft hyphen sits *before* the `</i>`
+(`demo` U+00AD `</i>` / `<i>ra`), so a check for a line ending in a hyphen misses it and
+the halves join with a space — `demo ra`.
+
+**Fix:** handled automatically, all three. If it persists, check the
 vocabulary figure the conversion prints; a book whose `pdftotext` output is
 itself poor (unusual encoding, ligature problems) weakens the oracle. Compare
 a sample page of `plain.txt` in the work directory against the PDF.
@@ -149,6 +181,19 @@ raise `--table-gap` or set `--table-gap 0` to disable gap detection.
 Rendered tables will not reflow with font size. That is the correct trade: a
 legible fixed table beats a reflowable scrambled one. Say so when reporting the
 result, since it is a real limitation the reader will notice.
+
+## Table text repeats after the picture
+
+> "after the drug table there's '(Depakene)' and '• teofilina' on their own"
+
+A table row with a single cell has no column gap, so it is not tagged as a table
+line — but it lies inside the crop, so it appeared once in the picture and
+again as stray text after it.
+
+**Fix:** handled automatically: lines lying vertically between a table's rows,
+and horizontally within it, are folded into that table's picture. A header row
+*above* the first gapped row is not between rows, so it stays as text (and may
+show clipped at the picture's top edge).
 
 ## Font size won't change on the Kindle
 

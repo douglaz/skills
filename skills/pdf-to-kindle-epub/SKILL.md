@@ -66,9 +66,11 @@ sizes, and the report is how you learn this book's. It prints the font-size
 histogram, which sizes form headings and how often, the actual heading text it
 would produce, a breakdown of small type, and two reconstructed paragraphs.
 
-**Read the sample paragraphs.** If they read as continuous prose, the
-reconstruction is working and the rest is tuning. If they are chopped up, stop
-and fix that first — nothing else matters.
+**Read the sample paragraphs.** If they are chopped up, stop and fix that
+first — nothing else matters. If they read as continuous prose, that is a good
+sign but not proof: two samples read fine on a book that still had hundreds of
+paragraphs cut mid-sentence elsewhere. The convert step's mid-sentence count is
+the real check.
 
 ### 2. Decide the structure
 
@@ -107,12 +109,20 @@ entry. The `analyze` output's first headings usually show the real title.
 
 ### 4. Check what it reports
 
-The convert step prints a self-check. Two numbers matter:
+The convert step prints a self-check. Three numbers matter:
 
+- **Paragraphs ending mid-sentence.** Paragraphs of ten or more words that stop
+  without closing punctuation while another paragraph follows — one paragraph
+  cut in two, the failure a reader hits first. Under ~4% is healthy (one book
+  read 2.6% when right and 6.9% with `--indent 0`); the rest are usually
+  captions or table text. A spike means lines are still being cut: see "Text
+  breaks mid-sentence" in the troubleshooting reference.
 - **Words not in the PDF's vocabulary.** The script compares against
   `pdftotext` output, which dehyphenates correctly, so it is a good oracle.
   Under ~1% is healthy. A spike means words are still being split — usually
-  hyphen joining, covered in the troubleshooting reference.
+  hyphen joining, covered in the troubleshooting reference. It cannot see a
+  paragraph cut in two — every word is intact — which is why the first number
+  exists.
 - **File size.** Over 25 MB cannot be emailed through Gmail. Lower
   `--max-image-px` (default 1400, already well past what e-ink can show), or
   use a delivery route without the limit.
@@ -132,18 +142,45 @@ Amazon's own limits are the thing to plan around:
 | Gmail attachment | 25 MB |
 
 The web uploader is the path of least resistance and sidesteps the size problem
-entirely. USB also works — a Kindle mounts as a drive and converts EPUBs dropped
-into `documents/`. Mention the web uploader when a file is anywhere near 25 MB,
-rather than shrinking images until quality suffers.
+entirely. Mention it when a file is anywhere near 25 MB, rather than shrinking
+images until quality suffers.
+
+USB also works, but not with the EPUB itself: a Kindle does not open an EPUB
+copied over USB — only Send to Kindle converts one. Convert to AZW3 first
+(`ebook-convert book.epub book.azw3`) and copy that into `documents/`, then
+eject before unplugging.
 
 ## What the script handles, and the reasoning
 
 Knowing *why* each rule exists makes it much easier to tell when a book needs
 a different setting.
 
-**Paragraphs** — a line starts a new paragraph if it is indented past the body
-margin, or if the previous line stopped short of the right margin. In justified
-text those two signals are reliable; the short line is the stronger of the two.
+**Paragraphs** — a line starts a new paragraph if it is indented, or if the
+previous line stopped short of the right margin. In justified text those two
+signals are reliable; the short line is the stronger of the two. Once a
+paragraph has a continuation line on the page, an indent is measured against
+the leftmost such line rather than the page margin: list items wrap at a
+hanging indent, and the minimum absorbs PDFs that start each line a few px
+off. That reference resets on every page, so a page whose margin was misjudged
+cannot carry a wrong one onward. A bullet or list number set as its own run
+always opens a paragraph. Raise `--indent` above any line-start jitter but
+below the real paragraph indent.
+
+Two overrides, both from the text rather than the geometry. A line ending in a
+soft hyphen never ends a paragraph: the word runs on. And when the previous
+line has no closing punctuation and the next starts in lower case, the sentence
+is still going, so they join — this keeps dialogue with a hanging speaker name
+("David: …" wrapping under the text) in one piece, which geometry alone
+splits. It applies only after a prose line: 35+ characters *and* ending near
+the page's body measure. An inset poem or a column of index entries sets its
+own right edge well short of the body's, so its lines stay line by line.
+Lettered list items ("b. ") are exempt.
+
+A ragged-right prose box — a worksheet, a boxed dialogue — looks exactly like
+that inset poem, so by default its lines stay apart too. For a book full of
+such boxes and without poetry, `--ragged-prose` drops the margin condition for
+35+ character lines. It merges free verse, so leave it off for books with
+poems.
 
 **Hyphenation** — PDFs break words across lines two ways, and both need
 handling. A soft hyphen (U+00AD) gets silently turned into a space by every
@@ -170,7 +207,10 @@ the columns interleave into nonsense. Any line whose runs are separated by a
 wide horizontal gap is treated as tabular, and the region is rendered as a
 cropped image. These stay readable and zoomable but will not reflow with font
 size, which is the right trade for a table. If `analyze` shows a small font size
-that is largely tabular, add it with `--table-sizes 11`.
+that is largely tabular, add it with `--table-sizes 11`. A row with a single
+cell has no column gap, so lines lying between a table's rows are folded into
+its picture too — otherwise they print a second time, out of order, as text
+after it.
 
 **Code listings** — detected by monospace font family and kept preformatted.
 Reflowing code destroys it.

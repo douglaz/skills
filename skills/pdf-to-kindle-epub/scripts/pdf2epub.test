@@ -77,6 +77,40 @@ FIXTURE = '''<?xml version="1.0" encoding="UTF-8"?>
 <text top="140" left="100" width="400" height="15" font="1">An inset quotation sits well in from the body margin.</text>
 <text top="200" left="50" width="300" height="17" font="0">That was his claim.</text>
 </page>
+<page number="5" position="absolute" top="0" left="0" height="1000" width="600">
+<text top="100" left="50" width="300" height="17" font="0">The study found two things:</text>
+<text top="122" left="80" width="10" height="17" font="0">• </text>
+<text top="122" left="100" width="450" height="17" font="0">genes explain only a small share of the</text>
+<text top="144" left="98" width="452" height="17" font="0">cases, while life events explain most;</text>
+<text top="166" left="98" width="200" height="17" font="0">so says the data;</text>
+<text top="188" left="80" width="10" height="17" font="0">• </text>
+<text top="188" left="100" width="450" height="17" font="0">pills are the usual treatment, though talk</text>
+<text top="210" left="98" width="200" height="17" font="0">therapy works as well.</text>
+<text top="232" left="50" width="480" height="17" font="0">Then <i>it took a long time to de­</i></text>
+<text top="254" left="50" width="200" height="17" font="0"><i>cay</i> and that was all.</text>
+</page>
+<page number="6" position="absolute" top="0" left="0" height="1000" width="600">
+<text top="100" left="50" width="500" height="17" font="0">Ana: You never do anything for yourself between the</text>
+<text top="122" left="100" width="200" height="17" font="0">sessions at all.</text>
+<text top="144" left="70" width="480" height="17" font="0">A one-line paragraph that runs to the margin.</text>
+<text top="166" left="70" width="300" height="17" font="0">The next one is indented too.</text>
+<text top="188" left="50" width="200" height="17" font="0">a. first item</text>
+<text top="210" left="50" width="200" height="17" font="0">b. second item</text>
+</page>
+</pdf2xml>
+'''
+
+# Line starts that wander a few px off the margin, as some PDFs set them.
+JITTER = '''<?xml version="1.0" encoding="UTF-8"?>
+<pdf2xml producer="poppler" version="test">
+<page number="1" position="absolute" top="0" left="0" height="1000" width="600">
+<fontspec id="0" size="15" family="ABCDEF+Serif" color="#000000"/>
+<text top="100" left="50" width="500" height="17" font="0">Lines in some PDFs start a few pixels off the</text>
+<text top="122" left="61" width="489" height="17" font="0">margin, and that jitter is not an indent, so it</text>
+<text top="144" left="52" width="498" height="17" font="0">all stays one paragraph until the line that</text>
+<text top="166" left="63" width="487" height="17" font="0">really ends it.</text>
+<text top="188" left="75" width="475" height="17" font="0">A real indent still opens the next one.</text>
+</page>
 </pdf2xml>
 '''
 
@@ -91,21 +125,21 @@ class Opt:
     short = 18
 
 
-def build():
+def build(fixture=FIXTURE, opt=Opt()):
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, 'book.xml')
         with open(path, 'w', encoding='utf8') as fh:
-            fh.write(FIXTURE)
+            fh.write(fixture)
         pages, body = P.parse(path)
     P.strip_furniture(pages, body)
-    P.classify(pages, body, Opt())
+    P.classify(pages, body, opt)
     for p in pages:
         p['tables'] = []
     # the oracle pdftotext would supply: it knows "productive", and does not
     # know "selfinterest", which is what makes the two cases decidable
     vocab = frozenset(['productive', 'work', 'self-interest', 'interest'])
     # as a real book maps them: parts to h1 (none here), chapters to h2
-    doc, counts, blocks = P.build_html(pages, body, Opt(), set(), {138}, vocab)
+    doc, counts, blocks = P.build_html(pages, body, opt, set(), {138}, vocab)
     return pages, body, doc, counts, blocks
 
 
@@ -174,6 +208,161 @@ print('\ntable detection')
 check('wide column gaps are not claimed in ordinary prose',
       all(l['kind'] != 'table' for p in pages for l in p['lines']),
       'a prose line was mistaken for a table')
+
+print('\nlists, italics and jitter')
+check('a bulleted item wrapping at a hanging indent stays one paragraph',
+      '<p>• genes explain only a small share of the cases, while life events'
+      ' explain most; so says the data;</p>' in doc,
+      'every wrapped line of the item became its own paragraph')
+check('each bullet opens its own paragraph',
+      '<p>• pills are the usual treatment, though talk therapy works as well.</p>' in doc)
+check('a soft hyphen inside italics joins the word',
+      'to decay</i> and that was all.' in doc and 'de cay' not in plain,
+      'the hyphen sat before </i> and was missed: "de cay"')
+check('a short line ending in a soft hyphen does not end the paragraph',
+      '<p>Then <i>it took a long time to decay</i> and that was all.</p>' in doc)
+check('a speaker line wrapping at a hanging indent stays one paragraph',
+      '<p>Ana: You never do anything for yourself between the sessions at all.</p>' in doc,
+      'geometry alone reads the hanging indent as a new paragraph')
+check('a full one-line paragraph is not merged into the indented next one',
+      '<p>A one-line paragraph that runs to the margin.</p>' in doc
+      and '<p>The next one is indented too.</p>' in doc)
+check('lettered list items are not merged by the lower-case rule',
+      '<p>a. first item</p>' in doc and '<p>b. second item</p>' in doc)
+check('no paragraph in the fixture is cut mid-sentence',
+      P.midsentence_breaks(blocks) == [], f'got {P.midsentence_breaks(blocks)}')
+
+
+class JitterOpt(Opt):
+    indent = 18
+
+
+_, _, jdoc, _, jblocks = build(JITTER, JitterOpt())
+check('line starts that jitter under --indent stay in one paragraph',
+      '<p>Lines in some PDFs start a few pixels off the margin, and that jitter is'
+      ' not an indent, so it all stays one paragraph until the line that really'
+      ' ends it.</p>' in jdoc, f'got {re.findall(r"<p>.*?</p>", jdoc)}')
+check('a real indent past --indent still opens a paragraph',
+      '<p>A real indent still opens the next one.</p>' in jdoc)
+TABLE = '''<?xml version="1.0" encoding="UTF-8"?>
+<pdf2xml producer="poppler" version="test">
+<page number="1" position="absolute" top="0" left="0" height="1000" width="600">
+<fontspec id="0" size="15" family="ABCDEF+Serif" color="#000000"/>
+<fontspec id="1" size="13" family="ABCDEF+Serif" color="#000000"/>
+<text top="60" left="50" width="500" height="17" font="0">Some prose comes before the table and runs right across the</text>
+<text top="82" left="50" width="200" height="17" font="0">page to its end.</text>
+<text top="120" left="50" width="100" height="15" font="1">lithium</text>
+<text top="120" left="300" width="100" height="15" font="1">tremor</text>
+<text top="140" left="50" width="100" height="15" font="1">(Depakene)</text>
+<text top="160" left="50" width="100" height="15" font="1">caffeine</text>
+<text top="160" left="300" width="100" height="15" font="1">lower level</text>
+<text top="220" left="50" width="300" height="17" font="0">After the table, prose resumes.</text>
+</page>
+</pdf2xml>
+'''
+with tempfile.TemporaryDirectory() as w:
+    path = os.path.join(w, 'book.xml')
+    with open(path, 'w', encoding='utf8') as fh:
+        fh.write(TABLE)
+    tpages, tbody = P.parse(path)
+    P.strip_furniture(tpages, tbody)
+    P.classify(tpages, tbody, Opt())
+    open(os.path.join(w, 'tbl-1-0.png'), 'wb').close()   # cached crop: no pdftoppm
+    P.crop_tables(tpages, w, 150)
+    tdoc, _, _ = P.build_html(tpages, tbody, Opt(), set(), set(), frozenset())
+check('a single-cell row inside a table goes into the picture, not the text',
+      '(Depakene)' not in tdoc and tdoc.count('<img') == 1, tdoc)
+check('prose around the table survives',
+      'runs right across the page to its end.' in tdoc and 'After the table, prose resumes.' in tdoc)
+# A paragraph turning onto a page whose most common line start is an inset
+# block (so that page's margin is misjudged), then verse in body type.
+TURN = '''<?xml version="1.0" encoding="UTF-8"?>
+<pdf2xml producer="poppler" version="test">
+<page number="1" position="absolute" top="0" left="0" height="1000" width="600">
+<fontspec id="0" size="15" family="ABCDEF+Serif" color="#000000"/>
+<text top="100" left="50" width="500" height="17" font="0">Prose that runs all the way down to the foot of the</text>
+<text top="122" left="50" width="500" height="17" font="0">page, where it tells of a trip across the United</text>
+</page>
+<page number="2" position="absolute" top="0" left="0" height="1000" width="600">
+<text top="100" left="50" width="300" height="17" font="0">States and Canada together.</text>
+<text top="140" left="110" width="380" height="17" font="0">An inset block in body type sits well</text>
+<text top="162" left="110" width="380" height="17" font="0">in from the margin and is set apart</text>
+<text top="184" left="110" width="380" height="17" font="0">from the prose around it on all</text>
+<text top="206" left="110" width="200" height="17" font="0">four sides.</text>
+</page>
+<page number="3" position="absolute" top="0" left="0" height="1000" width="600">
+<text top="100" left="90" width="200" height="17" font="0">so much depends</text>
+<text top="122" left="90" width="60" height="17" font="0">upon</text>
+<text top="144" left="90" width="140" height="17" font="0">a red wheel</text>
+<text top="166" left="90" width="90" height="17" font="0">barrow</text>
+<text top="200" left="50" width="500" height="17" font="0">Prose after the poem runs the full width of the page and</text>
+<text top="222" left="50" width="200" height="17" font="0">then ends.</text>
+</page>
+<page number="4" position="absolute" top="0" left="0" height="1000" width="600">
+<text top="100" left="50" width="500" height="17" font="0">A full line of prose sets the right margin of this page, and</text>
+<text top="122" left="50" width="200" height="17" font="0">then it ends.</text>
+<text top="200" left="90" width="380" height="17" font="0">you do not have to walk on your knees</text>
+<text top="222" left="90" width="390" height="17" font="0">for a hundred miles through the desert</text>
+<text top="244" left="90" width="300" height="17" font="0">repenting, nothing more.</text>
+</page>
+</pdf2xml>
+'''
+
+# Ten-word lines broken before a capital: a cut runs_on cannot repair.
+CUT = '''<?xml version="1.0" encoding="UTF-8"?>
+<pdf2xml producer="poppler" version="test">
+<page number="1" position="absolute" top="0" left="0" height="1000" width="600">
+<fontspec id="0" size="15" family="ABCDEF+Serif" color="#000000"/>
+<text top="100" left="50" width="500" height="17" font="0">In the spring of that year the whole family travelled to New</text>
+<text top="122" left="50" width="500" height="17" font="0">York and then on to Boston, where they stayed with the cousins for</text>
+<text top="144" left="50" width="200" height="17" font="0">a month.</text>
+</page>
+</pdf2xml>
+'''
+_, _, tdoc2, _, _ = build(TURN, Opt())
+check('a paragraph turning onto a page with a misjudged margin stays whole',
+      'across the United States and Canada together.</p>' in tdoc2,
+      f'got {re.findall(r"<p>.*?</p>", tdoc2)[:3]}')
+check('verse lines stay line by line despite lower-case starts',
+      all(f'<p>{v}</p>' in tdoc2 for v in ('so much depends', 'upon', 'a red wheel', 'barrow')),
+      f'got {re.findall(r"<p>.*?</p>", tdoc2)}')
+
+
+check('long verse lines short of the body measure stay line by line',
+      '<p>you do not have to walk on your knees</p>' in tdoc2
+      and '<p>for a hundred miles through the desert</p>' in tdoc2,
+      f'got {re.findall(r"<p>.*?</p>", tdoc2)[-3:]}')
+
+
+class Ragged(Opt):
+    ragged_prose = True
+
+
+_, _, rdoc, _, _ = build(TURN, Ragged())
+check('--ragged-prose rejoins long lines far from the margin',
+      '<p>you do not have to walk on your knees for a hundred miles through the desert'
+      ' repenting, nothing more.</p>' in rdoc, f'got {re.findall(r"<p>.*?</p>", rdoc)[-2:]}')
+check('--ragged-prose still leaves short lines alone',
+      all(f'<p>{v}</p>' in rdoc for v in ('so much depends', 'upon', 'a red wheel', 'barrow')))
+
+
+class NoShort(Opt):
+    short = 0
+
+
+_, _, _, _, cblocks = build(CUT, Opt())
+_, _, _, _, nblocks = build(CUT, NoShort())
+check('the mid-sentence check is quiet on a correct paragraph',
+      P.midsentence_breaks(cblocks) == [], f'got {P.midsentence_breaks(cblocks)}')
+check('the mid-sentence check fires when --short 0 cuts every line',
+      len(P.midsentence_breaks(nblocks)) >= 1,
+      'the check could not see a break that runs_on does not repair')
+_cut = 'a line of prose long enough to be a paragraph that was cut'
+check('midsentence_breaks flags a paragraph cut in two',
+      P.midsentence_breaks([('p', _cut), ('p', 'Right here.')]) == [(_cut, 'Right here.')])
+check('midsentence_breaks ignores short captions and list items',
+      P.midsentence_breaks([('p', 'QUADRO 5'), ('p', 'Registro diário'),
+                            ('p', _cut), ('p', 'b. second item')]) == [])
 
 print(f'\n{PASS} passed, {FAIL} failed')
 sys.exit(1 if FAIL else 0)
