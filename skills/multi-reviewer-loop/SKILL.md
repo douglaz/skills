@@ -3,7 +3,8 @@ name: multi-reviewer-loop
 description: >-
   Iteratively review, fix, validate, and re-review the current branch with
   `codex review` and a high-effort Claude reviewer in parallel. Reconcile their
-  findings as hypotheses, repeat until both are clean, then run a cross-file and
+  findings as hypotheses, fix introduced or brief-blocking P0/P1 and file other
+  defects as follow-ups, then run a cross-file and
   documentation consistency pass; diff-clean alone is not complete. Use for
   "review loop", "multi-reviewer loop", "codex review loop", "review and fix",
   "review until clean", "codex plus opus", "codex plus fable", "get a second
@@ -29,7 +30,7 @@ Drive a tight two-reviewer review loop without bloating the agent's own context.
 
 Two reviewers with different failure modes catch more than either alone, and
 their *disagreements* carry information a single reviewer can't give you: a
-finding both raise is worth fixing first; a finding only one raises still needs
+P0/P1 repair both raise is worth fixing first; a finding only one raises still needs
 your own judgment; a reviewer that keeps going quiet while the other ratchets is
 telling you the change is done.
 
@@ -377,6 +378,7 @@ a reviewer.
    # this otherwise predictable path. `second-model-bead-audit` already does it this way.
    REVIEW_DIR=$(mktemp -d "/tmp/review-${_PROJECT}-${_BRANCH:-detached}-${_TS}.XXXXXX") \
      || { echo "cannot create a private review directory"; exit 1; }
+   printf 'None.\n' >"$REVIEW_DIR/follow-ups.md"
    ```
 
    Store each pass separately, one file per reviewer:
@@ -555,7 +557,12 @@ For each pass `N` from `1` to `MAX_PASSES`:
 2. Unwrap the Claude reviewer's JSON into a plain findings file with `jq`, and
    parse findings from both reviewers with the shared pattern in
    [references/reviewer-panel.md](references/reviewer-panel.md) § Parsing findings.
-   Keep per-priority counts **per reviewer**.
+   Keep per-priority counts **per reviewer**. The orchestrator re-rates every
+   finding on the policy rubric in
+   [disposition-rules.md](references/disposition-rules.md): reviewer tags are
+   evidence, not verdicts. Lowering P0/P1 needs a one-line reason with file:line
+   evidence; raising to P0/P1 names the applicable clause. Codex's `--base` mode
+   cannot take our rubric prompt, so re-rate its tags here too.
 
    **Do not tighten that pattern to "the severity tag is the first token."** Only
    the Claude reviewer is prompted, so only it obeys a format you dictate; `codex
@@ -597,14 +604,14 @@ For each pass `N` from `1` to `MAX_PASSES`:
    - tokens line from stderr, if present
    - log file paths
 
-6. **If this pass produced findings, do not stop here — go straight to § 3.** The summary
-   below belongs to a pass that is *finished*, and a pass with findings is not: the fixes,
-   the validation, and the next pass's launch all still have to happen. Emitting it now
-   ends the turn at the pre-fix boundary, which is the same stall § 3.6 exists to prevent,
-   one step earlier. § 3.7 is where a findings pass reports, and by then the next pass is
-   already running.
+6. **Disposition every finding under § 3. If open P0/P1 findings introduced by
+   the whole change since `DIFF_BASE` or leaving the brief unmet remain, go
+   straight to the repairs in § 3.** Their fixes, validation and next pass launch
+   still have to happen before the summary (§ 3.7). A pass with only P2/P3 or
+   older P0/P1 outside the brief finishes after FILE; it needs no repair pass.
+   Continue to § 4b before finishing the loop.
 
-   Show this only when the pass was clean (so § 3 has nothing to do) or when a § 4 stop
+   Show this only when the pass has no open introduced or brief-blocking P0/P1, or when a § 4 stop
    condition fires — the cases where stopping is the correct outcome rather than a lapse:
 
    ```text
@@ -613,6 +620,7 @@ For each pass `N` from `1` to `MAX_PASSES`:
    codex: P0=W P1=X P2=Y P3=Z  (ok|failed|ambiguous)
    claude (<model>): P0=W P1=X P2=Y P3=Z  (ok|failed|ambiguous)
    Merged: Total=T  (both=A codex-only=B claude-only=C)
+   Filed: <n> (<ids or titles>; pending until finish)
    Logs: <REVIEW_DIR>/pass-NN.*
    ```
 
@@ -628,17 +636,20 @@ this phase cannot legally start until the last reviewer of the previous one is
 dead. This is an ordering rule, not a preference; the skill tells you to run the
 reviewers in parallel, which is precisely what makes the early-start tempting.
 
-If every panel reviewer is clean, go to § 4b (the consistency pass) — not
-straight to "Finish". A clean diff is the entry condition for that phase, not
-the end of the loop.
+First rate and disposition every merged finding using step 3 below, including
+a pass with only follow-ups. If no introduced or brief-blocking P0/P1 remains
+open, go to § 4b (the consistency pass), then finish and file. Reviewer health
+still has to be checked separately; FILE does not turn a failed reviewer clean.
 
-Otherwise:
+For findings requiring repair:
 
 0. **Consider delegating the EDIT to a fresh implementer — see § 3a.** You still
    decide what is real; you do not have to be the one who types the fix. On a long
    loop this is usually the higher-leverage split.
 
-1. Work the merged list, not two separate lists. Group related findings before
+1. Work the merged list, not two separate lists. FILE follow-ups before repairs;
+   the class sweep below applies only to introduced or brief-blocking P0/P1.
+   Group related P0/P1 findings before
    editing and prefer fixing the root cause once over patching each comment
    independently — including when the two reviewers describe the same root cause
    from different angles.
@@ -679,14 +690,23 @@ Otherwise:
    substitute for the over-specification test — two reviewers can both ask you to
    build something neither the code nor the threat model needs.
 
-3. Classify each merged finding as `FIX`, `DEFER`, `REJECT`, or `CUT/SIMPLIFY`
+3. Classify each merged finding as `FIX`, `FILE`, `DEFER`, `REJECT`, or `CUT/SIMPLIFY`
    using the rules in
    [references/disposition-rules.md](references/disposition-rules.md).
-   The key principle: `FIX` is the default, `REJECT` requires concrete
-   counter-evidence (the finding is wrong), `DEFER` is for plausible findings
-   that need broader work, and `CUT/SIMPLIFY` is for findings that are valid as
-   stated but add mechanism no real correctness/security/data-loss requirement
-   needs — apply the over-specification test there before building.
+   `FIX` is the default only for P0/P1 introduced by the whole change since
+   `DIFF_BASE` or leaving the brief unmet. `FILE` every verified P2/P3 and older
+   P0/P1 outside the brief; never repair P2/P3 in this change, even alongside a
+   P0/P1 or on the same lines. `REJECT` needs concrete counter-evidence;
+   `DEFER` stops for a P0/P1 whose safe fix needs a product or architecture call.
+   Keep the over-specification test for `CUT/SIMPLIFY`; an accepted suggestion
+   is listed once in the report, not filed, unless judged a P0–P3 defect.
+
+   Maintain `$REVIEW_DIR/follow-ups.md` with FILE findings for every later Claude
+   review and consistency prompt. A listed follow-up is not a finding again
+   unless rated P0/P1 with a reason. After repairs, recheck against the working
+   tree: remove items a repair resolved from the next prompt's list and record
+   them as resolved in the report. Codex cannot receive this list with `--base`;
+   disposition repeats yourself rather than repairing them.
 
    **The other reviewer's silence is not counter-evidence.** The two reviewers
    have different visibility (codex is diff-scoped; the Claude reviewer reads the
@@ -763,8 +783,10 @@ Otherwise:
    the correct code — or report the pass as **not** clean and say which test is unpinned.
    A verdict the panel is structurally blind to is one you have to enforce yourself.
 
-6. **Launch the next pass before you write the summary.** Not after — before. Go back to
-   § 2 with `N+1`, start the reviewers, and only then write up what this pass did.
+6. **When this pass repaired open P0/P1 findings, launch the next pass before
+   you write the summary.** Go back to § 2 with `N+1`, start the reviewers, and
+   only then write up what this pass did. With only FILE or rejected findings,
+   go to § 4b and finish without launching a repair pass.
 
    Writing a report to the user is the most turn-ending act available, so putting it last
    in a loop iteration reliably ends the loop instead of advancing it. Measured on a real
@@ -790,11 +812,12 @@ Otherwise:
    Fixed:
    - [P1][BOTH] <what changed>
    Deferred:
-   - [P2][CLAUDE] <why it remains open>
+   - [P1][CLAUDE] <decision needed; stops the loop>
+   Filed: <n> (<ids or titles>; pending until finish)
    Rejected with evidence:
    - [P3][CODEX] <why it is disproven>
    Cut/simplified (over-specification):
-   - [P2][BOTH] <what was not built or shrunk, and what already covers the case>
+   - <suggestion not built, or P0/P1 remedy simplified; what covers the case>
    Contradictions resolved:
    - <claim> — codex right / claude right, per <file:line>
    Validation: <command/result or "no targeted verifier found">
@@ -824,7 +847,7 @@ Stop early and surface the issue if any of these happen:
 - a reviewer times out (exit 124 or 137) twice in a row — the hang is the finding; stop and
   say so rather than starting a third pass that may sit for an hour
 - both reviewers fail in the same pass (nothing reviewed the code)
-- a finding remains plausible but fixing it would require a larger architectural
+- an introduced or brief-blocking P0/P1 remains plausible but fixing it would require a larger architectural
   rewrite or product decision
 - validation fails and the cause is unclear
 - max passes reached
@@ -897,7 +920,9 @@ codex pass needs `codex exec -c model_reasoning_effort=high` instead. The audit 
 Then **reconcile, don't obey** — accepting every cut is the same credulity in
 reverse. Run the audit's recommendations through your own judgment and the
 over-specification test, push back where a flagged mechanism is actually
-load-bearing, and apply the agreed cuts/simplifications. If a real product or
+load-bearing. Apply agreed cuts/simplifications only for introduced or
+brief-blocking P0/P1 defects; FILE verified P2/P3, and list accepted suggestions
+once without filing or repairing them. If a real product or
 architecture trade-off rides on how aggressively to cut, ask the user (the
 choice changes what the artifact *is*). Re-verify after the cuts that the core is
 intact and no dangling references to removed mechanisms remain.
@@ -919,7 +944,8 @@ These survive any number of diff passes precisely because each individual hunk i
 correct. They also get *created* by a long loop: you tighten a behaviour in one
 file per pass and never re-read the file that summarises it.
 
-**Entry:** a normal panel pass came back clean.
+**Entry:** a healthy normal panel pass has no open introduced or brief-blocking
+P0/P1 after disposition; P2/P3 and older P0/P1 outside the brief are FILE.
 
 **Who runs it:** a reviewer that accepts a custom prompt. The Claude slot by default
 — it opens files the diff does not show, which is what cross-file agreement needs. On
@@ -935,15 +961,16 @@ reviewer being unavailable and has to name which one.
 overview that was never touched is exactly where this drift hides, so an
 unchanged file contradicting a changed one is in scope and is a finding.
 
-**Loop:** fix what it finds, then **re-run both the panel and this pass** on the
-new diff. A consistency fix is a code change like any other and gets reviewed
-like one. Repeat until a panel pass and a consistency pass are both clean on the
-same tree. These re-runs count against `MAX_PASSES`; if the limit is already
-exhausted, finish `ISSUES_FIXED_UNCONFIRMED` and offer more passes rather than
-quietly calling it clean.
+**Loop:** re-rate and disposition what it finds. Fix only introduced or
+brief-blocking P0/P1 consistency defects, then **re-run both the panel and this
+pass** on the new diff. FILE P2/P3 and older P0/P1 outside the brief; never
+repair them here. Repeat until neither pass leaves an introduced or
+brief-blocking P0/P1 open on the same tree. These re-runs count against
+`MAX_PASSES`; if the limit is exhausted after repairs, finish
+`ISSUES_FIXED_UNCONFIRMED` and offer more passes.
 
-Fix findings the same way as any other — verify first, and prefer correcting
-whichever side is actually wrong over "updating both to match".
+Verify before fixing and correct whichever side is wrong rather than updating
+both to match. Keep the FILE list in later consistency prompts too.
 
 **There is no "too small to need this."** A single-file change can still be
 contradicted by an untouched README or overview — that is the incident this pass
@@ -957,10 +984,20 @@ pass prompt.
 
 ### 5. Finish
 
-The loop is `CLEAN` only when, **on the same tree**, every reviewer in the panel
-ran successfully and reported no findings, and the § 4b consistency pass came back
-clean. Fixing something after either pass means that tree was never reviewed —
-re-run both, do not round up.
+The loop is `CLEAN` only when, **on the same tree**, every panel reviewer ran
+successfully and neither the panel nor the § 4b consistency pass leaves open a
+P0/P1 defect introduced by the whole change since `DIFF_BASE` or leaving the
+brief unmet. P2/P3 and older P0/P1 outside the brief are dispositioned FILE;
+rejected findings do not hold the loop. Gates must also be clean. Fixing
+something after either pass requires re-running both.
+
+At the finish, file each finding dispositioned FILE that still holds in the repository with the work you accept, committed or not; for this loop that is the working tree at the finish, since the loop never commits. List each one a later fix removed in the report as resolved, not filed. Leave the tracker write uncommitted, as the loop leaves everything.
+
+Use [disposition-rules.md § Filing follow-ups](references/disposition-rules.md#filing-follow-ups):
+search open issues, dedupe only the same defect at equal or higher priority,
+and retain all required evidence, source, rating, smallest fix and verification.
+This finish step also applies when blocked or stopped at the pass cap. Tracker
+writes are finish metadata, not repairs requiring another panel.
 
 If the final pass was degraded — a
 reviewer failed, timed out, or was never available — report `CLEAN_DEGRADED` and
@@ -993,7 +1030,9 @@ Claude model: <resolved model> (<ladder default | user pin | fell back at pass N
 Passes run: N/MAX
 Base: <DIFF_BASE>
 Review dir: <REVIEW_DIR>
-Fixed: P0=W P1=X P2=Y P3=Z
+Fixed: P0=W P1=X
+Filed: <n> (<ids or titles>)
+Resolved follow-ups: <count or none>
 Agreement: both=A codex-only=B claude-only=C
 Deferred: <count or none>
 Rejected with evidence: <count or none>
@@ -1009,7 +1048,7 @@ Also provide:
 - the latest pass log paths, per reviewer
 - the `summary.md` path
 - a short list of any remaining findings, each tagged with its source reviewer
-- any deferred items
+- any deferred P0/P1 items, filed follow-ups and accepted suggestions (not filed)
 - any rejected items with the evidence used
 - any cut/simplified items with the over-specification rationale
 - any reviewer contradictions and how you resolved them
@@ -1061,21 +1100,24 @@ found issues, or right before opening a PR or shipping.
 
 Suggested phrasing (adapt the invocation syntax to your environment):
 "Want me to run the multi-reviewer-loop — codex and a Claude reviewer in
-parallel — and iterate until both are clean or the remaining items are fixed,
-deferred, or disproven with evidence?"
+parallel — fix introduced or brief-blocking P0/P1, file follow-ups, and check
+consistency before finishing?"
 
 ## Guardrails
 
-- Never turn this into a report-only workflow: every finding ends as fixed, deferred, or
-  disproven. You may delegate the EDITING (§ 3a) — that is not report-only — but the
+- Every finding ends as fixed (introduced or brief-blocking P0/P1 only), FILE,
+  deferred for a P0/P1 decision, or disproven; accepted suggestions are reported once. You may delegate the EDITING (§ 3a) — that is not report-only — but the
   adjudication stays yours.
 - Run the reviewers independently and in parallel. Never show one reviewer the
-  other's findings — correlated reviewers are one reviewer.
+  other's findings or raw output — correlated reviewers are one
+  reviewer. The only exception is the orchestrator's already-adjudicated FILE
+  follow-up list from completed earlier passes, supplied to later prompted
+  reviews and the consistency pass after both earlier reviewers finished.
 - Keep chat concise; the logs hold the full reviewer output.
 - Never commit, ship, stash, or reset automatically.
 - Never edit unrelated files just because they are in the working tree.
-- If you decide not to fix a finding, either defer it explicitly or cite the
-  evidence that disproves it. The other reviewer's silence is not evidence.
+- FILE verified P2/P3 and older P0/P1 outside the brief. For an introduced or
+  brief-blocking P0/P1 you do not fix, defer it explicitly or cite counter-evidence. The other reviewer's silence is not evidence.
 - Never report a degraded pass as clean, and never silently drop a reviewer that
   failed — say which one and why.
 - If a reviewer's auth or CLI errors out, surface the exact problem. Continue

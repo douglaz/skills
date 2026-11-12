@@ -73,13 +73,17 @@ edits this brief. Record finished steps and job paths as one line each in `brief
 <Delete this section unless the owner turned the drain lane on this session.> The owner has
 delegated merging for this session. That go-ahead is the human merge decision
 `pr-with-codex-bot-review` asks for. Drain scope: <every ready bead | the epic, label or bead ids
-the owner named>. Take each ready bead within that scope:
+the owner named>. Exclude `review-nit` and `review-followup` beads unless the
+owner names them; do not exclude `review-preexisting`. Take each ready bead
+within that scope:
 
 1. Branch from freshly pulled <base>.
 2. Implement it. With rloop, never use `--auto`: rloop commits onto the checked-out branch and never
    branches, pushes or opens PRs.
 3. If a Run implemented the bead, review its commits as "Run instructions" says, and close the bead
-   only when that review finds no defect. For that close, and for a bead that had no Run, resolve the
+   only when that review finds no P0/P1 defect that the Run introduced or that leaves
+   the Task section unmet; file P2s, P3s and older P0/P1s as the severity rule says.
+   For that close, and for a bead that had no Run, resolve the
    JSONL with `beads-jsonl-path`; inspect `git show HEAD:<relative-path>` with
    `jq -se --arg id "$ID" '[.[] | select(.id == $id)] | length == 1 and .[0].status == "closed"'`
    to prove committed closure. If needed, close/flush/review through that companion, commit only the
@@ -118,8 +122,9 @@ sections, in this order:
   > choice a Consultation settles and its record, or block if it is ambiguous or contradictory, in
   > itself or against the specifications. Each round brief keeps the Task section and every settled
   > choice unchanged, then states the current state and a Repairs list. A Reviewer demand beyond the
-  > Task section is a note in the Finished File, not a repair and not a block, unless it is a genuine
+  > Task section is a note in the Finished File, not a repair and not a block, unless it is a P0 or P1
   > defect against the Task section or the specifications, or shows them ambiguous or contradictory.
+  > A P2 or P3 is a follow-up the Manager files.
 
 Save each instruction as a file, and log its path and the Run Directory in `brief-log.md`.
 
@@ -128,12 +133,37 @@ open, and you close it after your own review. An rloop build older than `--no-cl
 flag and spawns nothing; refresh the build.
 
 When the Run ends `done`, review its commits (`git diff <base>..HEAD`) against the Task section.
-- If you find a defect, leave the bead open and send the defect back through another Run.
+- If you find a P0/P1 defect that the Run introduced or that leaves the Task section unmet,
+  leave the bead open and send the defect back through another Run.
+- File P2/P3 and older P0/P1 outside the Task as follow-ups; never repair P2/P3
+  in this change, even beside P0/P1 repairs.
 - Otherwise close it: resolve the JSONL with `beads-jsonl-path`; inspect
   `git show HEAD:<relative-path>` with
   `jq -se --arg id "$ID" '[.[] | select(.id == $id)] | length == 1 and .[0].status == "closed"'`
   to prove committed closure. If needed, close/flush/review through that companion, commit only the
   JSONL (`git commit --only -m "<message>" -- <path>`), and recheck HEAD.
+
+When a Run exits 2, decide which of its uncommitted work you keep (rloop's README: judge it by the feedback and the gates, then commit or discard it yourself). Then file its follow-ups as the severity rule says (the latest list is in the Run Directory's `task.md`), each that still holds in the repository with the work you accept, committed or not.
+
+At the round cap this list is newer than `task-<r>.md`. After a failed or
+undecided Manager call, the last Round's findings were never judged: file only
+what the last rewritten brief recorded. List items a later repair removed as
+resolved, not filed.
+
+For the review after a Run, re-rate every finding P0–P3 yourself; reviewer tags
+are evidence, not verdicts. Lowering P0/P1 needs a one-line reason with file:line
+evidence; raising to P0/P1 names the applicable clause. Judge the whole Run
+since its base, not just the latest Round. Use the
+[severity and filing rules](../../multi-reviewer-loop/references/disposition-rules.md):
+P2 `review-followup` at priority 2, P3 `review-nit` at priority 3, older P0/P1
+`review-preexisting` at its own priority. Search open issues first; one per
+distinct defect, commenting only on the same defect at equal or higher priority.
+Keep evidence at the observed commit, Reviewers, rating and why not higher,
+smallest fix and verification, and source task/Run Directory. Use
+`beads-jsonl-path` before writes and relate to the source bead. With no beads use
+the repo's tracker; with no tracker list them in the report. Accepted suggestions
+are listed once in the report, not filed, unless judged P0–P3 defects. A safe
+P0/P1 fix needing a product or architecture decision remains a stop.
 
 ## Recovery
 

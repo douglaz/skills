@@ -23,21 +23,22 @@ Load this file when merging the panel's findings and writing the final verdict.
 - Reviewer votes: Codex=<vote or n/a>, Claude=<vote or n/a>
 
 ## Blocking findings
-- [B1][BOTH | CODEX | CLAUDE | CONFLICT] <finding>
+- [P0][B1][BOTH | CODEX | CLAUDE | CONFLICT] <finding>
   - Evidence: <plan section and bead IDs>
   - Why it blocks:
   - Recommended bead-level fix:
 
 ## Important conditions
-- [I1][BOTH | CODEX | CLAUDE | CONFLICT] <finding>
+- [P1][I1][BOTH | CODEX | CLAUDE | CONFLICT] <finding>
   - Evidence: <plan section and bead IDs>
   - Why it matters:
   - Recommended bead-level fix:
 
 ## Optional nits
-- [N1][BOTH | CODEX | CLAUDE] <finding>
+- [P2 | P3][N1][BOTH | CODEX | CLAUDE] <finding>
   - Evidence:
-  - Suggested cleanup:
+  - Smallest fix and verification (follow-up only):
+  - Filed comment or nit bead ID and backlink:
 
 ## Coverage and scope notes
 - Missing or weakly represented plan elements
@@ -68,9 +69,20 @@ Load this file when merging the panel's findings and writing the final verdict.
 
 ## Severity rules
 
-- **Blocking**: implementation or the intended launch shape should not start yet.
-- **Important condition**: fix and re-audit before implementation starts.
-- **Nit**: low-leverage cleanup that does not affect execution safety.
+- **BLOCKER = P0**, **IMPORTANT = P1**, on the shared severity rubric. Only
+  introduced or brief-blocking P0/P1 holds launch; older P0/P1 outside the brief
+  is a non-blocking `review-preexisting` follow-up in the report.
+- **NIT carries P2 or P3**. A P2 NIT becomes a comment on each affected bead;
+  a P3 NIT becomes a priority-3 `task` bead labelled `review-nit`, naming the
+  affected bead, with a one-line comment on that bead naming the nit bead ID.
+  These are follow-ups, never repaired in this audit or alongside P0/P1 repairs.
+- The orchestrator re-rates every finding. Lowering P0/P1 needs a one-line reason
+  with file:line evidence; raising to P0/P1 names the applicable clause.
+- Verify follow-ups against the accepted work at finish; report removed items
+  as resolved. Include Reviewers, evidence at the observed commit, severity and
+  why not higher, smallest fix, verification and source audit/task/bead.
+- Search open issues and dedupe only the same defect at equal or higher priority.
+  Report filed IDs/comments and accepted suggestions (listed once, not filed).
 
 ## Merge rules
 

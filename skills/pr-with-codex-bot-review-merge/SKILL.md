@@ -28,6 +28,7 @@ Run it as written; it deliberately re-checks mutable forge and worktree state.
 - Squash-merge with the reviewed full OID and wait for `MERGED`
 - Preserve merge evidence, fetch the landed base, and refuse unsafe resets
 - Reset the local base and run its authoritative build
+- File surviving Follow-ups on a fresh metadata branch and open its PR
 
 ```bash
 # Two checks, because a FAILED `git status` also prints nothing: a corrupt index would
@@ -209,6 +210,44 @@ git checkout -B "$BASE" "refs/remotes/upstream/$BASE" \
   || { echo "cannot reset to the merge target — do NOT treat what follows as a check of it"; exit 1; }
 nix build                                    # confirm the base is healthy
 ```
+
+## File Follow-ups after the post-merge build
+
+File each item in the PR body's Follow-ups that still holds at the merged base, the commit the metadata PR's branch starts from; name each one that no longer holds there as resolved in the merge report, not filed.
+
+1. Read the source PR's body and retain its URL. After the successful post-merge
+   build, record the freshly fetched base commit and create a fresh metadata
+   branch from that commit **before any tracker writes or commits**. Never
+   commit or push directly to the local base: a local-only base commit would
+   make the next safe reset refuse.
+2. Apply [the filing procedure](../multi-reviewer-loop/references/disposition-rules.md#filing-follow-ups).
+   First search open issues; comment only for the same defect already covered at
+   equal or higher priority. One issue per distinct defect, including each P3.
+   Include evidence at the observed commit, Reviewers, severity and why not
+   higher, smallest fix and verification, source task/bead if any, and the PR
+   reference. P2: priority 2 `task`, `review-followup`; P3: priority 3 `task`,
+   `review-nit`; older P0/P1 outside the brief: its own priority 0/1 `task`,
+   `review-preexisting`. Link `related` to the source bead when there is one.
+3. With beads, load [`beads-jsonl-path`](../beads-jsonl-path/SKILL.md) and follow
+   its resolution, pre-write check, review-every-write and flush procedure.
+   Commit **only the resolved tracker file** on the metadata branch; inspect
+   the staged diff, require the commit's exit 0, and inspect committed content.
+   Push that branch and open its metadata PR at once, referencing the source PR;
+   carry it through the owning PR skill's review workflow. Do not leave a
+   local-only tracker commit on the base. If nothing was written, no metadata
+   PR is needed.
+4. Without beads, use the repository's tracker and cite the PR; without any
+   tracker, retain the list in the PR body and merge report. Create no tracker.
+   Report filed IDs/titles and items resolved at the filing reference state.
+
+For a PR closed without merging, enter only this filing section; do not run the
+merge, reset or post-merge build sequence above. Resolve the intended repository
+and PR explicitly, confirm its state is CLOSED and unmerged, fetch its base
+branch and branch from that base commit. File only older P0/P1 outside the
+brief that still hold on that base, never its P2/P3 items. Use that base as the
+filing reference state and otherwise follow the same search, evidence, tracker
+and metadata-PR steps. Refuse unrelated worktree changes before branching or
+writing, as in the normal path.
 
 `--match-head-commit` takes the **full 40-char OID**, which is why the snippet pins
 `$REVIEWED_TIP` from the gate's JSON: it is already the full SHA, and it is the tip the

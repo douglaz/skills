@@ -8,7 +8,8 @@ description: >-
   orchestrator merges and reconciles their findings into one verdict. Use after
   bead-polish-loop by default, or when the user asks to sanity-check, audit, get a
   second opinion on, or approve beads before implementation. Prefer read-only
-  review unless the user explicitly asks for bead edits.
+  review with only orchestrator follow-up comments and nit beads unless the
+  user explicitly asks for other bead edits.
 argument-hint: "[plan/spec path] [--reviewers codex|claude|codex,claude]"
 compatibility: >-
   Requires br, git, jq, and GNU timeout
@@ -33,14 +34,16 @@ prerequisite for choosing the reviewer.
 
 - Run this audit after every non-trivial `bead-polish-loop`, not only for
   high-stakes launches.
-- Keep the panel read-only. It reports exact fixes; `bead-polish-loop` owns normal
-  graph mutation.
+- Keep reviewers read-only. The orchestrator may write only P2 comments on
+  affected beads, P3 `review-nit` beads and their one-line backlinks; no other
+  graph edits in normal mode. `bead-polish-loop` owns normal graph mutation.
 - Run both reviewers independently and in parallel. Never seed one with the
   other's findings or with your own conclusions.
 - Treat panel findings as hypotheses to verify, not commands to obey.
 - Do not proceed to implementation on `FAIL` or `CONDITIONAL PASS`. Resolve and
-  re-audit every accepted condition first; any graph edit invalidates the old
-  verdict.
+  re-audit every accepted P0/P1 condition first. Substantive graph edits
+  invalidate the old verdict; the permitted follow-up comments and nit beads
+  record the audit without requiring re-audit.
 
 The user may explicitly opt out for a tiny or low-risk graph. Record the skipped
 gate rather than silently treating the polisher's own convergence judgment as an
@@ -166,7 +169,8 @@ recorded acceptance of the reduced review coverage.
 
    Do not label unrelated backlog beads as unplanned merely because
    the exported graph includes them.
-5. Audit the producer's successfully flushed, reviewed JSONL export; the audit itself never flushes or queries the database.
+5. Audit the producer's successfully flushed, reviewed JSONL export; reviewers never flush or query the database.
+   The orchestrator uses the live tracker only for the permitted follow-up writes after reconciliation.
    Capture the export and authority sources with the [Shared graph snapshot procedure](references/reviewer-panel.md#shared-graph-snapshot).
 
 6. Create a unique audit directory and one neutral prompt containing the
@@ -195,7 +199,8 @@ The panel audits:
 Each reviewer must cite plan sections and bead IDs, propose bead-level remedies,
 and state `No findings.` explicitly when clean.
 
-Votes apply to the captured export and sources; any later graph or source edit requires a new audit.
+Votes apply to the captured export and sources; later substantive graph or source edits require a new audit.
+The permitted follow-up comments and nit beads are audit metadata, not a new implementation baseline.
 Reject contradictory, truncated or failed reviewer output rather than treating it as a clean vote.
 
 ### 3. Merge and reconcile
@@ -215,6 +220,33 @@ reviewer was right.
 Reject a finding only with concrete plan, bead, or graph evidence. If a proposed
 fix adds work not required by the plan or a real delivery/verification risk,
 record it as out of scope rather than expanding the graph reflexively.
+
+Re-rate every finding on the
+[severity rubric](../multi-reviewer-loop/references/disposition-rules.md#classification).
+A Reviewer's tag is evidence, not a verdict. Lowering P0/P1 needs a one-line
+reason with file:line evidence (including the snapshotted bead/plan location);
+raising to P0/P1 names the applicable clause. BLOCKER = P0, IMPORTANT = P1;
+NIT must carry P2 or P3. Only P0/P1 introduced by the audited changes or leaving
+the plan/brief unmet holds launch; older P0/P1 outside the brief is reported as
+`review-preexisting`, without blocking this work. Use the repository's tracker
+for it under the filing rule, but do not expand normal-mode graph writes beyond
+the comments/nit beads below; report any such item needing other writes.
+
+At the finish, verify follow-ups still hold in the graph and repository with the
+work accepted, committed or not. A P2 NIT becomes a comment on each affected bead.
+A P3 NIT becomes one priority-3 `task` bead per distinct defect labelled
+`review-nit`, naming and linked `related` to the affected bead; add a one-line
+comment on each affected bead naming the nit bead ID. Never repair P2/P3 during
+this audit, even alongside a P0/P1 repair. Search open issues first; only the
+same defect at equal or higher priority becomes a comment on the existing
+issue. Each record includes evidence at the observed commit, Reviewers, severity
+and why not higher, smallest fix and verification, and source task/audit and bead
+IDs. List removed follow-ups as resolved, not filed; list accepted suggestions
+once without filing unless judged P0–P3 defects.
+
+Before permitted writes, load [`beads-jsonl-path`](../beads-jsonl-path/SKILL.md),
+resolve and check the JSONL, review every write and flush through that companion.
+Reviewers remain read-only; substantive repairs still go through polishing.
 
 Use [references/review-report-template.md](references/review-report-template.md)
 for the synthesis.
@@ -255,12 +287,15 @@ Check, per bead and then across the set:
 - **Across the set:** every cross-bead dependency rationale. A bead that says "depends
   on X because Y" is wrong the moment X's own text stops claiming Y.
 
-Fix by **re-authoring the bead** when the contradictions are structural rather than
+For introduced or brief-blocking P0/P1, fix through `bead-polish-loop` by
+**re-authoring the bead** when the contradictions are structural rather than
 local. A bead carrying half a dozen of them has been patched past the point where
 patching converges; rewriting it from the settled decisions is faster and leaves
 something an implementer can follow.
 
-Then re-run the panel. A coherence fix is a graph change like any other.
+Then re-run the panel. A coherence repair is a graph change like any other.
+P2/P3 coherence findings use the permitted follow-up comments/nit beads instead
+of repairs and do not trigger re-audit.
 
 **Why this is a phase and not advice.** Observed on a three-bead money-path set: four
 panel rounds, findings *rising* each round, because most were the orchestrator's own
@@ -270,10 +305,9 @@ requirement forbade, and a smoke-conversion count wrong by a factor of two — a
 resolved more than the previous two rounds combined. `multi-reviewer-loop` § 4b makes
 the same argument for diffs; bead graphs need it more, because prose has no compiler.
 
-- `FAIL`: any blocking coverage, ownership, dependency, execution, or verification
-  defect remains.
-- `CONDITIONAL PASS`: no blocker, but one or more named important conditions must
-  be fixed before the intended launch shape is safe.
+- `FAIL`: an introduced or brief-blocking P0 (BLOCKER) remains.
+- `CONDITIONAL PASS`: no such P0, but an introduced or brief-blocking P1
+  (IMPORTANT) remains and must be fixed before launch.
 - `PASS`: no blocking or important findings remain; optional nits may remain, AND
   § 3b has been run on the current text. A panel can only see what it was asked to
   look at; a bead that contradicts itself can pass every round, because each reviewer
@@ -285,13 +319,17 @@ owns the final verdict and must explain any departure from either vote.
 
 ### 5. Handoff and re-audit
 
-Normal mode is report-only:
+Normal mode reports findings and permits only the orchestrator's P2 comments,
+P3 nit beads and one-line backlinks described in § 3. It permits no other graph
+writes; reviewers are always read-only:
 
 - `PASS`: proceed to implementation.
 - `CONDITIONAL PASS` or `FAIL`: send accepted findings into
-  `bead-polish-loop`'s ledger, fix them there, then rerun the full panel.
+  `bead-polish-loop`'s ledger, fix introduced or brief-blocking P0/P1 there, then
+  rerun the full panel. P2/P3 remain follow-ups, never repairs in this change.
 
-If the user asks for fixes, apply reconciled findings through `bead-polish-loop`, review every write, flush, and rerun the audit.
+If the user asks for fixes, apply reconciled introduced or brief-blocking P0/P1
+through `bead-polish-loop`, review every write, flush, and rerun the audit.
 
 Bound an automatic polish/audit cycle to three panel runs. Stop earlier when the
 same material finding survives two genuine fix attempts, the graph drifts during
