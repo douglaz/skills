@@ -627,12 +627,13 @@ def build_html(pages, body, opt, h1s, h2s, vocab=frozenset(), hyphen_decisions=N
             f['base'] = None            # line positions are per page
 
         # Text beside a drop cap is inset to make room for the letter, not to
-        # begin a paragraph. A line is covered only if its centre is above
-        # the cap's bottom; a slight box overhang must not hide the next indent.
+        # begin a paragraph. Require the line's bottom inside the cap's box:
+        # real pdftohtml boxes overhang the next 14-15px line by up to 10px,
+        # past its centre, but not its bottom. This preserves the next indent.
         # Covered starts only vote for the margin if an ordinary line
         # corroborates them. Initial lines retain their existing margin vote.
-        # After that vote, use the flow's margin for paragraph_left on both
-        # initial and covered lines, regardless of where the letter sits.
+        # After that vote, covered lines use the flow's margin. An initial
+        # keeps its own indent, clamped to that margin for hanging letters.
         # Line clustering and short-line breaks retain their usual behaviour.
         paragraph_left = {}
         for initial in p['lines']:
@@ -640,7 +641,7 @@ def build_html(pages, body, opt, h1s, h2s, vocab=frozenset(), hyphen_decisions=N
                 continue
             right, bottom = initial['dropcap']
             for l in p['lines']:
-                if (initial['c'] < l['c'] < bottom
+                if (initial['c'] < l['c'] and l['c'] + l['h'] / 2 <= bottom
                         and l['left'] >= right - 2):
                     paragraph_left[id(l)] = None
 
@@ -658,7 +659,9 @@ def build_html(pages, body, opt, h1s, h2s, vocab=frozenset(), hyphen_decisions=N
                 geo[k] = (collections.Counter(starts).most_common(1)[0][0],
                           max(l['right'] for l in g))
                 for l in g:
-                    if id(l) in paragraph_left or 'dropcap' in l:
+                    if 'dropcap' in l:
+                        paragraph_left[id(l)] = max(l['left'], geo[k][0])
+                    elif id(l) in paragraph_left:
                         paragraph_left[id(l)] = geo[k][0]
 
         # Interleave figures by page position, then defer them if a paragraph

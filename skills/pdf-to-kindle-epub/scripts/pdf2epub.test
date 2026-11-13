@@ -688,8 +688,102 @@ for covered in (2, 3):
                 # an overhanging box fails on 26df189; the others are guards.
                 guard = ending == 'short' and (overhang == 'before' or layout == 'indented')
                 prefix = 'GUARD P1-F' if guard else 'P1-F'
-                check(f'{prefix} {layout} {context} matches margin paragraphs',
-                      got == margin, f'got={got!r}; margin={margin!r}')
+                if layout == 'indented' and ending == 'flush right':
+                    # An indented initial marks a paragraph even when the
+                    # preceding line reaches the right margin.
+                    separate = [anchor, cap_text, expected[-1]]
+                    check(f'P1-H indented {context} opens its own paragraph',
+                          got == separate, f'got={got!r}; expected={separate!r}')
+                else:
+                    check(f'{prefix} {layout} {context} matches margin paragraphs',
+                          got == margin, f'got={got!r}; margin={margin!r}')
+
+print('\nreal drop-cap boxes and indented initials (PR #119 round 5)')
+for opt in (Opt(), Indent18()):
+    for body_height, cap_height in ((15, 69), (14, 71)):
+        # Times 11pt/13.2pt leading as reported by pdftohtml: the 3-line
+        # letter ends at 266, 8px into the next 15px line. Also exercise a
+        # 10px overhang into a 14px line, beyond the old centre threshold.
+        fonts = ('<fontspec id="0" size="17" family="Times"/>'
+                 '<fontspec id="1" size="76" family="Times"/>')
+        anchor = (line('Ordinary prose establishes the body margin.', top=139,
+                       height=body_height)
+                  + line('The preceding paragraph reaches the right margin.', top=159,
+                         height=body_height)
+                  + line('It ends short.', top=178, width=91, height=body_height))
+        words = ['When the ship came in, everyone was ready.',
+                 'The harbour master stood beside the waiting vessel.',
+                 'London Bridge was visible beyond the harbour gates.']
+        next_p = 'Another paragraph begins after the covered lines.'
+        after = (line('It ends here.', top=277, width=96, height=body_height)
+                 + ''.join(line('Ordinary prose continues across the rest of the page.',
+                                top=top, height=body_height)
+                           for top in (297, 317, 337, 357, 376, 396))
+                 + line('The page ends.', top=416, width=96, height=body_height))
+        for layout, left, inset in (('hanging', -23, 50), ('margin', 50, 123),
+                                    ('indented', 70, 143)):
+            cap = line('W', top=197, left=left, width=72, height=cap_height, font=1)
+            rest = ''.join(line(t[1:] if i == 0 else t, top=198 + 20 * i,
+                                left=inset, width=550 - inset, height=body_height)
+                           for i, t in enumerate(words))
+            content = fonts + anchor + cap + rest
+            label = (f'P1-G {layout} body-height={body_height} '
+                     f'overhang={197 + cap_height - 258} indent={opt.indent}')
+            _, _, cd, _, _ = build(fixture(page(1, content
+                + line(next_p, top=258, left=75, width=475, height=body_height)
+                + after)), opt)
+            got = re.findall(r'<p>(.*?)</p>', cd)
+            # Only hanging text lets the overhang swallow the next indent;
+            # the inset layouts protect it horizontally on the old version.
+            prefix = '' if layout == 'hanging' else 'GUARD '
+            check(prefix + label + ' next indent opens a paragraph',
+                  got[1:3] == [' '.join(words), next_p + ' It ends here.'], repr(got))
+            check('GUARD ' + label + ' covered capitals and punctuation stay together',
+                  any(p.startswith(' '.join(words)) for p in got), repr(got))
+
+            # At the body margin the first uncovered line continues, then
+            # its short ending lets the next margin line open a paragraph.
+            _, _, cd, _, _ = build(fixture(page(1, content
+                + line('Everyone aboard could begin the journey home.', top=258,
+                       height=body_height) + after)), opt)
+            got = re.findall(r'<p>(.*?)</p>', cd)
+            check('GUARD ' + label + ' uncovered margin and short ending retain geometry',
+                  got[1] == ' '.join(words) +
+                  ' Everyone aboard could begin the journey home. It ends here.'
+                  and len(got) == 3 and got[2].endswith('The page ends.'), repr(got))
+
+    for covered in (2, 3):
+        anchor = (line('Ordinary prose establishes the body margin.', top=200)
+                  + line('The preceding paragraph ends flush right.', top=222))
+        words = ['When the ship came in, everyone was ready.',
+                 'The harbour master stood beside the waiting vessel.']
+        if covered == 3:
+            words.append('London Bridge was visible beyond the harbour gates.')
+        tail = (line('Everyone aboard could begin the journey home.',
+                     top=300 + 22 * covered)
+                + line('The voyage ended.', top=322 + 22 * covered, width=200)
+                + line('Another paragraph begins at the body margin.',
+                       top=344 + 22 * covered))
+        cap_text = ' '.join(words) + ' Everyone aboard could begin the journey home. The voyage ended.'
+        anchor_text = 'Ordinary prose establishes the body margin. The preceding paragraph ends flush right.'
+        last = 'Another paragraph begins at the body margin.'
+        for layout, left, width, inset in (('margin', 50, 40, 89),
+                                           ('hanging', 10, 38, 50),
+                                           ('indented', 70, 40, 109)):
+            cap = line('W', top=298, left=left, width=width, font=5,
+                       height=44 if covered == 2 else 68)
+            rest = ''.join(line(t[1:] if i == 0 else t, top=300 + 22 * i,
+                                left=inset, width=550 - inset)
+                           for i, t in enumerate(words))
+            _, _, cd, _, _ = build(fixture(page(1, DROP_FONTS + anchor + cap + rest + tail)), opt)
+            got = re.findall(r'<p>(.*?)</p>', cd)
+            label = f'P1-H {covered}-line {layout} flush-right predecessor indent={opt.indent}'
+            if layout == 'indented':
+                check(label + ' initial opens its paragraph and retains its continuations',
+                      got == [anchor_text, cap_text, last], repr(got))
+            else:
+                check('GUARD ' + label + ' retains margin paragraphs',
+                      got == [anchor_text + ' ' + cap_text, last], repr(got))
 
 tracked = DROP_FONTS + ''.join(
     line(letter, top=100, left=left, width=width, font=5, height=44)
