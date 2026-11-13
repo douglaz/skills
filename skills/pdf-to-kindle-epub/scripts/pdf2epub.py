@@ -22,7 +22,7 @@ Two modes:
     analyze   print what was detected; always do this first
     convert   build the EPUB
 """
-import argparse, collections, html, os, re, shutil, subprocess, sys, zipfile
+import argparse, collections, hashlib, html, os, re, shutil, subprocess, sys, zipfile
 from xml.etree import ElementTree as ET
 
 ZOOM = 1.5          # pdftohtml -xml renders coordinates at 1.5x PDF points
@@ -60,6 +60,16 @@ def extract(pdf, work):
     """
     os.makedirs(work, exist_ok=True)
     src = os.path.join(work, 'src.pdf')
+    if os.path.exists(src):
+        def digest(path):
+            h = hashlib.sha256()
+            with open(path, 'rb') as f:
+                for chunk in iter(lambda: f.read(1024 * 1024), b''):
+                    h.update(chunk)
+            return h.digest()
+        if digest(pdf) != digest(src):
+            sys.exit('input PDF differs from cached src.pdf; use a fresh --work directory '
+                     'to extract this PDF (including after OCR).')
     if not os.path.exists(src):
         shutil.copy(pdf, src)
     xml = os.path.join(work, 'book.xml')
@@ -67,7 +77,8 @@ def extract(pdf, work):
         run(['pdftohtml', '-xml', '-enc', 'UTF-8', '-nodrm', 'src.pdf', 'book'], cwd=work)
     txt = os.path.join(work, 'plain.txt')
     if not os.path.exists(txt):
-        # pdftotext dehyphenates correctly; used later as ground truth
+        # In measured poppler 26.10 output, pdftotext drops every line-end
+        # hyphen, including compounds. Useful for comparison, not an oracle.
         run(['pdftotext', 'src.pdf', 'plain.txt'], cwd=work)
     return xml
 
@@ -131,7 +142,7 @@ def parse(xml):
     for pg in root.findall('page'):
         for f in pg.findall('fontspec'):          # ids persist across pages
             fonts[f.get('id')] = (int(f.get('size')), f.get('family') or '')
-        runs, imgs = [], []
+        runs, imgs, positioned_images = [], [], []
         for el in pg:
             if el.tag == 'text':
                 sz, fam = fonts.get(el.get('font'), (0, ''))
@@ -139,10 +150,13 @@ def parse(xml):
                              int(el.get('left')), int(el.get('width')),
                              sz, fam, inner(el)))
             elif el.tag == 'image':
-                imgs.append(el.get('src').split('/')[-1])
+                src = el.get('src').split('/')[-1]
+                imgs.append(src)
+                positioned_images.append((int(el.get('top', '0')), src))
         pages.append({'n': int(pg.get('number')),
                       'w': int(pg.get('width')), 'h': int(pg.get('height')),
-                      'lines': lines_of(runs), 'imgs': imgs})
+                      'lines': lines_of(runs), 'imgs': imgs,
+                      'positioned_images': positioned_images})
     # a size of 0 means the fontspec was missing; fall back to the common size
     vol = collections.Counter()
     for p in pages:
@@ -161,32 +175,85 @@ def parse(xml):
 def strip_furniture(pages, body):
     """Drop page numbers and running heads.
 
-    A folio is a line that is just a number. A running head is a top- or
-    bottom-margin line whose text (digits removed) repeats across many pages.
-    Both become noise in a reflowed book.
+    A folio is a line that is just a number. Page-top heads can repeat within
+    one chapter, but must sit above the book's text block. Bottom lines keep
+    the original book-wide repetition rule, so rare notes are not furniture.
     """
-    edge = collections.Counter()
+    leading = collections.Counter()
+    for p in pages:
+        body_lines = [l for l in p['lines'] if l['size'] == body and txt_of(l['html'])]
+        leading.update(b['c'] - a['c'] for a, b in zip(body_lines, body_lines[1:])
+                       if 0 < b['c'] - a['c'] <= 2 * body)
+    pitch = leading.most_common(1)[0][0] if leading else 1.5 * body
+    jitter = max(12, pitch / 4)
+
+    def key_of(l):
+        # A changing folio may share the title's run or visual line.
+        return re.sub(r'\d+', '', txt_of(l['html'])).strip().lower()
+
+    # Estimate only the top from each page's first text line with a neighbour
+    # within normal leading. Detached one-off heads, roman folios and copyright
+    # lines cannot move it merely by occupying the same height on a few pages.
+    # On sparse pages an interior text line can supply the fallback. The outer
+    # decile allows different layouts without letting a title page set the top.
+    starts = []
     for p in pages:
         real = [l for l in p['lines'] if txt_of(l['html'])]
+        flow = [l for l in real if l['size'] <= body]
+        block = [l for i, l in enumerate(flow)
+                 if (i > 0 and 0 < l['c'] - flow[i - 1]['c'] <= 1.2 * pitch)
+                 or (i + 1 < len(flow) and 0 < flow[i + 1]['c'] - l['c'] <= 1.2 * pitch)]
+        if not block:
+            block = [l for l in real[1:-1] if l['size'] <= body]
+        if block:
+            starts.append(block[0]['c'])
+    starts.sort()
+    top = starts[(len(starts) - 1) // 10] if starts else None
+
+    def above_block(l):
+        # Spaced captions/subheads inside the extent are always content, even
+        # when repeated. Include offsets up to 12px (equality stays content),
+        # while a tight head 30px above the block still lies outside it.
+        # If no block is measured, preserve page-top text.
+        return top is not None and l['c'] < top - jitter
+
+    edge, detached = collections.Counter(), collections.Counter()
+    for p in pages:
+        real = [l for l in p['lines'] if txt_of(l['html'])]
+        # Keep the original first/last-line counts and threshold for footers.
+        # No geometric or low-repetition rule applies at the page bottom:
+        # repeated citations and infrequent single-line note bands survive.
         for l in real[:1] + real[-1:]:
-            key = re.sub(r'\d+', '', txt_of(l['html'])).strip().lower()
+            key = key_of(l)
             if key:
                 edge[key] += 1
+        if (len(real) >= 2 and above_block(real[0])
+                and real[1]['c'] - real[0]['c'] > 1.2 * pitch):
+            key = key_of(real[0])
+            if key:
+                detached[key] += 1
     repeated = {k for k, v in edge.items() if v >= max(8, len(pages) * 0.15)}
+    heads = {k for k, v in detached.items() if v >= 2}
     dropped = 0
     for p in pages:
         keep = []
         real = [l for l in p['lines'] if txt_of(l['html'])]
         for i, l in enumerate(real):
             t = txt_of(l['html'])
-            key = re.sub(r'\d+', '', t).strip().lower()
+            key = key_of(l)
             atedge = i < 1 or i >= len(real) - 1
             # Only digits, and only in body type: a part opener's roman numeral
             # is set in display type and must survive.
             if atedge and l['size'] <= body and re.fullmatch(r'[\divxlcdm]{1,8}', t.lower()):
                 dropped += 1
                 continue
-            if atedge and key in repeated and l['size'] <= body:
+            # Only page-top heads get the two-page rule, supported by detached
+            # occurrences outside the block. The book-wide rule also needs
+            # that position at the top, but stays geometry-free at the bottom.
+            # Judge modal size: a head may carry a larger-type folio.
+            if l['size'] <= body and (
+                    (i == 0 and above_block(l) and (key in heads or key in repeated))
+                    or (i == len(real) - 1 and key in repeated)):
                 dropped += 1
                 continue
             keep.append(l)
@@ -261,7 +328,7 @@ def heading_groups(pages, body):
 NUMERAL = re.compile(r'^(?:[IVXLCDM]{1,8}|\d{1,3})$', re.I)
 
 
-def heading_text(lines):
+def heading_text(lines, page_width):
     """Join a heading group, moving a standalone numeral next to its label.
 
     Work at the *run* level, not the line level. A chapter numeral is set so
@@ -271,19 +338,26 @@ def heading_text(lines):
     """
     parts = []
     for l in lines:
-        for left, w, sz, fam, t in l['runs']:
+        for i, (left, w, sz, fam, t) in enumerate(l['runs']):
             s = txt_of(t)
+            # A contents-page folio sits far to the right of its title,
+            # across a column-sized gap. Keep isolated chapter numerals and
+            # label/number runs separated by an ordinary word space.
+            if (s.isdigit() and i > 0 and left >= 0.75 * page_width
+                    and left - sum(l['runs'][i - 1][:2]) >= 30):
+                continue
             if s:
                 parts.append((sz, s))
-    # bare page numbers leak in from a printed contents page
-    parts = [(sz, s) for sz, s in parts if not s.isdigit()]
     if not parts:
         return ''
     nums = [s for sz, s in parts if NUMERAL.match(s)]
     if not nums:
         return ' '.join(s for _, s in parts)
     labels = [s for sz, s in parts if s not in nums and len(s.split()) == 1 and s.isupper()]
-    rest = [s for sz, s in parts if s not in nums and s not in labels]
+    # Only the first label is structural; every other run is title text.
+    rest = [s for sz, s in parts if s not in nums]
+    if labels:
+        rest.remove(labels[0])
     lead = ' '.join(labels[:1] + nums[:1])
     return f"{lead} — {' '.join(rest)}" if rest else lead
 
@@ -322,19 +396,19 @@ def crop_tables(pages, work, dpi):
                         and l['left'] >= x0 - 10 and l['right'] <= x1 + 10):
                     l['kind'] = 'table'
                     grp.append(l)
-            name = f'tbl-{p["n"]}-{i}.png'
+            top = min(l['c'] - l['h'] for l in grp) - 10
+            bot = max(l['c'] + l['h'] for l in grp) + 10
+            left = min(l['left'] for l in grp) - 10
+            right = max(l['right'] for l in grp) + 10
+            x, y = max(0, int(left * scale)), max(0, int(top * scale))
+            w, h = max(1, int((right - left) * scale)), max(1, int((bot - top) * scale))
+            # Cache the actual pdftoppm parameters, including rounded pixels.
+            name = f'tbl-{p["n"]}-{i}-{dpi}-{x}-{y}-{w}-{h}.png'
             path = os.path.join(work, name)
             if not os.path.exists(path):
-                top = min(l['c'] - l['h'] for l in grp) - 10
-                bot = max(l['c'] + l['h'] for l in grp) + 10
-                left = min(l['left'] for l in grp) - 10
-                right = max(l['right'] for l in grp) + 10
                 run(['pdftoppm', '-png', '-gray', '-r', str(dpi),
                      '-f', str(p['n']), '-l', str(p['n']),
-                     '-x', str(max(0, int(left * scale))),
-                     '-y', str(max(0, int(top * scale))),
-                     '-W', str(max(1, int((right - left) * scale))),
-                     '-H', str(max(1, int((bot - top) * scale))),
+                     '-x', str(x), '-y', str(y), '-W', str(w), '-H', str(h),
                      'src.pdf', name[:-4]], cwd=work)
                 for f in os.listdir(work):
                     if f.startswith(name[:-4] + '-'):
@@ -358,18 +432,40 @@ pre{font-size:.85em;white-space:pre-wrap;margin:1em 0;text-indent:0}
 img{max-width:100%}"""
 
 
-def hyphen_join(prev, nxt, vocab):
-    """Join across a real hyphen-minus at a line end.
+def midline_words(pages):
+    """Count case-insensitive tokens independent of pdftotext dehyphenation."""
+    words = collections.Counter()
+    for p in pages:
+        for l in p['lines']:
+            tokens = re.findall(WORD, html.unescape(txt_of(l['html'])).lower())
+            # Mid-line means excluding EVERY line's first and last token.
+            # Thus neither fragment of a hyphen-minus/soft-hyphen break can
+            # supply evidence, even across pages or on a one-word line.
+            # WORD keeps compounds whole: their halves are not standalone.
+            words.update(tokens[1:-1])
+    return words
 
-    Drop the hyphen only if the PDF's own text knows the joined word --
-    pdftotext dehyphenates correctly, so its vocabulary is the oracle. That
-    keeps "produc-/tive" -> "productive" while leaving a genuine compound
-    like "self-/interest" hyphenated.
-    """
-    stem = re.findall(WORD, html.unescape(re.sub(r'<[^>]+>', '', prev[:-1])))
-    head = re.findall(WORD, html.unescape(re.sub(r'<[^>]+>', '', nxt)))
-    if stem and head and (stem[-1] + head[0]).lower() in vocab:
-        return prev[:-1] + nxt
+
+def hyphen_join(prev, nxt, evidence, page=None, decisions=None):
+    """Resolve a line-end hyphen using mid-line forms, then standalone halves."""
+    # Only word fragments touching the break qualify. Searching for the
+    # nearest words instead can turn "pages 212-" / "218 and" into 212218.
+    stem = re.search(r'(?<!\w)(' + WORD + r')$',
+                     html.unescape(re.sub(r'<[^>]+>', '', prev[:-1])))
+    head = re.match(r'(' + WORD + r')(?!\w)',
+                    html.unescape(re.sub(r'<[^>]+>', '', nxt)).lstrip())
+    if stem and head:
+        a, b = stem[1].lower(), head[1].lower()
+        hyphenated, joined = evidence[a + '-' + b], evidence[a + b]
+        if hyphenated or joined:
+            keep = hyphenated >= joined       # a tie keeps the hyphen
+        else:
+            keep = bool(evidence[a] and evidence[b])
+            if decisions is not None:
+                decisions.append({'page': page, 'stem': stem[1], 'head': head[1],
+                                  'action': 'keep' if keep else 'join'})
+        if not keep:
+            return prev[:-1] + nxt
     return prev + nxt
 
 
@@ -389,7 +485,7 @@ def split_tail(s):
     return s[:m.start()].rstrip(), re.sub(r'\s+', '', m.group(0))
 
 
-def join_lines(prev, nxt, vocab):
+def join_lines(prev, nxt, evidence, page=None, decisions=None):
     core, tail = split_tail(prev)
     nxt = nxt.lstrip()
     if core.endswith('\xad'):
@@ -397,7 +493,7 @@ def join_lines(prev, nxt, vocab):
         # "impor tante".
         return core[:-1] + tail + nxt
     if core.endswith('-'):
-        return hyphen_join(core, tail + nxt, vocab)
+        return hyphen_join(core, tail + nxt, evidence, page, decisions)
     return core + tail + ' ' + nxt
 
 
@@ -428,11 +524,13 @@ def marker_left(l):
     return None
 
 
-def build_html(pages, body, opt, h1s, h2s, vocab=frozenset()):
+def build_html(pages, body, opt, h1s, h2s, vocab=frozenset(), hyphen_decisions=None):
     blocks = []
+    evidence = midline_words(pages)
     flows = {k: {'cur': None, 'gap': None, 'bgap': None, 'base': None, 'item': False,
                  'last': 0} for k in ('p', 'q', 'fn')}
     pending = []            # footnotes wait for the paragraph they interrupted
+    pending_images = []    # figures also wait for any open prose/quote
     code = []
 
     def flush_code():
@@ -448,6 +546,14 @@ def build_html(pages, body, opt, h1s, h2s, vocab=frozenset()):
         if which == 'p':
             blocks.extend(pending)
             pending.clear()
+        if which in ('p', 'q') and not any(flows[w]['cur'] for w in ('p', 'q')):
+            blocks.extend(pending_images)
+            pending_images.clear()
+
+    def image(src):
+        flush_code()
+        target = pending_images if any(flows[w]['cur'] for w in ('p', 'q')) else blocks
+        target.append(('img', src))
 
     def boundary():
         flush_code()
@@ -458,10 +564,6 @@ def build_html(pages, body, opt, h1s, h2s, vocab=frozenset()):
     emitted = set()
 
     for i, p in enumerate(pages):
-        for src in p['imgs']:
-            boundary()
-            blocks.append(('img', src))
-
         for f in flows.values():
             f['base'] = None            # line positions are per page
 
@@ -474,13 +576,20 @@ def build_html(pages, body, opt, h1s, h2s, vocab=frozenset()):
                 geo[k] = (collections.Counter(l['left'] for l in g).most_common(1)[0][0],
                           max(l['right'] for l in g))
 
-        for l in p['lines']:
+        # Interleave figures by page position, then defer them if a paragraph
+        # is still open. Keep imgs as filenames for the cover-duplicate rule.
+        images = p.get('positioned_images', [(0, src) for src in p['imgs']])
+        events = [(top, 0, src) for top, src in images]
+        events += [(l['c'] - l['h'] / 2, 1, l) for l in p['lines']]
+        for _, event_kind, l in sorted(events, key=lambda e: (e[0], e[1])):
+            if event_kind == 0:
+                image(l)
+                continue
             kind = l['kind']
             if kind == 'table':
                 r = next((r for r in p['tables'] if id(l) in r['lines']), None)
                 if r and not r['done']:
-                    boundary()
-                    blocks.append(('img', r['src']))
+                    image(r['src'])
                     r['done'] = True
                 continue
             if kind == 'head':
@@ -492,7 +601,7 @@ def build_html(pages, body, opt, h1s, h2s, vocab=frozenset()):
                 emitted.add(id(lines[0]))
                 top = max(x['max'] for x in lines)
                 tag = 'h1' if top in h1s else ('h2' if top in h2s else 'h3')
-                blocks.append((tag, html.escape(heading_text(lines))))
+                blocks.append((tag, heading_text(lines, p['w'])))  # runs are already escaped by inner()
                 continue
             if kind == 'code':
                 for w in ('fn', 'q', 'p'):
@@ -549,7 +658,7 @@ def build_html(pages, body, opt, h1s, h2s, vocab=frozenset()):
                 f['item'], f['base'] = ml is not None, None
             else:
                 f['base'] = tl if f['base'] is None else min(f['base'], tl)
-                cur[1] = join_lines(cur[1], l['html'], vocab)
+                cur[1] = join_lines(cur[1], l['html'], evidence, p['n'], hyphen_decisions)
             f['gap'] = br - l['right']
             f['bgap'] = geo.get('body', (bl, br))[1] - l['right']
             f['last'] = len(txt_of(l['html']))
@@ -630,8 +739,9 @@ def shrink_images(work, out, max_px, quality):
 def verify(epub, plain_txt):
     """Compare the EPUB's words against the PDF's own text.
 
-    pdftotext joins hyphenated line breaks correctly, so its vocabulary is a
-    good oracle: a spike in unknown words means words are still being split.
+    In measured poppler 26.10 output, pdftotext drops every line-end hyphen,
+    including compounds. This catches some split/unknown words, but cannot
+    certify hyphen decisions or detect text omitted from the EPUB.
     """
     vocab = set(w.lower() for w in re.findall(WORD, open(plain_txt, encoding='utf8').read()))
     inline = re.compile(r'</?(?:span|i|b|em|strong|a|sup|sub|font|small|big|u)\b[^>]*>', re.I)
@@ -669,7 +779,7 @@ def midsentence_breaks(blocks):
     out, prev = [], None
     for kind, t in blocks:
         if kind not in ('p', 'q'):
-            prev = None if kind != 'fn' else prev    # notes sit outside the flow
+            prev = prev if kind in ('fn', 'img') else None  # outside the flow
             continue
         s = re.sub(r'\s+', ' ', html.unescape(re.sub(r'<[^>]+>', '', t)).replace('\xad', '')).strip()
         if (prev and s and len(prev.split()) >= 10 and not OPEN_END.search(prev)
@@ -734,10 +844,10 @@ def analyze(pages, body, opt, vocab=frozenset()):
               + (f' --h2-sizes {eligible[1]}' if len(eligible) > 1 else ''))
     print('\nheadings found (size, text):')
     shown = 0
-    for _, grp in heading_groups(pages, body):
+    for p, grp in heading_groups(pages, body):
         top = max(l['max'] for l in grp)
         if top in eligible and shown < 40:
-            print(f'  {top:>4}  {heading_text(grp)[:70]}')
+            print(f'  {top:>4}  {heading_text(grp, p["w"])[:70]}')
             shown += 1
     print('\nsample reconstructed paragraphs (check these read as prose):')
     h1s = {eligible[0]} if eligible else set()
@@ -821,8 +931,13 @@ def main():
     h2s = ({int(x) for x in opt.h2_sizes.split(',')} if opt.h2_sizes
            else ({eligible[1]} if len(eligible) > 1 else set()))
 
-    doc, counts, blocks = build_html(pages, body, opt, h1s, h2s, load_vocab(work))
+    decisions = []
+    doc, counts, blocks = build_html(pages, body, opt, h1s, h2s,
+                                     hyphen_decisions=decisions)
     broken = midsentence_breaks(blocks)
+    print(f'no-evidence hyphen decisions: {len(decisions)}')
+    for d in decisions[:8]:
+        print(f'  page {d["page"]}: {d["stem"]!r} / {d["head"]!r}: {d["action"]}')
 
     # page 1 art is nearly always the front cover; inline it and the reader
     # meets the same image twice

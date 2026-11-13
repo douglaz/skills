@@ -85,9 +85,12 @@ starting guess, not an answer, and check it against the heading list above it.
 - **A size used hundreds of times is a subhead**, not a chapter. Leave it out;
   it becomes an h3 and stays out of the table of contents, which is what you
   want.
-- **A printed contents page** shows up as headings full of page numbers or
-  `···········` dot leaders. Drop those pages with `--drop-pages 9-12`. The
-  EPUB gets a real navigable contents, so the printed one is dead weight.
+- **A printed contents page** can show up as headings or `···········` dot
+  leaders. Digit runs in the page's rightmost quarter, separated from the
+  preceding run by at least 30px on the same visual line, are filtered from
+  headings. Chapter numbers next to their labels and number-only headings
+  are kept. Drop printed contents pages with `--drop-pages 9-12`. The EPUB
+  gets a real navigable contents, so the printed one is dead weight.
 
 ### 3. Convert
 
@@ -99,9 +102,10 @@ python3 scripts/pdf2epub.py convert "book.pdf" -o "Title - Author.epub" \
   --title "Real Title" --author "Author Name" --lang pt
 ```
 
-Reuse the same `--work` directory across runs. Extraction and table crops are
-cached there, so re-converting with different flags takes seconds rather than
-minutes.
+Reuse the same `--work` directory for the same PDF. Extraction is bound to the
+input's SHA-256 content: a different PDF, including one OCR'd in place, is
+refused with a message to use a fresh `--work` directory. Table crops are keyed
+by page, crop region and DPI, so changed flags render any newly needed crops.
 
 Set `--title`/`--author` from the book itself, not the filename — pirate-library
 filenames like `Some Book (z-library.sk, 1lib.sk).pdf` make an ugly library
@@ -109,26 +113,29 @@ entry. The `analyze` output's first headings usually show the real title.
 
 ### 4. Check what it reports
 
-The convert step prints a self-check. Three numbers matter:
+The convert step prints a self-check and a hyphen-decision report:
 
 - **Paragraphs ending mid-sentence.** Paragraphs of ten or more words that stop
   without closing punctuation while another paragraph follows — one paragraph
   cut in two, the failure a reader hits first. Under ~4% is healthy (one book
-  read 2.6% when right and 6.9% with `--indent 0`); the rest are usually
+  read 3.4%, 105 of 3124 paragraphs, with `--indent 18`); the rest are usually
   captions or table text. A spike means lines are still being cut: see "Text
   breaks mid-sentence" in the troubleshooting reference.
 - **Words not in the PDF's vocabulary.** The script compares against
-  `pdftotext` output, which dehyphenates correctly, so it is a good oracle.
-  Under ~1% is healthy. A spike means words are still being split — usually
-  hyphen joining, covered in the troubleshooting reference. It cannot see a
-  paragraph cut in two — every word is intact — which is why the first number
-  exists.
+  `pdftotext` output. In measured poppler 26.10 output, that tool drops every
+  line-end hyphen, including compounds, so this comparison cannot certify
+  hyphen decisions. Under ~1% is a useful screening threshold; a spike can
+  expose split or unknown words. It cannot detect omitted text or a paragraph
+  cut in two — every word in the latter is intact.
+- **No-evidence hyphen decisions.** The count and first eight decisions show
+  the page, both fragments and whether the hyphen was kept or the word joined.
+  Review these against the PDF; the standalone-word fallback is a heuristic.
 - **File size.** Over 25 MB cannot be emailed through Gmail. Lower
   `--max-image-px` (default 1400, already well past what e-ink can show), or
   use a delivery route without the limit.
 
-Then open the result and read a page or two of actual prose. The numbers catch
-broken words; only reading catches a book whose quotes all came out as
+Then open the result and read a page or two of actual prose. The numbers can
+expose some broken words; only reading catches a book whose quotes all came out as
 footnotes.
 
 ### 5. Deliver
@@ -154,6 +161,24 @@ eject before unplugging.
 
 Knowing *why* each rule exists makes it much easier to tell when a book needs
 a different setting.
+
+**Running heads and footers** — only page-top heads use the low-repetition
+rule: the text, with digits removed, must occur as a detached first line above
+the text block on at least two pages. The block's top is the outer decile of
+each page's first line with a normally spaced neighbour, falling back to
+interior text on sparse pages. Detached one-off heads and copyright lines do
+not anchor it just by sharing a height. The extent allows at least 12px of
+vertical page offset, so captions above tables and spaced subheads inside it
+survive regardless of repetition. Heads may repeat within just one chapter
+and may carry a changing folio, including one set larger than the title.
+
+Page-bottom lines are handled as before: a last line is stripped only when
+its digit-stripped text occurs among first or last lines at least
+`max(8, 15% of pages)` times. No position or low-repetition rule applies there,
+so citations repeated on only two or three pages and infrequent note bands
+survive. The same book-wide threshold also strips first lines above the text
+block. Both rules require modal size at most body; the digits/roman-only folio
+rule is unchanged.
 
 **Paragraphs** — a line starts a new paragraph if it is indented, or if the
 previous line stopped short of the right margin. In justified text those two
@@ -186,11 +211,20 @@ poems.
 handling. A soft hyphen (U+00AD) gets silently turned into a space by every
 converter, giving `impor tante`, `tam bém`. A real hyphen-minus is worse,
 because `produc-` + `tive` has to become `productive` while `self-` +
-`interest` must stay `self-interest`. The script decides using `pdftotext`
-output as an oracle — it dehyphenates correctly, so if it knows the joined
-word, the hyphen goes. This is the most common way a converted book is quietly
-ruined, because it looks fine until you read closely; the vocabulary check at
-the end of a conversion is what catches it.
+`interest` must stay `self-interest`. Measured poppler 26.10 `pdftotext` output
+drops every line-end hyphen, so it cannot decide this or reliably detect
+compound damage in the vocabulary check. The script instead counts words in
+the XML's visual lines, case-insensitively, excluding every line's first and
+last token so neither break fragment supplies evidence. Hyphenated compounds
+are whole tokens; their halves do not count as standalone words.
+
+If only one form (`self-interest` or `selfinterest`) occurs mid-line, that form
+wins. If both occur, the more frequent wins, and a tie keeps the hyphen. With
+neither form present, keep the hyphen only if both halves occur mid-line as
+standalone words; otherwise join. Conversion reports the number of these
+no-evidence decisions and the first eight with page, fragments and action.
+If either fragment touching a hyphen-minus is not a word, the hyphen stays
+and the break is excluded from the no-evidence count.
 
 **Block quotes vs footnotes** — most books set both in the same smaller type,
 so size alone cannot separate them. Indentation can: a quote is inset as a whole
@@ -215,7 +249,9 @@ after it.
 **Code listings** — detected by monospace font family and kept preformatted.
 Reflowing code destroys it.
 
-**Images** — book scans arrive at print resolution, far beyond any e-ink screen.
+**Images** — figures follow their page position and wait until an open paragraph
+closes, including one continuing from the previous page. Book scans arrive at
+print resolution, far beyond any e-ink screen.
 Everything is capped at 1400px; line art is quantized to a small palette, photos
 go to JPEG. Page 1 art is dropped because it duplicates the cover.
 

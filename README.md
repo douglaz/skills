@@ -327,7 +327,7 @@ python3 skills/pdf-to-kindle-epub/scripts/pdf2epub.py analyze book.pdf --work /v
 ```
 
 Every conversion prints a self-check: words missing from the PDF's own text, and paragraphs ending
-mid-sentence. On one 556-page book they read 0.05% and 2.6%. A scanned PDF with no text layer
+mid-sentence. On one 556-page book they read 0.05% and 3.4%. A scanned PDF with no text layer
 needs OCR first. A Kindle does not open an EPUB copied over USB, so for that route convert it to
 AZW3.
 

@@ -11,6 +11,7 @@ arrives.
 - [Words split in half](#words-split-in-half)
 - [A block of text is smaller than the rest](#a-block-of-text-is-smaller-than-the-rest)
 - [A footnote interrupts a sentence](#a-footnote-interrupts-a-sentence)
+- [Captions, subheads or footnotes disappeared](#captions-subheads-or-footnotes-disappeared)
 - [Grey background](#grey-background)
 - [Table of contents is wrong or starts partway in](#table-of-contents-is-wrong-or-starts-partway-in)
 - [Headings mashed together or full of page numbers](#headings-mashed-together-or-full-of-page-numbers)
@@ -61,6 +62,32 @@ A caution learned the hard way: when checking output, strip tags with a
 *space* replacement and it will look correct whether or not it is broken. Look
 at the raw markup.
 
+## Captions, subheads or footnotes disappeared
+
+A repeated line at a page edge can be real content even when a blank line or
+note gap separates it from its neighbour. Repetition and a gap alone do not
+identify a running head.
+
+**Fix:** only page-top heads use the low-repetition rule: at least two detached
+first-line occurrences above the measured text block, in modal type no larger
+than body. The top is estimated from the outer decile of each page's first
+line with a normally spaced neighbour, with interior text as a sparse-page
+fallback. Detached one-off heads, roman folios and copyright lines cannot
+establish the top merely by sharing a height. It allows at least 12px of
+vertical page offset. Captions and spaced subheads inside that extent stay,
+even if they repeat often. Heads above it may carry a changing page number,
+even in larger type.
+
+Page-bottom lines are handled as before: they need the book-wide threshold
+of `max(8, 15% of pages)` digit-stripped first/last-line occurrences, in modal
+type no larger than body. There is no position or low-repetition rule at the
+bottom. Short notes repeated on two or three pages survive, including in
+infrequent note bands. A bottom note repeated often enough to reach the
+book-wide threshold can still be stripped. The book-wide rule at the top also
+requires a position above the block; the digits/roman-only folio rule is
+unchanged. Compare suspect lines in `book.xml` with the generated HTML: the
+vocabulary check cannot detect omitted text.
+
 ## Every line of a list is its own paragraph
 
 > "each bullet point is chopped up line by line"
@@ -80,22 +107,32 @@ items can still break; check `marker_left` in the script.
 > "É pos sível", "impor tante", "tam bém"
 
 A soft hyphen (U+00AD) at the line end was turned into a space. Converters do
-this silently. `pdftotext` gets it right, which is why it is used as the
-verification oracle.
+this silently. The script rejoins it while rebuilding the paragraph.
 
 Real hyphen-minus breaks (`produc-` / `tive`) are the other half of this, and
-they are ambiguous: `self-` / `interest` must *keep* its hyphen. The script
-resolves it by asking whether `pdftotext` -- which dehyphenates correctly --
-knows the joined word.
+they are ambiguous: `self-` / `interest` must *keep* its hyphen. Measured
+poppler 26.10 `pdftotext` output drops every line-end hyphen, including these
+compounds, so its vocabulary cannot decide which form is right.
+
+The script uses case-insensitive mid-line evidence from the XML instead.
+Every line's first and last token are excluded so neither break fragment
+counts. If only the hyphenated or joined form occurs, it wins; if both occur,
+the more frequent wins, and a tie keeps the hyphen. With neither form present,
+the hyphen stays only if both halves occur mid-line as standalone words.
+A half inside another compound is not a standalone word.
+If either fragment touching a hyphen-minus is not a word, the hyphen stays
+and the break is excluded from the no-evidence count.
 
 A third variant hides inside italics: the soft hyphen sits *before* the `</i>`
 (`demo` U+00AD `</i>` / `<i>ra`), so a check for a line ending in a hyphen misses it and
 the halves join with a space — `demo ra`.
 
-**Fix:** handled automatically, all three. If it persists, check the
-vocabulary figure the conversion prints; a book whose `pdftotext` output is
-itself poor (unusual encoding, ligature problems) weakens the oracle. Compare
-a sample page of `plain.txt` in the work directory against the PDF.
+**Fix:** handled automatically, all three. Review the no-evidence decision
+count and the first eight examples printed by `convert` (page, fragments and
+keep/join action), especially compounds decided by the standalone-word
+fallback. The vocabulary comparison can expose some broken words but cannot
+certify hyphen decisions or detect omitted text. Compare suspect XML lines
+in `book.xml` and a sample of `plain.txt` against the PDF.
 
 **Do not** fix this by rejoining word pairs after the fact. Without the hyphen
 you cannot tell `de pressão` (two words) from `de-pressão` (one), and a
@@ -153,12 +190,16 @@ at a smaller size than part numerals but still belongs in `--h1-sizes`.
 Three distinct causes:
 
 1. **Page numbers in headings** — those pages are the book's *printed* contents
-   page. Drop them: `--drop-pages 9-12`. Dot leaders (`······`) are the same
-   thing.
+   page. Digit runs in the page's rightmost quarter, separated from the
+   preceding run by at least 30px on the same visual line, are filtered from
+   headings. Numbers on their own visual line are kept. Drop the pages with
+   `--drop-pages 9-12` to remove the printed contents altogether. Dot leaders
+   (`······`) are the same thing.
 2. **`CAPÍTULOV`** — the numeral is set so large it shares a visual line with
    its label, so joining whole lines concatenates them. Headings must be split
    at the *run* level, which the script does; the result is
-   `CAPÍTULO V — TITLE`.
+   `CAPÍTULO V — TITLE`. Arabic chapter numbers, number-only headings and
+   one-word uppercase titles are retained too.
 3. **Unrelated headings merged** — grouping reached too far. Groups break at a
    body-text line or a 150px vertical gap.
 

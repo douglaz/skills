@@ -12,6 +12,9 @@ bugs were. The extraction and the calibre call around them are thin.
 
 Usage: ./pdf2epub.test        (exits 0 if all pass)
 """
+import contextlib
+import html
+import io
 import os
 import re
 import sys
@@ -55,6 +58,7 @@ FIXTURE = '''<?xml version="1.0" encoding="UTF-8"?>
 <text top="188" left="70" width="480" height="17" font="0">An indented line starts a paragraph, and produc­</text>
 <text top="210" left="50" width="500" height="17" font="0">tive work differs from self-</text>
 <text top="232" left="50" width="300" height="17" font="0">interest, which keeps its hyphen.</text>
+<text top="254" left="50" width="300" height="17" font="0">Evidence of self-interest appears here.</text>
 </page>
 <page number="2" position="absolute" top="0" left="0" height="1000" width="600">
 <fontspec id="2" size="138" family="ABCDEF+Display" color="#000000"/>
@@ -135,9 +139,9 @@ def build(fixture=FIXTURE, opt=Opt()):
     P.classify(pages, body, opt)
     for p in pages:
         p['tables'] = []
-    # the oracle pdftotext would supply: it knows "productive", and does not
-    # know "selfinterest", which is what makes the two cases decidable
-    vocab = frozenset(['productive', 'work', 'self-interest', 'interest'])
+    # pdftotext's vocabulary is deliberately misleading for compounds;
+    # the XML fixture now supplies independent mid-line evidence instead.
+    vocab = frozenset(['productive', 'work', 'self-interest', 'selfinterest', 'interest'])
     # as a real book maps them: parts to h1 (none here), chapters to h2
     doc, counts, blocks = P.build_html(pages, body, opt, set(), {138}, vocab)
     return pages, body, doc, counts, blocks
@@ -155,7 +159,8 @@ check('no space left where the soft hyphen was',
 check('real hyphen dropped when the joined word is known',
       'productive work' in plain, 'expected "productive work"')
 check('real hyphen kept for a genuine compound',
-      'self-interest' in plain, 'expected "self-interest" to survive')
+      'productive work differs from self-interest, which keeps its hyphen.' in plain,
+      'expected the wrapped "self-interest" to survive')
 check('lines of one paragraph join into a single <p>',
       '<p>The quick brown fox jumps over the lazy dog and keeps running onward'
       ' to show that a soft hyphen joins correctly here.</p>' in doc,
@@ -267,8 +272,14 @@ with tempfile.TemporaryDirectory() as w:
     tpages, tbody = P.parse(path)
     P.strip_furniture(tpages, tbody)
     P.classify(tpages, tbody, Opt())
-    open(os.path.join(w, 'tbl-1-0.png'), 'wb').close()   # cached crop: no pdftoppm
-    P.crop_tables(tpages, w, 150)
+    def render_crop(cmd, cwd):
+        open(os.path.join(cwd, cmd[-1] + '-1.png'), 'wb').close()
+    old_run = P.run
+    try:
+        P.run = render_crop
+        P.crop_tables(tpages, w, 150)
+    finally:
+        P.run = old_run
     tdoc, _, _ = P.build_html(tpages, tbody, Opt(), set(), set(), frozenset())
 check('a single-cell row inside a table goes into the picture, not the text',
       '(Depakene)' not in tdoc and tdoc.count('<img') == 1, tdoc)
@@ -363,6 +374,547 @@ check('midsentence_breaks flags a paragraph cut in two',
 check('midsentence_breaks ignores short captions and list items',
       P.midsentence_breaks([('p', 'QUADRO 5'), ('p', 'Registro diário'),
                             ('p', _cut), ('p', 'b. second item')]) == [])
+
+print('\nP1 regressions')
+
+
+def line(t, top=100, left=50, width=500, font=0, height=17):
+    return (f'<text top="{top}" left="{left}" width="{width}" height="{height}" '
+            f'font="{font}">{t}</text>')
+
+
+FONTS = ('<fontspec id="0" size="15" family="Serif"/>'
+         '<fontspec id="1" size="13" family="Serif"/>'
+         '<fontspec id="2" size="39" family="Display"/>'
+         '<fontspec id="3" size="24" family="Display"/>'
+         '<fontspec id="4" size="14" family="Serif"/>')
+
+
+def page(n, content):
+    return (f'<page number="{n}" width="622" height="1000">'
+            + FONTS + content + '</page>')
+
+
+def fixture(*pgs):
+    return '<pdf2xml>' + ''.join(pgs) + '</pdf2xml>'
+
+
+BODY = line('Ordinary body text sets the size and margin for this book. ' * 4,
+            top=400)
+
+
+def headings(content):
+    _, _, hdoc, _, _ = build(fixture(page(1, content + BODY)))
+    return hdoc, re.findall(r'<h[123]>(.*?)</h[123]>', hdoc)
+
+
+_, hs = headings(line('12', top=60, font=2, height=44)
+                 + line('CHAPTER', top=130, font=3)
+                 + line('The Long Road Home', top=170, font=3))
+check('P1.1a separate display chapter number survives',
+      hs == ['CHAPTER 12 — The Long Road Home'], f'got {hs}')
+_, hs = headings(line('CHAPTER', top=100, width=110, font=3)
+                 + line('7', top=100, left=167, width=20, font=3)
+                 + line('The Long Road Home', top=140, font=3))
+check('P1.1b chapter number in an adjacent run survives',
+      hs == ['CHAPTER 7 — The Long Road Home'], f'got {hs}')
+hdoc, hs = headings(line('1', top=100, font=2, height=44))
+check('P1.1c number-only heading retains its level and text',
+      '<h3>1</h3>' in hdoc, f'got {hs}')
+
+# Page 10 of the real XML: small labels/titles with oversized numbers at
+# the right edge, sharing a visual line with one of the title lines.
+contents = ''
+for j, (num, roman) in enumerate(((49, 'III'), (67, 'IV'), (89, 'V'), (201, 'VI'))):
+    top = 100 + j * 160
+    contents += (line(f'<b>CAPÍTULO {roman}</b>', top, left=396, width=89, font=4)
+                 + line('THE FIRST TITLE LINE', top + 30, left=290, width=194, font=1)
+                 + line('AND ANOTHER TITLE LINE', top + 50, left=251, width=234, font=1)
+                 + line(str(num), top + 20, left=522 if num == 201 else 552, width=44,
+                        font=2, height=44))
+_, hs = headings(contents)
+check('GUARD P1.1d printed contents page numbers stay out of headings',
+      bool(hs) and not any(re.search(r'49|67|89|201', h) for h in hs), f'got {hs}')
+
+for label, width, positions in (
+    ('page-12 geometry', 630, (492, 495, 498)),
+    ('narrow page', 459, (400, 400, 400)),
+):
+    contents = ''
+    numbers = (329, 539, 547)
+    for j, (num, left) in enumerate(zip(numbers, positions)):
+        top = 100 + j * 170
+        contents += (line('CONTENTS TITLE ' + ('ALPHA', 'BETA', 'GAMMA')[j],
+                          top + 14, width=left - 100, font=3)
+                     + line(str(num), top, left=left, width=65, font=2, height=44))
+    pg = page(12, contents + BODY).replace('width="622"', f'width="{width}"')
+    _, _, hdoc, _, _ = build(fixture(pg))
+    hs = re.findall(r'<h[123]>(.*?)</h[123]>', hdoc)
+    check('R2 B ' + label + ' contents folios stay out of headings',
+          len(hs) == 3 and all('CONTENTS TITLE' in h for h in hs)
+          and not any(re.search(r'329|539|547', h) for h in hs), f'got {hs}')
+
+hdoc, _ = headings(line('Don&apos;t Panic: Q&amp;A on &quot;Risk&quot;', font=3))
+encoded = re.findall(r'<h[123]>(.*?)</h[123]>', hdoc)[0]
+check('P1.2 heading escapes special characters exactly once',
+      html.unescape(encoded) == 'Don\'t Panic: Q&A on "Risk"'
+      and not any(s in encoded for s in ('&amp;#x27;', '&amp;amp;', '&amp;quot;')),
+      f'got {encoded}')
+_, hs = headings(line('IV', top=60, font=2, height=44)
+                 + line('CHAPTER', top=130, font=3)
+                 + line('BEGINNINGS', top=170, font=3))
+check('P1.3 single-word uppercase title survives a numeral',
+      hs == ['CHAPTER IV — BEGINNINGS'], f'got {hs}')
+
+for small in (False, True):
+    pgs = []
+    chapter_names = 'ALPHA BETA GAMMA DELTA EPSILON ZETA ETA THETA IOTA KAPPA LAMBDA MU NU XI OMICRON'.split()
+    for n in range(1, 301):
+        head = ('THE BOOK TITLE' if n % 2 == 0
+                else 'CHAPTER TITLE ' + chapter_names[(n - 1) // 20])
+        # Capital starts prevent the lower-case repair from hiding a cut.
+        content = (line(head, 40, left=120 if small else 50,
+                        width=300, font=1 if small else 0)
+                   + line('Words of the paragraph continue across every page turn', 100)
+                   + line('And more words carry the same paragraph across the', 122)
+                   + line('Next page without losing the sentence' + ('.' if n == 300 else ''), 144))
+        pgs.append(page(n, content))
+    _, _, fdoc, _, fblocks = build(fixture(*pgs))
+    label = 'small' if small else 'body'
+    check(f'P1.4 {label} chapter and book margin heads are stripped',
+          'CHAPTER TITLE' not in fdoc and 'THE BOOK TITLE' not in fdoc,
+          f'{fdoc.count("CHAPTER TITLE")} chapter heads survived')
+    check(f'P1.4 {label} paragraphs cross every page turn whole',
+          len([b for b in fblocks if b[0] == 'p']) == 1
+          and P.midsentence_breaks(fblocks) == [],
+          f'{len(P.midsentence_breaks(fblocks))} mid-sentence breaks')
+
+for caption in (True, False):
+    pgs = [page(n, line(f'QUADRO {n}' if caption else 'Repeated subhead', 100)
+                + line('Actual content starts at the top of the text block.', 122)
+                + line('And the content closes here.', 144)) for n in range(1, 13)]
+    _, _, gdoc, _, _ = build(fixture(*pgs))
+    expected = [f'QUADRO {n}' for n in range(1, 13)] if caption else ['Repeated subhead'] * 12
+    check('GUARD P1.4 text-block ' + ('captions' if caption else 'repeated subheads') + ' survive',
+          all(e in gdoc for e in expected) and
+          (caption or gdoc.count('Repeated subhead') == 12),
+          f'got {re.findall(r"<p>.*?</p>", gdoc)[:3]}')
+
+_, _, fdoc, _, _ = build(fixture(*[
+    page(n, line('BOOK TITLE', 40) + line('Some body text.', 100)
+         + line(str(n), 960)) for n in range(1, 13)]))
+check('GUARD P1.4 repeated book title and folios are stripped',
+      'BOOK TITLE' not in fdoc and not re.search(r'<p>\d+</p>', fdoc))
+
+for label, head_top, body_top, arrangement in (
+    ('inline folio', 40, 100, 'inline'),
+    ('adjacent folio', 40, 100, 'adjacent'),
+    ('distant folio', 40, 100, 'distant'),
+    ('low head', 85, 150, 'title'),
+    ('13px gap', 70, 100, 'title'),
+    ('chapter head with folio', 40, 100, 'chapter'),
+):
+    pgs = []
+    for n in range(1, 41):
+        title = ('CHAPTER TITLE ' + ('ALPHA' if n <= 20 else 'BETA')
+                 if arrangement == 'chapter' else 'THE BOOK TITLE')
+        if arrangement in ('inline', 'chapter'):
+            head = line(f'{n + 23} {title}' if n % 2 else f'{title} {n + 23}',
+                        head_top, width=300)
+        elif arrangement in ('adjacent', 'distant'):
+            head = (line(title, head_top, width=200)
+                    + line(str(n + 23), head_top,
+                           left=255 if arrangement == 'adjacent' else 400, width=25))
+        else:
+            head = line(title, head_top, width=300)
+        pgs.append(page(n, head
+                        + line('Words of the paragraph continue across every page turn', body_top)
+                        + line('And more words carry the same paragraph across the', body_top + 22)
+                        + line('Next page without losing the sentence' + ('.' if n == 40 else ''),
+                               body_top + 44)))
+    fp, _, fdoc, _, fblocks = build(fixture(*pgs))
+    heads_left = [l for p in fp for l in p['lines']
+                  if 'BOOK TITLE' in l['html'] or 'CHAPTER TITLE' in l['html']]
+    check('R2 A ' + label + ' stripped without breaking page turns or making crops',
+          not heads_left and 'BOOK TITLE' not in fdoc and 'CHAPTER TITLE' not in fdoc
+          and not any(l['kind'] == 'table' for p in fp for l in p['lines'])
+          and len([b for b in fblocks if b[0] == 'p']) == 1
+          and P.midsentence_breaks(fblocks) == [],
+          f'{len(heads_left)} heads survived; '
+          f'{len(P.midsentence_breaks(fblocks))} mid-sentence breaks')
+
+print('\nR3 text-block boundaries')
+for label in ('caption above table', 'spaced subhead', 'short footnote'):
+    pgs, expected = [], {}
+    for n in range(1, 13):
+        content = (line('Ordinary prose starts at the usual text-block top.', 38)
+                   + line('More ordinary prose establishes the baseline pitch.', 60)
+                   + line('The paragraph continues on another regular line.', 82)
+                   + line('The last paragraph continues near the page bottom.', 840)
+                   + line('And ends at the usual text-block bottom.', 862))
+        if n % 4 == 0:
+            if label == 'caption above table':
+                # Page 120: centre 45, beside normal first-line centres 47;
+                # the first table row is about 43px below the caption.
+                wanted = f'QUADRO {n}'
+                content = (line(wanted, 36, height=18)
+                           + line('First table cell', 80, width=180)
+                           + line('Second table cell', 80, left=400, width=150)
+                           + line('Ordinary prose resumes after the table.', 102)
+                           + line('And ends at the usual text-block bottom.', 862))
+            elif label == 'spaced subhead':
+                wanted = 'Exercício'
+                content = (line('<b>Exercício</b>', 38)
+                           + line('Prose starts after a blank line under the subhead.', 78)
+                           + line('And continues at the normal baseline pitch.', 100)
+                           + line('And ends at the usual text-block bottom.', 862))
+            else:
+                wanted = f'{n}. Ver nota {n + 7}.'
+                content = (line('Ordinary prose starts at the usual text-block top.', 38)
+                           + line('More ordinary prose establishes the baseline pitch.', 60)
+                           + line('The last body line leaves room for one short note.', 818)
+                           + line(wanted, 864, font=1, height=13))
+            expected[n] = wanted
+        pgs.append(page(n, content))
+    fp, _, fdoc, _, _ = build(fixture(*pgs))
+    survivors = {p['n']: [P.txt_of(l['html']) for l in p['lines']] for p in fp}
+    check('R3 ' + label + ' survives inside the text block on every page',
+          all(wanted in survivors[n] and wanted in fdoc for n, wanted in expected.items()),
+          f'expected {expected}; retained { {n: survivors[n] for n in expected} }')
+
+pgs = []
+for n in range(1, 13):
+    head = (line('THE BOOK TITLE', 40, width=200)
+            + line(str(n + 23), 38, left=255, width=25, font=5, height=21))
+    pgs.append(page(n, '<fontspec id="5" size="18" family="Serif"/>' + head
+                    + line('Ordinary prose starts at the usual text-block top.', 100)
+                    + line('More ordinary prose establishes the baseline pitch.', 122)
+                    + line('The paragraph ends on its third regular line.', 144)))
+fp, _, fdoc, _, _ = build(fixture(*pgs))
+check('R3 running head with a larger folio is stripped on every page',
+      'THE BOOK TITLE' not in fdoc
+      and all('THE BOOK TITLE' not in l['html'] for p in fp for l in p['lines']),
+      f'{sum("THE BOOK TITLE" in l["html"] for p in fp for l in p["lines"])} heads survived')
+
+print('\nR4 footnote bands and offset pages')
+for footer in (False, True):
+    pgs, expected = [], {}
+    note_topics = iter('sleep mood exercise food work friends rest worry hope'.split())
+    for n in range(1, 13):
+        # Every note is detached: no multi-line note can anchor the band.
+        note = (f'{n}. Ver nota {n + 7}.' if n % 4 == 0
+                else f'{n}. A note about {next(note_topics)}.')
+        expected[n] = note
+        content = ''.join(line(f'Ordinary prose on page {n}, line {i}.', top)
+                          for i, top in enumerate(range(38, 819, 22)))
+        content += line(note, 864, font=1, height=13)
+        if footer:
+            content += line('THE BOOK TITLE', 904)
+        pgs.append(page(n, content))
+    fp, _, fdoc, _, _ = build(fixture(*pgs))
+    survivors = {p['n']: [P.txt_of(l['html']) for l in p['lines']] for p in fp}
+    label = 'footnote band' + (' with footer' if footer else '')
+    check(('GUARD R4 ' if footer else 'R4 ') + label
+          + ' keeps all three repeated notes and nine distinct notes',
+          all(note in survivors[n] and note in fdoc for n, note in expected.items()),
+          f'missing { {n: note for n, note in expected.items() if note not in survivors[n]} }')
+    if footer:
+        check('GUARD R4 footer below the footnote band is stripped on every page',
+              'THE BOOK TITLE' not in fdoc
+              and all('THE BOOK TITLE' not in l['html'] for p in fp for l in p['lines']))
+
+for shifted in ((20, 40, 60), (20, 40)):
+    pgs = []
+    for n in range(1, 61):
+        if n in shifted:
+            # The first-line centre is 38.5, 8px above the usual 46.5;
+            # the next line's centre is 82, leaving the measured 43.5px gap.
+            content = (line(f'QUADRO {n}', 30, height=17)
+                       + line('First table cell', 74, width=180, height=16)
+                       + line('Second table cell', 74, left=400, width=150, height=16)
+                       + line('Prose resumes after the table.', 96))
+        else:
+            content = (line('Ordinary prose starts at the usual text-block top.', 38)
+                       + line('More prose establishes the baseline pitch.', 60)
+                       + line('The paragraph continues on another line.', 82))
+        pgs.append(page(n, content + line('The page ends here.', 818)))
+    fp, _, fdoc, _, _ = build(fixture(*pgs))
+    survivors = {p['n']: [P.txt_of(l['html']) for l in p['lines']] for p in fp}
+    check(f'R4 {len(shifted)} offset pages keep every QUADRO caption',
+          all(f'QUADRO {n}' in survivors[n] and f'QUADRO {n}' in fdoc for n in shifted),
+          f'missing {[n for n in shifted if f"QUADRO {n}" not in survivors[n]]}')
+
+print('\nR5 top-only running heads')
+for topics, repetitions in (
+    ('sleep mood exercise food'.split(), 3),
+    ('sleep mood exercise food work friends'.split(), 2),
+):
+    pgs, expected = [], {}
+    for n in range(1, 13):
+        note = f'{n}. A citation about {topics[(n - 1) // repetitions]}.'
+        expected[n] = note
+        content = ''.join(line(f'Ordinary prose on page {n}, line {i}.', top)
+                          for i, top in enumerate(range(38, 819, 22)))
+        pgs.append(page(n, content + line(note, 864, font=1, height=13)))
+    fp, _, fdoc, _, _ = build(fixture(*pgs))
+    survivors = {p['n']: [P.txt_of(l['html']) for l in p['lines']] for p in fp}
+    check(f'R5.1 {len(topics)} citations x {repetitions} keep all 12 notes',
+          all(note in survivors[n] and note in fdoc for n, note in expected.items()),
+          f'missing { {n: note for n, note in expected.items() if note not in survivors[n]} }')
+
+pgs, expected = [], {}
+note_topics = iter('sleep mood exercise food work friends rest worry hope'.split())
+for n in range(1, 121):
+    content = ''.join(line(f'Ordinary prose on page {n}, line {i}.', top)
+                      for i, top in enumerate(range(38, 819, 22)))
+    if n <= 12:
+        note = (f'{n}. Ver nota {n + 7}.' if n % 4 == 0
+                else f'{n}. A note about {next(note_topics)}.')
+        expected[n] = note
+        content += line(note, 864, font=1, height=13)
+    pgs.append(page(n, content))
+fp, _, fdoc, _, _ = build(fixture(*pgs))
+survivors = {p['n']: [P.txt_of(l['html']) for l in p['lines']] for p in fp}
+check('R5.2 infrequent note band keeps all 12 notes among 120 pages',
+      all(note in survivors[n] and note in fdoc for n, note in expected.items()),
+      f'missing { {n: note for n, note in expected.items() if note not in survivors[n]} }')
+
+for small in (False, True):
+    for variant in ('one-off heads', 'roman folios', 'unique non-head text'):
+        pgs = []
+        for n in range(1, 301):
+            head = ('THE BOOK TITLE' if n % 2 == 0
+                    else 'CHAPTER TITLE ' + chapter_names[(n - 1) // 20])
+            if variant == 'one-off heads' and n in (1, 3, 5):
+                head = {1: 'PREFACE', 3: 'FOREWORD', 5: 'THANKS'}[n]
+            elif variant == 'roman folios' and n <= 3:
+                head = ('INTRODUCTION vi', 'vii INTRODUCTION', 'INTRODUCTION viii')[n - 1]
+            elif variant == 'unique non-head text' and n <= 3:
+                head = ('Copyright by the publisher', 'All rights reserved', 'Printed in Portugal')[n - 1]
+            content = (line(head, 40, left=120 if small else 50,
+                            width=300, font=1 if small else 0)
+                       + line('Words of the paragraph continue across every page turn', 100)
+                       + line('And more words carry the same paragraph across the', 122)
+                       + line('Next page without losing the sentence' + ('.' if n == 300 else ''), 144))
+            pgs.append(page(n, content))
+        fp, _, fdoc, _, _ = build(fixture(*pgs))
+        heads_left = [l for p in fp for l in p['lines']
+                      if 'THE BOOK TITLE' in l['html'] or 'CHAPTER TITLE' in l['html']]
+        check('R5.3 ' + ('small' if small else 'body') + ' ' + variant
+              + ' do not protect repeated heads',
+              not heads_left and 'THE BOOK TITLE' not in fdoc and 'CHAPTER TITLE' not in fdoc,
+              f'{len(heads_left)} repeated heads survived')
+
+# Each section starts with a headless opener, then a recto and a verso.
+# Chapters continue for 20 pages: ten chapter heads and nine book heads.
+pgs = []
+for title, length in [('PREFACE', 3), ('FOREWORD', 3), ('THANKS', 3)] + [
+    ('CHAPTER TITLE ' + name, 20) for name in chapter_names[:5]
+]:
+    for local in range(1, length + 1):
+        head = '' if local == 1 else line(title if local % 2 == 0 else 'THE BOOK TITLE', 40)
+        content = (head + line('Words of the paragraph continue across every page turn', 100)
+                   + line('And more words carry the same paragraph across the', 122)
+                   + line('Next page without losing the sentence', 144))
+        pgs.append(page(len(pgs) + 1, content))
+fp, _, fdoc, _, _ = build(fixture(*pgs))
+heads_left = [l for p in fp for l in p['lines']
+              if 'THE BOOK TITLE' in l['html'] or 'CHAPTER TITLE' in l['html']]
+check('R5.3 short sections do not protect 48 book and 50 chapter heads',
+      not heads_left and 'THE BOOK TITLE' not in fdoc and 'CHAPTER TITLE' not in fdoc,
+      f'{len(heads_left)} repeated heads survived')
+
+for offset in (10, 12):
+    shifted = (20, 40, 60)
+    pgs = []
+    for n in range(1, 61):
+        if n in shifted:
+            # Usual first-line centre 46.5, shifted up by offset; the
+            # table starts 43.5px below the caption, whatever the offset.
+            content = (line(f'QUADRO {n}', 38 - offset)
+                       + line('First table cell', 82 - offset, width=180, height=16)
+                       + line('Second table cell', 82 - offset, left=400, width=150, height=16)
+                       + line('Prose resumes after the table.', 104 - offset))
+        else:
+            content = (line('Ordinary prose starts at the usual text-block top.', 38)
+                       + line('More prose establishes the baseline pitch.', 60)
+                       + line('The paragraph continues on another line.', 82))
+        pgs.append(page(n, content + line('The page ends here.', 818 - (offset if n in shifted else 0))))
+    fp, _, fdoc, _, _ = build(fixture(*pgs))
+    survivors = {p['n']: [P.txt_of(l['html']) for l in p['lines']] for p in fp}
+    check(f'R5.4 {offset}px offset keeps all three QUADRO captions',
+          all(f'QUADRO {n}' in survivors[n] and f'QUADRO {n}' in fdoc for n in shifted),
+          f'missing {[n for n in shifted if f"QUADRO {n}" not in survivors[n]]}')
+
+image_turn = fixture(
+    page(1, line('Prose tells the whole family about a trip across the United', 100)),
+    page(2, '<image top="160" left="50" width="200" height="150" src="x.png"/>'
+         + line('States and Canada together on their long journey.', 100, width=300)
+         + line('A new paragraph comes after the figure.', 340, left=75, width=300)))
+_, _, idoc, _, iblocks = build(image_turn)
+check('P1.5a page-turn paragraph stays whole before a lower figure',
+      'across the United States and Canada together on their long journey.</p>' in idoc
+      and idoc.index('long journey.</p>') < idoc.index('<img'), f'got {iblocks}')
+inside_image = fixture(page(1,
+    '<image top="120" left="50" width="200" height="150" src="middle.png"/>'
+    + line('A paragraph starts before the figure and carries all the', 100)
+    + line('Way past it before finally ending.', 300, width=300)
+    + line('Another paragraph follows.', 340, left=75, width=300)))
+_, _, idoc, _, iblocks = build(inside_image)
+check('P1.5b an interior figure waits for the open paragraph to close',
+      'all the Way past it before finally ending.</p>' in idoc
+      and idoc.index('finally ending.</p>') < idoc.index('<img') < idoc.index('Another paragraph'),
+      f'got {iblocks}')
+check('P1.5c mid-sentence check sees through images',
+      P.midsentence_breaks([('p', _cut), ('img', 'x.png'), ('p', 'Next words.')])
+      == [(_cut, 'Next words.')], 'image hid the paragraph cut')
+
+
+def hyphen_case(stem, head, evidence, wanted):
+    # Keep each evidence token away from both ends of its visual line.
+    content = (line('Evidence says ' + evidence + ' elsewhere.', 100)
+               + line('The long paragraph carries its word as ' + stem + '-', 122)
+               + line(head + ' and the paragraph finishes.', 144, width=300))
+    hp, hb, hd, _, _ = build(fixture(page(1, content)))
+    # Feed the opposite pdftotext vocabulary decision, so only XML evidence
+    # can satisfy the assertion (and the unfixed converter visibly fails).
+    hd, _, _ = P.build_html(hp, hb, Opt(), set(), set(),
+                            {stem + head} if '-' in wanted else set())
+    decisions = []
+    if hasattr(P, 'midline_words'):
+        hd, _, _ = P.build_html(hp, hb, Opt(), set(), set(),
+                                hyphen_decisions=decisions)
+    return html.unescape(text(hd)), decisions
+
+
+for stem, head, wanted in (
+    ('1939', '1945', '1939-1945'),
+    ('pages 212', '218', 'pages 212-218'),
+    ('0-14', '044913-6', '0-14-044913-6'),
+):
+    hplain, decisions = hyphen_case(stem, head, 'unrelated tokens', wanted)
+    check('R2 C keeps ' + wanted, 'word as ' + wanted + ' and' in hplain,
+          f'got {hplain[-180:]}')
+    check('R2 C excludes ' + wanted + ' from no-evidence decisions',
+          decisions == [], f'got {decisions}')
+
+
+for stem, head, evidence, wanted, label in (
+    ('self', 'interest', 'Self-Interest', 'self-interest', 'hyphenated evidence'),
+    ('produc', 'tive', 'Productive', 'productive', 'joined evidence'),
+    ('prontos', 'socorros', 'prontos and socorros', 'prontos-socorros', 'standalone fallback'),
+    ('catastro', 'fizando', 'neither fragment', 'catastrofizando', 'join fallback'),
+    ('well', 'known', 'well-known wellknown wellknown', 'wellknown', 'joined majority'),
+    ('well', 'known', 'well-known well-known wellknown', 'well-known', 'hyphenated majority'),
+    ('well', 'known', 'well-known wellknown', 'well-known', 'tie keeps hyphen'),
+    ('prontos', 'socorros', 'pronto-socorros', 'prontossocorros', 'compound is not standalone'),
+):
+    hplain, decisions = hyphen_case(stem, head, evidence, wanted)
+    check('P1.6 ' + label, 'word as ' + wanted + ' and' in hplain, f'got {hplain[-180:]}')
+    if label in ('standalone fallback', 'join fallback'):
+        expected = {'page': 1, 'stem': stem, 'head': head,
+                    'action': 'keep' if '-' in wanted else 'join'}
+        check('P1.6 reports ' + stem + '/' + head + ' without evidence',
+              expected in decisions,
+              f'got {decisions}; missing midline_words/report interface on old code')
+
+# Neither side of a break may bootstrap evidence, including soft-hyphen
+# fragments or a one-word line. Their presence must still leave a fallback.
+for hyphen in ('-', '\xad'):
+    content = (line('Evidence excludes fragments of prontos' + hyphen, 100)
+               + line('socorros', 122, width=100)
+               + line('A second paragraph repeats prontos-', 160)
+               + line('socorros and ends.', 182, width=200))
+    hp, hb, hd, _, _ = build(fixture(page(1, content)))
+    decisions = []
+    if hasattr(P, 'midline_words'):
+        hd, _, _ = P.build_html(hp, hb, Opt(), set(), set(), hyphen_decisions=decisions)
+    check('P1.6 break fragments are not evidence ' + repr(hyphen),
+          'prontossocorros and ends.' in hd and bool(decisions),
+          f'got {decisions}; missing evidence/report interface on old code')
+
+no_evidence = fixture(page(1,
+    line('Elsewhere both prontos and socorros stand alone.', 100)
+    + line('The next paragraph ends its first line with prontos-', 140)
+    + line('socorros and then stops.', 162, width=200)
+    + line('This paragraph has a different broken word catastro-', 200)
+    + line('fizando and finally stops.', 222, width=200)))
+hp, hb, _, _, _ = build(no_evidence)
+decisions = []
+if hasattr(P, 'midline_words'):
+    P.build_html(hp, hb, Opt(), set(), set(), hyphen_decisions=decisions)
+check('P1.6 both no-evidence decisions are recorded together',
+      decisions == [{'page': 1, 'stem': 'prontos', 'head': 'socorros', 'action': 'keep'},
+                    {'page': 1, 'stem': 'catastro', 'head': 'fizando', 'action': 'join'}],
+      f'got {decisions}; missing evidence/report interface on old code')
+
+with tempfile.TemporaryDirectory() as w:
+    src = os.path.join(w, 'src.pdf')
+    inp = os.path.join(w, 'input.pdf')
+    for name, data in (('src.pdf', b'A'), ('input.pdf', b'B'), ('book.xml', b'old XML'),
+                       ('plain.txt', b'old text'), ('book-1_1.png', b'old image'),
+                       ('notes.txt', b'keep me')):
+        with open(os.path.join(w, name), 'wb') as f:
+            f.write(data)
+    calls, err = [], io.StringIO()
+    old_run = P.run
+    try:
+        P.run = lambda *a, **kw: calls.append(a)
+        refused = False
+        with contextlib.redirect_stderr(err):
+            try:
+                P.extract(inp, w)
+            except SystemExit as e:
+                refused = bool(e.code)
+                print(e, file=sys.stderr)
+        check('P1.7 different input refuses stale work with a remedy',
+              refused and '--work' in err.getvalue(), f'stderr={err.getvalue()!r}, refused={refused}')
+        with open(inp, 'wb') as f:
+            f.write(b'A')
+        calls.clear()
+        result = P.extract(inp, w)
+        check('GUARD P1.7 matching input reuses extraction without tools',
+              result == os.path.join(w, 'book.xml') and not calls, f'calls={calls}')
+    finally:
+        P.run = old_run
+
+with tempfile.TemporaryDirectory() as w:
+    path = os.path.join(w, 'book.xml')
+    with open(path, 'w') as f:
+        f.write(TABLE)
+    calls = []
+    old_run = P.run
+    try:
+        def render_crop(cmd, cwd):
+            calls.append(cmd)
+            open(os.path.join(cwd, cmd[-1] + '-1.png'), 'wb').close()
+        P.run = render_crop
+
+        def crop(height=0, dpi=150):
+            cp, cb = P.parse(path)
+            P.classify(cp, cb, Opt())
+            if height:
+                # Expand the same table without changing its page/index.
+                row = next(l for l in cp[0]['lines'] if 'lower level' in l['html'])
+                row['h'] += height
+            P.crop_tables(cp, w, dpi)
+            cd, _, _ = P.build_html(cp, cb, Opt(), set(), set())
+            return cp[0]['tables'][0]['src'], cd
+
+        first, _ = crop()
+        second, cdoc = crop(height=20)
+        check('P1.8 changed region renders a new referenced crop',
+              len(calls) == 2 and first != second and f'src="{second}"' in cdoc,
+              f'{len(calls)} renders, {first}, {second}')
+        before = len(calls)
+        same, _ = crop(height=20)
+        check('GUARD P1.8 same region and dpi reuse the crop',
+              len(calls) == before and same == second, f'{len(calls)} renders')
+        third, _ = crop(height=20, dpi=200)
+        check('P1.8 changed dpi renders again',
+              len(calls) == before + 1 and third != second, f'{len(calls)} renders, {third}')
+    finally:
+        P.run = old_run
 
 print(f'\n{PASS} passed, {FAIL} failed')
 sys.exit(1 if FAIL else 0)
