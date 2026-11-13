@@ -100,7 +100,10 @@ def lines_of(runs):
     """Cluster text runs into visual lines by vertical centre.
 
     Oversized single letters followed on their right by lowercase text are
-    removed first, then joined to that text's line. Their height must not
+    removed first, then joined in left-to-right order to the line reached by
+    following their neighbours to a surviving run. Cyclic chains stay in the
+    clustering. Initial lines carry the caps' right/bottom extent so paragraph
+    assembly can account for the inset of covered lines. Their height must not
     merge the body lines they cover. All other runs use the original centre
     clustering, which keeps small caps and raised runs with their text.
     """
@@ -125,6 +128,20 @@ def lines_of(runs):
         following = html.unescape(txt_of(runs[j][6]))
         if following and following[0].islower():
             caps[i] = (j, letter)
+    targets = {}
+    for start in caps:
+        path, seen = [], set()
+        j = start
+        while j in caps and j not in targets and j not in seen:
+            path.append(j)
+            seen.add(j)
+            j = caps[j][0]
+        target = None if j in seen else targets.get(j, j)
+        for i in path:
+            targets[i] = target
+    # No letter in a chain that loops can be removed safely. Retain those
+    # runs, including their size and geometry, for normal clustering.
+    caps = {i: cap for i, cap in caps.items() if targets[i] is not None}
     out = []
     line_for = {}
     for i in sorted((i for i in range(len(runs)) if i not in caps), key=runs.__getitem__):
@@ -159,15 +176,21 @@ def lines_of(runs):
             'runs': line_runs,
             'c': ln['c'], 'h': ln['h'],
         })
-    for i, (j, letter) in caps.items():
-        ln = res[line_for[j]]
+    initials = collections.defaultdict(list)
+    for i in caps:
+        initials[line_for[targets[i]]].append(i)
+    for line_index, indices in initials.items():
+        ln = res[line_index]
         # Flatten the decorative initial to the line's normal type and keep
         # the body's centre/height, maximum size and gaps. Even a short opening
         # stays prose, and subsequent covered lines retain their usual spacing.
-        cap = (runs[i][2], runs[i][3], ln['size'], runs[i][5], html.escape(letter))
-        ln['runs'].insert(0, cap)
-        ln['left'] = cap[0]
-        ln['html'] = cap[4] + ln['html']
+        prefix = [(runs[i][2], runs[i][3], ln['size'], runs[i][5], html.escape(caps[i][1]))
+                  for i in sorted(indices, key=lambda i: (runs[i][2], i))]
+        ln['runs'][:0] = prefix
+        ln['left'] = prefix[0][0]
+        ln['html'] = ''.join(r[4] for r in prefix) + ln['html']
+        ln['dropcap'] = (max(runs[i][2] + runs[i][3] for i in indices),
+                         max(runs[i][0] + runs[i][1] for i in indices))
     return res
 
 
@@ -611,6 +634,19 @@ def build_html(pages, body, opt, h1s, h2s, vocab=frozenset(), hyphen_decisions=N
                 geo[k] = (collections.Counter(l['left'] for l in g).most_common(1)[0][0],
                           max(l['right'] for l in g))
 
+        # Text beside a drop cap is inset to make room for the letter, not to
+        # begin a paragraph. Use the initial's left for paragraph geometry
+        # until its bottom; leave line clustering and short-line breaks intact.
+        paragraph_left = {}
+        for initial in p['lines']:
+            if 'dropcap' not in initial:
+                continue
+            right, bottom = initial['dropcap']
+            for l in p['lines']:
+                if (initial['c'] < l['c'] and l['c'] - l['h'] / 2 < bottom
+                        and l['left'] >= right - 2):
+                    paragraph_left[id(l)] = initial['left']
+
         # Interleave figures by page position, then defer them if a paragraph
         # is still open. Keep imgs as filenames for the cover-duplicate rule.
         images = p.get('positioned_images', [(0, src) for src in p['imgs']])
@@ -654,7 +690,7 @@ def build_html(pages, body, opt, h1s, h2s, vocab=frozenset(), hyphen_decisions=N
             f = flows[which]
             cur, prev = f['cur'], f['gap']
             ml = marker_left(l)
-            tl = (ml if ml is not None else l['left']) - bl
+            tl = (ml if ml is not None else paragraph_left.get(id(l), l['left'])) - bl
             if cur is None or ml is not None:
                 new = True                              # nothing open, or a list item
             elif split_tail(cur[1])[0].endswith('\xad'):

@@ -479,6 +479,99 @@ check('P1 existing T initial joins its lowercase continuation without a space',
       '<p>This line opens with a drop cap and then continues as ordinary prose for a good while '
       'until it ends.</p>' in doc, doc)
 
+
+print('\ndrop-cap paragraph and chain regressions (PR #119 round 2)')
+
+
+class Indent18(Opt):
+    indent = 18
+
+
+for covered in (2, 3):
+    for ending, second in (
+        ('and everyone was ready.', 'The harbour master stood beside the waiting vessel.'),
+        ('and knew what to expect from', 'Captain Smith, who stood beside the waiting vessel.'),
+        ('and everyone was ready;', 'the harbour master stood beside the waiting vessel.'),
+    ):
+        expected = ['When the ship came in, the passengers waited ' + ending, second]
+        rest = (line(expected[0][1:], top=300, left=89, width=461)
+                + line(second, top=322, left=89, width=461))
+        if covered == 3:
+            third = 'London Bridge was visible beyond the harbour gates.'
+            rest += line(third, top=344, left=89, width=461)
+            expected.append(third)
+        covered_rest = rest
+        last = 'Everyone aboard could finally begin the journey home.'
+        rest += line(last, top=300 + 22 * covered, width=500)
+        expected.append(last)
+        cap = line('W', top=298, width=40, font=5, height=44 if covered == 2 else 68)
+        for opt in (Opt(), Indent18()):
+            _, _, cd, _, _ = build(fixture(page(1, DROP_FONTS + cap + rest)), opt)
+            label = f'P1-A {covered}-line cap ending {ending!r} indent={opt.indent}'
+            check(label + ' stays one paragraph through the first uncovered line',
+                  re.findall(r'<p>.*?</p>', cd) == ['<p>' + ' '.join(expected) + '</p>'],
+                  repr(re.findall(r'<p>.*?</p>', cd)))
+
+            next_p = 'Another paragraph begins after the drop-cap paragraph.'
+            _, _, direct, _, _ = build(fixture(page(1, DROP_FONTS + cap + covered_rest
+                + line(next_p, top=300 + 22 * covered, left=70, width=480))), opt)
+            direct_label = label + (' GUARD' if covered == 2 else '')
+            check(direct_label + ' an indent immediately after the covered lines opens a paragraph',
+                  f'<p>{next_p}</p>' in direct,
+                  repr(re.findall(r'<p>.*?</p>', direct)))
+
+            for boundary in ('indent', 'short'):
+                # Guards: after the covered lines, ordinary paragraph geometry
+                # still applies. Capitals/punctuation keep runs_on out of it.
+                guard_rest = rest
+                if boundary == 'short':
+                    guard_rest = guard_rest.replace(
+                        line(last, top=300 + 22 * covered, width=500),
+                        line(last, top=300 + 22 * covered, width=200))
+                next_p = 'Another paragraph begins after the drop-cap paragraph.'
+                guard_rest += line(next_p, top=322 + 22 * covered,
+                                   left=70 if boundary == 'indent' else 50,
+                                   width=480 if boundary == 'indent' else 500)
+                _, _, gd, _, _ = build(fixture(page(1, DROP_FONTS + cap + guard_rest)), opt)
+                check(label + f' GUARD {boundary} opens a new paragraph',
+                      f'<p>{next_p}</p>' in gd,
+                      repr(re.findall(r'<p>.*?</p>', gd)))
+
+# Catch errors inside each regression so the old script reports each failure
+# rather than aborting the suite at its first KeyError.
+for letters, tail, expected in (
+    ('Wh', 'en the ship came into the harbour.', 'When the ship came into the harbour.'),
+    ('Arte', '', 'Arte'),
+):
+    chain = ''.join(line(letter, top=298, left=50 + 40 * i, width=40,
+                         font=5, height=44) for i, letter in enumerate(letters))
+    if tail:
+        chain += line(tail, top=300, left=50 + 40 * len(letters),
+                      width=500 - 40 * len(letters))
+    following = ['The harbour master greeted the passengers.',
+                 'Everyone could finally begin the journey home.']
+    chain += ''.join(line(t, top=344 + 22 * i) for i, t in enumerate(following))
+    try:
+        cp, _, _, _, _ = build(fixture(page(1, DROP_FONTS + chain + BODY)))
+        got = [text(l['html']) for l in cp[0]['lines']]
+        check(f'P1-B {letters} chain joins in order without raising',
+              got == [expected] + following + [text(BODY)], repr(got))
+    except Exception as e:
+        check(f'P1-B {letters} chain joins in order without raising', False,
+              f'{type(e).__name__}: {e}')
+
+try:
+    # Same-left zero-width letters each select the other as their next run.
+    cyclic_runs = [(298, 44, 50, 0, 40, 'Serif', letter) for letter in 'wh']
+    cyclic_runs.append((400, 17, 50, 500, 15, 'Serif', 'Ordinary body text.'))
+    cyclic = P.lines_of(cyclic_runs)
+    check('P1-B cyclic zero-width letters survive normal clustering without raising',
+          [l['html'] for l in cyclic] == ['hw', 'Ordinary body text.']
+          and cyclic[0]['max'] == 40, repr(cyclic))
+except Exception as e:
+    check('P1-B cyclic zero-width letters survive normal clustering without raising',
+          False, f'{type(e).__name__}: {e}')
+
 # Normal capitals, including a modestly larger one, retain their actual size.
 for size in (15, 17):
     normal = ('<fontspec id="5" size="' + str(size) + '" family="Serif"/>'
