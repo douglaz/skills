@@ -408,6 +408,113 @@ def headings(content):
     return hdoc, re.findall(r'<h[123]>(.*?)</h[123]>', hdoc)
 
 
+print('\noversized drop caps (PR #119 first-round P1)')
+DROP_FONTS = ('<fontspec id="5" size="40" family="Serif"/>'
+              '<fontspec id="6" size="12" family="Serif"/>'
+              '<fontspec id="7" size="9" family="Serif"/>')
+for covered in (2, 3):
+    for variant in ('plain', 'small caps', 'small start', 'superscript 0', 'superscript 6'):
+        first = 'hen the ship came in, the passengers knew what to expect and'
+        second = 'the harbour master was still on duty beside the waiting vessel and'
+        second_xml = line(second, top=322, left=89, width=461)
+        if variant == 'small caps':
+            second = 'the harbour master was still on DUTY beside the waiting vessel and'
+            second_xml = (line('the harbour master was still on ', top=322, left=89, width=230)
+                          + line('DUTY', top=323, left=319, width=40, font=6, height=14)
+                          + line(' beside the waiting vessel and', top=322, left=359, width=191))
+        elif variant == 'small start':
+            second_xml = (line('the ', top=323, left=89, width=22, font=6, height=14)
+                          + line(second[4:], top=322, left=111, width=439))
+        elif variant.startswith('superscript'):
+            raised = int(variant.split()[-1])
+            second_xml = (line(second, top=322, left=89, width=445)
+                          + line('12', top=322 - raised, left=534, width=16,
+                                 font=7, height=14))
+            second += '12'
+        expected = ['W' + first, second]
+        rest = line(first, top=300, left=89, width=461) + second_xml
+        if covered == 3:
+            third = 'the sailors watched the tide before the harbour gates opened and'
+            rest += line(third, top=344, left=89, width=461)
+            expected.append(third)
+        last = 'everyone aboard could finally begin the journey home.'
+        rest += line(last, top=300 + 22 * covered, width=500)
+        expected.append(last)
+        cap = line('W', top=298, width=40, font=5, height=44 if covered == 2 else 68)
+        cp, _, cd, _, _ = build(fixture(page(1, DROP_FONTS + cap + rest)))
+        without, _, _, _, _ = build(fixture(page(1, DROP_FONTS + rest)))
+        label = f'P1 drop cap {covered}-line {variant}'
+        got = [text(l['html']) for l in cp[0]['lines']]
+        check(label + ' visual lines stay separate and ordered', got == expected, repr(got))
+        check(label + ' remaining runs cluster as without the initial',
+              cp[0]['lines'][1:] == without[0]['lines'][1:]
+              and all(cp[0]['lines'][0][k] == without[0]['lines'][0][k]
+                      for k in ('c', 'h', 'size', 'max', 'gap')),
+              repr([(l['html'], l['c'], l['h']) for l in cp[0]['lines']]))
+        check(label + ' opens an ordinary paragraph', '<p>When the ship' in cd, cd)
+        check(label + ' output reads in order with spaces between lines',
+              re.findall(r'<p>(.*?)</p>', cd) == [' '.join(expected)], cd)
+        check(label + ' has no split word or glued lines',
+              'W hen' not in text(cd) and 'andthe' not in text(cd), text(cd))
+
+whole = (DROP_FONTS
+         + line(' <b>A</b> ', top=298, width=40, font=5, height=44)
+         + line('<i> man walked down to the harbour to see the ship come in and</i>',
+                top=300, left=89, width=461)
+         + line('the harbour master greeted him beside the waiting vessel.',
+                top=322, left=89, width=461)
+         + line('They walked home.', top=344, width=200))
+wp, _, wd, _, _ = build(fixture(page(1, whole)))
+check('P1 whole-word drop cap preserves the leading space through markup',
+      [text(l['html']) for l in wp[0]['lines']] == [
+          'A man walked down to the harbour to see the ship come in and',
+          'the harbour master greeted him beside the waiting vessel.', 'They walked home.'],
+      repr([l['html'] for l in wp[0]['lines']]))
+check('P1 whole-word drop cap stays in paragraph order without Aman',
+      '<p>A man walked down to the harbour to see the ship come in and '
+      'the harbour master greeted him beside the waiting vessel. They walked home.</p>' in
+      re.sub(r'</?[bi]>', '', wd) and 'Aman' not in text(wd), wd)
+
+check('P1 existing T initial joins its lowercase continuation without a space',
+      '<p>This line opens with a drop cap and then continues as ordinary prose for a good while '
+      'until it ends.</p>' in doc, doc)
+
+# Normal capitals, including a modestly larger one, retain their actual size.
+for size in (15, 17):
+    normal = ('<fontspec id="5" size="' + str(size) + '" family="Serif"/>'
+              + line('W', top=300, width=39, font=5)
+              + line('hen the ship sailed into the harbour', top=300, left=89, width=461)
+              + line('the master greeted the passengers.', top=322))
+    np, _, _, _, _ = build(fixture(page(1, normal)))
+    check(f'GUARD ordinary {size}pt capital is not flattened as a drop cap',
+          np[0]['lines'][0]['max'] == size and np[0]['lines'][0]['html'] ==
+          'When the ship sailed into the harbour', repr(np[0]['lines'][0]))
+
+# Measured with c4e21ab's script: A is not a Roman numeral, so its legacy
+# heading deliberately differs from V/I/X. These are preservation guards.
+for numeral in ('V', 'I', 'X', 'A'):
+    for wrapped in (False, True):
+        content = ('<fontspec id="5" size="138" family="Display"/>'
+                   + line(numeral, top=60, left=50, width=100, font=5, height=100)
+                   + line('CAPÍTULO', top=70, left=160, width=110)
+                   + line('The Second Chapter', top=112, left=160, width=350, font=3))
+        if wrapped:
+            content += line('Across the Harbour', top=144, left=160, width=350, font=3)
+        hp, _, hd, _, _ = build(fixture(page(1, content + BODY)))
+        title = 'The Second Chapter' + (' Across the Harbour' if wrapped else '')
+        expected_head = (f'A CAPÍTULO {title}' if numeral == 'A'
+                         else f'CAPÍTULO {numeral} — {title}')
+        label = f'GUARD chapter opener {numeral} wrapped={wrapped}'
+        check(label + ' keeps c4e21ab heading',
+              re.findall(r'<h[123]>.*?</h[123]>', hd) == [f'<h2>{expected_head}</h2>'], hd)
+        expected_lines = [numeral + 'CAPÍTULOThe Second Chapter']
+        if wrapped:
+            expected_lines.append('Across the Harbour')
+        check(label + ' keeps c4e21ab visual lines',
+              [l['html'] for l in hp[0]['lines']] == expected_lines + [text(BODY)],
+              repr([l['html'] for l in hp[0]['lines']]))
+
+
 _, hs = headings(line('12', top=60, font=2, height=44)
                  + line('CHAPTER', top=130, font=3)
                  + line('The Long Road Home', top=170, font=3))

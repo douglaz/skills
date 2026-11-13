@@ -99,12 +99,36 @@ def inner(el):
 def lines_of(runs):
     """Cluster text runs into visual lines by vertical centre.
 
-    Bucketing on `top` splits a small-caps or drop-cap run onto its own line
-    ("D" + "avid" as two lines), because a different font size sits at a
-    different top. Centres line up where tops do not.
+    Oversized single letters followed on their right by lowercase text are
+    removed first, then joined to that text's line. Their height must not
+    merge the body lines they cover. All other runs use the original centre
+    clustering, which keeps small caps and raised runs with their text.
     """
+    sizes = collections.Counter()
+    for _, _, _, _, size, _, txt in runs:
+        if size:
+            sizes[size] += max(len(txt_of(txt)), 1)
+    reference = sizes.most_common(1)[0][0] if sizes else 12
+    caps = {}
+    for i, (top, height, left, width, size, fam, txt) in enumerate(runs):
+        letter = html.unescape(txt_of(txt))
+        # 1.5 times the page's character-weighted dominant size is clearly
+        # oversized; ordinary capitals and modest font variations stay put.
+        if len(letter) != 1 or not letter.isalpha() or size < 1.5 * reference:
+            continue
+        neighbours = [j for j, r in enumerate(runs)
+                      if j != i and r[2] >= left + width - 2
+                      and r[0] < top + height / 2 and r[0] + r[1] > top]
+        if not neighbours:
+            continue
+        j = min(neighbours, key=lambda j: (runs[j][2], runs[j][0]))
+        following = html.unescape(txt_of(runs[j][6]))
+        if following and following[0].islower():
+            caps[i] = (j, letter)
     out = []
-    for top, height, left, width, size, fam, txt in sorted(runs):
+    line_for = {}
+    for i in sorted((i for i in range(len(runs)) if i not in caps), key=runs.__getitem__):
+        top, height, left, width, size, fam, txt = runs[i]
         c = top + height / 2
         if out and abs(c - out[-1]['c']) <= max(height, out[-1]['h']) * 0.45:
             ln = out[-1]
@@ -115,24 +139,35 @@ def lines_of(runs):
         else:
             out.append({'c': c, 'h': height, 'n': 1,
                         'runs': [(left, width, size, fam, txt)]})
+        line_for[i] = len(out) - 1
     res = []
     for ln in out:
-        runs = sorted(ln['runs'])
+        line_runs = sorted(ln['runs'])
         sizes = collections.Counter()
-        for left, w, sz, fam, t in runs:
+        for left, w, sz, fam, t in line_runs:
             sizes[sz] += max(len(txt_of(t)), 1)
-        gaps = [runs[i + 1][0] - (runs[i][0] + runs[i][1]) for i in range(len(runs) - 1)]
+        gaps = [line_runs[i + 1][0] - (line_runs[i][0] + line_runs[i][1])
+                for i in range(len(line_runs) - 1)]
         res.append({
-            'left': runs[0][0],
-            'right': max(r[0] + r[1] for r in runs),
+            'left': line_runs[0][0],
+            'right': max(r[0] + r[1] for r in line_runs),
             'size': sizes.most_common(1)[0][0],
-            'max': max(r[2] for r in runs),
-            'mono': all(MONO.search(r[3] or '') for r in runs),
+            'max': max(r[2] for r in line_runs),
+            'mono': all(MONO.search(r[3] or '') for r in line_runs),
             'gap': max(gaps) if gaps else 0,          # widest internal gap = column split
-            'html': ''.join(r[4] for r in runs),
-            'runs': runs,
+            'html': ''.join(r[4] for r in line_runs),
+            'runs': line_runs,
             'c': ln['c'], 'h': ln['h'],
         })
+    for i, (j, letter) in caps.items():
+        ln = res[line_for[j]]
+        # Flatten the decorative initial to the line's normal type and keep
+        # the body's centre/height, maximum size and gaps. Even a short opening
+        # stays prose, and subsequent covered lines retain their usual spacing.
+        cap = (runs[i][2], runs[i][3], ln['size'], runs[i][5], html.escape(letter))
+        ln['runs'].insert(0, cap)
+        ln['left'] = cap[0]
+        ln['html'] = cap[4] + ln['html']
     return res
 
 
