@@ -310,6 +310,27 @@ It reads files only, and on about 60k calls it took 22 seconds. Prices live in
 `scripts/prices.json`, with their date and sources; a model missing there is reported as unpriced,
 never guessed. Cache reads are usually over 90% of tokens but a much smaller share of the cost.
 
+### pdf-to-kindle-epub
+
+Rebuilds a book PDF into a reflowable EPUB for a Kindle or another e-reader. calibre's PDF input
+and `pdftohtml` both emit one block per printed line, so the book arrives cut mid-sentence; this
+skill discards the line structure and rebuilds paragraphs from `pdftohtml -xml` geometry instead.
+It handles:
+- paragraphs from indents and short lines, with soft hyphens and hanging-indent lists rejoined;
+- footnotes held until the paragraph they interrupt ends;
+- headings chosen by type size, wired into a real table of contents;
+- tables rendered as images, and code kept preformatted.
+
+```text
+/pdf-to-kindle-epub convert ~/Downloads/book.pdf for my Kindle
+python3 skills/pdf-to-kindle-epub/scripts/pdf2epub.py analyze book.pdf --work /var/tmp/bookbuild
+```
+
+Every conversion prints a self-check: words missing from the PDF's own text, and paragraphs ending
+mid-sentence. On one 556-page book they read 0.05% and 3.4%. A scanned PDF with no text layer
+needs OCR first. A Kindle does not open an EPUB copied over USB, so for that route convert it to
+AZW3.
+
 ### galtland-architecture
 
 Applies or reviews a Rust async architecture: platform-split crates (a
@@ -476,6 +497,9 @@ directories created by `--migrate-existing`.
   window, `node`, and `playwright-core` (found via `require`, or from gstack's
   bundled copy) for `copa-booking`; `node` is also needed by `./check.sh`,
   which runs `copa-booking`'s offline test
+- `python3`, poppler's `pdftohtml`, `pdftoppm` and `pdftotext`, and calibre's
+  `ebook-convert` for `pdf-to-kindle-epub`; ImageMagick's `magick` is optional
+  and shrinks images. Its offline test in `./check.sh` needs only `python3`
 
 ## License
 

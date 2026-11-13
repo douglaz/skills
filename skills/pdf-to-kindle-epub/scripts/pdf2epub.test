@@ -1,0 +1,1575 @@
+#!/usr/bin/env python3
+"""pdf2epub.test — fixture tests for the layout decisions.
+
+Every case here is a defect that shipped to a reader during development, where
+the failure is silent: the EPUB builds, opens, and looks plausible, and the
+damage only shows up while actually reading. Nothing else in the pipeline
+objects, so these assertions are the objection.
+
+The fixture is a synthetic `pdftohtml -xml` document, so the suite needs no
+poppler, no calibre and no PDF — it tests the decisions, which is where the
+bugs were. The extraction and the calibre call around them are thin.
+
+Usage: ./pdf2epub.test        (exits 0 if all pass)
+"""
+import contextlib
+import html
+import io
+import os
+import re
+import sys
+import tempfile
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+sys.dont_write_bytecode = True
+import pdf2epub as P  # noqa: E402
+
+PASS = FAIL = 0
+
+
+def check(name, cond, detail=''):
+    global PASS, FAIL
+    if cond:
+        PASS += 1
+        print(f'  ok   {name}')
+    else:
+        FAIL += 1
+        print(f'  FAIL {name}' + (f'\n       {detail}' if detail else ''))
+
+
+def text(el):
+    """Tag-stripped text. Note: strips with '' so a broken join stays visible."""
+    return re.sub(r'<[^>]+>', '', el)
+
+
+# --------------------------------------------------------------------- fixture
+# left=50 width=500 puts the right margin at 550; a line ending short of that
+# closes a paragraph, which is how justified text signals one.
+FIXTURE = '''<?xml version="1.0" encoding="UTF-8"?>
+<pdf2xml producer="poppler" version="test">
+<page number="1" position="absolute" top="0" left="0" height="1000" width="600">
+<fontspec id="0" size="15" family="ABCDEF+Serif" color="#000000"/>
+<fontspec id="1" size="13" family="ABCDEF+Serif" color="#000000"/>
+<text top="100" left="50" width="500" height="17" font="0">The quick brown fox jumps over the lazy</text>
+<text top="122" left="50" width="500" height="17" font="0">dog and keeps run­</text>
+<text top="144" left="50" width="500" height="17" font="0">ning onward to show that a soft hyphen joins</text>
+<text top="166" left="50" width="200" height="17" font="0">correctly here.</text>
+<text top="188" left="70" width="480" height="17" font="0">An indented line starts a paragraph, and produc­</text>
+<text top="210" left="50" width="500" height="17" font="0">tive work differs from self-</text>
+<text top="232" left="50" width="300" height="17" font="0">interest, which keeps its hyphen.</text>
+<text top="254" left="50" width="300" height="17" font="0">Evidence of self-interest appears here.</text>
+</page>
+<page number="2" position="absolute" top="0" left="0" height="1000" width="600">
+<fontspec id="2" size="138" family="ABCDEF+Display" color="#000000"/>
+<fontspec id="3" size="24" family="ABCDEF+Display" color="#000000"/>
+<fontspec id="4" size="40" family="ABCDEF+Serif" color="#000000"/>
+<text top="60" left="140" width="60" height="100" font="2">II</text>
+<text top="100" left="50" width="80" height="17" font="0">CAPÍTULO</text>
+<text top="200" left="50" width="400" height="28" font="3">THE SECOND CHAPTER</text>
+<text top="300" left="50" width="30" height="44" font="4">T</text>
+<text top="320" left="82" width="460" height="17" font="0">his line opens with a drop cap and then continues as ordinary prose for a good while</text>
+<text top="342" left="50" width="240" height="17" font="0">until it ends.</text>
+</page>
+<page number="3" position="absolute" top="0" left="0" height="1000" width="600">
+<text top="100" left="50" width="500" height="17" font="0">A paragraph whose sentence carries on across</text>
+<text top="180" left="50" width="400" height="15" font="1">12. A footnote starts at the body margin.</text>
+<text top="220" left="50" width="300" height="17" font="0">the footnote that interrupts it.</text>
+</page>
+<page number="4" position="absolute" top="0" left="0" height="1000" width="600">
+<text top="100" left="50" width="300" height="17" font="0">He put it this way:</text>
+<text top="140" left="100" width="400" height="15" font="1">An inset quotation sits well in from the body margin.</text>
+<text top="200" left="50" width="300" height="17" font="0">That was his claim.</text>
+</page>
+<page number="5" position="absolute" top="0" left="0" height="1000" width="600">
+<text top="100" left="50" width="300" height="17" font="0">The study found two things:</text>
+<text top="122" left="80" width="10" height="17" font="0">• </text>
+<text top="122" left="100" width="450" height="17" font="0">genes explain only a small share of the</text>
+<text top="144" left="98" width="452" height="17" font="0">cases, while life events explain most;</text>
+<text top="166" left="98" width="200" height="17" font="0">so says the data;</text>
+<text top="188" left="80" width="10" height="17" font="0">• </text>
+<text top="188" left="100" width="450" height="17" font="0">pills are the usual treatment, though talk</text>
+<text top="210" left="98" width="200" height="17" font="0">therapy works as well.</text>
+<text top="232" left="50" width="480" height="17" font="0">Then <i>it took a long time to de­</i></text>
+<text top="254" left="50" width="200" height="17" font="0"><i>cay</i> and that was all.</text>
+</page>
+<page number="6" position="absolute" top="0" left="0" height="1000" width="600">
+<text top="100" left="50" width="500" height="17" font="0">Ana: You never do anything for yourself between the</text>
+<text top="122" left="100" width="200" height="17" font="0">sessions at all.</text>
+<text top="144" left="70" width="480" height="17" font="0">A one-line paragraph that runs to the margin.</text>
+<text top="166" left="70" width="300" height="17" font="0">The next one is indented too.</text>
+<text top="188" left="50" width="200" height="17" font="0">a. first item</text>
+<text top="210" left="50" width="200" height="17" font="0">b. second item</text>
+</page>
+</pdf2xml>
+'''
+
+# Line starts that wander a few px off the margin, as some PDFs set them.
+JITTER = '''<?xml version="1.0" encoding="UTF-8"?>
+<pdf2xml producer="poppler" version="test">
+<page number="1" position="absolute" top="0" left="0" height="1000" width="600">
+<fontspec id="0" size="15" family="ABCDEF+Serif" color="#000000"/>
+<text top="100" left="50" width="500" height="17" font="0">Lines in some PDFs start a few pixels off the</text>
+<text top="122" left="61" width="489" height="17" font="0">margin, and that jitter is not an indent, so it</text>
+<text top="144" left="52" width="498" height="17" font="0">all stays one paragraph until the line that</text>
+<text top="166" left="63" width="487" height="17" font="0">really ends it.</text>
+<text top="188" left="75" width="475" height="17" font="0">A real indent still opens the next one.</text>
+</page>
+</pdf2xml>
+'''
+
+
+class Opt:
+    head_delta = 2
+    quote_indent = 40
+    table_gap = 40
+    table_sizes = None
+    code = True
+    indent = 6
+    short = 18
+
+
+def build(fixture=FIXTURE, opt=Opt()):
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, 'book.xml')
+        with open(path, 'w', encoding='utf8') as fh:
+            fh.write(fixture)
+        pages, body = P.parse(path)
+    P.strip_furniture(pages, body)
+    P.classify(pages, body, opt)
+    for p in pages:
+        p['tables'] = []
+    # pdftotext's vocabulary is deliberately misleading for compounds;
+    # the XML fixture now supplies independent mid-line evidence instead.
+    vocab = frozenset(['productive', 'work', 'self-interest', 'selfinterest', 'interest'])
+    # as a real book maps them: parts to h1 (none here), chapters to h2
+    doc, counts, blocks = P.build_html(pages, body, opt, set(), {138}, vocab)
+    return pages, body, doc, counts, blocks
+
+
+pages, body, doc, counts, blocks = build()
+plain = text(doc)
+
+print('body text and hyphenation')
+check('body font size detected as 15', body == 15, f'got {body}')
+check('soft hyphen joins across the line break',
+      'running onward' in plain, 'expected "running onward"')
+check('no space left where the soft hyphen was',
+      'run ning' not in plain and 'run­' not in plain)
+check('real hyphen dropped when the joined word is known',
+      'productive work' in plain, 'expected "productive work"')
+check('real hyphen kept for a genuine compound',
+      'productive work differs from self-interest, which keeps its hyphen.' in plain,
+      'expected the wrapped "self-interest" to survive')
+check('lines of one paragraph join into a single <p>',
+      '<p>The quick brown fox jumps over the lazy dog and keeps running onward'
+      ' to show that a soft hyphen joins correctly here.</p>' in doc,
+      'paragraph did not reassemble; got:\n       '
+      + (re.findall(r'<p>[^<]*</p>', doc) or ['none'])[0][:140])
+check('an indented line opens a new paragraph',
+      doc.count('<p>') >= 2 and 'An indented line starts a paragraph' in doc)
+
+print('\nheadings')
+heads = re.findall(r'<h[123]>(.*?)</h[123]>', doc)
+check('numeral sharing a line with its label is split at the run',
+      any(h.startswith('CAPÍTULO II') for h in heads),
+      f'got {heads}')
+check('heading group absorbs the title line',
+      any('CAPÍTULO II — THE SECOND CHAPTER' == h for h in heads), f'got {heads}')
+check('opener becomes h2 because 138 was mapped there',
+      '<h2>CAPÍTULO II — THE SECOND CHAPTER</h2>' in doc)
+check('a drop cap does not turn a paragraph into a heading',
+      not any('drop cap' in h for h in heads), f'got {heads}')
+check('drop-cap line still reads as one paragraph',
+      'This line opens with a drop cap' in plain
+      or 'T his line opens with a drop cap' in plain,
+      'drop cap line lost or split')
+
+print('\nquotes, footnotes and ordering')
+check('inset small type becomes a block quote at full size',
+      '<blockquote>An inset quotation sits well in from the body margin.</blockquote>' in doc,
+      'quote was not recognised; small type at the margin is a footnote, inset is a quote')
+check('small type at the body margin stays a footnote',
+      '<p class="fn">12. A footnote starts at the body margin.</p>' in doc)
+check('a footnote does not split the sentence it interrupts',
+      'carries on across the footnote that interrupts it.' in plain,
+      'the interrupted paragraph did not rejoin')
+check('the footnote is emitted after that paragraph, not inside it',
+      plain.find('the footnote that interrupts it.')
+      < plain.find('12. A footnote starts at the body margin.'),
+      'footnote landed before the paragraph closed')
+
+print('\nline clustering')
+p2 = pages[1]
+first = p2['lines'][0]
+check('runs at different sizes cluster into one visual line',
+      'CAPÍTULO' in P.txt_of(first['html']) and 'II' in P.txt_of(first['html']),
+      f"got {P.txt_of(first['html'])!r} — clustering by top alone splits these")
+check('that line is classified as a heading despite its modal size being body',
+      first['kind'] == 'head',
+      f"kind={first['kind']}, size={first['size']}, max={first['max']}")
+
+print('\ntable detection')
+check('wide column gaps are not claimed in ordinary prose',
+      all(l['kind'] != 'table' for p in pages for l in p['lines']),
+      'a prose line was mistaken for a table')
+
+print('\nlists, italics and jitter')
+check('a bulleted item wrapping at a hanging indent stays one paragraph',
+      '<p>• genes explain only a small share of the cases, while life events'
+      ' explain most; so says the data;</p>' in doc,
+      'every wrapped line of the item became its own paragraph')
+check('each bullet opens its own paragraph',
+      '<p>• pills are the usual treatment, though talk therapy works as well.</p>' in doc)
+check('a soft hyphen inside italics joins the word',
+      'to decay</i> and that was all.' in doc and 'de cay' not in plain,
+      'the hyphen sat before </i> and was missed: "de cay"')
+check('a short line ending in a soft hyphen does not end the paragraph',
+      '<p>Then <i>it took a long time to decay</i> and that was all.</p>' in doc)
+check('a speaker line wrapping at a hanging indent stays one paragraph',
+      '<p>Ana: You never do anything for yourself between the sessions at all.</p>' in doc,
+      'geometry alone reads the hanging indent as a new paragraph')
+check('a full one-line paragraph is not merged into the indented next one',
+      '<p>A one-line paragraph that runs to the margin.</p>' in doc
+      and '<p>The next one is indented too.</p>' in doc)
+check('lettered list items are not merged by the lower-case rule',
+      '<p>a. first item</p>' in doc and '<p>b. second item</p>' in doc)
+check('no paragraph in the fixture is cut mid-sentence',
+      P.midsentence_breaks(blocks) == [], f'got {P.midsentence_breaks(blocks)}')
+
+
+class JitterOpt(Opt):
+    indent = 18
+
+
+_, _, jdoc, _, jblocks = build(JITTER, JitterOpt())
+check('line starts that jitter under --indent stay in one paragraph',
+      '<p>Lines in some PDFs start a few pixels off the margin, and that jitter is'
+      ' not an indent, so it all stays one paragraph until the line that really'
+      ' ends it.</p>' in jdoc, f'got {re.findall(r"<p>.*?</p>", jdoc)}')
+check('a real indent past --indent still opens a paragraph',
+      '<p>A real indent still opens the next one.</p>' in jdoc)
+TABLE = '''<?xml version="1.0" encoding="UTF-8"?>
+<pdf2xml producer="poppler" version="test">
+<page number="1" position="absolute" top="0" left="0" height="1000" width="600">
+<fontspec id="0" size="15" family="ABCDEF+Serif" color="#000000"/>
+<fontspec id="1" size="13" family="ABCDEF+Serif" color="#000000"/>
+<text top="60" left="50" width="500" height="17" font="0">Some prose comes before the table and runs right across the</text>
+<text top="82" left="50" width="200" height="17" font="0">page to its end.</text>
+<text top="120" left="50" width="100" height="15" font="1">lithium</text>
+<text top="120" left="300" width="100" height="15" font="1">tremor</text>
+<text top="140" left="50" width="100" height="15" font="1">(Depakene)</text>
+<text top="160" left="50" width="100" height="15" font="1">caffeine</text>
+<text top="160" left="300" width="100" height="15" font="1">lower level</text>
+<text top="220" left="50" width="300" height="17" font="0">After the table, prose resumes.</text>
+</page>
+</pdf2xml>
+'''
+with tempfile.TemporaryDirectory() as w:
+    path = os.path.join(w, 'book.xml')
+    with open(path, 'w', encoding='utf8') as fh:
+        fh.write(TABLE)
+    tpages, tbody = P.parse(path)
+    P.strip_furniture(tpages, tbody)
+    P.classify(tpages, tbody, Opt())
+    def render_crop(cmd, cwd):
+        open(os.path.join(cwd, cmd[-1] + '-1.png'), 'wb').close()
+    old_run = P.run
+    try:
+        P.run = render_crop
+        P.crop_tables(tpages, w, 150)
+    finally:
+        P.run = old_run
+    tdoc, _, _ = P.build_html(tpages, tbody, Opt(), set(), set(), frozenset())
+check('a single-cell row inside a table goes into the picture, not the text',
+      '(Depakene)' not in tdoc and tdoc.count('<img') == 1, tdoc)
+check('prose around the table survives',
+      'runs right across the page to its end.' in tdoc and 'After the table, prose resumes.' in tdoc)
+# A paragraph turning onto a page whose most common line start is an inset
+# block (so that page's margin is misjudged), then verse in body type.
+TURN = '''<?xml version="1.0" encoding="UTF-8"?>
+<pdf2xml producer="poppler" version="test">
+<page number="1" position="absolute" top="0" left="0" height="1000" width="600">
+<fontspec id="0" size="15" family="ABCDEF+Serif" color="#000000"/>
+<text top="100" left="50" width="500" height="17" font="0">Prose that runs all the way down to the foot of the</text>
+<text top="122" left="50" width="500" height="17" font="0">page, where it tells of a trip across the United</text>
+</page>
+<page number="2" position="absolute" top="0" left="0" height="1000" width="600">
+<text top="100" left="50" width="300" height="17" font="0">States and Canada together.</text>
+<text top="140" left="110" width="380" height="17" font="0">An inset block in body type sits well</text>
+<text top="162" left="110" width="380" height="17" font="0">in from the margin and is set apart</text>
+<text top="184" left="110" width="380" height="17" font="0">from the prose around it on all</text>
+<text top="206" left="110" width="200" height="17" font="0">four sides.</text>
+</page>
+<page number="3" position="absolute" top="0" left="0" height="1000" width="600">
+<text top="100" left="90" width="200" height="17" font="0">so much depends</text>
+<text top="122" left="90" width="60" height="17" font="0">upon</text>
+<text top="144" left="90" width="140" height="17" font="0">a red wheel</text>
+<text top="166" left="90" width="90" height="17" font="0">barrow</text>
+<text top="200" left="50" width="500" height="17" font="0">Prose after the poem runs the full width of the page and</text>
+<text top="222" left="50" width="200" height="17" font="0">then ends.</text>
+</page>
+<page number="4" position="absolute" top="0" left="0" height="1000" width="600">
+<text top="100" left="50" width="500" height="17" font="0">A full line of prose sets the right margin of this page, and</text>
+<text top="122" left="50" width="200" height="17" font="0">then it ends.</text>
+<text top="200" left="90" width="380" height="17" font="0">you do not have to walk on your knees</text>
+<text top="222" left="90" width="390" height="17" font="0">for a hundred miles through the desert</text>
+<text top="244" left="90" width="300" height="17" font="0">repenting, nothing more.</text>
+</page>
+</pdf2xml>
+'''
+
+# Ten-word lines broken before a capital: a cut runs_on cannot repair.
+CUT = '''<?xml version="1.0" encoding="UTF-8"?>
+<pdf2xml producer="poppler" version="test">
+<page number="1" position="absolute" top="0" left="0" height="1000" width="600">
+<fontspec id="0" size="15" family="ABCDEF+Serif" color="#000000"/>
+<text top="100" left="50" width="500" height="17" font="0">In the spring of that year the whole family travelled to New</text>
+<text top="122" left="50" width="500" height="17" font="0">York and then on to Boston, where they stayed with the cousins for</text>
+<text top="144" left="50" width="200" height="17" font="0">a month.</text>
+</page>
+</pdf2xml>
+'''
+_, _, tdoc2, _, _ = build(TURN, Opt())
+check('a paragraph turning onto a page with a misjudged margin stays whole',
+      'across the United States and Canada together.</p>' in tdoc2,
+      f'got {re.findall(r"<p>.*?</p>", tdoc2)[:3]}')
+check('verse lines stay line by line despite lower-case starts',
+      all(f'<p>{v}</p>' in tdoc2 for v in ('so much depends', 'upon', 'a red wheel', 'barrow')),
+      f'got {re.findall(r"<p>.*?</p>", tdoc2)}')
+
+
+check('long verse lines short of the body measure stay line by line',
+      '<p>you do not have to walk on your knees</p>' in tdoc2
+      and '<p>for a hundred miles through the desert</p>' in tdoc2,
+      f'got {re.findall(r"<p>.*?</p>", tdoc2)[-3:]}')
+
+
+class Ragged(Opt):
+    ragged_prose = True
+
+
+_, _, rdoc, _, _ = build(TURN, Ragged())
+check('--ragged-prose rejoins long lines far from the margin',
+      '<p>you do not have to walk on your knees for a hundred miles through the desert'
+      ' repenting, nothing more.</p>' in rdoc, f'got {re.findall(r"<p>.*?</p>", rdoc)[-2:]}')
+check('--ragged-prose still leaves short lines alone',
+      all(f'<p>{v}</p>' in rdoc for v in ('so much depends', 'upon', 'a red wheel', 'barrow')))
+
+
+class NoShort(Opt):
+    short = 0
+
+
+_, _, _, _, cblocks = build(CUT, Opt())
+_, _, _, _, nblocks = build(CUT, NoShort())
+check('the mid-sentence check is quiet on a correct paragraph',
+      P.midsentence_breaks(cblocks) == [], f'got {P.midsentence_breaks(cblocks)}')
+check('the mid-sentence check fires when --short 0 cuts every line',
+      len(P.midsentence_breaks(nblocks)) >= 1,
+      'the check could not see a break that runs_on does not repair')
+_cut = 'a line of prose long enough to be a paragraph that was cut'
+check('midsentence_breaks flags a paragraph cut in two',
+      P.midsentence_breaks([('p', _cut), ('p', 'Right here.')]) == [(_cut, 'Right here.')])
+check('midsentence_breaks ignores short captions and list items',
+      P.midsentence_breaks([('p', 'QUADRO 5'), ('p', 'Registro diário'),
+                            ('p', _cut), ('p', 'b. second item')]) == [])
+
+print('\nP1 regressions')
+
+
+def line(t, top=100, left=50, width=500, font=0, height=17):
+    return (f'<text top="{top}" left="{left}" width="{width}" height="{height}" '
+            f'font="{font}">{t}</text>')
+
+
+FONTS = ('<fontspec id="0" size="15" family="Serif"/>'
+         '<fontspec id="1" size="13" family="Serif"/>'
+         '<fontspec id="2" size="39" family="Display"/>'
+         '<fontspec id="3" size="24" family="Display"/>'
+         '<fontspec id="4" size="14" family="Serif"/>')
+
+
+def page(n, content):
+    return (f'<page number="{n}" width="622" height="1000">'
+            + FONTS + content + '</page>')
+
+
+def fixture(*pgs):
+    return '<pdf2xml>' + ''.join(pgs) + '</pdf2xml>'
+
+
+BODY = line('Ordinary body text sets the size and margin for this book. ' * 4,
+            top=400)
+
+
+def headings(content):
+    _, _, hdoc, _, _ = build(fixture(page(1, content + BODY)))
+    return hdoc, re.findall(r'<h[123]>(.*?)</h[123]>', hdoc)
+
+
+print('\noversized drop caps (PR #119 first-round P1)')
+DROP_FONTS = ('<fontspec id="5" size="40" family="Serif"/>'
+              '<fontspec id="6" size="12" family="Serif"/>'
+              '<fontspec id="7" size="9" family="Serif"/>')
+for covered in (2, 3):
+    for variant in ('plain', 'small caps', 'small start', 'superscript 0', 'superscript 6'):
+        first = 'hen the ship came in, the passengers knew what to expect and'
+        second = 'the harbour master was still on duty beside the waiting vessel and'
+        second_xml = line(second, top=322, left=89, width=461)
+        if variant == 'small caps':
+            second = 'the harbour master was still on DUTY beside the waiting vessel and'
+            second_xml = (line('the harbour master was still on ', top=322, left=89, width=230)
+                          + line('DUTY', top=323, left=319, width=40, font=6, height=14)
+                          + line(' beside the waiting vessel and', top=322, left=359, width=191))
+        elif variant == 'small start':
+            second_xml = (line('the ', top=323, left=89, width=22, font=6, height=14)
+                          + line(second[4:], top=322, left=111, width=439))
+        elif variant.startswith('superscript'):
+            raised = int(variant.split()[-1])
+            second_xml = (line(second, top=322, left=89, width=445)
+                          + line('12', top=322 - raised, left=534, width=16,
+                                 font=7, height=14))
+            second += '12'
+        expected = ['W' + first, second]
+        rest = line(first, top=300, left=89, width=461) + second_xml
+        if covered == 3:
+            third = 'the sailors watched the tide before the harbour gates opened and'
+            rest += line(third, top=344, left=89, width=461)
+            expected.append(third)
+        last = 'everyone aboard could finally begin the journey home.'
+        rest += line(last, top=300 + 22 * covered, width=500)
+        expected.append(last)
+        cap = line('W', top=298, width=40, font=5, height=44 if covered == 2 else 68)
+        cp, _, cd, _, _ = build(fixture(page(1, DROP_FONTS + cap + rest)))
+        without, _, _, _, _ = build(fixture(page(1, DROP_FONTS + rest)))
+        label = f'P1 drop cap {covered}-line {variant}'
+        got = [text(l['html']) for l in cp[0]['lines']]
+        check(label + ' visual lines stay separate and ordered', got == expected, repr(got))
+        check(label + ' remaining runs cluster as without the initial',
+              cp[0]['lines'][1:] == without[0]['lines'][1:]
+              and all(cp[0]['lines'][0][k] == without[0]['lines'][0][k]
+                      for k in ('c', 'h', 'size', 'max', 'gap')),
+              repr([(l['html'], l['c'], l['h']) for l in cp[0]['lines']]))
+        check(label + ' opens an ordinary paragraph', '<p>When the ship' in cd, cd)
+        check(label + ' output reads in order with spaces between lines',
+              re.findall(r'<p>(.*?)</p>', cd) == [' '.join(expected)], cd)
+        check(label + ' has no split word or glued lines',
+              'W hen' not in text(cd) and 'andthe' not in text(cd), text(cd))
+
+whole = (DROP_FONTS
+         + line(' <b>A</b> ', top=298, width=40, font=5, height=44)
+         + line('<i> man walked down to the harbour to see the ship come in and</i>',
+                top=300, left=89, width=461)
+         + line('the harbour master greeted him beside the waiting vessel.',
+                top=322, left=89, width=461)
+         + line('They walked home.', top=344, width=200))
+wp, _, wd, _, _ = build(fixture(page(1, whole)))
+check('P1 whole-word drop cap preserves the leading space through markup',
+      [text(l['html']) for l in wp[0]['lines']] == [
+          'A man walked down to the harbour to see the ship come in and',
+          'the harbour master greeted him beside the waiting vessel.', 'They walked home.'],
+      repr([l['html'] for l in wp[0]['lines']]))
+check('P1 whole-word drop cap stays in paragraph order without Aman',
+      '<p>A man walked down to the harbour to see the ship come in and '
+      'the harbour master greeted him beside the waiting vessel. They walked home.</p>' in
+      re.sub(r'</?[bi]>', '', wd) and 'Aman' not in text(wd), wd)
+
+check('P1 existing T initial joins its lowercase continuation without a space',
+      '<p>This line opens with a drop cap and then continues as ordinary prose for a good while '
+      'until it ends.</p>' in doc, doc)
+
+
+print('\ndrop-cap paragraph and chain regressions (PR #119 round 2)')
+
+
+class Indent18(Opt):
+    indent = 18
+
+
+for covered in (2, 3):
+    for ending, second in (
+        ('and everyone was ready.', 'The harbour master stood beside the waiting vessel.'),
+        ('and knew what to expect from', 'Captain Smith, who stood beside the waiting vessel.'),
+        ('and everyone was ready;', 'the harbour master stood beside the waiting vessel.'),
+    ):
+        expected = ['When the ship came in, the passengers waited ' + ending, second]
+        rest = (line(expected[0][1:], top=300, left=89, width=461)
+                + line(second, top=322, left=89, width=461))
+        if covered == 3:
+            third = 'London Bridge was visible beyond the harbour gates.'
+            rest += line(third, top=344, left=89, width=461)
+            expected.append(third)
+        covered_rest = rest
+        last = 'Everyone aboard could finally begin the journey home.'
+        rest += line(last, top=300 + 22 * covered, width=500)
+        expected.append(last)
+        cap = line('W', top=298, width=40, font=5, height=44 if covered == 2 else 68)
+        for opt in (Opt(), Indent18()):
+            _, _, cd, _, _ = build(fixture(page(1, DROP_FONTS + cap + rest)), opt)
+            label = f'P1-A {covered}-line cap ending {ending!r} indent={opt.indent}'
+            check(label + ' stays one paragraph through the first uncovered line',
+                  re.findall(r'<p>.*?</p>', cd) == ['<p>' + ' '.join(expected) + '</p>'],
+                  repr(re.findall(r'<p>.*?</p>', cd)))
+
+            next_p = 'Another paragraph begins after the drop-cap paragraph.'
+            _, _, direct, _, _ = build(fixture(page(1, DROP_FONTS + cap + covered_rest
+                + line(next_p, top=300 + 22 * covered, left=70, width=480))), opt)
+            direct_label = label + (' GUARD' if covered == 2 else '')
+            check(direct_label + ' an indent immediately after the covered lines opens a paragraph',
+                  f'<p>{next_p}</p>' in direct,
+                  repr(re.findall(r'<p>.*?</p>', direct)))
+
+            for boundary in ('indent', 'short'):
+                # Guards: after the covered lines, ordinary paragraph geometry
+                # still applies. Capitals/punctuation keep runs_on out of it.
+                guard_rest = rest
+                if boundary == 'short':
+                    guard_rest = guard_rest.replace(
+                        line(last, top=300 + 22 * covered, width=500),
+                        line(last, top=300 + 22 * covered, width=200))
+                next_p = 'Another paragraph begins after the drop-cap paragraph.'
+                guard_rest += line(next_p, top=322 + 22 * covered,
+                                   left=70 if boundary == 'indent' else 50,
+                                   width=480 if boundary == 'indent' else 500)
+                _, _, gd, _, _ = build(fixture(page(1, DROP_FONTS + cap + guard_rest)), opt)
+                check(label + f' GUARD {boundary} opens a new paragraph',
+                      f'<p>{next_p}</p>' in gd,
+                      repr(re.findall(r'<p>.*?</p>', gd)))
+
+# Catch errors inside each regression so the old script reports each failure
+# rather than aborting the suite at its first KeyError.
+for letters, tail, expected in (
+    ('Wh', 'en the ship came into the harbour.', 'When the ship came into the harbour.'),
+    ('Arte', '', 'Arte'),
+):
+    chain = ''.join(line(letter, top=298, left=50 + 40 * i, width=40,
+                         font=5, height=44) for i, letter in enumerate(letters))
+    if tail:
+        chain += line(tail, top=300, left=50 + 40 * len(letters),
+                      width=500 - 40 * len(letters))
+    following = ['The harbour master greeted the passengers.',
+                 'Everyone could finally begin the journey home.']
+    chain += ''.join(line(t, top=344 + 22 * i) for i, t in enumerate(following))
+    try:
+        cp, _, _, _, _ = build(fixture(page(1, DROP_FONTS + chain + BODY)))
+        got = [text(l['html']) for l in cp[0]['lines']]
+        check(f'P1-B {letters} chain joins in order without raising',
+              got == [expected] + following + [text(BODY)], repr(got))
+    except Exception as e:
+        check(f'P1-B {letters} chain joins in order without raising', False,
+              f'{type(e).__name__}: {e}')
+
+try:
+    # Same-left zero-width letters each select the other as their next run.
+    cyclic_runs = [(298, 44, 50, 0, 40, 'Serif', letter) for letter in 'wh']
+    cyclic_runs.append((400, 17, 50, 500, 15, 'Serif', 'Ordinary body text.'))
+    cyclic = P.lines_of(cyclic_runs)
+    check('P1-B cyclic zero-width letters survive normal clustering without raising',
+          [l['html'] for l in cyclic] == ['hw', 'Ordinary body text.']
+          and cyclic[0]['max'] == 40, repr(cyclic))
+except Exception as e:
+    check('P1-B cyclic zero-width letters survive normal clustering without raising',
+          False, f'{type(e).__name__}: {e}')
+
+print('\ndrop-cap continuity and reading order (PR #119 round 3)')
+for opt in (Opt(), Indent18()):
+    for layout, left, width, inset in (
+        ('margin', 50, 40, 89),
+        ('indented', 70, 40, 109),
+        ('hanging 10', 10, 38, 50),
+        ('hanging 30', 30, 18, 50),
+    ):
+        for covered in (2, 3):
+            expected = ['When the ship came in, everyone was ready.',
+                        'The harbour master stood beside the waiting vessel.']
+            if covered == 3:
+                expected.append('London Bridge was visible beyond the harbour gates.')
+            cap = line('W', top=298, left=left, width=width, font=5,
+                       height=44 if covered == 2 else 68)
+            rest = ''.join(line(t[1:] if i == 0 else t, top=300 + 22 * i,
+                                left=inset, width=550 - inset)
+                           for i, t in enumerate(expected))
+            first_uncovered = 'Everyone aboard could finally begin the journey home.'
+            final = 'The voyage ended.'
+            tail = (line(first_uncovered, top=300 + 22 * covered)
+                    + line(final, top=322 + 22 * covered, width=200))
+            # Two ordinary lines establish margin 50 independently of the cap.
+            anchor = (line('Ordinary prose establishes the body margin.', top=100)
+                      + line('This paragraph ends here.', top=122, width=200))
+            content = DROP_FONTS + anchor + cap + rest
+            _, _, cd, _, _ = build(fixture(page(1, content + tail)), opt)
+            label = f'{covered}-line {layout} initial indent={opt.indent}'
+            prefix = 'GUARD' if layout == 'margin' else 'P1-C'
+            got = re.findall(r'<p>(.*?)</p>', cd)
+            check(prefix + ' ' + label + ' continues through the first uncovered line',
+                  got[1:] == [' '.join(expected + [first_uncovered, final])], repr(got))
+
+            # The only ordinary margin line may be the first uncovered one.
+            _, _, cd, _, _ = build(fixture(page(1, DROP_FONTS + cap + rest
+                + line(first_uncovered, top=300 + 22 * covered))), opt)
+            got = re.findall(r'<p>(.*?)</p>', cd)
+            sparse_prefix = 'P1-C' if layout.startswith('hanging') else 'GUARD'
+            check(sparse_prefix + ' ' + label + ' needs no extra margin lines',
+                  got == [' '.join(expected + [first_uncovered])], repr(got))
+
+            next_p = 'Another paragraph begins after the covered lines.'
+            _, _, gd, _, _ = build(fixture(page(1, content
+                + line(next_p, top=300 + 22 * covered, left=75, width=475))), opt)
+            check('GUARD P1-C ' + label + ' immediate indent opens a paragraph',
+                  f'<p>{next_p}</p>' in gd, repr(re.findall(r'<p>.*?</p>', gd)))
+            for short_line in (0, covered - 1):
+                short_rest = ''.join(line(t[1:] if i == 0 else t, top=300 + 22 * i,
+                                         left=inset,
+                                         width=200 if i == short_line else 550 - inset)
+                                     for i, t in enumerate(expected))
+                _, _, gd, _, _ = build(fixture(page(1,
+                    DROP_FONTS + anchor + cap + short_rest + tail)), opt)
+                following = expected[short_line + 1] if short_line == 0 else first_uncovered
+                check('GUARD P1-C ' + label + f' short line {short_line + 1} ends a paragraph',
+                      f'<p>{following}' in gd, repr(re.findall(r'<p>.*?</p>', gd)))
+
+print('\ndrop-cap overhang and paragraph context (PR #119 round 4)')
+
+
+def cap_paragraphs(left, width, inset, covered, height, anchor_width):
+    anchor = (line('Ordinary prose establishes the body margin.', top=200)
+              + line('The preceding paragraph ends here.', top=222, width=anchor_width))
+    words = ['When the ship came in, everyone was ready for news.',
+             'The harbour master stood beside the long vessel there.',
+             'Everyone aboard watched the harbour gates.'][:covered]
+    cap = line('W', top=298, left=left, width=width, font=5, height=height)
+    rest = ''.join(line(t[1:] if i == 0 else t, top=300 + 22 * i,
+                        left=inset, width=550 - inset) for i, t in enumerate(words))
+    tail = (line('Another paragraph begins after the covered lines.',
+                 top=300 + 22 * covered, left=75, width=475)
+            + line('It ends here.', top=322 + 22 * covered, width=200))
+    _, _, cd, _, _ = build(fixture(page(1, DROP_FONTS + anchor + cap + rest + tail)),
+                          Indent18())
+    return re.findall(r'<p>(.*?)</p>', cd)
+
+
+for covered, height in ((2, 47), (3, 74)):
+    for layout, left, width, inset in (
+        ('margin', 50, 40, 89),
+        ('indented', 70, 40, 109),
+        ('hanging', 10, 38, 50),
+    ):
+        got = cap_paragraphs(left, width, inset, covered, height, 300)
+        prefix = 'P1-E' if layout == 'hanging' else 'GUARD P1-E'
+        check(f'{prefix} {covered}-line {layout} overhang preserves the next indent',
+              got[-1] == 'Another paragraph begins after the covered lines. It ends here.'
+              and len(got) == 3, repr(got))
+
+for covered in (2, 3):
+    for overhang, height in (('before', 44 if covered == 2 else 66),
+                            ('overhang', 47 if covered == 2 else 74)):
+        for ending, anchor_width in (('short', 300), ('flush right', 500)):
+            margin = cap_paragraphs(50, 40, 89, covered, height, anchor_width)
+            anchor = ('Ordinary prose establishes the body margin. '
+                      'The preceding paragraph ends here.')
+            cap_text = 'When the ship came in, everyone was ready for news. '
+            cap_text += 'The harbour master stood beside the long vessel there.'
+            if covered == 3:
+                cap_text += ' Everyone aboard watched the harbour gates.'
+            expected = ([anchor, cap_text] if ending == 'short'
+                        else [anchor + ' ' + cap_text])
+            expected.append('Another paragraph begins after the covered lines. It ends here.')
+            context = f'{covered}-line box={overhang} preceding={ending}'
+            check('GUARD P1-F margin ' + context + ' retains its paragraph structure',
+                  margin == expected, repr(margin))
+            for layout, left, width, inset in (
+                ('hanging 10', 10, 38, 50),
+                ('hanging 30', 30, 18, 50),
+                ('indented', 70, 40, 109),
+            ):
+                got = cap_paragraphs(left, width, inset, covered, height, anchor_width)
+                # With a short preceding paragraph, only a hanging cap with
+                # an overhanging box fails on 26df189; the others are guards.
+                guard = ending == 'short' and (overhang == 'before' or layout == 'indented')
+                prefix = 'GUARD P1-F' if guard else 'P1-F'
+                if layout == 'indented' and ending == 'flush right':
+                    # An indented initial marks a paragraph even when the
+                    # preceding line reaches the right margin.
+                    separate = [anchor, cap_text, expected[-1]]
+                    check(f'P1-H indented {context} opens its own paragraph',
+                          got == separate, f'got={got!r}; expected={separate!r}')
+                else:
+                    check(f'{prefix} {layout} {context} matches margin paragraphs',
+                          got == margin, f'got={got!r}; margin={margin!r}')
+
+print('\nreal drop-cap boxes and indented initials (PR #119 round 5)')
+for opt in (Opt(), Indent18()):
+    for body_height, cap_height in ((15, 69), (14, 71)):
+        # Times 11pt/13.2pt leading as reported by pdftohtml: the 3-line
+        # letter ends at 266, 8px into the next 15px line. Also exercise a
+        # 10px overhang into a 14px line, beyond the old centre threshold.
+        fonts = ('<fontspec id="0" size="17" family="Times"/>'
+                 '<fontspec id="1" size="76" family="Times"/>')
+        anchor = (line('Ordinary prose establishes the body margin.', top=139,
+                       height=body_height)
+                  + line('The preceding paragraph reaches the right margin.', top=159,
+                         height=body_height)
+                  + line('It ends short.', top=178, width=91, height=body_height))
+        words = ['When the ship came in, everyone was ready.',
+                 'The harbour master stood beside the waiting vessel.',
+                 'London Bridge was visible beyond the harbour gates.']
+        next_p = 'Another paragraph begins after the covered lines.'
+        after = (line('It ends here.', top=277, width=96, height=body_height)
+                 + ''.join(line('Ordinary prose continues across the rest of the page.',
+                                top=top, height=body_height)
+                           for top in (297, 317, 337, 357, 376, 396))
+                 + line('The page ends.', top=416, width=96, height=body_height))
+        for layout, left, inset in (('hanging', -23, 50), ('margin', 50, 123),
+                                    ('indented', 70, 143)):
+            cap = line('W', top=197, left=left, width=72, height=cap_height, font=1)
+            rest = ''.join(line(t[1:] if i == 0 else t, top=198 + 20 * i,
+                                left=inset, width=550 - inset, height=body_height)
+                           for i, t in enumerate(words))
+            content = fonts + anchor + cap + rest
+            label = (f'P1-G {layout} body-height={body_height} '
+                     f'overhang={197 + cap_height - 258} indent={opt.indent}')
+            _, _, cd, _, _ = build(fixture(page(1, content
+                + line(next_p, top=258, left=75, width=475, height=body_height)
+                + after)), opt)
+            got = re.findall(r'<p>(.*?)</p>', cd)
+            # Only hanging text lets the overhang swallow the next indent;
+            # the inset layouts protect it horizontally on the old version.
+            prefix = '' if layout == 'hanging' else 'GUARD '
+            check(prefix + label + ' next indent opens a paragraph',
+                  got[1:3] == [' '.join(words), next_p + ' It ends here.'], repr(got))
+            check('GUARD ' + label + ' covered capitals and punctuation stay together',
+                  any(p.startswith(' '.join(words)) for p in got), repr(got))
+
+            # At the body margin the first uncovered line continues, then
+            # its short ending lets the next margin line open a paragraph.
+            _, _, cd, _, _ = build(fixture(page(1, content
+                + line('Everyone aboard could begin the journey home.', top=258,
+                       height=body_height) + after)), opt)
+            got = re.findall(r'<p>(.*?)</p>', cd)
+            check('GUARD ' + label + ' uncovered margin and short ending retain geometry',
+                  got[1] == ' '.join(words) +
+                  ' Everyone aboard could begin the journey home. It ends here.'
+                  and len(got) == 3 and got[2].endswith('The page ends.'), repr(got))
+
+    for covered in (2, 3):
+        anchor = (line('Ordinary prose establishes the body margin.', top=200)
+                  + line('The preceding paragraph ends flush right.', top=222))
+        words = ['When the ship came in, everyone was ready.',
+                 'The harbour master stood beside the waiting vessel.']
+        if covered == 3:
+            words.append('London Bridge was visible beyond the harbour gates.')
+        tail = (line('Everyone aboard could begin the journey home.',
+                     top=300 + 22 * covered)
+                + line('The voyage ended.', top=322 + 22 * covered, width=200)
+                + line('Another paragraph begins at the body margin.',
+                       top=344 + 22 * covered))
+        cap_text = ' '.join(words) + ' Everyone aboard could begin the journey home. The voyage ended.'
+        anchor_text = 'Ordinary prose establishes the body margin. The preceding paragraph ends flush right.'
+        last = 'Another paragraph begins at the body margin.'
+        for layout, left, width, inset in (('margin', 50, 40, 89),
+                                           ('hanging', 10, 38, 50),
+                                           ('indented', 70, 40, 109)):
+            cap = line('W', top=298, left=left, width=width, font=5,
+                       height=44 if covered == 2 else 68)
+            rest = ''.join(line(t[1:] if i == 0 else t, top=300 + 22 * i,
+                                left=inset, width=550 - inset)
+                           for i, t in enumerate(words))
+            _, _, cd, _, _ = build(fixture(page(1, DROP_FONTS + anchor + cap + rest + tail)), opt)
+            got = re.findall(r'<p>(.*?)</p>', cd)
+            label = f'P1-H {covered}-line {layout} flush-right predecessor indent={opt.indent}'
+            if layout == 'indented':
+                check(label + ' initial opens its paragraph and retains its continuations',
+                      got == [anchor_text, cap_text, last], repr(got))
+            else:
+                check('GUARD ' + label + ' retains margin paragraphs',
+                      got == [anchor_text + ' ' + cap_text, last], repr(got))
+
+tracked = DROP_FONTS + ''.join(
+    line(letter, top=100, left=left, width=width, font=5, height=44)
+    for letter, left, width in (
+        ('A', 50, 30), ('r', 95, 30), ('t', 140, 30), ('e', 185, 30),
+        (' ', 215, 20), ('S', 240, 30), ('o', 285, 30), ('p', 330, 30), ('a', 375, 30)))
+tp, _, td, _, _ = build(fixture(page(1, tracked + BODY)))
+check('P1-D two chains on one visual line retain their text order',
+      text(tp[0]['lines'][0]['html']) == 'Arte Sopa',
+      repr(text(tp[0]['lines'][0]['html'])))
+tracked_heads = re.findall(r'<h[123]>(.*?)</h[123]>', td)
+check('P1-D two chains retain heading letter order',
+      [re.sub(r'\s+', '', text(h)) for h in tracked_heads] == ['ArteSopa'],
+      repr(tracked_heads))
+
+# Normal capitals, including a modestly larger one, retain their actual size.
+for size in (15, 17):
+    normal = ('<fontspec id="5" size="' + str(size) + '" family="Serif"/>'
+              + line('W', top=300, width=39, font=5)
+              + line('hen the ship sailed into the harbour', top=300, left=89, width=461)
+              + line('the master greeted the passengers.', top=322))
+    np, _, _, _, _ = build(fixture(page(1, normal)))
+    check(f'GUARD ordinary {size}pt capital is not flattened as a drop cap',
+          np[0]['lines'][0]['max'] == size and np[0]['lines'][0]['html'] ==
+          'When the ship sailed into the harbour', repr(np[0]['lines'][0]))
+
+# Measured with c4e21ab's script: A is not a Roman numeral, so its legacy
+# heading deliberately differs from V/I/X. These are preservation guards.
+for numeral in ('V', 'I', 'X', 'A'):
+    for wrapped in (False, True):
+        content = ('<fontspec id="5" size="138" family="Display"/>'
+                   + line(numeral, top=60, left=50, width=100, font=5, height=100)
+                   + line('CAPÍTULO', top=70, left=160, width=110)
+                   + line('The Second Chapter', top=112, left=160, width=350, font=3))
+        if wrapped:
+            content += line('Across the Harbour', top=144, left=160, width=350, font=3)
+        hp, _, hd, _, _ = build(fixture(page(1, content + BODY)))
+        title = 'The Second Chapter' + (' Across the Harbour' if wrapped else '')
+        expected_head = (f'A CAPÍTULO {title}' if numeral == 'A'
+                         else f'CAPÍTULO {numeral} — {title}')
+        label = f'GUARD chapter opener {numeral} wrapped={wrapped}'
+        check(label + ' keeps c4e21ab heading',
+              re.findall(r'<h[123]>.*?</h[123]>', hd) == [f'<h2>{expected_head}</h2>'], hd)
+        expected_lines = [numeral + 'CAPÍTULOThe Second Chapter']
+        if wrapped:
+            expected_lines.append('Across the Harbour')
+        check(label + ' keeps c4e21ab visual lines',
+              [l['html'] for l in hp[0]['lines']] == expected_lines + [text(BODY)],
+              repr([l['html'] for l in hp[0]['lines']]))
+
+
+print('\ndrop-cap first line and initial spacing (CodeRabbit, PR #119)')
+first = 'When the ship came in, the passengers knew what to expect and'
+second = 'the harbour master was still on duty beside the waiting vessel and'
+third = 'the sailors watched the tide before the harbour gates opened.'
+for offset in (1, 5, 13):
+    content = (DROP_FONTS
+               + line('W', top=298, width=40, font=5, height=68)
+               + line(first[1:], top=300, left=103, width=447)
+               + line(second, top=322, left=103 - offset, width=447 + offset)
+               + line(third, top=344, left=103 - offset, width=447 + offset))
+    jp, _, jd, _, _ = build(fixture(page(1, content)))
+    got = [text(l['html']) for l in jp[0]['lines']]
+    label = f'P1 first-line jitter {offset}px'
+    check(label + ' initial joins the first visual line', got[0] == first, repr(got))
+    check(label + ' second line retains its own text', got[1] == second, repr(got))
+    check(label + ' paragraph opens with When', '<p>' + first in jd, jd)
+
+exact_runs = [(100, 40, 100, 24, 36, 'Serif', 'W'),
+              (100, 14, 130, 420, 12, 'Serif', first[1:]),
+              (114, 14, 126, 424, 12, 'Serif', second),
+              (140, 14, 50, 500, 12, 'Serif', third)]
+exact_lines = P.lines_of(exact_runs)
+got = [text(l['html']) for l in exact_lines]
+check('P1 CodeRabbit exact geometry initial joins top=100',
+      got[0] == first and exact_lines[0]['c'] == 107, repr(got))
+check('P1 CodeRabbit exact geometry top=114 stays unchanged',
+      got[1] == second and exact_lines[1]['c'] == 121, repr(got))
+
+for cap, continuation, expected, glued in (
+    ('A ', 'long time ago, the passengers waited for the ship and',
+     'A long time ago, the passengers waited for the ship and', 'Along'),
+    ('I ', 'was born beside the harbour where the ships came in and',
+     'I was born beside the harbour where the ships came in and', 'Iwas'),
+    ('O ', 'happy day when the ship came into the harbour at last and',
+     'O happy day when the ship came into the harbour at last and', 'Ohappy'),
+    ('A', ' man walked down to the harbour to see the ship come in and',
+     'A man walked down to the harbour to see the ship come in and', 'Aman'),
+):
+    content = (DROP_FONTS + line(cap, top=298, width=40, font=5, height=44)
+               + line(continuation, top=300, left=89, width=461)
+               + line(second, top=322, left=89, width=461))
+    sp, _, sd, _, _ = build(fixture(page(1, content)))
+    label = f'P1 initial spacing {cap!r} + {continuation.split()[0]!r}'
+    check(label + ' line keeps the word space',
+          text(sp[0]['lines'][0]['html']) == expected, repr(sp[0]['lines'][0]['html']))
+    check(label + ' paragraph keeps the word space',
+          '<p>' + expected in sd and glued not in text(sd), sd)
+
+for variant in ('lower first run', 'small first run', 'small caps', 'raised superscript'):
+    opening = line(first[1:], top=300, left=89, width=461)
+    expected = first
+    if variant in ('lower first run', 'small first run'):
+        opening = (line('hen ', top=301, left=89, width=30,
+                        font=6 if variant == 'small first run' else 0,
+                        height=14 if variant == 'small first run' else 17)
+                   + line(first[5:], top=300, left=119, width=431))
+    elif variant == 'small caps':
+        opening = (line('hen the ', top=301, left=89, width=60, font=6, height=14)
+                   + line('SHIP', top=300, left=149, width=40, font=6, height=14)
+                   + line(first[13:], top=300, left=189, width=361))
+        expected = first.replace('ship', 'SHIP')
+    elif variant == 'raised superscript':
+        opening = (line(first[1:], top=300, left=89, width=445)
+                   + line('12', top=294, left=534, width=16, font=7, height=14))
+        expected += '12'
+    content = (DROP_FONTS + line('W', top=298, width=40, font=5, height=68)
+               + opening + line(second, top=322, left=89, width=461)
+               + line(third, top=344, left=89, width=461))
+    gp, _, gd, _, _ = build(fixture(page(1, content)))
+    got = [text(l['html']) for l in gp[0]['lines']]
+    check(f'GUARD first-line grouping {variant}',
+          got == [expected, second, third] and '<p>' + expected in gd,
+          repr(got) + '\n' + gd)
+
+
+print('\na line above a drop cap is not its first line (PR #119)')
+for previous_kind in ('italic run', 'centred ornament', 'lowercase at 95', 'lowercase at 103'):
+    fonts = DROP_FONTS + '<fontspec id="8" size="15" family="Serif Italic"/>'
+    if previous_kind == 'italic run':
+        previous = (line('slept since the ', top=278, width=100)
+                    + line('<i>Mary Rose</i>', top=278, left=150, width=70, font=8)
+                    + line(' was sighted.', top=278, left=220, width=110))
+        previous_text = 'slept since the Mary Rose was sighted.'
+    elif previous_kind == 'centred ornament':
+        previous = line('* * *', top=278, left=280, width=40)
+        previous_text = '* * *'
+    else:
+        left = int(previous_kind.split()[-1])
+        previous = (line('The ', top=278, width=left - 50)
+                    + line('end of the previous paragraph.', top=278, left=left, width=300))
+        previous_text = 'The end of the previous paragraph.'
+    # 294 overlaps the previous line by 1px; 292 reaches 3px into it.
+    # 298 is the non-overlapping guard for every preceding layout.
+    for cap_top in ((294, 292, 298) if previous_kind == 'italic run' else (294, 298)):
+        content = (fonts + previous
+                   + line('W', top=cap_top, width=40, font=5, height=68)
+                   + line(first[1:], top=300, left=89, width=461)
+                   + line(second, top=322, left=89, width=461)
+                   + line(third, top=344, left=89, width=461))
+        ap, _, ad, _, _ = build(fixture(page(1, content)))
+        got = [text(l['html']) for l in ap[0]['lines']]
+        label = f'{"GUARD" if cap_top == 298 else "P1"} above-cap {previous_kind} top={cap_top}'
+        check(label + ' previous line keeps its text',
+              got[0] == previous_text, repr(got))
+        check(label + ' initial joins the first covered line',
+              len(got) > 1 and got[1] == first, repr(got))
+        check(label + ' second covered line keeps its text',
+              len(got) > 2 and got[2] == second, repr(got))
+        check(label + ' paragraph opens with When', '<p>' + first in ad, ad)
+        check(label + ' covered lines do not glue andthe', 'andthe' not in text(ad), ad)
+
+
+print('\na line running through a drop cap is not its first line (PR #119)')
+# Measured typst / pdftohtml 26.11 geometry: the preceding line's centre
+# (85.5) is below the cap's top (82), but its text crosses the cap's box.
+through_fonts = ('<fontspec id="0" size="17" family="Libertinus Serif"/>'
+                 '<fontspec id="1" size="17" family="Libertinus Serif Italic"/>'
+                 '<fontspec id="2" size="77" family="Libertinus Serif"/>')
+through_first = 'When the ship came in, the passengers knew what to expect and'
+through_second = 'the harbour master was still on duty beside the waiting and'
+through_third = 'the sailors watched the tide before the harbour gates opened'
+for layout in ('l3-italic', 'l3-lower', 'no previous line', 'indented kerning quote'):
+    previous = ''
+    previous_text = ''
+    if layout == 'l3-italic':
+        previous = (line('The preceding paragraph has slept since the ', top=76,
+                         left=60, width=301, height=19)
+                    + line('<i>Mary Rose</i>', top=76, left=361, width=69,
+                           height=19, font=1)
+                    + line(' was sighted.', top=76, left=430, width=87, height=19))
+        previous_text = 'The preceding paragraph has slept since the Mary Rose was sighted.'
+    elif layout == 'l3-lower':
+        previous = (line('Then', top=76, left=60, width=35, height=19)
+                    + line('<i>end of the previous paragraph was reached.</i>',
+                           top=76, left=138, width=283, height=19, font=1))
+        previous_text = 'Thenend of the previous paragraph was reached.'
+    # At the paragraph indent the opening quote ends 1px inside the cap.
+    # It must survive the overlap slack, and keep its place before the W.
+    cap_left = 80 if layout == 'indented kerning quote' else 60
+    inset = cap_left + 75
+    quote = (line('“', top=96, left=72, width=9, height=19)
+             if layout == 'indented kerning quote' else '')
+    content = (through_fonts
+               + line('Ordinary prose establishes the body margin for this page of text.',
+                      top=56, left=60, width=435, height=19)
+               + previous
+               + line('W', top=82, left=cap_left, width=73, height=88, font=2)
+               + quote
+               + line(through_first[1:], top=96, left=inset, width=420, height=19)
+               + line(through_second, top=116, left=inset, width=402, height=19)
+               + line(through_third, top=136, left=inset, width=408, height=19)
+               + line('and then the paragraph goes on at the margin for another line of text.',
+                      top=156, left=60, width=470, height=19)
+               + line('Another paragraph follows here in ordinary prose to set the body size, and ',
+                      top=176, left=60, width=508, height=19)
+               + line('it keeps going for a while so the body size dominates the page.',
+                      top=196, left=60, width=422, height=19))
+    measured_page = ('<page number="1" width="630" height="480">'
+                     + content + '</page>')
+    rp, _, rd, _, _ = build(fixture(measured_page))
+    got = [text(l['html']) for l in rp[0]['lines']]
+    label = ('P1 through-cap ' if previous else 'GUARD through-cap ') + layout
+    start = 2 if previous else 1
+    if previous:
+        check(label + ' previous line keeps its text without W',
+              got[1] == previous_text and 'W' not in got[1], repr(got))
+    expected = ('“' if quote else '') + through_first
+    check(label + ' initial joins the first covered line',
+          len(got) > start and got[start] == expected, repr(got))
+    check(label + ' second covered line keeps its text',
+          len(got) > start + 1 and got[start + 1] == through_second, repr(got))
+    check(label + ' third covered line keeps its text',
+          len(got) > start + 2 and got[start + 2] == through_third, repr(got))
+    if not quote:
+        check(label + ' paragraph opens with When and separates covered words',
+              any(p.startswith(expected) and 'expect and the harbour' in p
+                  for p in re.findall(r'<p>(.*?)</p>', rd))
+              and 'andthe' not in text(rd) and 'Wthe' not in text(rd), rd)
+
+
+print('\ndrop-cap text adjacency (post-Run review of PR #119)')
+divider_runs = [(100, 34, 50, 22, 30, 'S', 'A'),
+                (100, 14, 330, 200, 12, 'S', 'abacus, 12'),
+                (118, 14, 330, 200, 12, 'S', 'abbey, 40-41'),
+                (140, 14, 50, 200, 12, 'S', 'aardvark, 3'),
+                (140, 14, 330, 200, 12, 'S', 'abbot, 7')]
+divider_lines = P.lines_of(divider_runs)
+check('P1 distant lowercase entry preserves the divider and legacy clustering',
+      (50, 22, 30, 'S', 'A') in divider_lines[0]['runs']
+      and divider_lines[0]['max'] == 30 and divider_lines[0]['gap'] == 258
+      and all('dropcap' not in ln for ln in divider_lines)
+      and [ln['html'] for ln in divider_lines] == [
+          'Aabacus, 12abbey, 40-41', 'aardvark, 3abbot, 7'],
+      repr(divider_lines))
+divider_xml = ('<fontspec id="0" size="12" family="S"/>'
+               '<fontspec id="5" size="30" family="S"/>'
+               + ''.join(line(t, top=top, height=h, left=left, width=w,
+                              font=5 if size == 30 else 0)
+                         for top, h, left, w, size, _, t in divider_runs)
+               + line('Ordinary body text establishes the reference size.', top=200)
+               + line('The body paragraph ends here.', top=222, width=250))
+_, divider_body, divider_doc, _, _ = build(fixture(page(1, divider_xml)))
+divider_blocks = re.findall(r'<(?:p|h[123])\b[^>]*>(.*?)</(?:p|h[123])>', divider_doc)
+check('P1 distant lowercase entry is not glued to the divider in prose or headings',
+      divider_body == 12 and bool(divider_blocks)
+      and any('abacus' in text(b) for b in divider_blocks)
+      and all('Aabacus' not in text(b) for b in divider_blocks), divider_doc)
+
+em_runs = [(100, 44, 50, 40, 40, 'S', 'W'),
+           (102, 14, 102, 448, 12, 'S', 'hen the ship came in, everyone was ready and'),
+           (124, 14, 102, 448, 12, 'S', 'the harbour master greeted the passengers.'),
+           (146, 14, 50, 240, 12, 'S', 'The journey ended here.')]
+em_lines = P.lines_of(em_runs)
+check('GUARD one-em gap still attaches and flattens the drop cap',
+      em_lines[0]['html'] == 'When the ship came in, everyone was ready and'
+      and (50, 40, 12, 'S', 'W') in em_lines[0]['runs']
+      and em_lines[0]['size'] == em_lines[0]['max'] == 12
+      and em_lines[0].get('dropcap') == (90, 144), repr(em_lines))
+em_xml = ('<fontspec id="0" size="12" family="S"/>'
+          '<fontspec id="5" size="40" family="S"/>'
+          + ''.join(line(t, top=top, height=h, left=left, width=w,
+                         font=5 if size == 40 else 0)
+                    for top, h, left, w, size, _, t in em_runs))
+_, em_body, em_doc, _, _ = build(fixture(page(1, em_xml)))
+check('GUARD one-em gap opens an ordinary paragraph',
+      em_body == 12 and '<p>When the' in em_doc, em_doc)
+
+
+_, hs = headings(line('12', top=60, font=2, height=44)
+                 + line('CHAPTER', top=130, font=3)
+                 + line('The Long Road Home', top=170, font=3))
+check('P1.1a separate display chapter number survives',
+      hs == ['CHAPTER 12 — The Long Road Home'], f'got {hs}')
+_, hs = headings(line('CHAPTER', top=100, width=110, font=3)
+                 + line('7', top=100, left=167, width=20, font=3)
+                 + line('The Long Road Home', top=140, font=3))
+check('P1.1b chapter number in an adjacent run survives',
+      hs == ['CHAPTER 7 — The Long Road Home'], f'got {hs}')
+hdoc, hs = headings(line('1', top=100, font=2, height=44))
+check('P1.1c number-only heading retains its level and text',
+      '<h3>1</h3>' in hdoc, f'got {hs}')
+
+# Page 10 of the real XML: small labels/titles with oversized numbers at
+# the right edge, sharing a visual line with one of the title lines.
+contents = ''
+for j, (num, roman) in enumerate(((49, 'III'), (67, 'IV'), (89, 'V'), (201, 'VI'))):
+    top = 100 + j * 160
+    contents += (line(f'<b>CAPÍTULO {roman}</b>', top, left=396, width=89, font=4)
+                 + line('THE FIRST TITLE LINE', top + 30, left=290, width=194, font=1)
+                 + line('AND ANOTHER TITLE LINE', top + 50, left=251, width=234, font=1)
+                 + line(str(num), top + 20, left=522 if num == 201 else 552, width=44,
+                        font=2, height=44))
+_, hs = headings(contents)
+check('GUARD P1.1d printed contents page numbers stay out of headings',
+      bool(hs) and not any(re.search(r'49|67|89|201', h) for h in hs), f'got {hs}')
+
+for label, width, positions in (
+    ('page-12 geometry', 630, (492, 495, 498)),
+    ('narrow page', 459, (400, 400, 400)),
+):
+    contents = ''
+    numbers = (329, 539, 547)
+    for j, (num, left) in enumerate(zip(numbers, positions)):
+        top = 100 + j * 170
+        contents += (line('CONTENTS TITLE ' + ('ALPHA', 'BETA', 'GAMMA')[j],
+                          top + 14, width=left - 100, font=3)
+                     + line(str(num), top, left=left, width=65, font=2, height=44))
+    pg = page(12, contents + BODY).replace('width="622"', f'width="{width}"')
+    _, _, hdoc, _, _ = build(fixture(pg))
+    hs = re.findall(r'<h[123]>(.*?)</h[123]>', hdoc)
+    check('R2 B ' + label + ' contents folios stay out of headings',
+          len(hs) == 3 and all('CONTENTS TITLE' in h for h in hs)
+          and not any(re.search(r'329|539|547', h) for h in hs), f'got {hs}')
+
+hdoc, _ = headings(line('Don&apos;t Panic: Q&amp;A on &quot;Risk&quot;', font=3))
+encoded = re.findall(r'<h[123]>(.*?)</h[123]>', hdoc)[0]
+check('P1.2 heading escapes special characters exactly once',
+      html.unescape(encoded) == 'Don\'t Panic: Q&A on "Risk"'
+      and not any(s in encoded for s in ('&amp;#x27;', '&amp;amp;', '&amp;quot;')),
+      f'got {encoded}')
+_, hs = headings(line('IV', top=60, font=2, height=44)
+                 + line('CHAPTER', top=130, font=3)
+                 + line('BEGINNINGS', top=170, font=3))
+check('P1.3 single-word uppercase title survives a numeral',
+      hs == ['CHAPTER IV — BEGINNINGS'], f'got {hs}')
+
+for small in (False, True):
+    pgs = []
+    chapter_names = 'ALPHA BETA GAMMA DELTA EPSILON ZETA ETA THETA IOTA KAPPA LAMBDA MU NU XI OMICRON'.split()
+    for n in range(1, 301):
+        head = ('THE BOOK TITLE' if n % 2 == 0
+                else 'CHAPTER TITLE ' + chapter_names[(n - 1) // 20])
+        # Capital starts prevent the lower-case repair from hiding a cut.
+        content = (line(head, 40, left=120 if small else 50,
+                        width=300, font=1 if small else 0)
+                   + line('Words of the paragraph continue across every page turn', 100)
+                   + line('And more words carry the same paragraph across the', 122)
+                   + line('Next page without losing the sentence' + ('.' if n == 300 else ''), 144))
+        pgs.append(page(n, content))
+    _, _, fdoc, _, fblocks = build(fixture(*pgs))
+    label = 'small' if small else 'body'
+    check(f'P1.4 {label} chapter and book margin heads are stripped',
+          'CHAPTER TITLE' not in fdoc and 'THE BOOK TITLE' not in fdoc,
+          f'{fdoc.count("CHAPTER TITLE")} chapter heads survived')
+    check(f'P1.4 {label} paragraphs cross every page turn whole',
+          len([b for b in fblocks if b[0] == 'p']) == 1
+          and P.midsentence_breaks(fblocks) == [],
+          f'{len(P.midsentence_breaks(fblocks))} mid-sentence breaks')
+
+for caption in (True, False):
+    pgs = [page(n, line(f'QUADRO {n}' if caption else 'Repeated subhead', 100)
+                + line('Actual content starts at the top of the text block.', 122)
+                + line('And the content closes here.', 144)) for n in range(1, 13)]
+    _, _, gdoc, _, _ = build(fixture(*pgs))
+    expected = [f'QUADRO {n}' for n in range(1, 13)] if caption else ['Repeated subhead'] * 12
+    check('GUARD P1.4 text-block ' + ('captions' if caption else 'repeated subheads') + ' survive',
+          all(e in gdoc for e in expected) and
+          (caption or gdoc.count('Repeated subhead') == 12),
+          f'got {re.findall(r"<p>.*?</p>", gdoc)[:3]}')
+
+_, _, fdoc, _, _ = build(fixture(*[
+    page(n, line('BOOK TITLE', 40) + line('Some body text.', 100)
+         + line(str(n), 960)) for n in range(1, 13)]))
+check('GUARD P1.4 repeated book title and folios are stripped',
+      'BOOK TITLE' not in fdoc and not re.search(r'<p>\d+</p>', fdoc))
+
+for label, head_top, body_top, arrangement in (
+    ('inline folio', 40, 100, 'inline'),
+    ('adjacent folio', 40, 100, 'adjacent'),
+    ('distant folio', 40, 100, 'distant'),
+    ('low head', 85, 150, 'title'),
+    ('13px gap', 70, 100, 'title'),
+    ('chapter head with folio', 40, 100, 'chapter'),
+):
+    pgs = []
+    for n in range(1, 41):
+        title = ('CHAPTER TITLE ' + ('ALPHA' if n <= 20 else 'BETA')
+                 if arrangement == 'chapter' else 'THE BOOK TITLE')
+        if arrangement in ('inline', 'chapter'):
+            head = line(f'{n + 23} {title}' if n % 2 else f'{title} {n + 23}',
+                        head_top, width=300)
+        elif arrangement in ('adjacent', 'distant'):
+            head = (line(title, head_top, width=200)
+                    + line(str(n + 23), head_top,
+                           left=255 if arrangement == 'adjacent' else 400, width=25))
+        else:
+            head = line(title, head_top, width=300)
+        pgs.append(page(n, head
+                        + line('Words of the paragraph continue across every page turn', body_top)
+                        + line('And more words carry the same paragraph across the', body_top + 22)
+                        + line('Next page without losing the sentence' + ('.' if n == 40 else ''),
+                               body_top + 44)))
+    fp, _, fdoc, _, fblocks = build(fixture(*pgs))
+    heads_left = [l for p in fp for l in p['lines']
+                  if 'BOOK TITLE' in l['html'] or 'CHAPTER TITLE' in l['html']]
+    check('R2 A ' + label + ' stripped without breaking page turns or making crops',
+          not heads_left and 'BOOK TITLE' not in fdoc and 'CHAPTER TITLE' not in fdoc
+          and not any(l['kind'] == 'table' for p in fp for l in p['lines'])
+          and len([b for b in fblocks if b[0] == 'p']) == 1
+          and P.midsentence_breaks(fblocks) == [],
+          f'{len(heads_left)} heads survived; '
+          f'{len(P.midsentence_breaks(fblocks))} mid-sentence breaks')
+
+print('\nR3 text-block boundaries')
+for label in ('caption above table', 'spaced subhead', 'short footnote'):
+    pgs, expected = [], {}
+    for n in range(1, 13):
+        content = (line('Ordinary prose starts at the usual text-block top.', 38)
+                   + line('More ordinary prose establishes the baseline pitch.', 60)
+                   + line('The paragraph continues on another regular line.', 82)
+                   + line('The last paragraph continues near the page bottom.', 840)
+                   + line('And ends at the usual text-block bottom.', 862))
+        if n % 4 == 0:
+            if label == 'caption above table':
+                # Page 120: centre 45, beside normal first-line centres 47;
+                # the first table row is about 43px below the caption.
+                wanted = f'QUADRO {n}'
+                content = (line(wanted, 36, height=18)
+                           + line('First table cell', 80, width=180)
+                           + line('Second table cell', 80, left=400, width=150)
+                           + line('Ordinary prose resumes after the table.', 102)
+                           + line('And ends at the usual text-block bottom.', 862))
+            elif label == 'spaced subhead':
+                wanted = 'Exercício'
+                content = (line('<b>Exercício</b>', 38)
+                           + line('Prose starts after a blank line under the subhead.', 78)
+                           + line('And continues at the normal baseline pitch.', 100)
+                           + line('And ends at the usual text-block bottom.', 862))
+            else:
+                wanted = f'{n}. Ver nota {n + 7}.'
+                content = (line('Ordinary prose starts at the usual text-block top.', 38)
+                           + line('More ordinary prose establishes the baseline pitch.', 60)
+                           + line('The last body line leaves room for one short note.', 818)
+                           + line(wanted, 864, font=1, height=13))
+            expected[n] = wanted
+        pgs.append(page(n, content))
+    fp, _, fdoc, _, _ = build(fixture(*pgs))
+    survivors = {p['n']: [P.txt_of(l['html']) for l in p['lines']] for p in fp}
+    check('R3 ' + label + ' survives inside the text block on every page',
+          all(wanted in survivors[n] and wanted in fdoc for n, wanted in expected.items()),
+          f'expected {expected}; retained { {n: survivors[n] for n in expected} }')
+
+pgs = []
+for n in range(1, 13):
+    head = (line('THE BOOK TITLE', 40, width=200)
+            + line(str(n + 23), 38, left=255, width=25, font=5, height=21))
+    pgs.append(page(n, '<fontspec id="5" size="18" family="Serif"/>' + head
+                    + line('Ordinary prose starts at the usual text-block top.', 100)
+                    + line('More ordinary prose establishes the baseline pitch.', 122)
+                    + line('The paragraph ends on its third regular line.', 144)))
+fp, _, fdoc, _, _ = build(fixture(*pgs))
+check('R3 running head with a larger folio is stripped on every page',
+      'THE BOOK TITLE' not in fdoc
+      and all('THE BOOK TITLE' not in l['html'] for p in fp for l in p['lines']),
+      f'{sum("THE BOOK TITLE" in l["html"] for p in fp for l in p["lines"])} heads survived')
+
+print('\nR4 footnote bands and offset pages')
+for footer in (False, True):
+    pgs, expected = [], {}
+    note_topics = iter('sleep mood exercise food work friends rest worry hope'.split())
+    for n in range(1, 13):
+        # Every note is detached: no multi-line note can anchor the band.
+        note = (f'{n}. Ver nota {n + 7}.' if n % 4 == 0
+                else f'{n}. A note about {next(note_topics)}.')
+        expected[n] = note
+        content = ''.join(line(f'Ordinary prose on page {n}, line {i}.', top)
+                          for i, top in enumerate(range(38, 819, 22)))
+        content += line(note, 864, font=1, height=13)
+        if footer:
+            content += line('THE BOOK TITLE', 904)
+        pgs.append(page(n, content))
+    fp, _, fdoc, _, _ = build(fixture(*pgs))
+    survivors = {p['n']: [P.txt_of(l['html']) for l in p['lines']] for p in fp}
+    label = 'footnote band' + (' with footer' if footer else '')
+    check(('GUARD R4 ' if footer else 'R4 ') + label
+          + ' keeps all three repeated notes and nine distinct notes',
+          all(note in survivors[n] and note in fdoc for n, note in expected.items()),
+          f'missing { {n: note for n, note in expected.items() if note not in survivors[n]} }')
+    if footer:
+        check('GUARD R4 footer below the footnote band is stripped on every page',
+              'THE BOOK TITLE' not in fdoc
+              and all('THE BOOK TITLE' not in l['html'] for p in fp for l in p['lines']))
+
+for shifted in ((20, 40, 60), (20, 40)):
+    pgs = []
+    for n in range(1, 61):
+        if n in shifted:
+            # The first-line centre is 38.5, 8px above the usual 46.5;
+            # the next line's centre is 82, leaving the measured 43.5px gap.
+            content = (line(f'QUADRO {n}', 30, height=17)
+                       + line('First table cell', 74, width=180, height=16)
+                       + line('Second table cell', 74, left=400, width=150, height=16)
+                       + line('Prose resumes after the table.', 96))
+        else:
+            content = (line('Ordinary prose starts at the usual text-block top.', 38)
+                       + line('More prose establishes the baseline pitch.', 60)
+                       + line('The paragraph continues on another line.', 82))
+        pgs.append(page(n, content + line('The page ends here.', 818)))
+    fp, _, fdoc, _, _ = build(fixture(*pgs))
+    survivors = {p['n']: [P.txt_of(l['html']) for l in p['lines']] for p in fp}
+    check(f'R4 {len(shifted)} offset pages keep every QUADRO caption',
+          all(f'QUADRO {n}' in survivors[n] and f'QUADRO {n}' in fdoc for n in shifted),
+          f'missing {[n for n in shifted if f"QUADRO {n}" not in survivors[n]]}')
+
+print('\nR5 top-only running heads')
+for topics, repetitions in (
+    ('sleep mood exercise food'.split(), 3),
+    ('sleep mood exercise food work friends'.split(), 2),
+):
+    pgs, expected = [], {}
+    for n in range(1, 13):
+        note = f'{n}. A citation about {topics[(n - 1) // repetitions]}.'
+        expected[n] = note
+        content = ''.join(line(f'Ordinary prose on page {n}, line {i}.', top)
+                          for i, top in enumerate(range(38, 819, 22)))
+        pgs.append(page(n, content + line(note, 864, font=1, height=13)))
+    fp, _, fdoc, _, _ = build(fixture(*pgs))
+    survivors = {p['n']: [P.txt_of(l['html']) for l in p['lines']] for p in fp}
+    check(f'R5.1 {len(topics)} citations x {repetitions} keep all 12 notes',
+          all(note in survivors[n] and note in fdoc for n, note in expected.items()),
+          f'missing { {n: note for n, note in expected.items() if note not in survivors[n]} }')
+
+pgs, expected = [], {}
+note_topics = iter('sleep mood exercise food work friends rest worry hope'.split())
+for n in range(1, 121):
+    content = ''.join(line(f'Ordinary prose on page {n}, line {i}.', top)
+                      for i, top in enumerate(range(38, 819, 22)))
+    if n <= 12:
+        note = (f'{n}. Ver nota {n + 7}.' if n % 4 == 0
+                else f'{n}. A note about {next(note_topics)}.')
+        expected[n] = note
+        content += line(note, 864, font=1, height=13)
+    pgs.append(page(n, content))
+fp, _, fdoc, _, _ = build(fixture(*pgs))
+survivors = {p['n']: [P.txt_of(l['html']) for l in p['lines']] for p in fp}
+check('R5.2 infrequent note band keeps all 12 notes among 120 pages',
+      all(note in survivors[n] and note in fdoc for n, note in expected.items()),
+      f'missing { {n: note for n, note in expected.items() if note not in survivors[n]} }')
+
+for small in (False, True):
+    for variant in ('one-off heads', 'roman folios', 'unique non-head text'):
+        pgs = []
+        for n in range(1, 301):
+            head = ('THE BOOK TITLE' if n % 2 == 0
+                    else 'CHAPTER TITLE ' + chapter_names[(n - 1) // 20])
+            if variant == 'one-off heads' and n in (1, 3, 5):
+                head = {1: 'PREFACE', 3: 'FOREWORD', 5: 'THANKS'}[n]
+            elif variant == 'roman folios' and n <= 3:
+                head = ('INTRODUCTION vi', 'vii INTRODUCTION', 'INTRODUCTION viii')[n - 1]
+            elif variant == 'unique non-head text' and n <= 3:
+                head = ('Copyright by the publisher', 'All rights reserved', 'Printed in Portugal')[n - 1]
+            content = (line(head, 40, left=120 if small else 50,
+                            width=300, font=1 if small else 0)
+                       + line('Words of the paragraph continue across every page turn', 100)
+                       + line('And more words carry the same paragraph across the', 122)
+                       + line('Next page without losing the sentence' + ('.' if n == 300 else ''), 144))
+            pgs.append(page(n, content))
+        fp, _, fdoc, _, _ = build(fixture(*pgs))
+        heads_left = [l for p in fp for l in p['lines']
+                      if 'THE BOOK TITLE' in l['html'] or 'CHAPTER TITLE' in l['html']]
+        check('R5.3 ' + ('small' if small else 'body') + ' ' + variant
+              + ' do not protect repeated heads',
+              not heads_left and 'THE BOOK TITLE' not in fdoc and 'CHAPTER TITLE' not in fdoc,
+              f'{len(heads_left)} repeated heads survived')
+
+# Each section starts with a headless opener, then a recto and a verso.
+# Chapters continue for 20 pages: ten chapter heads and nine book heads.
+pgs = []
+for title, length in [('PREFACE', 3), ('FOREWORD', 3), ('THANKS', 3)] + [
+    ('CHAPTER TITLE ' + name, 20) for name in chapter_names[:5]
+]:
+    for local in range(1, length + 1):
+        head = '' if local == 1 else line(title if local % 2 == 0 else 'THE BOOK TITLE', 40)
+        content = (head + line('Words of the paragraph continue across every page turn', 100)
+                   + line('And more words carry the same paragraph across the', 122)
+                   + line('Next page without losing the sentence', 144))
+        pgs.append(page(len(pgs) + 1, content))
+fp, _, fdoc, _, _ = build(fixture(*pgs))
+heads_left = [l for p in fp for l in p['lines']
+              if 'THE BOOK TITLE' in l['html'] or 'CHAPTER TITLE' in l['html']]
+check('R5.3 short sections do not protect 48 book and 50 chapter heads',
+      not heads_left and 'THE BOOK TITLE' not in fdoc and 'CHAPTER TITLE' not in fdoc,
+      f'{len(heads_left)} repeated heads survived')
+
+for offset in (10, 12):
+    shifted = (20, 40, 60)
+    pgs = []
+    for n in range(1, 61):
+        if n in shifted:
+            # Usual first-line centre 46.5, shifted up by offset; the
+            # table starts 43.5px below the caption, whatever the offset.
+            content = (line(f'QUADRO {n}', 38 - offset)
+                       + line('First table cell', 82 - offset, width=180, height=16)
+                       + line('Second table cell', 82 - offset, left=400, width=150, height=16)
+                       + line('Prose resumes after the table.', 104 - offset))
+        else:
+            content = (line('Ordinary prose starts at the usual text-block top.', 38)
+                       + line('More prose establishes the baseline pitch.', 60)
+                       + line('The paragraph continues on another line.', 82))
+        pgs.append(page(n, content + line('The page ends here.', 818 - (offset if n in shifted else 0))))
+    fp, _, fdoc, _, _ = build(fixture(*pgs))
+    survivors = {p['n']: [P.txt_of(l['html']) for l in p['lines']] for p in fp}
+    check(f'R5.4 {offset}px offset keeps all three QUADRO captions',
+          all(f'QUADRO {n}' in survivors[n] and f'QUADRO {n}' in fdoc for n in shifted),
+          f'missing {[n for n in shifted if f"QUADRO {n}" not in survivors[n]]}')
+
+image_turn = fixture(
+    page(1, line('Prose tells the whole family about a trip across the United', 100)),
+    page(2, '<image top="160" left="50" width="200" height="150" src="x.png"/>'
+         + line('States and Canada together on their long journey.', 100, width=300)
+         + line('A new paragraph comes after the figure.', 340, left=75, width=300)))
+_, _, idoc, _, iblocks = build(image_turn)
+check('P1.5a page-turn paragraph stays whole before a lower figure',
+      'across the United States and Canada together on their long journey.</p>' in idoc
+      and idoc.index('long journey.</p>') < idoc.index('<img'), f'got {iblocks}')
+inside_image = fixture(page(1,
+    '<image top="120" left="50" width="200" height="150" src="middle.png"/>'
+    + line('A paragraph starts before the figure and carries all the', 100)
+    + line('Way past it before finally ending.', 300, width=300)
+    + line('Another paragraph follows.', 340, left=75, width=300)))
+_, _, idoc, _, iblocks = build(inside_image)
+check('P1.5b an interior figure waits for the open paragraph to close',
+      'all the Way past it before finally ending.</p>' in idoc
+      and idoc.index('finally ending.</p>') < idoc.index('<img') < idoc.index('Another paragraph'),
+      f'got {iblocks}')
+check('P1.5c mid-sentence check sees through images',
+      P.midsentence_breaks([('p', _cut), ('img', 'x.png'), ('p', 'Next words.')])
+      == [(_cut, 'Next words.')], 'image hid the paragraph cut')
+
+
+def hyphen_case(stem, head, evidence, wanted):
+    # Keep each evidence token away from both ends of its visual line.
+    content = (line('Evidence says ' + evidence + ' elsewhere.', 100)
+               + line('The long paragraph carries its word as ' + stem + '-', 122)
+               + line(head + ' and the paragraph finishes.', 144, width=300))
+    hp, hb, hd, _, _ = build(fixture(page(1, content)))
+    # Feed the opposite pdftotext vocabulary decision, so only XML evidence
+    # can satisfy the assertion (and the unfixed converter visibly fails).
+    hd, _, _ = P.build_html(hp, hb, Opt(), set(), set(),
+                            {stem + head} if '-' in wanted else set())
+    decisions = []
+    if hasattr(P, 'midline_words'):
+        hd, _, _ = P.build_html(hp, hb, Opt(), set(), set(),
+                                hyphen_decisions=decisions)
+    return html.unescape(text(hd)), decisions
+
+
+for stem, head, wanted in (
+    ('1939', '1945', '1939-1945'),
+    ('pages 212', '218', 'pages 212-218'),
+    ('0-14', '044913-6', '0-14-044913-6'),
+):
+    hplain, decisions = hyphen_case(stem, head, 'unrelated tokens', wanted)
+    check('R2 C keeps ' + wanted, 'word as ' + wanted + ' and' in hplain,
+          f'got {hplain[-180:]}')
+    check('R2 C excludes ' + wanted + ' from no-evidence decisions',
+          decisions == [], f'got {decisions}')
+
+
+for stem, head, evidence, wanted, label in (
+    ('self', 'interest', 'Self-Interest', 'self-interest', 'hyphenated evidence'),
+    ('produc', 'tive', 'Productive', 'productive', 'joined evidence'),
+    ('prontos', 'socorros', 'prontos and socorros', 'prontos-socorros', 'standalone fallback'),
+    ('catastro', 'fizando', 'neither fragment', 'catastrofizando', 'join fallback'),
+    ('well', 'known', 'well-known wellknown wellknown', 'wellknown', 'joined majority'),
+    ('well', 'known', 'well-known well-known wellknown', 'well-known', 'hyphenated majority'),
+    ('well', 'known', 'well-known wellknown', 'well-known', 'tie keeps hyphen'),
+    ('prontos', 'socorros', 'pronto-socorros', 'prontossocorros', 'compound is not standalone'),
+):
+    hplain, decisions = hyphen_case(stem, head, evidence, wanted)
+    check('P1.6 ' + label, 'word as ' + wanted + ' and' in hplain, f'got {hplain[-180:]}')
+    if label in ('standalone fallback', 'join fallback'):
+        expected = {'page': 1, 'stem': stem, 'head': head,
+                    'action': 'keep' if '-' in wanted else 'join'}
+        check('P1.6 reports ' + stem + '/' + head + ' without evidence',
+              expected in decisions,
+              f'got {decisions}; missing midline_words/report interface on old code')
+
+# Neither side of a break may bootstrap evidence, including soft-hyphen
+# fragments or a one-word line. Their presence must still leave a fallback.
+for hyphen in ('-', '\xad'):
+    content = (line('Evidence excludes fragments of prontos' + hyphen, 100)
+               + line('socorros', 122, width=100)
+               + line('A second paragraph repeats prontos-', 160)
+               + line('socorros and ends.', 182, width=200))
+    hp, hb, hd, _, _ = build(fixture(page(1, content)))
+    decisions = []
+    if hasattr(P, 'midline_words'):
+        hd, _, _ = P.build_html(hp, hb, Opt(), set(), set(), hyphen_decisions=decisions)
+    check('P1.6 break fragments are not evidence ' + repr(hyphen),
+          'prontossocorros and ends.' in hd and bool(decisions),
+          f'got {decisions}; missing evidence/report interface on old code')
+
+no_evidence = fixture(page(1,
+    line('Elsewhere both prontos and socorros stand alone.', 100)
+    + line('The next paragraph ends its first line with prontos-', 140)
+    + line('socorros and then stops.', 162, width=200)
+    + line('This paragraph has a different broken word catastro-', 200)
+    + line('fizando and finally stops.', 222, width=200)))
+hp, hb, _, _, _ = build(no_evidence)
+decisions = []
+if hasattr(P, 'midline_words'):
+    P.build_html(hp, hb, Opt(), set(), set(), hyphen_decisions=decisions)
+check('P1.6 both no-evidence decisions are recorded together',
+      decisions == [{'page': 1, 'stem': 'prontos', 'head': 'socorros', 'action': 'keep'},
+                    {'page': 1, 'stem': 'catastro', 'head': 'fizando', 'action': 'join'}],
+      f'got {decisions}; missing evidence/report interface on old code')
+
+with tempfile.TemporaryDirectory() as w:
+    src = os.path.join(w, 'src.pdf')
+    inp = os.path.join(w, 'input.pdf')
+    for name, data in (('src.pdf', b'A'), ('input.pdf', b'B'), ('book.xml', b'old XML'),
+                       ('plain.txt', b'old text'), ('book-1_1.png', b'old image'),
+                       ('notes.txt', b'keep me')):
+        with open(os.path.join(w, name), 'wb') as f:
+            f.write(data)
+    calls, err = [], io.StringIO()
+    old_run = P.run
+    try:
+        P.run = lambda *a, **kw: calls.append(a)
+        refused = False
+        with contextlib.redirect_stderr(err):
+            try:
+                P.extract(inp, w)
+            except SystemExit as e:
+                refused = bool(e.code)
+                print(e, file=sys.stderr)
+        check('P1.7 different input refuses stale work with a remedy',
+              refused and '--work' in err.getvalue(), f'stderr={err.getvalue()!r}, refused={refused}')
+        with open(inp, 'wb') as f:
+            f.write(b'A')
+        calls.clear()
+        result = P.extract(inp, w)
+        check('GUARD P1.7 matching input reuses extraction without tools',
+              result == os.path.join(w, 'book.xml') and not calls, f'calls={calls}')
+    finally:
+        P.run = old_run
+
+with tempfile.TemporaryDirectory() as w:
+    path = os.path.join(w, 'book.xml')
+    with open(path, 'w') as f:
+        f.write(TABLE)
+    calls = []
+    old_run = P.run
+    try:
+        def render_crop(cmd, cwd):
+            calls.append(cmd)
+            open(os.path.join(cwd, cmd[-1] + '-1.png'), 'wb').close()
+        P.run = render_crop
+
+        def crop(height=0, dpi=150):
+            cp, cb = P.parse(path)
+            P.classify(cp, cb, Opt())
+            if height:
+                # Expand the same table without changing its page/index.
+                row = next(l for l in cp[0]['lines'] if 'lower level' in l['html'])
+                row['h'] += height
+            P.crop_tables(cp, w, dpi)
+            cd, _, _ = P.build_html(cp, cb, Opt(), set(), set())
+            return cp[0]['tables'][0]['src'], cd
+
+        first, _ = crop()
+        second, cdoc = crop(height=20)
+        check('P1.8 changed region renders a new referenced crop',
+              len(calls) == 2 and first != second and f'src="{second}"' in cdoc,
+              f'{len(calls)} renders, {first}, {second}')
+        before = len(calls)
+        same, _ = crop(height=20)
+        check('GUARD P1.8 same region and dpi reuse the crop',
+              len(calls) == before and same == second, f'{len(calls)} renders')
+        third, _ = crop(height=20, dpi=200)
+        check('P1.8 changed dpi renders again',
+              len(calls) == before + 1 and third != second, f'{len(calls)} renders, {third}')
+    finally:
+        P.run = old_run
+
+print(f'\n{PASS} passed, {FAIL} failed')
+sys.exit(1 if FAIL else 0)
