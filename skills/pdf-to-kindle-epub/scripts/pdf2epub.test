@@ -910,6 +910,43 @@ for variant in ('lower first run', 'small first run', 'small caps', 'raised supe
           repr(got) + '\n' + gd)
 
 
+print('\na line above a drop cap is not its first line (PR #119)')
+for previous_kind in ('italic run', 'centred ornament', 'lowercase at 95', 'lowercase at 103'):
+    fonts = DROP_FONTS + '<fontspec id="8" size="15" family="Serif Italic"/>'
+    if previous_kind == 'italic run':
+        previous = (line('slept since the ', top=278, width=100)
+                    + line('<i>Mary Rose</i>', top=278, left=150, width=70, font=8)
+                    + line(' was sighted.', top=278, left=220, width=110))
+        previous_text = 'slept since the Mary Rose was sighted.'
+    elif previous_kind == 'centred ornament':
+        previous = line('* * *', top=278, left=280, width=40)
+        previous_text = '* * *'
+    else:
+        left = int(previous_kind.split()[-1])
+        previous = (line('The ', top=278, width=left - 50)
+                    + line('end of the previous paragraph.', top=278, left=left, width=300))
+        previous_text = 'The end of the previous paragraph.'
+    # 294 overlaps the previous line by 1px; 292 reaches 3px into it.
+    # 298 is the non-overlapping guard for every preceding layout.
+    for cap_top in ((294, 292, 298) if previous_kind == 'italic run' else (294, 298)):
+        content = (fonts + previous
+                   + line('W', top=cap_top, width=40, font=5, height=68)
+                   + line(first[1:], top=300, left=89, width=461)
+                   + line(second, top=322, left=89, width=461)
+                   + line(third, top=344, left=89, width=461))
+        ap, _, ad, _, _ = build(fixture(page(1, content)))
+        got = [text(l['html']) for l in ap[0]['lines']]
+        label = f'{"GUARD" if cap_top == 298 else "P1"} above-cap {previous_kind} top={cap_top}'
+        check(label + ' previous line keeps its text',
+              got[0] == previous_text, repr(got))
+        check(label + ' initial joins the first covered line',
+              len(got) > 1 and got[1] == first, repr(got))
+        check(label + ' second covered line keeps its text',
+              len(got) > 2 and got[2] == second, repr(got))
+        check(label + ' paragraph opens with When', '<p>' + first in ad, ad)
+        check(label + ' covered lines do not glue andthe', 'andthe' not in text(ad), ad)
+
+
 print('\ndrop-cap text adjacency (post-Run review of PR #119)')
 divider_runs = [(100, 34, 50, 22, 30, 'S', 'A'),
                 (100, 14, 330, 200, 12, 'S', 'abacus, 12'),
