@@ -947,6 +947,74 @@ for previous_kind in ('italic run', 'centred ornament', 'lowercase at 95', 'lowe
         check(label + ' covered lines do not glue andthe', 'andthe' not in text(ad), ad)
 
 
+print('\na line running through a drop cap is not its first line (PR #119)')
+# Measured typst / pdftohtml 26.11 geometry: the preceding line's centre
+# (85.5) is below the cap's top (82), but its text crosses the cap's box.
+through_fonts = ('<fontspec id="0" size="17" family="Libertinus Serif"/>'
+                 '<fontspec id="1" size="17" family="Libertinus Serif Italic"/>'
+                 '<fontspec id="2" size="77" family="Libertinus Serif"/>')
+through_first = 'When the ship came in, the passengers knew what to expect and'
+through_second = 'the harbour master was still on duty beside the waiting and'
+through_third = 'the sailors watched the tide before the harbour gates opened'
+for layout in ('l3-italic', 'l3-lower', 'no previous line', 'indented kerning quote'):
+    previous = ''
+    previous_text = ''
+    if layout == 'l3-italic':
+        previous = (line('The preceding paragraph has slept since the ', top=76,
+                         left=60, width=301, height=19)
+                    + line('<i>Mary Rose</i>', top=76, left=361, width=69,
+                           height=19, font=1)
+                    + line(' was sighted.', top=76, left=430, width=87, height=19))
+        previous_text = 'The preceding paragraph has slept since the Mary Rose was sighted.'
+    elif layout == 'l3-lower':
+        previous = (line('Then', top=76, left=60, width=35, height=19)
+                    + line('<i>end of the previous paragraph was reached.</i>',
+                           top=76, left=138, width=283, height=19, font=1))
+        previous_text = 'Thenend of the previous paragraph was reached.'
+    # At the paragraph indent the opening quote ends 1px inside the cap.
+    # It must survive the overlap slack, and keep its place before the W.
+    cap_left = 80 if layout == 'indented kerning quote' else 60
+    inset = cap_left + 75
+    quote = (line('“', top=96, left=72, width=9, height=19)
+             if layout == 'indented kerning quote' else '')
+    content = (through_fonts
+               + line('Ordinary prose establishes the body margin for this page of text.',
+                      top=56, left=60, width=435, height=19)
+               + previous
+               + line('W', top=82, left=cap_left, width=73, height=88, font=2)
+               + quote
+               + line(through_first[1:], top=96, left=inset, width=420, height=19)
+               + line(through_second, top=116, left=inset, width=402, height=19)
+               + line(through_third, top=136, left=inset, width=408, height=19)
+               + line('and then the paragraph goes on at the margin for another line of text.',
+                      top=156, left=60, width=470, height=19)
+               + line('Another paragraph follows here in ordinary prose to set the body size, and ',
+                      top=176, left=60, width=508, height=19)
+               + line('it keeps going for a while so the body size dominates the page.',
+                      top=196, left=60, width=422, height=19))
+    measured_page = ('<page number="1" width="630" height="480">'
+                     + content + '</page>')
+    rp, _, rd, _, _ = build(fixture(measured_page))
+    got = [text(l['html']) for l in rp[0]['lines']]
+    label = ('P1 through-cap ' if previous else 'GUARD through-cap ') + layout
+    start = 2 if previous else 1
+    if previous:
+        check(label + ' previous line keeps its text without W',
+              got[1] == previous_text and 'W' not in got[1], repr(got))
+    expected = ('“' if quote else '') + through_first
+    check(label + ' initial joins the first covered line',
+          len(got) > start and got[start] == expected, repr(got))
+    check(label + ' second covered line keeps its text',
+          len(got) > start + 1 and got[start + 1] == through_second, repr(got))
+    check(label + ' third covered line keeps its text',
+          len(got) > start + 2 and got[start + 2] == through_third, repr(got))
+    if not quote:
+        check(label + ' paragraph opens with When and separates covered words',
+              any(p.startswith(expected) and 'expect and the harbour' in p
+                  for p in re.findall(r'<p>(.*?)</p>', rd))
+              and 'andthe' not in text(rd) and 'Wthe' not in text(rd), rd)
+
+
 print('\ndrop-cap text adjacency (post-Run review of PR #119)')
 divider_runs = [(100, 34, 50, 22, 30, 'S', 'A'),
                 (100, 14, 330, 200, 12, 'S', 'abacus, 12'),

@@ -102,10 +102,13 @@ def lines_of(runs):
     Oversized single letters whose topmost covered line starts with lowercase
     text within one body em to their right are removed first. Candidate runs
     use the same centre clustering as ordinary lines; groups centred above
-    the letter's top edge are not covered. Caps are restored among the runs
-    of the line reached by following their neighbours to a surviving
-    run, in left-to-right order, retaining their own trailing word space.
-    Cyclic chains stay in the clustering. Initial lines carry the caps'
+    the letter's top edge or with text running through its box are not covered.
+    The latter check includes every run on the visual line except oversized
+    single letters, with 2px slack for touching or kerned quotes. Adjacency or
+    lowercase failure on the first covered line rejects the cap. Caps are
+    restored among the runs of the line reached by following their neighbours
+    to a surviving run, in left-to-right order, retaining their own trailing
+    word space. Cyclic chains stay in the clustering. Initial lines carry the caps'
     right/bottom extent so paragraph
     assembly can account for the inset of covered lines. Their height must not
     merge the body lines they cover. All other runs use the original centre
@@ -116,13 +119,17 @@ def lines_of(runs):
         if size:
             sizes[size] += max(len(txt_of(txt)), 1)
     reference = sizes.most_common(1)[0][0] if sizes else 12
-    caps = {}
+    oversized = {}
     for i, (top, height, left, width, size, fam, txt) in enumerate(runs):
         letter = html.unescape(txt_of(txt))
         # 1.5 times the page's character-weighted dominant size is clearly
         # oversized; ordinary capitals and modest font variations stay put.
         if len(letter) != 1 or not letter.isalpha() or size < 1.5 * reference:
             continue
+        oversized[i] = letter
+    caps = {}
+    for i, letter in oversized.items():
+        top, height, left, width, size, fam, txt = runs[i]
         neighbours = [j for j, r in enumerate(runs)
                       if j != i and r[2] >= left + width - 2
                       and r[0] < top + height / 2 and r[0] + r[1] > top]
@@ -131,21 +138,31 @@ def lines_of(runs):
         # Find the first visual line before choosing its leftmost run. Use
         # the ordinary centre/height rule so small caps and raised runs stay
         # with their text rather than becoming a separate opening line.
-        # A previous line may overlap the box without being covered by it.
+        # A previous line may overlap the box without being covered by it:
+        # check all runs in the group's band for text crossing the cap, not
+        # just the candidates to its right. Ignore oversized letters so the
+        # cap's own box and chained initials cannot exclude their first line.
+        def covered(c, h):
+            return c >= top and not any(
+                j not in oversized
+                and abs(r[0] + r[1] / 2 - c) <= max(r[1], h) * 0.45
+                and r[2] < left + width - 2 and r[2] + r[3] > left + 2
+                for j, r in enumerate(runs))
+
         first_line = []
         c, h = 0, 0
         for j in sorted(neighbours, key=runs.__getitem__):
             r = runs[j]
             centre = r[0] + r[1] / 2
             if first_line and abs(centre - c) > max(r[1], h) * 0.45:
-                if c >= top:
+                if covered(c, h):
                     break
                 first_line = []
                 c, h = 0, 0
             c = (c * len(first_line) + centre) / (len(first_line) + 1)
             h = max(h, r[1])
             first_line.append(j)
-        if c < top:
+        if not covered(c, h):
             continue
         j = min(first_line, key=lambda j: (runs[j][2], runs[j][0]))
         # One body em allows a word space after the initial (and overlaps),
