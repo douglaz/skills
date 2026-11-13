@@ -99,9 +99,9 @@ def inner(el):
 def lines_of(runs):
     """Cluster text runs into visual lines by vertical centre.
 
-    Oversized single letters followed on their right by lowercase text are
-    removed first, then restored among the runs of the line reached by
-    following their neighbours to a surviving run, in left-to-right order.
+    Oversized single letters with lowercase text within one body em to their
+    right are removed first, then restored among the runs of the line reached
+    by following their neighbours to a surviving run, in left-to-right order.
     Cyclic chains stay in the clustering. Initial lines carry the caps'
     right/bottom extent so paragraph
     assembly can account for the inset of covered lines. Their height must not
@@ -126,6 +126,10 @@ def lines_of(runs):
         if not neighbours:
             continue
         j = min(neighbours, key=lambda j: (runs[j][2], runs[j][0]))
+        # One body em allows a word space after the initial (and overlaps),
+        # without borrowing lowercase text from a distant column.
+        if runs[j][2] - (left + width) > reference:
+            continue
         following = html.unescape(txt_of(runs[j][6]))
         if following and following[0].islower():
             caps[i] = (j, letter)

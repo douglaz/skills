@@ -835,6 +835,54 @@ for numeral in ('V', 'I', 'X', 'A'):
               repr([l['html'] for l in hp[0]['lines']]))
 
 
+print('\ndrop-cap text adjacency (post-Run review of PR #119)')
+divider_runs = [(100, 34, 50, 22, 30, 'S', 'A'),
+                (100, 14, 330, 200, 12, 'S', 'abacus, 12'),
+                (118, 14, 330, 200, 12, 'S', 'abbey, 40-41'),
+                (140, 14, 50, 200, 12, 'S', 'aardvark, 3'),
+                (140, 14, 330, 200, 12, 'S', 'abbot, 7')]
+divider_lines = P.lines_of(divider_runs)
+check('P1 distant lowercase entry preserves the divider and legacy clustering',
+      (50, 22, 30, 'S', 'A') in divider_lines[0]['runs']
+      and divider_lines[0]['max'] == 30 and divider_lines[0]['gap'] == 258
+      and all('dropcap' not in ln for ln in divider_lines)
+      and [ln['html'] for ln in divider_lines] == [
+          'Aabacus, 12abbey, 40-41', 'aardvark, 3abbot, 7'],
+      repr(divider_lines))
+divider_xml = ('<fontspec id="0" size="12" family="S"/>'
+               '<fontspec id="5" size="30" family="S"/>'
+               + ''.join(line(t, top=top, height=h, left=left, width=w,
+                              font=5 if size == 30 else 0)
+                         for top, h, left, w, size, _, t in divider_runs)
+               + line('Ordinary body text establishes the reference size.', top=200)
+               + line('The body paragraph ends here.', top=222, width=250))
+_, divider_body, divider_doc, _, _ = build(fixture(page(1, divider_xml)))
+divider_blocks = re.findall(r'<(?:p|h[123])\b[^>]*>(.*?)</(?:p|h[123])>', divider_doc)
+check('P1 distant lowercase entry is not glued to the divider in prose or headings',
+      divider_body == 12 and bool(divider_blocks)
+      and any('abacus' in text(b) for b in divider_blocks)
+      and all('Aabacus' not in text(b) for b in divider_blocks), divider_doc)
+
+em_runs = [(100, 44, 50, 40, 40, 'S', 'W'),
+           (102, 14, 102, 448, 12, 'S', 'hen the ship came in, everyone was ready and'),
+           (124, 14, 102, 448, 12, 'S', 'the harbour master greeted the passengers.'),
+           (146, 14, 50, 240, 12, 'S', 'The journey ended here.')]
+em_lines = P.lines_of(em_runs)
+check('GUARD one-em gap still attaches and flattens the drop cap',
+      em_lines[0]['html'] == 'When the ship came in, everyone was ready and'
+      and (50, 40, 12, 'S', 'W') in em_lines[0]['runs']
+      and em_lines[0]['size'] == em_lines[0]['max'] == 12
+      and em_lines[0].get('dropcap') == (90, 144), repr(em_lines))
+em_xml = ('<fontspec id="0" size="12" family="S"/>'
+          '<fontspec id="5" size="40" family="S"/>'
+          + ''.join(line(t, top=top, height=h, left=left, width=w,
+                         font=5 if size == 40 else 0)
+                    for top, h, left, w, size, _, t in em_runs))
+_, em_body, em_doc, _, _ = build(fixture(page(1, em_xml)))
+check('GUARD one-em gap opens an ordinary paragraph',
+      em_body == 12 and '<p>When the' in em_doc, em_doc)
+
+
 _, hs = headings(line('12', top=60, font=2, height=44)
                  + line('CHAPTER', top=130, font=3)
                  + line('The Long Road Home', top=170, font=3))
