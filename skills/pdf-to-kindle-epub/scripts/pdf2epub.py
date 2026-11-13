@@ -99,9 +99,11 @@ def inner(el):
 def lines_of(runs):
     """Cluster text runs into visual lines by vertical centre.
 
-    Oversized single letters with lowercase text within one body em to their
-    right are removed first, then restored among the runs of the line reached
-    by following their neighbours to a surviving run, in left-to-right order.
+    Oversized single letters whose topmost covered line starts with lowercase
+    text within one body em to their right are removed first. Candidate runs
+    use the same centre clustering as ordinary lines. Caps are restored among
+    the runs of the line reached by following their neighbours to a surviving
+    run, in left-to-right order, retaining their own trailing word space.
     Cyclic chains stay in the clustering. Initial lines carry the caps'
     right/bottom extent so paragraph
     assembly can account for the inset of covered lines. Their height must not
@@ -125,7 +127,20 @@ def lines_of(runs):
                       and r[0] < top + height / 2 and r[0] + r[1] > top]
         if not neighbours:
             continue
-        j = min(neighbours, key=lambda j: (runs[j][2], runs[j][0]))
+        # Find the first visual line before choosing its leftmost run. Use
+        # the ordinary centre/height rule so small caps and raised runs stay
+        # with their text rather than becoming a separate opening line.
+        first_line = []
+        c, h = 0, 0
+        for j in sorted(neighbours, key=runs.__getitem__):
+            r = runs[j]
+            centre = r[0] + r[1] / 2
+            if first_line and abs(centre - c) > max(r[1], h) * 0.45:
+                break
+            c = (c * len(first_line) + centre) / (len(first_line) + 1)
+            h = max(h, r[1])
+            first_line.append(j)
+        j = min(first_line, key=lambda j: (runs[j][2], runs[j][0]))
         # One body em allows a word space after the initial (and overlaps),
         # without borrowing lowercase text from a distant column.
         if runs[j][2] - (left + width) > reference:
@@ -189,8 +204,15 @@ def lines_of(runs):
         # Flatten the decorative initial to the line's normal type and keep
         # the body's centre/height, maximum size and gaps. Even a short opening
         # stays prose, and subsequent covered lines retain their usual spacing.
-        letters = [(runs[i][2], runs[i][3], ln['size'], runs[i][5], html.escape(caps[i][1]))
-                   for i in sorted(indices, key=lambda i: (runs[i][2], i))]
+        letters = []
+        for i in sorted(indices, key=lambda i: (runs[i][2], i)):
+            initial = re.sub(r'\s+', ' ', html.unescape(re.sub(r'<[^>]+>', '', runs[i][6]))).lstrip()
+            j = caps[i][0]
+            following = caps[j][1] if j in caps else html.unescape(re.sub(r'<[^>]+>', '', runs[j][6]))
+            # A space on either side is enough, including through markup.
+            if following[:1].isspace():
+                initial = initial.rstrip()
+            letters.append((runs[i][2], runs[i][3], ln['size'], runs[i][5], html.escape(initial)))
         ln['runs'] = sorted(ln['runs'] + letters, key=lambda r: r[0])
         ln['left'] = ln['runs'][0][0]
         ln['html'] = ''.join(r[4] for r in ln['runs'])

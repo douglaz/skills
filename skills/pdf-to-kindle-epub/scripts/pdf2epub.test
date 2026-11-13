@@ -835,6 +835,81 @@ for numeral in ('V', 'I', 'X', 'A'):
               repr([l['html'] for l in hp[0]['lines']]))
 
 
+print('\ndrop-cap first line and initial spacing (CodeRabbit, PR #119)')
+first = 'When the ship came in, the passengers knew what to expect and'
+second = 'the harbour master was still on duty beside the waiting vessel and'
+third = 'the sailors watched the tide before the harbour gates opened.'
+for offset in (1, 5, 13):
+    content = (DROP_FONTS
+               + line('W', top=298, width=40, font=5, height=68)
+               + line(first[1:], top=300, left=103, width=447)
+               + line(second, top=322, left=103 - offset, width=447 + offset)
+               + line(third, top=344, left=103 - offset, width=447 + offset))
+    jp, _, jd, _, _ = build(fixture(page(1, content)))
+    got = [text(l['html']) for l in jp[0]['lines']]
+    label = f'P1 first-line jitter {offset}px'
+    check(label + ' initial joins the first visual line', got[0] == first, repr(got))
+    check(label + ' second line retains its own text', got[1] == second, repr(got))
+    check(label + ' paragraph opens with When', '<p>' + first in jd, jd)
+
+exact_runs = [(100, 40, 100, 24, 36, 'Serif', 'W'),
+              (100, 14, 130, 420, 12, 'Serif', first[1:]),
+              (114, 14, 126, 424, 12, 'Serif', second),
+              (140, 14, 50, 500, 12, 'Serif', third)]
+exact_lines = P.lines_of(exact_runs)
+got = [text(l['html']) for l in exact_lines]
+check('P1 CodeRabbit exact geometry initial joins top=100',
+      got[0] == first and exact_lines[0]['c'] == 107, repr(got))
+check('P1 CodeRabbit exact geometry top=114 stays unchanged',
+      got[1] == second and exact_lines[1]['c'] == 121, repr(got))
+
+for cap, continuation, expected, glued in (
+    ('A ', 'long time ago, the passengers waited for the ship and',
+     'A long time ago, the passengers waited for the ship and', 'Along'),
+    ('I ', 'was born beside the harbour where the ships came in and',
+     'I was born beside the harbour where the ships came in and', 'Iwas'),
+    ('O ', 'happy day when the ship came into the harbour at last and',
+     'O happy day when the ship came into the harbour at last and', 'Ohappy'),
+    ('A', ' man walked down to the harbour to see the ship come in and',
+     'A man walked down to the harbour to see the ship come in and', 'Aman'),
+):
+    content = (DROP_FONTS + line(cap, top=298, width=40, font=5, height=44)
+               + line(continuation, top=300, left=89, width=461)
+               + line(second, top=322, left=89, width=461))
+    sp, _, sd, _, _ = build(fixture(page(1, content)))
+    label = f'P1 initial spacing {cap!r} + {continuation.split()[0]!r}'
+    check(label + ' line keeps the word space',
+          text(sp[0]['lines'][0]['html']) == expected, repr(sp[0]['lines'][0]['html']))
+    check(label + ' paragraph keeps the word space',
+          '<p>' + expected in sd and glued not in text(sd), sd)
+
+for variant in ('lower first run', 'small first run', 'small caps', 'raised superscript'):
+    opening = line(first[1:], top=300, left=89, width=461)
+    expected = first
+    if variant in ('lower first run', 'small first run'):
+        opening = (line('hen ', top=301, left=89, width=30,
+                        font=6 if variant == 'small first run' else 0,
+                        height=14 if variant == 'small first run' else 17)
+                   + line(first[5:], top=300, left=119, width=431))
+    elif variant == 'small caps':
+        opening = (line('hen the ', top=301, left=89, width=60, font=6, height=14)
+                   + line('SHIP', top=300, left=149, width=40, font=6, height=14)
+                   + line(first[13:], top=300, left=189, width=361))
+        expected = first.replace('ship', 'SHIP')
+    elif variant == 'raised superscript':
+        opening = (line(first[1:], top=300, left=89, width=445)
+                   + line('12', top=294, left=534, width=16, font=7, height=14))
+        expected += '12'
+    content = (DROP_FONTS + line('W', top=298, width=40, font=5, height=68)
+               + opening + line(second, top=322, left=89, width=461)
+               + line(third, top=344, left=89, width=461))
+    gp, _, gd, _, _ = build(fixture(page(1, content)))
+    got = [text(l['html']) for l in gp[0]['lines']]
+    check(f'GUARD first-line grouping {variant}',
+          got == [expected, second, third] and '<p>' + expected in gd,
+          repr(got) + '\n' + gd)
+
+
 print('\ndrop-cap text adjacency (post-Run review of PR #119)')
 divider_runs = [(100, 34, 50, 22, 30, 'S', 'A'),
                 (100, 14, 330, 200, 12, 'S', 'abacus, 12'),
