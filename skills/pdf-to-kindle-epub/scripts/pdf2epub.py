@@ -100,9 +100,10 @@ def lines_of(runs):
     """Cluster text runs into visual lines by vertical centre.
 
     Oversized single letters followed on their right by lowercase text are
-    removed first, then joined in left-to-right order to the line reached by
-    following their neighbours to a surviving run. Cyclic chains stay in the
-    clustering. Initial lines carry the caps' right/bottom extent so paragraph
+    removed first, then restored among the runs of the line reached by
+    following their neighbours to a surviving run, in left-to-right order.
+    Cyclic chains stay in the clustering. Initial lines carry the caps'
+    right/bottom extent so paragraph
     assembly can account for the inset of covered lines. Their height must not
     merge the body lines they cover. All other runs use the original centre
     clustering, which keeps small caps and raised runs with their text.
@@ -184,11 +185,11 @@ def lines_of(runs):
         # Flatten the decorative initial to the line's normal type and keep
         # the body's centre/height, maximum size and gaps. Even a short opening
         # stays prose, and subsequent covered lines retain their usual spacing.
-        prefix = [(runs[i][2], runs[i][3], ln['size'], runs[i][5], html.escape(caps[i][1]))
-                  for i in sorted(indices, key=lambda i: (runs[i][2], i))]
-        ln['runs'][:0] = prefix
-        ln['left'] = prefix[0][0]
-        ln['html'] = ''.join(r[4] for r in prefix) + ln['html']
+        letters = [(runs[i][2], runs[i][3], ln['size'], runs[i][5], html.escape(caps[i][1]))
+                   for i in sorted(indices, key=lambda i: (runs[i][2], i))]
+        ln['runs'] = sorted(ln['runs'] + letters, key=lambda r: r[0])
+        ln['left'] = ln['runs'][0][0]
+        ln['html'] = ''.join(r[4] for r in ln['runs'])
         ln['dropcap'] = (max(runs[i][2] + runs[i][3] for i in indices),
                          max(runs[i][0] + runs[i][1] for i in indices))
     return res
@@ -625,18 +626,12 @@ def build_html(pages, body, opt, h1s, h2s, vocab=frozenset(), hyphen_decisions=N
         for f in flows.values():
             f['base'] = None            # line positions are per page
 
-        # margins per flow: a page with both a quote and a footnote has two
-        # different left margins at the same font size
-        geo = {}
-        for k in ('body', 'quote', 'note'):
-            g = [l for l in p['lines'] if l['kind'] == k]
-            if g:
-                geo[k] = (collections.Counter(l['left'] for l in g).most_common(1)[0][0],
-                          max(l['right'] for l in g))
-
         # Text beside a drop cap is inset to make room for the letter, not to
-        # begin a paragraph. Use the initial's left for paragraph geometry
-        # until its bottom; leave line clustering and short-line breaks intact.
+        # begin a paragraph. Use the flow's margin for paragraph_left until
+        # the cap's bottom. Covered starts only vote for the margin if an
+        # ordinary line corroborates them, so an inset cannot set the margin
+        # and a hanging letter cannot outvote the body text it covers.
+        # Line clustering and short-line breaks retain their usual behaviour.
         paragraph_left = {}
         for initial in p['lines']:
             if 'dropcap' not in initial:
@@ -645,7 +640,24 @@ def build_html(pages, body, opt, h1s, h2s, vocab=frozenset(), hyphen_decisions=N
             for l in p['lines']:
                 if (initial['c'] < l['c'] and l['c'] - l['h'] / 2 < bottom
                         and l['left'] >= right - 2):
-                    paragraph_left[id(l)] = initial['left']
+                    paragraph_left[id(l)] = None
+
+        # margins per flow: a page with both a quote and a footnote has two
+        # different left margins at the same font size
+        geo = {}
+        for k in ('body', 'quote', 'note'):
+            g = [l for l in p['lines'] if l['kind'] == k]
+            if g:
+                ordinary = {l['left'] for l in g if id(l) not in paragraph_left
+                            and 'dropcap' not in l}
+                starts = [l['left'] for l in g
+                          if id(l) not in paragraph_left or l['left'] in ordinary]
+                starts = starts or [g[0]['left']]
+                geo[k] = (collections.Counter(starts).most_common(1)[0][0],
+                          max(l['right'] for l in g))
+                for l in g:
+                    if id(l) in paragraph_left:
+                        paragraph_left[id(l)] = geo[k][0]
 
         # Interleave figures by page position, then defer them if a paragraph
         # is still open. Keep imgs as filenames for the cover-duplicate rule.

@@ -572,6 +572,77 @@ except Exception as e:
     check('P1-B cyclic zero-width letters survive normal clustering without raising',
           False, f'{type(e).__name__}: {e}')
 
+print('\ndrop-cap continuity and reading order (PR #119 round 3)')
+for opt in (Opt(), Indent18()):
+    for layout, left, width, inset in (
+        ('margin', 50, 40, 89),
+        ('indented', 70, 40, 109),
+        ('hanging 10', 10, 38, 50),
+        ('hanging 30', 30, 18, 50),
+    ):
+        for covered in (2, 3):
+            expected = ['When the ship came in, everyone was ready.',
+                        'The harbour master stood beside the waiting vessel.']
+            if covered == 3:
+                expected.append('London Bridge was visible beyond the harbour gates.')
+            cap = line('W', top=298, left=left, width=width, font=5,
+                       height=44 if covered == 2 else 68)
+            rest = ''.join(line(t[1:] if i == 0 else t, top=300 + 22 * i,
+                                left=inset, width=550 - inset)
+                           for i, t in enumerate(expected))
+            first_uncovered = 'Everyone aboard could finally begin the journey home.'
+            final = 'The voyage ended.'
+            tail = (line(first_uncovered, top=300 + 22 * covered)
+                    + line(final, top=322 + 22 * covered, width=200))
+            # Two ordinary lines establish margin 50 independently of the cap.
+            anchor = (line('Ordinary prose establishes the body margin.', top=100)
+                      + line('This paragraph ends here.', top=122, width=200))
+            content = DROP_FONTS + anchor + cap + rest
+            _, _, cd, _, _ = build(fixture(page(1, content + tail)), opt)
+            label = f'{covered}-line {layout} initial indent={opt.indent}'
+            prefix = 'GUARD' if layout == 'margin' else 'P1-C'
+            got = re.findall(r'<p>(.*?)</p>', cd)
+            check(prefix + ' ' + label + ' continues through the first uncovered line',
+                  got[1:] == [' '.join(expected + [first_uncovered, final])], repr(got))
+
+            # The only ordinary margin line may be the first uncovered one.
+            _, _, cd, _, _ = build(fixture(page(1, DROP_FONTS + cap + rest
+                + line(first_uncovered, top=300 + 22 * covered))), opt)
+            got = re.findall(r'<p>(.*?)</p>', cd)
+            sparse_prefix = 'P1-C' if layout.startswith('hanging') else 'GUARD'
+            check(sparse_prefix + ' ' + label + ' needs no extra margin lines',
+                  got == [' '.join(expected + [first_uncovered])], repr(got))
+
+            next_p = 'Another paragraph begins after the covered lines.'
+            _, _, gd, _, _ = build(fixture(page(1, content
+                + line(next_p, top=300 + 22 * covered, left=75, width=475))), opt)
+            check('GUARD P1-C ' + label + ' immediate indent opens a paragraph',
+                  f'<p>{next_p}</p>' in gd, repr(re.findall(r'<p>.*?</p>', gd)))
+            for short_line in (0, covered - 1):
+                short_rest = ''.join(line(t[1:] if i == 0 else t, top=300 + 22 * i,
+                                         left=inset,
+                                         width=200 if i == short_line else 550 - inset)
+                                     for i, t in enumerate(expected))
+                _, _, gd, _, _ = build(fixture(page(1,
+                    DROP_FONTS + anchor + cap + short_rest + tail)), opt)
+                following = expected[short_line + 1] if short_line == 0 else first_uncovered
+                check('GUARD P1-C ' + label + f' short line {short_line + 1} ends a paragraph',
+                      f'<p>{following}' in gd, repr(re.findall(r'<p>.*?</p>', gd)))
+
+tracked = DROP_FONTS + ''.join(
+    line(letter, top=100, left=left, width=width, font=5, height=44)
+    for letter, left, width in (
+        ('A', 50, 30), ('r', 95, 30), ('t', 140, 30), ('e', 185, 30),
+        (' ', 215, 20), ('S', 240, 30), ('o', 285, 30), ('p', 330, 30), ('a', 375, 30)))
+tp, _, td, _, _ = build(fixture(page(1, tracked + BODY)))
+check('P1-D two chains on one visual line retain their text order',
+      text(tp[0]['lines'][0]['html']) == 'Arte Sopa',
+      repr(text(tp[0]['lines'][0]['html'])))
+tracked_heads = re.findall(r'<h[123]>(.*?)</h[123]>', td)
+check('P1-D two chains retain heading letter order',
+      [re.sub(r'\s+', '', text(h)) for h in tracked_heads] == ['ArteSopa'],
+      repr(tracked_heads))
+
 # Normal capitals, including a modestly larger one, retain their actual size.
 for size in (15, 17):
     normal = ('<fontspec id="5" size="' + str(size) + '" family="Serif"/>'
