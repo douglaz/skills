@@ -627,10 +627,12 @@ def build_html(pages, body, opt, h1s, h2s, vocab=frozenset(), hyphen_decisions=N
             f['base'] = None            # line positions are per page
 
         # Text beside a drop cap is inset to make room for the letter, not to
-        # begin a paragraph. Use the flow's margin for paragraph_left until
-        # the cap's bottom. Covered starts only vote for the margin if an
-        # ordinary line corroborates them, so an inset cannot set the margin
-        # and a hanging letter cannot outvote the body text it covers.
+        # begin a paragraph. A line is covered only if its centre is above
+        # the cap's bottom; a slight box overhang must not hide the next indent.
+        # Covered starts only vote for the margin if an ordinary line
+        # corroborates them. Initial lines retain their existing margin vote.
+        # After that vote, use the flow's margin for paragraph_left on both
+        # initial and covered lines, regardless of where the letter sits.
         # Line clustering and short-line breaks retain their usual behaviour.
         paragraph_left = {}
         for initial in p['lines']:
@@ -638,7 +640,7 @@ def build_html(pages, body, opt, h1s, h2s, vocab=frozenset(), hyphen_decisions=N
                 continue
             right, bottom = initial['dropcap']
             for l in p['lines']:
-                if (initial['c'] < l['c'] and l['c'] - l['h'] / 2 < bottom
+                if (initial['c'] < l['c'] < bottom
                         and l['left'] >= right - 2):
                     paragraph_left[id(l)] = None
 
@@ -656,7 +658,7 @@ def build_html(pages, body, opt, h1s, h2s, vocab=frozenset(), hyphen_decisions=N
                 geo[k] = (collections.Counter(starts).most_common(1)[0][0],
                           max(l['right'] for l in g))
                 for l in g:
-                    if id(l) in paragraph_left:
+                    if id(l) in paragraph_left or 'dropcap' in l:
                         paragraph_left[id(l)] = geo[k][0]
 
         # Interleave figures by page position, then defer them if a paragraph

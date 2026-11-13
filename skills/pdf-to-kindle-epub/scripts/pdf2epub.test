@@ -629,6 +629,68 @@ for opt in (Opt(), Indent18()):
                 check('GUARD P1-C ' + label + f' short line {short_line + 1} ends a paragraph',
                       f'<p>{following}' in gd, repr(re.findall(r'<p>.*?</p>', gd)))
 
+print('\ndrop-cap overhang and paragraph context (PR #119 round 4)')
+
+
+def cap_paragraphs(left, width, inset, covered, height, anchor_width):
+    anchor = (line('Ordinary prose establishes the body margin.', top=200)
+              + line('The preceding paragraph ends here.', top=222, width=anchor_width))
+    words = ['When the ship came in, everyone was ready for news.',
+             'The harbour master stood beside the long vessel there.',
+             'Everyone aboard watched the harbour gates.'][:covered]
+    cap = line('W', top=298, left=left, width=width, font=5, height=height)
+    rest = ''.join(line(t[1:] if i == 0 else t, top=300 + 22 * i,
+                        left=inset, width=550 - inset) for i, t in enumerate(words))
+    tail = (line('Another paragraph begins after the covered lines.',
+                 top=300 + 22 * covered, left=75, width=475)
+            + line('It ends here.', top=322 + 22 * covered, width=200))
+    _, _, cd, _, _ = build(fixture(page(1, DROP_FONTS + anchor + cap + rest + tail)),
+                          Indent18())
+    return re.findall(r'<p>(.*?)</p>', cd)
+
+
+for covered, height in ((2, 47), (3, 74)):
+    for layout, left, width, inset in (
+        ('margin', 50, 40, 89),
+        ('indented', 70, 40, 109),
+        ('hanging', 10, 38, 50),
+    ):
+        got = cap_paragraphs(left, width, inset, covered, height, 300)
+        prefix = 'P1-E' if layout == 'hanging' else 'GUARD P1-E'
+        check(f'{prefix} {covered}-line {layout} overhang preserves the next indent',
+              got[-1] == 'Another paragraph begins after the covered lines. It ends here.'
+              and len(got) == 3, repr(got))
+
+for covered in (2, 3):
+    for overhang, height in (('before', 44 if covered == 2 else 66),
+                            ('overhang', 47 if covered == 2 else 74)):
+        for ending, anchor_width in (('short', 300), ('flush right', 500)):
+            margin = cap_paragraphs(50, 40, 89, covered, height, anchor_width)
+            anchor = ('Ordinary prose establishes the body margin. '
+                      'The preceding paragraph ends here.')
+            cap_text = 'When the ship came in, everyone was ready for news. '
+            cap_text += 'The harbour master stood beside the long vessel there.'
+            if covered == 3:
+                cap_text += ' Everyone aboard watched the harbour gates.'
+            expected = ([anchor, cap_text] if ending == 'short'
+                        else [anchor + ' ' + cap_text])
+            expected.append('Another paragraph begins after the covered lines. It ends here.')
+            context = f'{covered}-line box={overhang} preceding={ending}'
+            check('GUARD P1-F margin ' + context + ' retains its paragraph structure',
+                  margin == expected, repr(margin))
+            for layout, left, width, inset in (
+                ('hanging 10', 10, 38, 50),
+                ('hanging 30', 30, 18, 50),
+                ('indented', 70, 40, 109),
+            ):
+                got = cap_paragraphs(left, width, inset, covered, height, anchor_width)
+                # With a short preceding paragraph, only a hanging cap with
+                # an overhanging box fails on 26df189; the others are guards.
+                guard = ending == 'short' and (overhang == 'before' or layout == 'indented')
+                prefix = 'GUARD P1-F' if guard else 'P1-F'
+                check(f'{prefix} {layout} {context} matches margin paragraphs',
+                      got == margin, f'got={got!r}; margin={margin!r}')
+
 tracked = DROP_FONTS + ''.join(
     line(letter, top=100, left=left, width=width, font=5, height=44)
     for letter, left, width in (
