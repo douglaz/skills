@@ -90,10 +90,14 @@ it to the live manager now, add it to the brief's "Owner decisions in force" so 
 inherits it, and save it to memory. If it replaces an older rule, it takes that rule's place and the
 old text goes to the log.
 
-**A wait.** The manager normally owns deterministic waits and already-authorized
-continuations within its phase. It returns a wait only when it cannot keep
-supervision alive, giving the job's unit, result paths and next action. You then
-own the fallback watcher (section 4). A required decision still ends the turn.
+**A wait.** A manager, subagent or sol, polls a wait it expects to end within about
+an hour in chunks of 270 seconds (4.5 minutes) or less. Each chunk is one bounded
+command that returns within 270 seconds; re-arm until the result arrives. Do not
+use one long command that sleeps internally in chunks without returning.
+For a longer wait, such as an rloop Run, the manager ends its turn and returns a
+wait naming the unit, out/err/exit paths and next action. It also returns a wait
+when it cannot keep supervision alive. The assistant watches it (section 4) and
+resumes the manager with the result. A required decision still ends the turn.
 A subagent manager uses no Monitor or background shell for job waits. It runs long jobs as units
 that write a result file and, if one is still running when its turn ends, returns a wait naming it.
 
@@ -187,9 +191,11 @@ if it did.
 
 ## 4. Watching long jobs
 
-- The phase's manager or its supervised launcher owns job waits, bot-state
-  collection and the next authorized step. Keep all gate, review and merge checks;
-  waiting grants no new authority. Return once for a decision or the completed phase.
+- The phase's manager or its supervised launcher collects bot state and takes the
+  next authorized step. The manager polls waits expected within about an hour as
+  section 2 says; it hands longer waits to the assistant, or returns a wait when
+  supervision cannot stay alive. Return for a required decision or a completed phase
+  too. Keep all gate, review and merge checks; waiting grants no new authority.
 - Independently watch the manager's exit so its death cannot strand a child job.
   If it exits with an unfinished job, take over the job's watcher and resume from
   the recorded state. Watch the child directly when the manager returns a wait.
@@ -204,21 +210,24 @@ if it did.
   turn and confirm it has exited before taking over unfinished jobs' watchers and
   resuming from recorded state. Never start a replacement while the old manager can
   still act.
-- Use one event-driven wait with a deadline for a terminal result or an action
-  someone must take. Avoid periodic assistant turns solely to re-arm a monitor.
-  If a watcher expires or dies, re-arm it or explicitly hand off supervision.
+- The assistant uses one event-driven wait on Runs, jobs, watchers and manager
+  units, with a deadline of at most 55 minutes (3300 seconds), for a terminal result
+  or an action someone must take. Re-arm on expiry; keep a wake-up that only re-arms
+  short. If a watcher expires or dies, re-arm it or explicitly hand off supervision.
   Read any supplied watch script before running it.
-- **Arm a wakeup past the usage-limit reset.** When a turn arrives with a "Usage limit reached" grace
-  notice, arm one wakeup that outlives the reset before you end the turn. This cheap poll is the one
-  exception to the notice's "don't start long work". Use a Bash `run_in_background` loop that polls
+- **Keep a wakeup armed through the usage-limit reset.** When a turn arrives with a "Usage limit reached"
+  grace notice, arm one wakeup before you end the turn. Each armed wait has a deadline of at most
+  55 minutes (3300 seconds). This cheap poll is the one exception to the notice's "don't start long
+  work". Use a Bash `run_in_background` loop that polls
   `env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW claude -p "/usage" </dev/null` every few minutes until its `Current session` line (the 5-hour
-  window, not the weekly ones) reads under 100% used, or use a scheduled wakeup. On Claude Code
-  2.1.293 that call exits 0 with the line on stdout and nothing on stderr, and it still answers while
-  the session is capped. Take the reading, not the advertised reset time, which has come back hours
-  early. A 30-minute Monitor or a 2-hour waiter can expire inside the limit, so re-arm the wakeup on
-  every expiry until the poll sees the drop. Stop re-arming six hours after the notice (one window
-  plus margin) and report the last reading. One night several sessions wrapped up under the notice
-  with nothing armed, and sat idle about 12 hours past the reset until the owner typed.
+  window, not the weekly ones) reads under 100% used or the wait's deadline arrives, or use a
+  scheduled wakeup. On Claude Code 2.1.293 that call exits 0 with the line on stdout and nothing on
+  stderr, and it still answers while the session is capped. Take the reading, not the advertised
+  reset time, which has come back hours early. An individual wait need not outlive the reset:
+  re-arm the wakeup on every expiry until the poll sees the drop. Stop re-arming six hours after
+  the notice (one window plus margin) and report the last reading. One night several sessions
+  wrapped up under the notice with nothing armed, and sat idle about 12 hours past the reset until
+  the owner typed.
 - **Every terminal state needs a line,** including "unit gone, no exit file". Silence is not success.
 - **Read the result from systemd when unsure.** If an exit file looks wrong, read the unit's result
   with `systemctl --user show <unit> -p LoadState -p Result -p ExecMainStatus` and from its `out`
@@ -288,9 +297,13 @@ systemd-run --user --unit=manager-$(basename $D) --collect --expand-environment=
 - **Clear:** section 3's "Clearing safely" steps; its step 3 is one new spawn turn with the same
   brief and the next task.
 - **Watch:** the assistant watches `$D/exit` and the silence trigger in section 4
-  with one watcher, and re-arms on expiry. The manager supervises its phase's job
-  waits within its own unit;
-  the assistant takes over unfinished jobs if that unit exits. `success exited 0` means `$D/report` holds the turn's last
+  with one watcher, using deadlines of at most 55 minutes (3300 seconds), and re-arms
+  on expiry. For waits expected within about an hour, the manager uses one bounded
+  command per chunk, returning within 270 seconds (4.5 minutes), and re-arms until
+  the result arrives. For a longer wait, such as an rloop Run, it ends its turn with
+  a wait naming the unit, out/err/exit paths and next action. The assistant watches
+  it and answers with a `resume` turn carrying the result. The assistant also takes
+  over unfinished jobs if the manager unit exits. `success exited 0` means `$D/report` holds the turn's last
   message, which is the manager's question, report or wait. Anything else: read `err` and the tail of
   `out`, and tell the owner. A fresh start prints `Reading additional input from stdin...` on `err`;
   that is normal, since a unit's stdin is already null. Stop a turn with
@@ -308,11 +321,12 @@ What differs from the subagent:
 - **No Skill, Agent or AskUserQuestion tools.** Codex uses a skill when the prompt or brief names
   it, from `~/.codex/skills`, where `install.sh` installs this repo's skills. For any other skill,
   including owner-only ones (section 5), give the path to its `SKILL.md`. Steps a skill runs as a
-  Claude subagent, such as panel readers, run as `env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW claude -p` or `codex exec -c model_reasoning_effort=high` commands instead.
+  Claude subagent, such as panel readers, run as `env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW CLAUDE_CODE_PROMPT_CACHE_TTL=5m claude -p` or `codex exec -c model_reasoning_effort=high` commands instead.
 - **No sandbox and no deny list.** The bypass flag is required, because sandboxed codex cannot reach
   the nix daemon socket and cannot run gates (rloop-spec `AGT-10`). The brief's hard safety lines are
   its only fence. The brief's other rules hold as written: one question per turn,
-  no owner-only skill on its own initiative, and supervised waits within the authorized phase.
+  no owner-only skill on its own initiative, and section 2's bounded waits and
+  longer-wait handoff within the authorized phase.
 
 Checked on codex-cli 0.164.0, 2026-10-25, with trivial prompts: a start and a resume turn, both run
 directly and as units like the one above, exited 0. Each resume reported the start's thread id and

@@ -32,7 +32,9 @@ different diffs.
 
 Every launch below removes `CLAUDE_CODE_AUTO_COMPACT_WINDOW` so the process uses its
 per-model automatic window even when the calling shell exports an interactive override.
-Keep that removal on probes and review calls alike.
+Keep that removal on probes and review calls alike. Every launch also sets
+`CLAUDE_CODE_PROMPT_CACHE_TTL=5m` because a one-off reader never returns after an hour.
+The supplied measurement checked this on Claude Code 2.1.321, 2026-11-14.
 
 **The Claude slot is a role, not a model.** Resolve which model fills it once per
 run, before the first pass, into `$CLAUDE_MODEL`; every invocation below uses that
@@ -83,7 +85,7 @@ _pj=$(mktemp) || { echo "cannot create the probe scratch file"; exit 1; }
 # an unconditional trap here would silently replace it and leak that file instead.
 for _m in $CLAUDE_MODEL_LADDER; do
   _rc=0
-  "$TO" --kill-after=15 90 env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW claude -p 'Reply with exactly: PANEL_OK' \
+  "$TO" --kill-after=15 90 env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW CLAUDE_CODE_PROMPT_CACHE_TTL=5m claude -p 'Reply with exactly: PANEL_OK' \
     --model "$_m" --output-format json \
     --tools "Read" --allowedTools "Read" --disallowedTools "Edit,Write,NotebookEdit" \
     </dev/null >"$_pj" 2>/dev/null || _rc=$?
@@ -360,7 +362,7 @@ RC_TIMEOUT=1500   # 25 min; a normal pass is 5-15
 CODEX_PID=$!
 
 "$TO" --kill-after=60 "$RC_TIMEOUT" \
-  env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW claude -p "$(cat "$CLAUDE_PROMPT_FILE")" \
+  env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW CLAUDE_CODE_PROMPT_CACHE_TTL=5m claude -p "$(cat "$CLAUDE_PROMPT_FILE")" \
   --model "$CLAUDE_MODEL" \
   --effort high \
   --output-format json \
@@ -899,7 +901,7 @@ files:
 [ -n "${CLAUDE_MODEL:-}" ] \
   || { echo "no Claude model for the consistency pass — use codex exec (below) or report it unrun"; exit 1; }
 "$TO" --kill-after=60 1500 \
-  env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW claude -p "$(cat "$REVIEW_DIR/claude-consistency-prompt.txt")" \
+  env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW CLAUDE_CODE_PROMPT_CACHE_TTL=5m claude -p "$(cat "$REVIEW_DIR/claude-consistency-prompt.txt")" \
   --model "$CLAUDE_MODEL" --effort high --output-format json \
   --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
   --disallowedTools "Edit,Write,NotebookEdit" \

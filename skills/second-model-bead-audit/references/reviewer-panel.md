@@ -205,7 +205,7 @@ if [ -n "$_CLAUDE_PROBE_TIMEOUT" ] \
     && CLAUDE_BIN=$(command -v claude); then
   for _m in $CLAUDE_MODEL_LADDER; do
     _rc=0
-    env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW \
+    env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW CLAUDE_CODE_PROMPT_CACHE_TTL=5m \
       "$_CLAUDE_PROBE_TIMEOUT" --kill-after=15 90 "$CLAUDE_BIN" -p 'Reply with exactly: PANEL_OK' \
       --model "$_m" --output-format json \
       --no-session-persistence --safe-mode --strict-mcp-config \
@@ -292,7 +292,7 @@ fi
 if $RUN_CLAUDE; then
   CLAUDE_BIN=$(command -v claude) || exit 1
   (
-    env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW \
+    env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW CLAUDE_CODE_PROMPT_CACHE_TTL=5m \
       "$TIMEOUT_TOOL" --kill-after=30s 900s "$CLAUDE_BIN" -p "$(<"$AUDIT_PROMPT_FILE")" \
       --model "$CLAUDE_MODEL" \
       --effort high \

@@ -369,7 +369,7 @@ else
   # the exact failure the wrapper was added to catch.
   CLAUDE_RC=0
   "$TO" --kill-after=60 1500 \
-    env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW claude -p "$(cat "$RD/prompt.txt")" \
+    env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW CLAUDE_CODE_PROMPT_CACHE_TTL=5m claude -p "$(cat "$RD/prompt.txt")" \
     --model "$CLAUDE_MODEL" --effort high --output-format json \
     --tools "Bash,Read,Glob,Grep" --allowedTools "Bash,Read,Glob,Grep" \
     --disallowedTools "Edit,Write,NotebookEdit" \
