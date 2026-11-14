@@ -210,13 +210,20 @@ grill through `grill-with-docs`, not bare `grilling`.
 
 ## Long waits
 
-Own deterministic waits and the next already-authorized step within this phase.
+Take the next already-authorized step within this phase. As a subagent or sol
+manager, poll waits expected to end within about an hour in chunks of 270 seconds
+(4.5 minutes) or less. Each chunk is one bounded command returning within 270 seconds;
+re-arm until the result arrives. Do not use one long command that sleeps internally
+in chunks without returning. For a longer wait, such as an rloop Run, end your turn
+with a wait naming the unit, out/err/exit paths and next action. The assistant watches
+it and resumes you with the result.
 Use a supervised unit or launcher and record the unit, out/err/exit paths and next
 action in `brief-log.md` so the assistant can recover if your turn exits. For PR bot rounds and CI,
 use `pr-with-codex-bot-review`'s `scripts/pr-watch <N>` on the PR's branch. Keep the
 existing safety, review, CI and merge gates; re-read the Merge lane before merging.
-Return for a decision or a completed phase. If you cannot keep supervision alive,
-return a wait with those paths and a watch command; the assistant takes over.
+Return for a required decision or a completed phase too. If you cannot keep supervision
+alive, return a wait with those paths and next action. Include a watch command on every
+wait handoff; the assistant takes over and resumes you with the result.
 As a subagent manager, run long jobs (`pr-watch` too) as units that write a result file, never
 behind a Monitor or background shell; if one is still running at turn end, return a wait naming it.
 
