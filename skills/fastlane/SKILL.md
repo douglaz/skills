@@ -46,8 +46,12 @@ The fast lane removes test gates, never safety gates.
 
 ## Roles
 
-- **Manager** runs the lane: an Opus subagent at effort high, a fresh one per phase (delegate-to-manager skill).
-  It writes task files, launches codex and the readers, judges findings, commits, deploys and runs the live test.
+- **Manager** runs the lane: an Opus subagent at effort high (delegate-to-manager skill). It writes task files,
+  launches codex and the readers, judges findings, commits, deploys and runs the live test.
+  - One manager runs the whole lane, every iteration until the live test is perfect. Each iteration continues what
+    the last one started, so the lane is one task with no boundary to clear at.
+  - Never replace it for context size. If it stops mid-lane, resume it; spawn one replacement only if the resume is
+    refused, and point it at the lane's state file.
 - **Assistant** (the main session) watches every wait and relays to the owner in one line per meaningful event.
   When delegated, the manager never runs its own monitor or sleep loop. It ends its turn with a wait command.
 - Without a manager (the owner asked the main session to do it directly), the session plays both roles.
