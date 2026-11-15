@@ -1,6 +1,10 @@
 # Context budget: how the numbers were checked
 
-Section 3's context budget rests on two observations from Claude Code 2.1.293. Both checks below read
+> **History.** Since 2026-11-15 section 3 no longer clears a manager because of its context size. The owner
+> limited replacements to task or milestone boundaries. The reading below is now information only, kept for cost
+> questions. The budget it once supported is gone.
+
+The former context budget rested on two observations from Claude Code 2.1.293. Both checks below read
 only metadata from local transcripts: usage counts, `compact_boundary` records, and the
 `<task-id>`/`<subagent_tokens>` tags of completion notifications. They print numbers, never message
 text.

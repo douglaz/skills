@@ -264,12 +264,12 @@ a defect found in review, each shown to go red against the real bug.
 
 ### delegate-to-manager
 
-Turns the main Claude Code session into the owner's assistant. A fresh background "manager"
-subagent does the repo work: grilling, triage, panels, rloop Runs, edits, reviews and PRs. The
+Turns the main Claude Code session into the owner's assistant. A background "manager" subagent,
+one per task, does the repo work: grilling, triage, panels, rloop Runs, edits, reviews and PRs. The
 assistant relays both ways and filters out mechanical noise. It answers a question itself only when a
 recorded decision already settles it, and says which one. Technical questions go to a reviewer panel
-before they reach the owner. The assistant watches long jobs and starts a clean manager at each phase
-boundary, and considers one at any return where the manager is over its context budget. The manager
+before they reach the owner. The assistant watches long jobs and starts a new manager only at a task or
+milestone boundary, never because of the manager's context size. The manager
 pushes and opens PRs without asking. On a greenfield or pre-production project
 draining beads, the assistant asks at the start of every session whether to run the drain lane; it
 stays off unless the owner says yes. In the lane the manager also works the bot rounds, merges once

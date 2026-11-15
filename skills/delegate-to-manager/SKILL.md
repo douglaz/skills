@@ -1,14 +1,14 @@
 ---
 name: delegate-to-manager
 description: >-
-  Act as the owner's assistant and run a project through a fresh "manager" subagent that does the
-  actual work: grilling, triage, panels, rloop Runs, spec edits, reviews and PRs. The assistant relays
-  in both directions, filters noise and mechanical detail, watches long jobs, and starts a clean
-  manager at each phase boundary. The owner keeps every real decision. Use this whenever the owner
-  says "be my assistant", "launch the manager", "delegate this", "spawn a manager", or "run the next
-  bead through a manager". Also use it when they want work driven "without filling my context" or say
-  their workflow is too repetitive to steer by hand, and when resuming a delegation that is already
-  running.
+  Act as the owner's assistant and run a project through a "manager" subagent that does the actual
+  work: grilling, triage, panels, rloop Runs, spec edits, reviews and PRs. The assistant relays in
+  both directions, filters noise and mechanical detail, watches long jobs, and starts a new manager
+  only at a task or milestone boundary, never for context size. The owner keeps every real decision.
+  Use this whenever the owner says "be my assistant", "launch the manager", "delegate this", "spawn a
+  manager", or "run the next bead through a manager". Also use it when they want work driven "without
+  filling my context" or say their workflow is too repetitive to steer by hand, and when resuming a
+  delegation that is already running.
 argument-hint: "[first task, e.g. 'triage the next bead']"
 ---
 
@@ -20,12 +20,13 @@ Three roles:
 |---|---|---|
 | **Owner** | the human | makes the decisions |
 | **Assistant** | you, the main session | keeps the brief, relays decisions, watches manager exits, decides boundaries, writes memory |
-| **Manager** | a fresh background subagent | all the repo work: reads, grills, triages, runs panels and rloop, edits, reviews, PRs |
+| **Manager** | a background subagent, one per task | all the repo work: reads, grills, triages, runs panels and rloop, edits, reviews, PRs |
 
-The point is context hygiene and less repetitive steering. Every phase starts in an empty manager
-context, so it reasons sharply. Your own context stays thin because file dumps, gate logs and
-skill bodies land in the manager's window, not yours. If you catch yourself reading spec files or
-running gates in the repo, stop and hand the work to the manager instead.
+The point is context hygiene and less repetitive steering. Every task starts in an empty manager
+context, so it reasons sharply, and inside a task the manager keeps what it has learned. Your own
+context stays thin because file dumps, gate logs and skill bodies land in the manager's window, not
+yours. If you catch yourself reading spec files or running gates in the repo, stop and hand the
+work to the manager instead.
 
 ## 1. Set up
 
@@ -108,38 +109,49 @@ short:
 - what to end its turn with;
 - what not to do, such as "don't merge" or "don't implement yet".
 
-## 3. Phase boundaries and returns
+## 3. Task boundaries and returns
 
-When a phase ends (triage done, Run done, review done, PR merged), decide continue or clear. If the
-owner uses the `ask-matt` skill, ask the manager to apply it. Have it read `ask-matt/SKILL.md` and its
-`PHASE-BOUNDARIES.md`, then answer in three lines or fewer: the boundary option, the next step, and
-anything the next manager needs that isn't already on the bead or branch.
+**Replace a manager only at a task or milestone boundary,** when no meaningful context needs to
+carry over. The owner, 2026-11-15: "we only do on task/milestomes boundaries. That means only when
+no meaningful context needs to carry over".
+- A task is the unit of work the owner asked for. Examples: a bead from triage to merged PR, a
+  spec change through its panel, a fast-lane loop until its live test is perfect.
+- Its phases are not boundaries: fix rounds, review rounds, deploys, live runs and PR bot rounds.
+  Each one continues what the last started, so the same manager carries them all.
 
-- **Continue:** keep sending messages to the same agent.
-- **Clear:** follow "Clearing safely" below: the brief's state section first, then a **new** Agent as in
-  section 1 step 3, with the same brief and the next task.
-- **Compact:** have the old manager write a summary file to your scratchpad, then spawn a new one
-  pointed at it.
-- When the answer is obvious (the manager is over its context budget and the next phase is
-  unrelated), skip the ask and tell the owner you skipped it.
+When a task or milestone ends (a bead merged, a Run accepted and its PR landed, the live test
+perfect), decide continue or clear. If the owner uses the `ask-matt` skill, ask the manager to apply
+it. Have it read `ask-matt/SKILL.md` and its `PHASE-BOUNDARIES.md`, then answer in three lines or
+fewer: the boundary option, the next step, and anything the next manager needs that isn't already
+on the bead or branch.
 
-**Context budget.** Every return (question, report or wait) is a continue-or-clear point, not only
-the end of a phase.
-- **Reading:** the notification that a manager's turn ended carries
-  `<usage><subagent_tokens>N</subagent_tokens>…`, and N is the manager's context at that return
-  ([references/context-budget-check.md](references/context-budget-check.md)). If a notification
-  lacks it, treat the reading as unavailable and say so. Don't estimate it from call or tool counts.
-  A sol manager (section 7) has no reading, so clear it at phase boundaries as before.
-- **Budget:** a subagent manager inherits your session's `CLAUDE_CODE_AUTO_COMPACT_WINDOW`. At 500000
-  or more, or unset, use a soft budget of 150k: the hard window is emergency headroom, not a target.
-  Auto-compaction fires about 33k below a configured window on 2.1.293 (150000 compacts near 117k),
-  so under a smaller window set the budget well below that trigger: about 90k for 150000.
-- **Over budget at a return:** clear by default, especially when the next step starts a new rloop Run,
-  panel sequence or PR bot cycle. Continue only when the next step is short and needs what the
-  manager holds, and say so in one line.
-- **What the budget can't do:** it acts only when a turn ends. Don't promise to stop a manager before
-  it compacts, don't add returns just to check its size, and never stop a turn or a job to clear. A
-  single long turn can grow past any budget.
+- **Continue:** keep sending messages to the same agent. This is the default at every return inside
+  a task.
+- **Clear:** only at a task or milestone boundary. Follow "Clearing safely" below: the brief's state
+  section first, then a **new** Agent as in section 1 step 3, with the same brief and the next task.
+- **Compact:** only at a boundary, when the next task needs a summary of this one. Have the old
+  manager write a summary file under `/var/tmp`, then spawn a new one pointed at it.
+- When the answer is obvious (the task ended and the next one is unrelated), skip the ask and tell
+  the owner you skipped it.
+
+**Context size is not a boundary.**
+- Never clear, compact or split a task across managers because of the manager's context size.
+- The `<usage><subagent_tokens>N</subagent_tokens>…` reading in a completion notification is
+  information only ([references/context-budget-check.md](references/context-budget-check.md)).
+  Report it when the owner asks about cost.
+- Near the hard window, auto-compaction does its job. Don't hand one task to "one step per manager"
+  to keep each small: the re-reading costs more than it saves, and the working context the next
+  step needs is lost.
+
+**A manager that stops mid-task** (a harness restart, a crash, a killed process):
+- Resume it with `SendMessage` first; its transcript keeps its context. For a sol manager, start a
+  `resume` turn on its thread (section 7).
+- If the resume is refused, spawn exactly one replacement. A subagent stopped by a harness restart
+  answers "was stopped and won't be resumed", so this is the usual case.
+- Point the replacement at the brief and the manager's state file, give it the whole remaining
+  task, and tell the owner in one line.
+- So the manager keeps a short state file current at each return. It is crash insurance, not a
+  handover routine.
 
 **Clearing safely.**
 1. The old manager's turn has ended and nothing can wake it: it has no background shell or Monitor
