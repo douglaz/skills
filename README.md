@@ -287,6 +287,25 @@ while you keep only the decisions. `references/manager-brief-template.md` is the
 manager reads first. It keeps memory reads per activity, because a manager that read everything up
 front used about 110k tokens before starting work.
 
+### fastlane
+
+Trades the full implement-and-review loop for speed. Instead of rloop Runs, the manager writes a
+short task file and calls codex (`gpt-6.1-sol` at `high`) directly. opus, astra and sol read the
+diff; fable is an optional fourth seat that nobody waits on. The manager judges the findings,
+commits, deploys and runs the live test: one full end-to-end journey through the deployed system,
+driven the way a real user would drive it. The loop repeats until the live test is perfect. Tests
+are neither run nor fixed until then; test-only findings go on a deferred list, which becomes the
+next task once the live test passes. For spec-only work there is no live test, and the lane is about
+writing the spec.
+
+```text
+/fastlane get the signup flow working live
+```
+
+Every codex run and reader is a capped `systemd-run --user` unit that writes an exit file.
+`scripts/wait.sh` waits on them with the usual 0/1/2/124 codes. `references/live-test-template.md`
+is where each project defines what its live test means.
+
 ### token-ledger
 
 Measures how many tokens a project consumed across Claude Code and Codex. It builds the figures from
@@ -500,6 +519,8 @@ directories created by `--migrate-existing`.
 - `python3`, poppler's `pdftohtml`, `pdftoppm` and `pdftotext`, and calibre's
   `ebook-convert` for `pdf-to-kindle-epub`; ImageMagick's `magick` is optional
   and shrinks images. Its offline test in `./check.sh` needs only `python3`
+- `codex` and `claude` on `PATH`, `systemd-run --user`, and GNU `timeout` for
+  `fastlane`
 
 ## License
 
