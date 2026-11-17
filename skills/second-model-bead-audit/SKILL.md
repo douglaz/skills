@@ -8,8 +8,8 @@ description: >-
   orchestrator merges and reconciles their findings into one verdict. Use after
   bead-polish-loop by default, or when the user asks to sanity-check, audit, get a
   second opinion on, or approve beads before implementation. Prefer read-only
-  review with only orchestrator follow-up comments and nit beads unless the
-  user explicitly asks for other bead edits.
+  review with only orchestrator follow-up beads and their backlink comments
+  unless the user explicitly asks for other bead edits.
 argument-hint: "[plan/spec path] [--reviewers codex|claude|codex,claude]"
 compatibility: >-
   Requires br, git, jq, and GNU timeout
@@ -34,15 +34,15 @@ prerequisite for choosing the reviewer.
 
 - Run this audit after every non-trivial `bead-polish-loop`, not only for
   high-stakes launches.
-- Keep reviewers read-only. The orchestrator may write only P2 comments on
-  affected beads, P3 `review-nit` beads and their one-line backlinks; no other
-  graph edits in normal mode. `bead-polish-loop` owns normal graph mutation.
+- Keep reviewers read-only. The orchestrator may write only P2
+  `review-followup` beads, P3 `review-nit` beads and their one-line backlinks; no
+  other graph edits in normal mode. `bead-polish-loop` owns normal graph mutation.
 - Run both reviewers independently and in parallel. Never seed one with the
   other's findings or with your own conclusions.
 - Treat panel findings as hypotheses to verify, not commands to obey.
 - Do not proceed to implementation on `FAIL` or `CONDITIONAL PASS`. Resolve and
   re-audit every accepted P0/P1 condition first. Substantive graph edits
-  invalidate the old verdict; the permitted follow-up comments and nit beads
+  invalidate the old verdict; the permitted follow-up beads and backlinks
   record the audit without requiring re-audit.
 
 The user may explicitly opt out for a tiny or low-risk graph. Record the skipped
@@ -200,7 +200,7 @@ Each reviewer must cite plan sections and bead IDs, propose bead-level remedies,
 and state `No findings.` explicitly when clean.
 
 Votes apply to the captured export and sources; later substantive graph or source edits require a new audit.
-The permitted follow-up comments and nit beads are audit metadata, not a new implementation baseline.
+The permitted follow-up beads and backlinks are audit metadata, not a new implementation baseline.
 Reject contradictory, truncated or failed reviewer output rather than treating it as a clean vote.
 
 ### 3. Merge and reconcile
@@ -231,11 +231,12 @@ audit judges the whole exported graph against the plan, so no P0/P1 in it is
 outside the work under review.
 
 At the finish, verify follow-ups still hold in the graph and repository with the
-work accepted, committed or not. A P2 NIT becomes a comment on each affected bead.
-A P3 NIT becomes one priority-3 `task` bead per distinct defect labelled
-`review-nit`, naming and linked `related` to the affected bead; add a one-line
-comment on each affected bead naming the nit bead ID. Never repair P2/P3 during
-this audit, even alongside a P0/P1 repair. Search open issues first; only the
+work accepted, committed or not. A P2 NIT becomes one priority-2 `task` bead per
+distinct defect labelled `review-followup`, and a P3 NIT one priority-3 `task`
+bead per distinct defect labelled `review-nit`; each names and is linked
+`related` to the affected bead. Add a one-line comment on each affected bead
+naming the follow-up bead ID. Never repair P2/P3 during this audit, even
+alongside a P0/P1 repair. Search open issues first; only the
 same defect at equal or higher priority becomes a comment on the existing
 issue. Each record includes evidence at the observed commit, Reviewers, severity
 and why not higher, smallest fix and verification, and source task/audit and bead
@@ -292,7 +293,7 @@ patching converges; rewriting it from the settled decisions is faster and leaves
 something an implementer can follow.
 
 Then re-run the panel. A coherence repair is a graph change like any other.
-P2/P3 coherence findings use the permitted follow-up comments/nit beads instead
+P2/P3 coherence findings use the permitted follow-up beads instead
 of repairs and do not trigger re-audit.
 
 **Why this is a phase and not advice.** Observed on a three-bead money-path set: four
@@ -317,9 +318,9 @@ owns the final verdict and must explain any departure from either vote.
 
 ### 5. Handoff and re-audit
 
-Normal mode reports findings and permits only the orchestrator's P2 comments,
-P3 nit beads and one-line backlinks described in § 3. It permits no other graph
-writes; reviewers are always read-only:
+Normal mode reports findings and permits only the orchestrator's P2
+`review-followup` beads, P3 `review-nit` beads and one-line backlinks described
+in § 3. It permits no other graph writes; reviewers are always read-only:
 
 - `PASS`: proceed to implementation.
 - `CONDITIONAL PASS` or `FAIL`: send accepted findings into

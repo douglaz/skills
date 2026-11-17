@@ -88,8 +88,9 @@ one line to `brief-log.md` and never edits the brief.
 
 **A new standing rule from the owner** (for example "always panel technical questions first"): send
 it to the live manager now, add it to the brief's "Owner decisions in force" so the next manager
-inherits it, and save it to memory. If it replaces an older rule, it takes that rule's place and the
-old text goes to the log.
+inherits it, and save it to memory. A rule about rating or fixing review findings goes in the brief's
+"Review findings" section instead, which no lane deletes. If it replaces an older rule, it takes that
+rule's place and the old text goes to the log.
 
 **A wait.** A manager, subagent or sol, polls a wait it expects to end within about
 an hour in chunks of 270 seconds (4.5 minutes) or less. Each chunk is one bounded

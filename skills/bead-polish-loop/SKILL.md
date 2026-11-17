@@ -183,8 +183,12 @@ After convergence:
      Rerun a healthy full panel, or obtain and record the user's explicit
      acceptance of the reduced review coverage.
    - `CONDITIONAL PASS`: add accepted conditions to the ledger, run a focused
-     polish round, and re-audit before any implementation starts.
+     polish round, and re-audit before any implementation starts. That round
+     fixes only the accepted P0/P1 conditions, rated on the
+     [shared rubric](../multi-reviewer-loop/references/disposition-rules.md#classification).
+     The audit's P2/P3 stay filed as follow-ups and never fold into it.
    - `FAIL`: reopen polishing, resolve blocking findings, and rerun the panel.
+     The audit's P2/P3 stay filed here too.
 4. Preserve the audit quality label. A qualified pass is not equivalent to a
    healthy full-panel pass, and a blocked audit has no launch verdict.
 

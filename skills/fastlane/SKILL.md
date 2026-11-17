@@ -108,7 +108,8 @@ Each iteration lives in `iN/`. The scripts are in `scripts/` next to this file. 
 3. **Review.**
    - Run `scripts/make-diff.sh <worktree> <base> iN/diff.patch`. It captures tracked changes plus new files, and
      prints the diff's sha.
-   - Write `iN/review-brief.md` from [references/prompts.md](references/prompts.md).
+   - Write `iN/review-brief.md` from [references/prompts.md](references/prompts.md). Keep its P0–P3 lines exactly
+     as the template has them, the owner's text: never add, drop or reword a clause for one change.
    - Run `scripts/review.sh <worktree> iN/review-brief.md iN/review <tag>` for opus, astra and sol. To add the
      optional seat, name all four: `scripts/review.sh <worktree> iN/review-brief.md iN/review <tag> opus astra sol fable`.
    - Wait only on the required seats: `scripts/wait.sh 3300 iN/review/opus iN/review/astra iN/review/sol`. Read
@@ -116,19 +117,32 @@ Each iteration lives in `iN/`. The scripts are in `scripts/` next to this file. 
    - On a re-review after a fix, the brief covers the delta and the earlier findings, not the whole change again.
 4. **Judge.** Read every finding against the code before believing it. Votes never outweigh a verified defect, and a
    unanimous finding can still be wrong.
+   - **Re-rate every finding yourself, every round.** A seat's tag is evidence, not a verdict. Lowering a P0/P1
+     needs file:line evidence; raising one to P0/P1 names the owner's clause, never a clause a brief added.
+   - **Before accepting a P0/P1 in code, check that it is reachable** in a supported case, on the path the live test
+     and the launch actually run. If it isn't, it is not a P0/P1; the launch line or code that shows it unreachable
+     is the lowering's evidence. Spec-only text has no such path: judge its findings against the scope's
+     requirements.
    - **Verified P0/P1 product defect the change introduces, or one that leaves the task unmet:** goes back to step 1
-     as a fix task, with a re-review of the delta. Any seat can raise one. An older P0/P1 outside the task goes to
+     as a fix task, with a re-review of the delta. Any seat can raise one. The fix task names the smallest change
+     that removes each P0/P1; anything beyond it is a follow-up. An older P0/P1 outside the task goes to
      `followups.md` as `review-preexisting` instead.
    - **Test-only finding:** a test unrun, a fixture broken, missing coverage, a check that "can't fail". Add it to
      `deferred-tests.md`; it is never a blocker here. Check first that it really is test-only. A test that fails
-     because the product misbehaves is a product defect.
-   - **P2/P3:** add it to `followups.md`, to be filed at the end (severity rule). Don't fix it now unless the live
-     test shows it.
+     because the product misbehaves is a product defect. This covers the suspended test suite only, not the
+     live-test driver or its checks.
+   - **P2/P3:** add it to `followups.md`, to be filed at the end (severity rule). Never fix it in this change, not
+     even beside a P0/P1 or on the same lines. If a later live run shows it, re-rate it in that iteration's
+     `judgement.md` with the run as evidence; it then enters the next task as a live failure.
+   - **A listed or filed follow-up** enters a task mid-lane only after a re-rating to P0/P1 recorded in
+     `judgement.md` with its clause and evidence, or when the owner names it.
    - **A seat that failed or hit a limit:** relaunch it once in a fresh directory and tag. If it fails again, go on
      only while at least two of opus, astra and sol answered, and name the missing seat in the report. With fewer
      than two, stop and report.
 
-   Write the calls to `iN/judgement.md`.
+   Write `iN/judgement.md` every round, one line per finding: every seat's tag, your rating, the file:line
+   evidence for a lowering or the clause for a raise, and where it went (fix task, `deferred-tests.md`,
+   `followups.md`, or rejected and why).
 5. **Commit.** Re-run `make-diff.sh` and confirm the sha matches the one the reviewers read. Then commit on the
    working branch with the project's author identity and public-text rules. Push only as the project's rule allows.
 6. **Deploy and live test.**
@@ -144,8 +158,17 @@ Each iteration lives in `iN/`. The scripts are in `scripts/` next to this file. 
 - the next run would pass a spending cap;
 - the live test can't run for a reason outside the code, such as a vendor being down or credentials expiring.
 
+Whatever ends the lane, a stop above or the owner lifting it, file `followups.md` under the severity rule before you
+report: each item that still holds at the committed tip.
+
 After the same live failure survives two fixes, revisit the diagnosis and report progress to the owner. Continue
 unless an authorised limit or an outside blocker prevents it.
+
+**Test tooling gets two review rounds** (owner, 2026-11-17). Test tooling is the project's own live-test driver,
+checkers, smoke, cleanup and gate scripts, and the lane's tools. After a tooling change's second review round,
+commit it, put every finding still open in `followups.md` (a P0/P1 at its own priority labelled
+`review-followup`), and let the live run judge the result. Only a finding that touches money, machine deletion or
+secrets, or a check that can pass when it should fail, still goes back for a fix and another round.
 
 **Time each live test.** The owner's iteration rule covers it. If a run goes over 20 minutes, first make it faster:
 reuse setup that isn't under test, and cut idle waits. If it's still over, halt before the next iteration and bring
@@ -169,7 +192,8 @@ the owner a proposal.
 2. File the follow-ups under the severity rule, deduped against open items:
    - P2 at priority 2, labelled `review-followup`;
    - P3 at priority 3, labelled `review-nit`;
-   - an older P0/P1 at its own priority, labelled `review-preexisting`.
+   - an older P0/P1 at its own priority, labelled `review-preexisting`, holding nothing;
+   - a P0/P1 the test-tooling cap left open, at its own priority, labelled `review-followup`.
 3. Bring the tests back. Unless the owner redirects, the suspension ends here, and `deferred-tests.md` becomes the
    next fast-lane task:
    - Codex updates the tests to the new behaviour, and the suite runs once, within the iteration-check limits.

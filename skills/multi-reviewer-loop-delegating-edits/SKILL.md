@@ -48,7 +48,9 @@ finding precisely enough for someone else to act on, which by itself kills the v
 **The split that works:**
 
 - **You adjudicate.** Verify each finding against source first. Never hand over a finding
-  you have not checked — you would be outsourcing the judgment, not the typing.
+  you have not checked — you would be outsourcing the judgment, not the typing. Hand
+  over only FIX findings, the introduced or brief-blocking P0/P1; never a P2/P3 or other
+  FILE item, even on the same lines.
 - **The implementer edits**, in a fresh context. A fresh context is also an *ignorant*
   one: everything it must not do has to be in the prompt, because none of it is in the
   air. Carry all of:
@@ -70,6 +72,8 @@ finding precisely enough for someone else to act on, which by itself kills the v
     genuinely require a lock, a validation, or a transaction; what is forbidden is
     anything beyond the finding. Scope conflicts come back to you to adjudicate, not
     resolved by the implementer.
+  - **Report other defects, don't fix them.** A defect it notices that is not on the
+    list goes in its report, even when it sits on the lines it is editing.
   - Plus your environment guards.
 - **Tool-managed state is delegable too — through the tool, never the file.** A ticket
   tracker or database whose on-disk form is a single JSONL line per record is corrupted by

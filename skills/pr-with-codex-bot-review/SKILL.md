@@ -530,6 +530,13 @@ brief unmet sends this PR back.
   holding this PR. File it after the merge with the other follow-ups.
 - **Introduced or brief-blocking P0/P1**: fix, regression-test, and push as below.
   Stop for a product or architecture decision if a safe fix needs one.
+- **A PR that changes only the project's own test tooling** (harnesses, drivers,
+  checkers, smoke, cleanup and gate scripts) gets at most two bot rounds (owner,
+  2026-11-17). A finding still open after the second goes in Follow-ups, a P0/P1
+  at its own priority labelled `review-followup`, and is answered and resolved
+  without a push. The exception is a finding that touches money, machine
+  deletion or secrets, or a check that can pass when it should fail: fix that one
+  as above.
 
 For each finding:
 
