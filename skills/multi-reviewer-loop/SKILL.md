@@ -166,6 +166,14 @@ issue, or a loop that is generating new findings as fast as it fixes them (each
 fix adds review surface). The last case is a cue to run a skeptical audit
 (§ 4a), not to keep spending passes.
 
+**A change to the project's own test tooling** (harnesses, drivers, checkers,
+smoke, cleanup and gate scripts) gets at most two review passes (owner,
+2026-11-17), whatever `MAX_PASSES` says. After pass 2, FILE every finding still
+open, a P0/P1 at its own priority labelled `review-followup`; if that filed a
+P0/P1, finish `ISSUES_REMAIN` and name each one. The exception is a finding
+that touches money, machine deletion or secrets, or a check that can pass when
+it should fail: fix that one and review it in a further pass.
+
 Two reviewers cost roughly twice as much per pass as one. That is the point —
 but if the user asks for a cheap check, `--reviewers codex` or
 `--reviewers claude` is the honest way to give it to them, not silently dropping

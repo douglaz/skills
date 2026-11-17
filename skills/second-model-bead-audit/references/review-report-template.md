@@ -38,7 +38,7 @@ Load this file when merging the panel's findings and writing the final verdict.
 - [P2 | P3][N1][BOTH | CODEX | CLAUDE] <finding>
   - Evidence:
   - Smallest fix and verification (follow-up only):
-  - Filed comment or nit bead ID and backlink:
+  - Filed follow-up bead ID and backlink:
 
 ## Coverage and scope notes
 - Missing or weakly represented plan elements
@@ -71,9 +71,10 @@ Load this file when merging the panel's findings and writing the final verdict.
 
 - **BLOCKER = P0**, **IMPORTANT = P1**, on the shared severity rubric. Every
   accepted P0/P1 holds launch, as before.
-- **NIT carries P2 or P3**. A P2 NIT becomes a comment on each affected bead;
-  a P3 NIT becomes a priority-3 `task` bead labelled `review-nit`, naming the
-  affected bead, with a one-line comment on that bead naming the nit bead ID.
+- **NIT carries P2 or P3**. A P2 NIT becomes a priority-2 `task` bead labelled
+  `review-followup`, and a P3 NIT a priority-3 `task` bead labelled
+  `review-nit`, each naming the affected bead, with a one-line comment on that
+  bead naming the follow-up bead ID.
   These are follow-ups, never repaired in this audit or alongside P0/P1 repairs.
 - The orchestrator re-rates every finding. Lowering P0/P1 needs a one-line reason
   with file:line evidence; raising to P0/P1 names the applicable clause.

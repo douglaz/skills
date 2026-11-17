@@ -137,9 +137,9 @@ BLOCKER = P0, IMPORTANT = P1; NIT carries P2 or P3.
 
 Verify before you claim; what you could not verify is a question, not a finding. A follow-up the brief already
 lists is not a finding again unless you rate it P0 or P1; say why.
-P2 NITs become orchestrator comments on affected beads. Each distinct P3 NIT
-becomes a priority-3 review-nit bead naming the affected bead, with a one-line
-backlink comment naming the nit bead ID. Reviewers only report; do not write.
+Each distinct P2 NIT becomes a priority-2 review-followup bead, and each distinct
+P3 NIT a priority-3 review-nit bead, naming the affected bead, with a one-line
+backlink comment naming the follow-up bead ID. Reviewers only report; do not write.
 FAIL means at least one P0 (BLOCKER). CONDITIONAL PASS means no P0 but at least
 one P1 (IMPORTANT). PASS means neither remains. These are reviewer votes; the
 orchestrator re-rates every finding.
@@ -519,7 +519,7 @@ fi
 
 Votes apply to the copied export and authority sources. Any subsequent
 substantive graph or source edit requires a new audit before implementation. Permitted
-orchestrator follow-up comments and nit beads are audit metadata and do not
+orchestrator follow-up beads and backlinks are audit metadata and do not
 require another audit.
 
 ## Recovery

@@ -54,15 +54,20 @@ live test passes, so don't ask for them.
 - The repository at `<worktree>` for context. Read the callers and siblings of changed code.
 - (Re-review) The earlier findings: `<path>`. Check whether each one is fixed, and look only at
   the new delta: `<path>`.
+- (Re-review) Follow-ups already listed: `<path to followups.md>`. Don't report one again unless
+  you rate it P0 or P1 and name the clause it meets.
 
 ## Report
 One finding per line, most severe first:
 `[P0|P1|P2|P3] [PRODUCT|TEST] file:line: claim`, then indented detail and evidence.
-- P0: money or data loss, a secret, security, core function broken.
-- P1: wrong behaviour in a supported case, or the task's goal not met.
-- P2: a real defect that doesn't block. P3: changes no behaviour.
+- P0: money or data loss, a secret, security, core function broken, or the brief fundamentally failed.
+- P1: blocks acceptance: wrong behaviour in a supported case, a brief requirement unmet, a check that cannot
+  fail, or a requirement made false. Any money, secret or data-loss defect on a reachable path is at least P1.
+- P2: a real defect that does not block.
+- P3: changes no behaviour, requirement or check.
 - TEST marks a finding about tests only (unrun, broken fixture, missing coverage). It's deferred,
-  not a blocker. Use PRODUCT for anything a real user could hit.
+  not a blocker. Use PRODUCT for anything a real user could hit. The live-test driver and its
+  checks aren't suspended tests: tag findings about them PRODUCT.
 - Before claiming behaviour in code the diff doesn't show, read that code and cite it. If you
   can't verify a claim, write it as a QUESTION.
 - Write exactly "No findings." if there are none.

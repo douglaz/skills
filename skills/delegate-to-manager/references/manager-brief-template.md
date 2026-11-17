@@ -1,8 +1,8 @@
 # Manager brief template
 
 Copy this to a `mktemp -d /var/tmp/<project>-manager-XXXXXX` folder as `manager-brief.md` and fill
-each `<…>`. Delete unused sections. Keep current scope, open defects, applicable
-owner decisions and hard safety lines; point to history only when relevant.
+each `<…>`. Delete unused sections, but never "Review findings". Keep current scope, open
+defects, applicable owner decisions and hard safety lines; point to history only when relevant.
 
 The brief says what holds now. `brief-log.md`, beside it, says what happened.
 - Only the assistant edits the brief. Managers append to the log when the assistant or this brief
@@ -164,6 +164,37 @@ smallest fix and verification, and source task/Run Directory. Use
 the repo's tracker; with no tracker list them in the report. Accepted suggestions
 are listed once in the report, not filed, unless judged P0–P3 defects. A safe
 P0/P1 fix needing a product or architecture decision remains a stop.
+
+## Review findings
+
+Keep this section in every brief, whatever the lane. It governs every review you run or judge: the review after a
+Run, fast-lane rounds, panels on a diff and PR bot rounds. The owner's scale, word for word:
+
+- P0: money or data loss, a secret, security, core function broken, or the brief fundamentally failed.
+- P1: blocks acceptance: wrong behaviour in a supported case, a brief requirement unmet, a check that cannot
+  fail, or a requirement made false. Any money, secret or data-loss defect on a reachable path is at least P1.
+- P2: a real defect that does not block.
+- P3: changes no behaviour, requirement or check.
+
+The judge re-rates; lowering a P0/P1 needs file:line evidence, and raising one to P0/P1 names the clause.
+
+- Every review brief you write carries those four lines unchanged. Never add, drop or reword a clause for one
+  change.
+- Re-rate every finding each round and record it: the reviewer's rating, yours, the file:line evidence for a
+  lowering and the clause for a raise. A raise names one of the owner's clauses above, never a clause a brief added.
+- Before accepting a P0/P1 in code, check that the defect is reachable in a supported case, on the path the
+  project actually launches. Spec text has no such path: judge its findings against the scope's requirements.
+- Only a P0/P1 the change introduces, or one that leaves the brief unmet, sends work back. Its fix is the smallest
+  change that removes it; anything beyond that is a follow-up.
+- Never fix a P2/P3 in the same change, not even beside a P0/P1, and never run a review round for them alone. File
+  them when the work ends, as the severity rule says: P2 at priority 2 labelled `review-followup`, P3 at priority 3
+  labelled `review-nit`, an older P0/P1 at its own priority labelled `review-preexisting`, holding nothing.
+- Don't work a follow-up mid-lane unless a re-rating to P0/P1 is recorded with its clause and evidence, or the
+  owner names it.
+- A change to the project's own test tooling (harnesses, drivers, checkers, smoke, cleanup and gate scripts) gets
+  at most two review rounds (owner, 2026-11-17; for an rloop Run, `--max-rounds 2`). Later findings become
+  follow-ups, a P0/P1 at its own priority labelled `review-followup`, except one that touches money, machine
+  deletion or secrets, or a check that can pass when it should fail: that one still goes back.
 
 ## Recovery
 
