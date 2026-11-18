@@ -1,0 +1,45 @@
+{
+  "skill_name": "browser-vm",
+  "_note": "These need a machine with nix, KVM and systemd-run --user, and network access. Eval 2 needs a human for the emailed code; run it attended.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Use our browser to open https://example.com, follow its one link, and tell me the title of the page you land on. Send me a screenshot too.",
+      "expected_output": "Checks the VM is up (starts it if not), opens the page in a tab, finds and clicks the link, reports the landing page's URL and title, and saves a screenshot it then views.",
+      "files": [],
+      "expectations": [
+        "scripts/browser-vm is used (status or up, then tab commands) rather than a browser on the host",
+        "The page is read (text or elements) before the click",
+        "The reported title and URL come from the tab after the click",
+        "A screenshot file is saved and opened with the Read tool",
+        "The tab opened for the task is closed at the end"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "log into the demo account at https://the-internet.herokuapp.com/login with our browser. the credentials are in the password manager under 'herokuapp demo'",
+      "expected_output": "Looks the item up in the password manager, fills the username, pipes the password over stdin, submits, confirms the secure-area page, and never prints the password.",
+      "files": [],
+      "expectations": [
+        "The password manager is searched for the item before the user is asked for credentials",
+        "The password reaches the page through --stdin, not as a command argument",
+        "The password is never echoed, printed or written to a file",
+        "Success is confirmed from the page after submitting (text or wait), not assumed",
+        "If the password manager is locked or the item is missing, the user is asked rather than a guess being typed"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "is the browser vm actually isolated from this machine? and can it get through the recaptcha on https://www.google.com/recaptcha/api2/demo",
+      "expected_output": "Runs isolation-check and quotes it, states the in-guest-firewall limit, then opens the demo, waits for the extension to solve the challenge, and reports whether a response token appeared and how long it took.",
+      "files": [],
+      "expectations": [
+        "isolation-check is run and its output is quoted, not paraphrased from the skill text",
+        "The answer states that the egress block is a firewall inside the guest, and names what the check does not test",
+        "The challenge is left to the extension: nothing is clicked inside the CAPTCHA frame",
+        "The result is taken from the response token's length, with a wait of up to two minutes",
+        "If no NopeCHA key is imported, the reply says so and asks for one instead of reporting a generic failure"
+      ]
+    }
+  ]
+}

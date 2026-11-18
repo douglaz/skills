@@ -1,0 +1,204 @@
+#!/usr/bin/env bash
+# browser-vm — run and drive Chromium inside an isolated NixOS QEMU VM.
+#
+#   browser-vm up              build (if needed), start the VM, open the CDP tunnel
+#   browser-vm down            close the tunnel and stop the VM (disk and profile are kept)
+#   browser-vm status          unit / ssh / CDP state, one line each; exit 0 only if all are up
+#   browser-vm ssh [CMD...]    run a command (or a shell) in the guest as user `browser`
+#   browser-vm tab ...         drive a tab; see `browser-vm tab help`
+#   browser-vm reset-profile   wipe the guest browser profile (cookies, logins, extension state)
+#   browser-vm nopecha-key     read a NopeCHA API key on stdin and import it into the extension
+#   browser-vm nopecha-key --check   say whether a key is stored, without revealing it
+#   browser-vm isolation-check prove from inside the guest what it can and cannot reach
+#   browser-vm destroy         stop the VM and delete its disk (the SSH key is kept)
+#
+# Environment:
+#   BROWSER_VM_STATE     state directory (default: $XDG_STATE_HOME/browser-vm, else ~/.local/state/browser-vm)
+#   BROWSER_VM_SSH_PORT  host port forwarded to the guest's sshd, bound to 127.0.0.1 (default 2422)
+#   BROWSER_VM_CDP_PORT  host port of the CDP tunnel, bound to 127.0.0.1 (default 9333)
+#   BROWSER_VM_UNIT      systemd user unit name (default browser-vm)
+#   BROWSER_VM_MEM       MemoryMax of the unit (default 6G; the guest itself has 4G)
+#   BROWSER_VM_BOOT_WAIT seconds to wait for the guest to answer (default 600)
+set -euo pipefail
+
+SELF_DIR=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+SKILL_DIR=$(dirname "$SELF_DIR")
+STATE=${BROWSER_VM_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/browser-vm}
+SSH_PORT=${BROWSER_VM_SSH_PORT:-2422}
+CDP_PORT=${BROWSER_VM_CDP_PORT:-9333}
+UNIT=${BROWSER_VM_UNIT:-browser-vm}
+MEM=${BROWSER_VM_MEM:-6G}
+BOOT_WAIT=${BROWSER_VM_BOOT_WAIT:-600}
+KEY=$STATE/id_ed25519
+CTL=$STATE/ssh-ctl
+export BROWSER_VM_STATE=$STATE BROWSER_VM_CDP_PORT=$CDP_PORT
+
+die() { echo "browser-vm: $*" >&2; exit 1; }
+need() { command -v "$1" >/dev/null 2>&1 || die "needs \`$1\` on PATH"; }
+usage() { awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"; }
+
+# Every connection to the guest uses exactly these options. The forwarding ones are pinned off
+# because the user's own ssh config still applies: a `Host *` with `ForwardAgent yes` would
+# otherwise hand the host's authentication agent to the guest.
+SSH_OPTS=(-i "$KEY" -p "$SSH_PORT" -o IdentitiesOnly=yes -o BatchMode=yes
+  -o ForwardAgent=no -o ForwardX11=no
+  -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$STATE/known_hosts"
+  -o ConnectTimeout=5 -o LogLevel=ERROR)
+ssh_base() { ssh "${SSH_OPTS[@]}" "$@"; }
+guest() { ssh_base browser@127.0.0.1 "$@"; }
+unit_active() { systemctl --user is-active --quiet "$UNIT"; }
+tunnel_up() { ssh_base -S "$CTL" -O check browser@127.0.0.1 >/dev/null 2>&1; }
+cdp_up() { curl -sf -m 3 "http://127.0.0.1:$CDP_PORT/json/version" >/dev/null 2>&1; }
+port_busy() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+
+open_tunnel() {
+  tunnel_up && return 0
+  rm -f "$CTL"
+  ssh_base -M -S "$CTL" -f -N -o ExitOnForwardFailure=yes \
+    -L "127.0.0.1:$CDP_PORT:127.0.0.1:9222" browser@127.0.0.1
+}
+close_tunnel() { ssh_base -S "$CTL" -O exit browser@127.0.0.1 >/dev/null 2>&1 || true; rm -f "$CTL"; }
+
+cmd_up() {
+  need nix; need ssh; need ssh-keygen; need systemd-run; need curl; need node
+  [ -w /dev/kvm ] || die "/dev/kvm is not writable: the VM needs KVM"
+  mkdir -p "$STATE" && chmod 700 "$STATE"
+  [ -f "$KEY" ] || ssh-keygen -q -t ed25519 -N '' -C browser-vm -f "$KEY"
+
+  if ! unit_active; then
+    # The flake is copied next to the public key so the store only ever sees the public half.
+    rm -rf "$STATE/flake" && mkdir -p "$STATE/flake" "$STATE/tmp"
+    cp "$SKILL_DIR"/vm/flake.nix "$SKILL_DIR"/vm/flake.lock "$SKILL_DIR"/vm/configuration.nix "$STATE/flake/"
+    cp "$KEY.pub" "$STATE/flake/authorized_key.pub"
+    echo "browser-vm: building the VM (first build downloads Chromium)..." >&2
+    vm=$(nix --extra-experimental-features 'nix-command flakes' build --no-link --print-out-paths \
+      "path:$STATE/flake" 2>"$STATE/build.err") || { tail -20 "$STATE/build.err" >&2; die "build failed; full log in $STATE/build.err"; }
+    if port_busy "$SSH_PORT"; then die "port $SSH_PORT is already in use; set BROWSER_VM_SSH_PORT"; fi
+    systemctl --user reset-failed "$UNIT" 2>/dev/null || true
+    systemd-run --user --unit="$UNIT" --collect --quiet \
+      --working-directory="$STATE" \
+      -E PATH="$PATH" -E NIX_DISK_IMAGE="$STATE/disk.qcow2" -E TMPDIR="$STATE/tmp" \
+      -E QEMU_NET_OPTS="hostfwd=tcp:127.0.0.1:$SSH_PORT-:22" \
+      -p KillMode=mixed -p MemoryMax="$MEM" -p MemorySwapMax=0 \
+      -p "StandardOutput=file:$STATE/console.log" -p "StandardError=file:$STATE/console.err" \
+      "$vm/bin/run-browser-vm-vm"
+    echo "browser-vm: booting (the first boot builds a store image and takes a few minutes)..." >&2
+  fi
+
+  local deadline=$((SECONDS + BOOT_WAIT))
+  until guest 'curl -sf -m 3 127.0.0.1:9222/json/version >/dev/null' 2>/dev/null; do
+    unit_active || { tail -5 "$STATE/console.err" >&2; die "the VM unit stopped; see $STATE/console.log"; }
+    [ "$SECONDS" -lt "$deadline" ] || die "the guest did not answer within ${BOOT_WAIT}s; see $STATE/console.log"
+    sleep 5
+  done
+  if ! tunnel_up && port_busy "$CDP_PORT"; then die "port $CDP_PORT is already in use; set BROWSER_VM_CDP_PORT"; fi
+  open_tunnel
+  cdp_up || die "tunnel opened but CDP does not answer on 127.0.0.1:$CDP_PORT"
+  echo "browser-vm: up. CDP at http://127.0.0.1:$CDP_PORT (state: $STATE)"
+}
+
+cmd_down() {
+  close_tunnel
+  systemctl --user stop "$UNIT" 2>/dev/null || true
+  echo "browser-vm: down (disk and profile kept in $STATE)"
+}
+
+cmd_status() {
+  local rc=0
+  if unit_active; then echo "unit:   active ($UNIT)"; else echo "unit:   inactive"; rc=1; fi
+  if [ "$rc" = 0 ] && guest true 2>/dev/null; then echo "ssh:    ok (127.0.0.1:$SSH_PORT)"; else echo "ssh:    no answer"; rc=1; fi
+  if cdp_up; then echo "cdp:    ok (http://127.0.0.1:$CDP_PORT)"; else echo "cdp:    no answer (run \`browser-vm up\`)"; rc=1; fi
+  return $rc
+}
+
+cmd_reset_profile() {
+  guest 'touch ~/reset-profile && kill "$(systemctl show -p MainPID --value chromium-cdp)"'
+  local i
+  for i in $(seq 1 30); do
+    sleep 2
+    if guest '[ ! -e ~/reset-profile ] && curl -sf -m 3 127.0.0.1:9222/json/version >/dev/null' 2>/dev/null; then
+      rm -rf "$STATE/tabs"
+      echo "browser-vm: profile wiped; logins and extension settings are gone"; return 0
+    fi
+  done
+  die "the browser did not come back after the reset"
+}
+
+cmd_nopecha_key() {
+  local key out
+  if [ "${1:-}" = --check ]; then exec node "$SELF_DIR/nopecha-status.mjs"; fi
+  IFS= read -r key || true
+  [ -n "$key" ] || die "nopecha-key reads the key from stdin, e.g.  <password-manager get command> | browser-vm nopecha-key"
+  # The key travels in the URL fragment, handed to the driver through the environment so it
+  # never appears in a process list. The tab is closed on every exit path: left open, its URL
+  # would still hold the key.
+  trap 'node "$SELF_DIR/tab.mjs" --tab nopecha-setup close >/dev/null 2>&1 || true' EXIT
+  BROWSER_VM_URL="https://nopecha.com/setup#$key" node "$SELF_DIR/tab.mjs" --tab nopecha-setup open >/dev/null \
+    || die "could not open the NopeCHA setup page"
+  sleep 4
+  out=$(node "$SELF_DIR/tab.mjs" --tab nopecha-setup text) || die "could not read the NopeCHA setup page"
+  case "$out" in
+    *"Imported settings"*) echo "browser-vm: NopeCHA key imported (stored in the guest profile only)" ;;
+    # The page's text is not echoed: it can repeat the key.
+    *) die "the extension did not confirm the import (is this the regular NopeCHA build, and is the key valid?)" ;;
+  esac
+}
+
+# Probes are TCP connects from inside the guest. Each "must be blocked" row targets a port that
+# is known to be listening: a throwaway listener this command starts on every host address for
+# the length of the check. A control row connects to the guest's own sshd, so a probe that could
+# only ever say "blocked" shows up as a failed control instead of a clean report.
+cmd_isolation_check() {
+  need node; need ip
+  local port addrs rows rc=0   # lpid is global: the EXIT trap reads it after this function returns
+  exec 3< <(node -e '
+    const s = require("net").createServer((c) => c.end()).listen(0, "0.0.0.0", () => console.log(s.address().port));
+    setTimeout(() => process.exit(0), 60000);')
+  lpid=$!
+  trap 'kill "$lpid" 2>/dev/null || true' EXIT
+  IFS= read -r port <&3 || die "could not start the probe listener"
+  (exec 4<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null || die "the probe listener on port $port does not answer on the host itself"
+  addrs=$(ip -4 -o addr show scope global | awk '{ split($4, a, "/"); print a[1] }')
+
+  rows=$(guest "PORT=$port ADDRS='$(echo $addrs)' bash -s" <<'GUEST'
+probe() { timeout 4 bash -c "exec 3<>/dev/tcp/$1/$2" 2>/dev/null && echo reachable || echo blocked; }
+row() { printf '%-46s %-10s (want %s)\n' "$1" "$2" "$3"; }
+row "control: guest's own sshd (127.0.0.1:22)" "$(probe 127.0.0.1 22)" reachable
+row "host loopback (10.0.2.2:$PORT, listening)" "$(probe 10.0.2.2 "$PORT")" blocked
+for a in $ADDRS; do row "host address ($a:$PORT, listening)" "$(probe "$a" "$PORT")" blocked; done
+row "public internet (example.com:443)" "$(probe example.com 443)" reachable
+shares=$(mount -t virtiofs,9p 2>/dev/null | awk '{ print $3 }' | xargs)
+row "host directories mounted in the guest" "${shares:-none}" none
+row "sudo in the guest" "$(command -v sudo >/dev/null && echo present || echo absent)" absent
+GUEST
+  ) || die "could not run the probes in the guest"
+  echo "$rows"
+  # A row passes when its observed value (second-to-last column group) equals the wanted one.
+  if echo "$rows" | awk '{ want = $NF; sub(/\)$/, "", want); got = $(NF - 2); if (got != want) bad = 1 } END { exit bad }'; then
+    echo "isolation-check: every row is as wanted"
+  else
+    echo "isolation-check: at least one row is NOT as wanted" >&2; rc=1
+  fi
+  return $rc
+}
+
+cmd_destroy() {
+  cmd_down >/dev/null
+  rm -rf "$STATE/disk.qcow2" "$STATE/tabs" "$STATE/known_hosts" "$STATE/tmp" "$STATE/flake"
+  echo "browser-vm: disk deleted; the next \`up\` starts from an empty machine"
+}
+
+case "${1:-}" in
+  up) cmd_up ;;
+  down) cmd_down ;;
+  status) cmd_status ;;
+  ssh) shift; guest "$@" ;;
+  tab) shift; need node; exec node "$SELF_DIR/tab.mjs" "$@" ;;
+  reset-profile) cmd_reset_profile ;;
+  nopecha-key) shift; cmd_nopecha_key "$@" ;;
+  isolation-check) cmd_isolation_check ;;
+  destroy) cmd_destroy ;;
+  __ssh-options) printf '%s\n' "${SSH_OPTS[@]}" ;;   # for browser-vm.test
+  -h|--help|help) usage ;;
+  *) usage >&2; exit 2 ;;
+esac

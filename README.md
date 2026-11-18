@@ -149,6 +149,33 @@ Codex:
 Use the copa-booking skill to start a Copa booking ASU-PTY Dec 12-19 with a checked bag.
 ```
 
+### browser-vm
+
+Opens, reads, logs into and clicks through web pages in a real Chromium that
+runs inside an isolated NixOS virtual machine, driven from the host over the
+DevTools protocol. `vm/` holds the machine's NixOS configuration: one
+unprivileged user, no route to the host's loopback, the LAN or overlay
+networks, its own Nix store image, and the browser's debug port reachable only
+through an SSH tunnel on `127.0.0.1`. `scripts/browser-vm` builds and starts it
+as a memory-capped `systemd-run --user` unit and drives tabs (`open`, `text`,
+`elements`, `fill`, `click`, `wait`, `shot`); secrets go to the page over stdin,
+piped from the user's password manager. Logins persist in the VM's profile.
+The NopeCHA extension is loaded for reCAPTCHA-style challenges and takes its
+API key at runtime. `isolation-check` prints what the guest can and cannot
+reach.
+
+Claude Code:
+
+```text
+/browser-vm log into the staging dashboard with the account in the password manager and screenshot the usage page
+```
+
+Codex:
+
+```text
+Use the browser-vm skill to open https://example.com/pricing and tell me what the Team plan costs.
+```
+
 ### plan-to-beads-transfer
 
 Translates a stable spec, PRD, or markdown plan into actual `br` beads with
@@ -516,6 +543,9 @@ directories created by `--migrate-existing`.
   window, `node`, and `playwright-core` (found via `require`, or from gstack's
   bundled copy) for `copa-booking`; `node` is also needed by `./check.sh`,
   which runs `copa-booking`'s offline test
+- `nix` with flakes, KVM (`/dev/kvm`), `systemd-run --user`, `ssh`, `curl` and
+  `node` 22 or newer for `browser-vm`; its offline test in `./check.sh` needs
+  only `bash` and `node`
 - `python3`, poppler's `pdftohtml`, `pdftoppm` and `pdftotext`, and calibre's
   `ebook-convert` for `pdf-to-kindle-epub`; ImageMagick's `magick` is optional
   and shrinks images. Its offline test in `./check.sh` needs only `python3`

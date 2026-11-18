@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# browser-vm.test — offline checks: syntax, usage errors and the no-browser path of the CLI and
+# the tab driver. Starts no VM and opens no network connection beyond a refused loopback port.
+# Usage: ./skills/browser-vm/scripts/browser-vm.test   (exits 0 if all pass)
+set -euo pipefail
+cd "$(dirname "$0")"
+command -v node >/dev/null 2>&1 || { echo "browser-vm.test needs node on PATH (the tab driver's runtime, see README prerequisites)"; exit 1; }
+fail=0; n=0
+check() { n=$((n+1)); if "$@"; then echo "  ok   $desc"; else echo "  FAIL $desc"; fail=1; fi; }
+out=$(mktemp); state=$(mktemp -d); trap 'rm -rf "$out" "$state"' EXIT
+# A port nothing listens on and an empty state directory: no call below can reach a real VM.
+export BROWSER_VM_CDP_PORT=1 BROWSER_VM_STATE="$state"
+
+desc="browser-vm parses as bash"
+check bash -n browser-vm
+desc="tab.mjs parses as JavaScript"
+check node --check tab.mjs
+
+./browser-vm help >"$out" 2>&1 && rc=0 || rc=$?
+desc="browser-vm help exits 0 and lists every subcommand"
+check test "$rc" -eq 0
+for sub in up down status ssh tab reset-profile nopecha-key isolation-check destroy; do
+  desc="  help names \`$sub\`"
+  check grep -qE "^ +browser-vm $sub( |\$)" "$out"
+done
+desc="the usage block stops before the code (no 'set -euo' line leaks into help)"
+check test "$(grep -c 'set -euo' "$out")" -eq 0
+
+./browser-vm frobnicate >"$out" 2>&1 && rc=0 || rc=$?
+desc="an unknown subcommand exits 2"
+check test "$rc" -eq 2
+
+node tab.mjs help >"$out" 2>&1 && rc=0 || rc=$?
+desc="tab help exits 0 and stops before the code"
+check test "$rc" -eq 0
+check test "$(grep -c '^import ' "$out")" -eq 0
+for c in open goto url text elements eval click fill type key wait shot tabs close; do
+  desc="  tab help names \`$c\`"
+  check grep -qE "^  $c( |\$)" "$out"
+done
+
+usage_rc() { node tab.mjs "$@" >"$out" 2>&1 && rc=0 || rc=$?; test "$rc" -eq 2; }
+desc="tab: unknown command is a usage error"
+check usage_rc bogus
+desc="tab: click without a target is a usage error"
+check usage_rc click
+desc="tab: fill without text or --stdin is a usage error"
+check usage_rc fill 'input[name=q]'
+desc="tab: type without text or --stdin is a usage error"
+check usage_rc type
+desc="tab: an unknown key name is a usage error"
+check usage_rc key F13
+desc="tab: a tab name with a slash is rejected (it becomes a file name)"
+check usage_rc --tab ../x url
+
+node tab.mjs open https://example.com >"$out" 2>&1 && rc=0 || rc=$?
+desc="tab: with no browser listening, open exits 1 and says to run \`browser-vm up\`"
+check test "$rc" -eq 1
+check grep -qF 'browser-vm up' "$out"
+node tab.mjs url >"$out" 2>&1 && rc=0 || rc=$?
+desc="tab: with no tab opened yet, url exits 1 and says how to open one"
+check test "$rc" -eq 1
+check grep -qF 'open URL' "$out"
+
+echo fake-key-123 | ./browser-vm nopecha-key >"$out" 2>&1 && rc=0 || rc=$?
+desc="nopecha-key that cannot open its page exits 1, leaves no setup tab behind and never echoes the key"
+check test "$rc" -eq 1
+check test ! -e "$state/tabs/nopecha-setup"
+check test "$(grep -c 'fake-key-123' "$out")" -eq 0
+
+desc="the guest shares no host directory (qemu-vm.nix's writable defaults are cleared)"
+check grep -qF 'sharedDirectories = lib.mkForce { };' ../vm/configuration.nix
+
+echo | ./browser-vm nopecha-key >"$out" 2>&1 && rc=0 || rc=$?
+desc="nopecha-key with an empty stdin exits 1 before touching the browser"
+check test "$rc" -eq 1
+check grep -qF 'reads the key from stdin' "$out"
+
+./browser-vm nopecha-key --check >"$out" 2>&1 && rc=0 || rc=$?
+desc="nopecha-key --check with no browser exits 1 and never prints 'key: set'"
+check test "$rc" -eq 1
+check test "$(grep -c '^key: ' "$out")" -eq 0
+desc="nopecha-status.mjs parses as JavaScript"
+check node --check nopecha-status.mjs
+
+# The user's ssh config still applies to the script's connections, so a `Host *` that forwards
+# the agent or X11 must be overridden by the script's own options. `ssh -G` prints the effective
+# configuration without connecting.
+if command -v ssh >/dev/null 2>&1; then
+  cfg=$(mktemp); printf 'Host *\n  ForwardAgent yes\n  ForwardX11 yes\n' >"$cfg"
+  mapfile -t opts < <(./browser-vm __ssh-options)
+  ssh -F "$cfg" -G browser@127.0.0.1 >"$out" 2>&1 || true
+  desc="control: without the script's options that config does forward the agent"
+  check grep -qx 'forwardagent yes' "$out"
+  ssh -F "$cfg" "${opts[@]}" -G browser@127.0.0.1 >"$out" 2>&1 || true
+  desc="with the script's options the agent is not forwarded to the guest"
+  check grep -qx 'forwardagent no' "$out"
+  desc="with the script's options X11 is not forwarded to the guest"
+  check grep -qx 'forwardx11 no' "$out"
+  rm -f "$cfg"
+else
+  echo "  FAIL ssh is not on PATH: the forwarding checks cannot run"; fail=1
+fi
+
+desc="the browser unit requires the guest firewall, so it cannot start unfiltered"
+check grep -qF 'requires = [ "firewall.service" ];' ../vm/configuration.nix
+
+desc="the VM config pins the extension by hash and keeps the private key out of the flake"
+check grep -qE 'sha256 = "[0-9a-f]{64}"' ../vm/configuration.nix
+check test ! -e ../vm/authorized_key.pub
+
+echo "browser-vm.test: $n checks, $([ $fail -eq 0 ] && echo all passed || echo FAILURES)"
+exit $fail
