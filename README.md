@@ -162,7 +162,9 @@ as a memory-capped `systemd-run --user` unit and drives tabs (`open`, `text`,
 piped from the user's password manager. Logins persist in the VM's profile.
 The NopeCHA extension is loaded for reCAPTCHA-style challenges and takes its
 API key at runtime. `isolation-check` prints what the guest can and cannot
-reach.
+reach. Optionally, `vpn set` takes a WireGuard config on stdin and the guest
+then sends all its traffic through that tunnel, staying offline if the tunnel
+cannot be set up.
 
 Claude Code:
 

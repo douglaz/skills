@@ -189,6 +189,39 @@ account at risk. Use it where the user asked for automation. Where a
 site-specific skill or the user says a challenge is theirs to solve by hand,
 that instruction wins.
 
+## VPN (optional)
+
+By default the guest reaches the internet from the host's own connection. When
+the user asks for the browser to go through a VPN, or to appear from another
+place, give the VM a WireGuard config. Do not set one up unasked.
+
+```bash
+<password-manager command that prints the WireGuard config> | $B vpn set
+$B down && $B up          # the setting applies when the VM starts
+$B vpn status             # configured / running / the guest's public address and country
+```
+
+`vpn set` takes a standard WireGuard config file (the kind a provider lets you
+download) on stdin; it holds a private key, so pipe it and never print it. The
+config must give an IPv4 `Address`, an IPv4 `DNS` server and an `Endpoint`
+written as an IP address and port. The copy is kept on the host in the state
+directory (mode 600), outside the Nix store, and reaches the guest as a
+credential only root there can read, so pages and extensions cannot get at the
+key.
+
+With a tunnel set, all of the guest's traffic takes it, DNS and WebRTC
+included, and nothing else is allowed out: if the tunnel cannot be set up, the
+guest stays offline, the browser does not start and `up` fails saying so. The
+blocked ranges still apply inside the tunnel. `vpn status` exits 0 only when
+what is configured is what is running and, with a tunnel, the guest's public
+address differs from the host's; quote its output when you report that the VPN
+is on. `$B vpn clear`, then `down` and `up`, returns to a direct connection.
+The setting survives `down` and `destroy`.
+
+Restarting the VM closes every tab, so check with the user first when other
+work may be using it. Logins are kept, but a site can ask for a fresh sign-in
+when the address changes country.
+
 ## Resetting
 
 - `$B reset-profile` wipes cookies, logins and extension settings and restarts
