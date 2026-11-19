@@ -585,6 +585,43 @@ for probe_case in success failed error malformed; do
   if [[ $rc -eq 0 ]]; then pass "$t"; else fail "$t" "exit $rc: $(<"$b/err")"; fi
 done
 
+# With no pin, the default ladder is opus alone: fable is never probed, not even as a
+# fallback when opus fails (owner, 2026-11-19: fable runs only when a caller names it).
+cat >"$b/bin/claude" <<'PROBE_STUB'
+#!/bin/sh
+while [ $# -gt 0 ]; do
+  if [ "$1" = --model ]; then printf '%s\n' "$2" >>"$PROBE_LOG"; fi
+  shift
+done
+printf '%s\n' "$PROBE_REPLY"
+exit "$PROBE_RC"
+PROBE_STUB
+for probe_case in success failed; do
+  probe_rc=0; [[ $probe_case == failed ]] && probe_rc=9
+  : >"$b/probe.log"
+  (
+    set -euo pipefail
+    unset CLAUDE_REVIEWER_MODELS
+    export PATH="$b/bin:$PATH" PROBE_REPLY='{"is_error":false,"result":"PANEL_OK"}' \
+      PROBE_RC="$probe_rc" PROBE_LOG="$b/probe.log"
+    AUDIT_DIR=$b
+    source "$b/probe.bash"
+    [[ $probe_case == success && $CLAUDE_MODEL == opus || $probe_case == failed && -z $CLAUDE_MODEL ]]
+    [[ $(<"$PROBE_LOG") == opus ]]
+  ) >"$b/out" 2>"$b/err"; rc=$?
+  t="reviewer probe default ladder is opus alone: $probe_case"
+  if [[ $rc -eq 0 ]]; then pass "$t"; else fail "$t" "exit $rc, probed: $(<"$b/probe.log")"; fi
+done
+
+t='both reviewer panels default the Claude ladder to opus alone'
+ladder_line='CLAUDE_MODEL_LADDER="${CLAUDE_REVIEWER_MODELS:-opus}"'
+if grep -qxF -- "$ladder_line" "$panel" \
+   && grep -qxF -- "$ladder_line" "$HERE/skills/multi-reviewer-loop/references/reviewer-panel.md"; then
+  pass "$t"
+else
+  fail "$t" 'a reviewer-panel.md default ladder is not opus alone'
+fi
+
 awk '/^CLAUDE_DENIALS=$/ { code=1 } code && /^```$/ { exit } code { print }' \
   "$panel" >"$b/denials.bash"
 t='reviewer denied inspection is a failed seat'

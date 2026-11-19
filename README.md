@@ -43,7 +43,7 @@ Runs an iterative multi-reviewer review/fix/re-review loop on your current branc
 
 Two reviewers with different scopes — codex sees the diff, the Claude reviewer reads out into the repo — catch more than either alone, and their disagreements are the highest-signal moments in the loop. P0/P1 repairs both raise get fixed first; a finding only one raises still gets the full evidence bar, because the other reviewer's silence is not counter-evidence. If one reviewer is unavailable the loop runs degraded and says so; it never reports a one-reviewer pass as clean.
 
-The Claude slot is a role, not a model: a bounded probe picks the first reachable model down a ladder (`fable`, then `opus`) before the first pass, because a model you cannot reach *hangs* rather than erroring — the bounded probe had to kill it at 90 seconds, and an unbounded call in the same state was still running eight minutes later — and discovering that inside a real pass costs the whole 25-minute reviewer timeout. A pin replaces the ladder rather than heading it, so a model you name by hand fails rather than being silently substituted. A fallback is a full panel with a substitute, not a degraded one, and every report names the model that actually ran.
+The Claude slot is a role, not a model: a bounded probe picks the first reachable model down a ladder (by default `opus` alone; fable runs only when a caller names it) before the first pass, because a model you cannot reach *hangs* rather than erroring — the bounded probe had to kill it at 90 seconds, and an unbounded call in the same state was still running eight minutes later — and discovering that inside a real pass costs the whole 25-minute reviewer timeout. A pin replaces the ladder rather than heading it, so a model you name by hand fails rather than being silently substituted. A fallback is a full panel with a substitute, not a degraded one, and every report names the model that actually ran.
 
 Best fit: Claude Code explicit invocation. This skill shells out to both `codex`
 and `claude` and is most natural when run as a slash command from Claude Code.
@@ -291,7 +291,7 @@ a defect found in review, each shown to go red against the real bug.
 
 ### delegate-to-manager
 
-Turns the main Claude Code session into the owner's assistant. A background "manager" subagent,
+Turns the main Claude Code session into the owner's assistant, which runs on Fable. A background "manager" subagent,
 one per task, does the repo work: grilling, triage, panels, rloop Runs, edits, reviews and PRs. The
 assistant relays both ways and filters out mechanical noise. It answers a question itself only when a
 recorded decision already settles it, and says which one. Technical questions go to a reviewer panel

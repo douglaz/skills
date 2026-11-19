@@ -52,7 +52,8 @@ independent audit.
 ## Inputs
 
 Parse `--reviewers <list>` first. Valid values are `codex`, `claude`, and
-`codex,claude`; the default is both. A model name (`fable`, `opus`) is accepted
+`codex,claude`; the default is both. The Claude slot's default ladder is `opus` alone;
+fable runs only when named. A model name (`fable`, `opus`) is accepted
 where the slot name goes and pins that model instead of running the ladder. A
 user-pinned one-reviewer audit is a
 `PINNED PANEL`, not an availability failure, but it still lacks full-panel
@@ -115,9 +116,9 @@ panel is still stronger than guessing which single auditor to invoke.
 
 **The label is relative to the graph's builder, and a fallback does not change who
 that was.** The ladder stays inside the Claude family, so on a *Claude-built* graph a
-`fable`→`opus` substitution was `BUILDER-LINEAGE` before and stays `BUILDER-LINEAGE`;
-on a *Codex-built* graph the Claude auditor is `INDEPENDENT` whichever rung it landed
-on. Do not downgrade it for matching the **coordinator** — the coordinator did not
+`fable`→`opus` substitution on a caller-named ladder was `BUILDER-LINEAGE` before and
+stays `BUILDER-LINEAGE`; on a *Codex-built* graph the Claude auditor is `INDEPENDENT`
+whichever rung it landed on. Do not downgrade it for matching the **coordinator** — the coordinator did not
 build the graph, and on a Codex-built graph that downgrade would strip the label from
 the one reviewer actually supplying the independent vote while leaving it on Codex,
 which is the reviewer sharing lineage with the builder.

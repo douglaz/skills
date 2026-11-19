@@ -285,7 +285,8 @@ CLAUDE_MODEL=$(bash probe.sh) || CLAUDE_MODEL=""
 
 **The `>&2` is the load-bearing part.** Every progress line in that block is a plain
 `echo`, i.e. stdout, so without it the command substitution captures the diagnostics
-*as the model name*. Both failure modes are silent: on a successful fallback
+*as the model name*. Both failure modes are silent: on a successful fallback down a
+named ladder such as `CLAUDE_REVIEWER_MODELS='fable opus'`
 `--model` receives `"claude reviewer: 'fable' did not answer (exit 124)⏎claude
 reviewer: using opus⏎opus"` and the call dies in argument parsing; on an exhausted
 ladder the block still exits 0 and still prints `no ladder candidate answered — …`,

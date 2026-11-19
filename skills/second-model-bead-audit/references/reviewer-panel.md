@@ -191,7 +191,7 @@ Probe only the requested slot; a model pin replaces the ladder.
 
 ```bash
 CLAUDE_MODEL=""
-CLAUDE_MODEL_LADDER="${CLAUDE_REVIEWER_MODELS:-fable opus}"
+CLAUDE_MODEL_LADDER="${CLAUDE_REVIEWER_MODELS:-opus}"
 _CLAUDE_PROBE="$AUDIT_DIR/claude-model-probe.json"
 _CLAUDE_PROBE_TIMEOUT=
 if timeout \

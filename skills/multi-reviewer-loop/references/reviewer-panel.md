@@ -38,7 +38,8 @@ The supplied measurement checked this on Claude Code 2.1.321, 2026-11-14.
 
 **The Claude slot is a role, not a model.** Resolve which model fills it once per
 run, before the first pass, into `$CLAUDE_MODEL`; every invocation below uses that
-variable and none hardcodes a name. The default ladder is `fable` then `opus`. **A
+variable and none hardcodes a name. The default ladder is `opus` alone; fable runs only
+when a caller names it (a pin or a ladder of their own), never as a fallback. **A
 user pin replaces the ladder rather than sitting in front of it** — a pinned model
 that cannot be reached fails the slot, because substituting there would hand the user
 a different reviewer than the one they named.
@@ -77,7 +78,7 @@ if [ -z "${TO:-}" ]; then
 fi
 [ -n "$TO" ] || { echo "no GNU timeout (nor gtimeout) — cannot bound the probe"; exit 1; }
 # Unquoted on purpose: this is a space-separated ladder and the split IS the loop.
-CLAUDE_MODEL_LADDER="${CLAUDE_REVIEWER_MODELS:-fable opus}"
+CLAUDE_MODEL_LADDER="${CLAUDE_REVIEWER_MODELS:-opus}"
 CLAUDE_MODEL=""
 _pj=$(mktemp) || { echo "cannot create the probe scratch file"; exit 1; }
 # Deleted inline at the end of this block, NOT via `trap ... EXIT`. Bash keeps one EXIT
@@ -129,8 +130,9 @@ needed its own initialisation and its own status capture. The unavailable-review
 already existed, already had all of that, and was already reviewed. A second path
 beside it bought nothing but places to be wrong.
 
-Run on a host whose first ladder entry was unreachable. `ladder.sh` is the block above
-extracted from this file programmatically, with a single `set -euo pipefail` line
+Run with the two-rung ladder `fable opus` (then the default, now
+`CLAUDE_REVIEWER_MODELS='fable opus'`) on a host whose first rung was unreachable.
+`ladder.sh` is the block above extracted from this file programmatically, with a single `set -euo pipefail` line
 prepended — the block itself sets no shell options, so the harness has to supply them,
 and saying "run verbatim under `set -euo pipefail`" without saying where the `set` came
 from is the same one-step-removed sloppiness this section is about:
