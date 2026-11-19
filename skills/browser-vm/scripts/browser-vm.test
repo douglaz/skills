@@ -8,8 +8,9 @@ command -v node >/dev/null 2>&1 || { echo "browser-vm.test needs node on PATH (t
 fail=0; n=0
 check() { n=$((n+1)); if "$@"; then echo "  ok   $desc"; else echo "  FAIL $desc"; fail=1; fi; }
 out=$(mktemp); state=$(mktemp -d); trap 'rm -rf "$out" "$state"' EXIT
-# A port nothing listens on and an empty state directory: no call below can reach a real VM.
-export BROWSER_VM_CDP_PORT=1 BROWSER_VM_STATE="$state"
+# A port nothing listens on, an empty state directory and a unit name nothing runs under: no
+# call below can reach a real VM.
+export BROWSER_VM_CDP_PORT=1 BROWSER_VM_STATE="$state" BROWSER_VM_UNIT=browser-vm-test-none
 
 desc="browser-vm parses as bash"
 check bash -n browser-vm
@@ -19,7 +20,7 @@ check node --check tab.mjs
 ./browser-vm help >"$out" 2>&1 && rc=0 || rc=$?
 desc="browser-vm help exits 0 and lists every subcommand"
 check test "$rc" -eq 0
-for sub in up down status ssh tab reset-profile nopecha-key isolation-check destroy; do
+for sub in up down status ssh tab reset-profile nopecha-key vpn isolation-check destroy; do
   desc="  help names \`$sub\`"
   check grep -qE "^ +browser-vm $sub( |\$)" "$out"
 done
@@ -102,8 +103,54 @@ else
   echo "  FAIL ssh is not on PATH: the forwarding checks cannot run"; fail=1
 fi
 
-desc="the browser unit requires the guest firewall, so it cannot start unfiltered"
-check grep -qF 'requires = [ "firewall.service" ];' ../vm/configuration.nix
+desc="the browser unit requires the guest firewall and the tunnel unit, so it cannot start unfiltered"
+check grep -qzE 'requires = \[\s*"firewall.service"\s*"vm-vpn.service"\s*\];' ../vm/configuration.nix
+desc="the tunnel unit runs only when the host passed a config, and closes egress before anything else"
+check grep -qF 'unitConfig.ConditionCredential = vpnCredential;' ../vm/configuration.nix
+check test "$(grep -nE 'iptables -A vm-vpn -j REJECT|ip link add wg0' ../vm/configuration.nix | head -1 | grep -c REJECT)" -eq 1
+
+# A syntactically valid config with an all-zero key: nothing below starts a VM.
+zero=$(head -c 32 /dev/zero | base64)
+vpn_conf() { printf '[Interface]\nPrivateKey = %s\nAddress = 10.9.8.7/32, fc00::1/128\nDNS = 10.64.0.1\n[Peer]\nPublicKey = %s\nAllowedIPs = 0.0.0.0/0\nEndpoint = %s\n' "$zero" "$zero" "$1"; }
+vpn_conf 203.0.113.5:51820 | ./browser-vm vpn set >"$out" 2>&1 && rc=0 || rc=$?
+desc="vpn set stores a valid config with mode 600 and never echoes it"
+check test "$rc" -eq 0
+check test "$(stat -c %a "$state/vpn/wg.conf")" = 600
+check test "$(grep -cF "$zero" "$out")" -eq 0
+vpn_conf vpn.example.com:51820 | ./browser-vm vpn set >"$out" 2>&1 && rc=0 || rc=$?
+desc="vpn set refuses an endpoint given as a host name and keeps the stored config"
+check test "$rc" -eq 1
+check grep -qF '203.0.113.5' "$state/vpn/wg.conf"
+echo | ./browser-vm vpn set >"$out" 2>&1 && rc=0 || rc=$?
+desc="vpn set with an empty stdin exits 1"
+check test "$rc" -eq 1
+./browser-vm vpn status >"$out" 2>&1 && rc=0 || rc=$?
+desc="vpn status with no VM running exits 1 and still says a config is set"
+check test "$rc" -eq 1
+check grep -qx 'configured: yes' "$out"
+# `up` with a config set, against stand-ins for nix, systemd and ssh: the "guest" boots and its
+# browser answers, but its tunnel unit is not running, as when the config never reached it.
+if [ -w /dev/kvm ]; then
+  stub=$(mktemp -d); mkdir -p "$stub/vm/bin"; : >"$stub/vm/bin/run-browser-vm-vm"
+  printf '#!/bin/sh\necho %s/vm\n' "$stub" >"$stub/nix"
+  printf '#!/bin/sh\ntouch %s/running\n' "$stub" >"$stub/systemd-run"
+  printf '#!/bin/sh\ncase "$*" in *is-active*) test -e %s/running ;; *stop*) rm -f %s/running ;; esac\n' "$stub" "$stub" >"$stub/systemctl"
+  printf '#!/bin/sh\ncase "$*" in *"is-active --quiet vm-vpn"*|*is-failed*|*"-O check"*) exit 1 ;; esac\nexit 0\n' >"$stub/ssh"
+  chmod +x "$stub"/nix "$stub"/systemd-run "$stub"/systemctl "$stub"/ssh
+  PATH="$stub:$PATH" BROWSER_VM_SSH_PORT=1 ./browser-vm up >"$out" 2>&1 && rc=0 || rc=$?
+  desc="up with a config whose tunnel is not running in the guest fails, says why and stops the VM"
+  check test "$rc" -eq 1
+  check grep -qF 'did not take the WireGuard config' "$out"
+  check test ! -e "$stub/running"
+  rm -rf "$stub"
+else
+  echo "  skip up-with-a-config check: /dev/kvm is not writable here, and \`up\` stops before it"
+fi
+
+./browser-vm vpn clear >"$out" 2>&1 && rc=0 || rc=$?
+desc="vpn clear removes the stored config"
+check test "$rc" -eq 0
+check test ! -e "$state/vpn/wg.conf"
 
 desc="the VM config pins the extension by hash and keeps the private key out of the flake"
 check grep -qE 'sha256 = "[0-9a-f]{64}"' ../vm/configuration.nix
