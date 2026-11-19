@@ -52,7 +52,7 @@ check "launch appends one record line: manager | unit | exit path | ISO deadline
   '[ "$(wc -l < "$FIX/lane/waits")" = 1 ] && [[ "$line" =~ ^devices\ \|\ fl-i1-impl\ \|\ $FIX/lane/i1/impl/exit\ \|\ $ISO$ ]]' "line: $line"
 check "launch writes unit, kind, manager and the record path into DIR" \
   '[ "$(cat "$FIX/lane/i1/impl/unit")" = fl-i1-impl ] && [ "$(cat "$FIX/lane/i1/impl/kind")" = other ] &&
-   [ "$(cat "$FIX/lane/i1/impl/manager")" = devices ] && [ "$(cat "$FIX/lane/i1/impl/waits")" = "$FIX/lane/waits" ]'
+   [ "$(cat "$FIX/lane/i1/impl/manager")" = devices ] && [ "$(cat "$FIX/lane/i1/impl/record")" = "$FIX/lane/waits" ]'
 
 echo "lead | - | /abs/peer-handoff/exit | 2026-11-19T18:30Z" >> "$FIX/lane/waits"
 rm "$FIX/active/fl-i1-impl"; echo "success exited 0" > "$FIX/lane/i1/impl/exit"
@@ -90,7 +90,7 @@ check "a wait.sh stopped by a signal removes its line" '! grep -q "fl-i3-live" "
 new_fix
 (cd "$FIX" && mkdir -p elsewhere && env FASTLANE_CWD="$FIX" "$LU" fl-x "$FIX/elsewhere/x" -- /bin/true) > "$FIX/launch.out" 2>&1; rc=$?
 check "outside a lane folder a launch still starts, and writes no record" \
-  '[ "$rc" = 0 ] && [ ! -e "$FIX/elsewhere/x/waits" ] && [ ! -s "$FIX/lane/waits" ]' "rc $rc: $(cat "$FIX/launch.out")"
+  '[ "$rc" = 0 ] && [ ! -e "$FIX/elsewhere/x/record" ] && [ ! -s "$FIX/lane/waits" ]' "rc $rc: $(cat "$FIX/launch.out")"
 
 # --- the busy check ----------------------------------------------------------------------------
 new_fix
@@ -111,6 +111,9 @@ rc=$(launch --kind live fl-live2 i1/live2 -- /bin/true)
 check "a second live run is not blocked by a live unit" '[ "$rc" = 0 ]' "rc $rc: $(cat "$FIX/launch.out")"
 out=$("$LU" --check deploy "$FIX/lane" 2>&1); rc=$?
 check "--check deploy exits 1 and prints the holders" '[ "$rc" = 1 ] && grep -q "fl-live" <<<"$out"' "rc $rc: $out"
+out=$(cd "$FIX/lane/i1/impl" && "$LU" --check deploy 2>&1); rc=$?
+check "--check deploy run from inside a unit's directory still finds the lane and its live unit" \
+  '[ "$rc" = 1 ] && grep -q "fl-live" <<<"$out"' "rc $rc: $out"
 out=$(cd "$FIX/lane/i1" && "$LU" --check other 2>&1); rc=$?
 check "--check other exits 0, finding the lane folder above the current directory" '[ "$rc" = 0 ] && [ -z "$out" ]' "rc $rc: $out"
 rm "$FIX/active/fl-live" "$FIX/active/fl-live2"

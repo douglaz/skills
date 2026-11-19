@@ -6,7 +6,7 @@
 #      2: a unit is gone without writing its exit file (result unknown). 124: deadline; re-arm.
 # Pass only the seats you need: never include the optional fable seat.
 #
-# Wait record: for each DIR that launch-unit.sh recorded (DIR/waits names the lane's record), this
+# Wait record: for each DIR that launch-unit.sh recorded (DIR/record names the lane's record), this
 # wait's line "MANAGER | UNIT | DIR/exit | DEADLINE" is written with its own deadline when it starts
 # (replacing launch-unit.sh's line for the same manager) and removed when it ends, on every exit
 # path, its own deadline included. MANAGER is FASTLANE_MANAGER, else the one that launched DIR, so
@@ -21,8 +21,8 @@ END=$(( $(date +%s) + DL ))
 # record ADD|DROP: rewrite this wait's lines in each DIR's record, under the record's lock.
 record() {
   for d in "$@"; do
-    [ -s "$d/waits" ] && [ -s "$d/unit" ] || continue
-    rec=$(cat "$d/waits"); u=$(cat "$d/unit")
+    [ -s "$d/record" ] && [ -s "$d/unit" ] || continue
+    rec=$(cat "$d/record"); u=$(cat "$d/unit")
     m=${FASTLANE_MANAGER:-$(cat "$d/manager" 2>/dev/null || echo -)}
     e=$(cd "$d" && pwd)/exit
     [ -f "$rec" ] || continue

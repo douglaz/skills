@@ -12,7 +12,7 @@
 #
 # Lane guards. The lane folder is the nearest directory at or above DIR that holds a `waits` file.
 # - Wait record: when there is one, a line "MANAGER | UNIT | DIR/exit | DEADLINE" is appended to
-#   it (DEADLINE in UTC, 55 minutes out, like 2026-11-19T18:30Z), and DIR/waits names the file so
+#   it (DEADLINE in UTC, 55 minutes out, like 2026-11-19T18:30Z), and DIR/record names the file so
 #   wait.sh can refresh and remove the line. MANAGER: --manager, else FASTLANE_MANAGER, else "-".
 # - Busy check: KIND is deploy, live or other (the default). A deploy refuses while a live unit
 #   started in the lane folder is active, and a live run refuses while a deploy is; nothing else
@@ -131,7 +131,7 @@ systemd-run --user --unit="$UNIT" --collect --expand-environment=no \
   -p "ExecStopPost=/bin/sh -c 'printenv SERVICE_RESULT EXIT_CODE EXIT_STATUS | xargs > $DIR/exit'" \
   "$@"
 if [ -n "$LANE" ]; then
-  printf '%s\n' "$LANE/waits" > "$DIR/waits"
+  printf '%s\n' "$LANE/waits" > "$DIR/record"
   DL=$(date -u -d "@$(( $(date +%s) + 3300 + 59 ))" +%Y-%m-%dT%H:%MZ)
   printf '%s\n' "$MANAGER | $UNIT | $DIR/exit | $DL" >> "$LANE/waits"
   exec 9>&-
