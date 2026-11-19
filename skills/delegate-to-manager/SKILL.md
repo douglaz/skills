@@ -22,6 +22,9 @@ Three roles:
 | **Assistant** | you, the main session | keeps the brief, relays decisions, watches manager exits, decides boundaries, writes memory |
 | **Manager** | a background subagent, one per task | all the repo work: reads, grills, triages, runs panels and rloop, edits, reviews, PRs |
 
+The assistant runs on Fable (owner, 2026-11-19). Managers don't: an Opus manager stays an Opus
+subagent with effort high passed explicitly (section 1, step 3).
+
 The point is context hygiene and less repetitive steering. Every task starts in an empty manager
 context, so it reasons sharply, and inside a task the manager keeps what it has learned. Your own
 context stays thin because file dumps, gate logs and skill bodies land in the manager's window, not

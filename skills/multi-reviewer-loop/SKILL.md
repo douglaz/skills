@@ -44,11 +44,11 @@ The default panel is two reviewers, run in parallel every pass:
 | `claude` | `env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW CLAUDE_CODE_PROMPT_CACHE_TTL=5m claude -p "<review prompt>" --model "$CLAUDE_MODEL" --effort high --output-format json` | Repo-aware, reads beyond the diff |
 
 **The Claude slot is a role, not a model.** `$CLAUDE_MODEL` is resolved once per run
-by a bounded probe down a ladder — `fable`, then `opus`, or a user pin that *replaces*
-the ladder instead of heading it — because a model you cannot reach *hangs* rather than
-erroring, and finding that out inside a real pass costs the full 25-minute timeout.
-When no candidate answers, the Claude reviewer is simply unavailable — the same case as
-a missing CLI, handled by the same rule below. The probe, the measured evidence for it,
+by a bounded probe down a ladder — `opus` alone by default, or a user pin that *replaces*
+the ladder instead of heading it (fable runs only when a caller names it) — because a
+model you cannot reach *hangs* rather than erroring, and finding that out inside a real
+pass costs the full 25-minute timeout. When no candidate answers, the Claude reviewer is
+simply unavailable — the same case as a missing CLI, handled by the same rule below. The probe, the measured evidence for it,
 and the mid-run re-resolution rule are in
 [references/reviewer-panel.md](references/reviewer-panel.md) § Resolving the Claude
 reviewer's model. Read it before the first pass.
@@ -115,7 +115,7 @@ Parse in this order, so a flag never leaks into the focus text:
 
    Accept a **model name** where the slot name goes — `--reviewers codex,opus` — and
    treat it as pinning both the slot and its model. `fable` keeps working for the same
-   reason, and is now a pin rather than the default.
+   reason: it is a pin only, never the default or a fallback (owner, 2026-11-19).
 
    **Known names only: `fable`, `opus`.** A token that is neither a slot nor one of
    those is an error — say so and stop, exactly as an unknown `--reviewers` value did
