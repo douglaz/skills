@@ -20,7 +20,7 @@ Three roles:
 |---|---|---|
 | **Owner** | the human | makes the decisions |
 | **Assistant** | you, the main session | keeps the brief, relays decisions, watches manager exits, decides boundaries, writes memory |
-| **Manager** | a background subagent, one per task | all the repo work: reads, grills, triages, runs panels and rloop, edits, reviews, PRs |
+| **Manager** | a background subagent per task, or several in one lane (section 1) | all the repo work: reads, grills, triages, runs panels and rloop, edits, reviews, PRs |
 
 The assistant runs on Fable (owner, 2026-11-19). Managers don't: an Opus manager stays an Opus
 subagent with effort high passed explicitly (section 1, step 3).
@@ -38,9 +38,9 @@ work to the manager instead.
 2. **Write the brief.** Fill in [references/manager-brief-template.md](references/manager-brief-template.md)
    and save it as `manager-brief.md` where the template says, under `/var/tmp`. Never use the
    scratchpad, which can vanish mid-session.
-   - Keep it lean. It points to files and never inlines them. Memory files are read **per activity**
-     through the table in the template, not all up front. A manager told to read every memory file up
-     front used about 110k tokens before it started work.
+   - Keep it lean. It points to files and skills and never restates them. Memory files are read
+     **per activity** through the table in the template, not all up front. A manager told to read
+     every memory file up front used about 110k tokens before it started work.
    - Copy the project's **hard safety lines** verbatim from memory or CLAUDE.md: production systems
      not to touch, what must be redacted from public repos, and how credentials are fetched.
    - Set the **merge lane**. At the start of every session, ask the owner whether to run the drain
@@ -56,10 +56,22 @@ work to the manager instead.
    For an Opus manager, use the Agent tool with `subagent_type: general-purpose`, `model: opus`,
    `effort: high` and `run_in_background: true`. Pass the effort explicitly: left out, the manager
    inherits the session's default, which may be `xhigh`. The prompt says: read the brief first and follow it all session, then
-   gives the task in one or two sentences. Use a fresh agent, not a fork: a fork inherits your whole
-   context, which defeats the purpose. For a sol manager, spawn it as section 7 says.
+   gives the task in one or two sentences and names the skills the role needs. The manager loads
+   them at the start of the task; a sol manager gets each one's `SKILL.md` path. Use a fresh agent,
+   not a fork: a fork inherits your whole context, which defeats the purpose. For a sol manager,
+   spawn it as section 7 says.
 4. Tell the owner in a few lines how the split works, then wait for the notification. Never predict
    or invent what the manager will report.
+
+**Several managers in one lane.** A lane can run managers side by side, one per role (for example
+product, tests, devices). Each brief carries the manager's role and names the **lead manager**.
+- The lead manager alone merges, deploys and promotes. The others hand their results to it.
+- A manager messages a peer only to hand off work or ask a question, and adds one line to
+  `brief-log.md` for each message.
+- Decisions, launch requests, spend and P0/P1 findings go to the assistant, never peer to peer, and
+  so does anything for the owner.
+- Each manager is still one task's manager: section 3's boundary and replacement rules apply to it
+  alone.
 
 ## 2. Relay loop
 
@@ -83,28 +95,30 @@ The manager ends each turn with exactly one of three things: a **question**, a *
 - **Panel results:** relay them faithfully, never polished. Give which option each reader picked and
   its strongest argument, plus any claim of yours or the manager's that a reader broke.
 
-**A report.** Summarise it for the owner in a few lines: what changed, what's next, and what they
-must decide. Rewrite the brief's "Current state" section and add a line to its log, as the
+**A report.** Give the owner the outcome in one sentence, then a handful of bullets at most: what
+changed, what's next, and what they must decide. Give more detail when they ask.
+- After the owner has been away, open with what is live, what went wrong and what needs them.
+- Relay a manager's inference as a reading ("a reading: …"). Give a cause only once a manager has
+  shown evidence for it.
+
+Rewrite the brief's "Current state" section and add a line to its log, as the
 template's header says. Update the project memory if durable state changed. You own the brief and
 memory writes; the manager only suggests them. If you have a manager record its own step, it appends
 one line to `brief-log.md` and never edits the brief.
 
 **A new standing rule from the owner** (for example "always panel technical questions first"): send
-it to the live manager now, add it to the brief's "Owner decisions in force" so the next manager
-inherits it, and save it to memory. A rule about rating or fixing review findings goes in the brief's
+it to each live manager now, add it to each brief's "Owner decisions in force" so the next manager
+inherits it, and save it to memory. A rule about rating or fixing review findings goes in each brief's
 "Review findings" section instead, which no lane deletes. If it replaces an older rule, it takes that
 rule's place and the old text goes to the log.
 
-**A wait.** A manager, subagent or sol, polls a wait it expects to end within about
-an hour in chunks of 270 seconds (4.5 minutes) or less. Each chunk is one bounded
-command that returns within 270 seconds; re-arm until the result arrives. Do not
-use one long command that sleeps internally in chunks without returning.
-For a longer wait, such as an rloop Run, the manager ends its turn and returns a
-wait naming the unit, out/err/exit paths and next action. It also returns a wait
-when it cannot keep supervision alive. The assistant watches it (section 4) and
-resumes the manager with the result. A required decision still ends the turn.
-A subagent manager uses no Monitor or background shell for job waits. It runs long jobs as units
-that write a result file and, if one is still running when its turn ends, returns a wait naming it.
+**A wait.** A manager runs long jobs as units that write an exit file. Before it ends a turn that
+leaves one running, a subagent manager arms its own wait: one background command that returns when
+the exit file appears or at a deadline of at most 55 minutes (3300 seconds). Its return wakes the
+manager, which acts on the result or re-arms on expiry. The turn ends with a wait naming the unit,
+out/err/exit paths and next action, so the job can be recovered if the manager dies. A required
+decision still ends the turn. A sol manager can't be woken between turns; section 7 says how it
+waits.
 
 Reply to the manager with `SendMessage`, using the agent ID from the spawn result. Keep the message
 short:
@@ -124,10 +138,11 @@ no meaningful context needs to carry over".
   Each one continues what the last started, so the same manager carries them all.
 
 When a task or milestone ends (a bead merged, a Run accepted and its PR landed, the live test
-perfect), decide continue or clear. If the owner uses the `ask-matt` skill, ask the manager to apply
-it. Have it read `ask-matt/SKILL.md` and its `PHASE-BOUNDARIES.md`, then answer in three lines or
-fewer: the boundary option, the next step, and anything the next manager needs that isn't already
-on the bead or branch.
+perfect), decide continue or clear. Either way, check the brief's size as the template's header
+says, and name the skills the next task's role needs in the task message. If the owner uses the
+`ask-matt` skill, ask the manager to apply it. Have it read `ask-matt/SKILL.md` and its
+`PHASE-BOUNDARIES.md`, then answer in three lines or fewer: the boundary option, the next step, and
+anything the next manager needs that isn't already on the bead or branch.
 
 - **Continue:** keep sending messages to the same agent. This is the default at every return inside
   a task.
@@ -159,7 +174,8 @@ on the bead or branch.
 
 **Clearing safely.**
 1. The old manager's turn has ended and nothing can wake it: it has no background shell or Monitor
-   still running, because their completion resumes it. Each unit it
+   still running, because their completion resumes it. If its own wait (section 2) is still armed,
+   have it stop that wait first. Each unit it
    launched has finished or is named in its wait, with out/err/exit paths, and your watcher owns it.
    While a unit that writes to the worktree (an rloop Run) is still running, the new manager may
    watch it but must not edit that worktree. If ownership of a job is unclear, ask the manager
@@ -208,13 +224,18 @@ if it did.
 ## 4. Watching long jobs
 
 - The phase's manager or its supervised launcher collects bot state and takes the
-  next authorized step. The manager polls waits expected within about an hour as
-  section 2 says; it hands longer waits to the assistant, or returns a wait when
-  supervision cannot stay alive. Return for a required decision or a completed phase
+  next authorized step. A subagent manager waits on its own jobs as section 2 says;
+  a sol manager waits as section 7 says. Return for a required decision or a completed phase
   too. Keep all gate, review and merge checks; waiting grants no new authority.
 - Independently watch the manager's exit so its death cannot strand a child job.
   If it exits with an unfinished job, take over the job's watcher and resume from
-  the recorded state. Watch the child directly when the manager returns a wait.
+  the recorded state. Watch the child directly when a sol manager returns a wait.
+- **Stall watch.** While a subagent manager's turn runs, keep one background wait on its output
+  file (the path in the spawn result). Read the file's write time with `stat -L`, since the path
+  is a symlink. The wait alerts after 25 minutes without a write and has a deadline of 55 minutes.
+  On an alert, message the manager and re-arm, counting the next 25 minutes from the message. If
+  that alert finds the message unconsumed (no write since it), stop the manager and spawn one
+  replacement as section 3's "A manager that stops mid-task" says.
 - For a manager unit, have that same watcher wake after 30 minutes without new
   output (`$D/out` mtime; count from launch if empty). Silence triggers inspection,
   not a stall verdict: read `err` and the tail of `out`. Use the running command's
@@ -252,7 +273,7 @@ if it did.
   unit that failed. Then `out` and `err` are the only record.
 - When a fallback wait ends, send the manager the result and the next instruction.
 - The owner sees one short line per meaningful event. Report a round starting over, or an exit;
-  don't narrate probes.
+  don't narrate probes. An event that changes nothing gets one line at most, usually none.
 
 ## 5. Owner-only skills
 
@@ -341,8 +362,8 @@ What differs from the subagent:
 - **No sandbox and no deny list.** The bypass flag is required, because sandboxed codex cannot reach
   the nix daemon socket and cannot run gates (rloop-spec `AGT-10`). The brief's hard safety lines are
   its only fence. The brief's other rules hold as written: one question per turn,
-  no owner-only skill on its own initiative, and section 2's bounded waits and
-  longer-wait handoff within the authorized phase.
+  no owner-only skill on its own initiative, and the bounded waits and
+  longer-wait handoff above within the authorized phase.
 
 Checked on codex-cli 0.164.0, 2026-10-25, with trivial prompts: a start and a resume turn, both run
 directly and as units like the one above, exited 0. Each resume reported the start's thread id and

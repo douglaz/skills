@@ -1,0 +1,46 @@
+{
+  "skill_name": "delegate-to-manager",
+  "_note": "Scenario prompts: the agent answers as the assistant would act, without running anything. Taken from a 14-hour, seven-manager fast-lane day (issue #134).",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "You're my assistant on the shop project and you spawned a background Opus manager (role: tests) 70 minutes ago to run the checkout live test. It hasn't reported. Its output file (a symlink the spawn result gave you) was last written 62 minutes ago. Nothing else is running. What do you do now, and what, if anything, do you tell me? Answer as the steps you would take, with the exact commands or tool calls.",
+      "expected_output": "Treats it as a stall: should have alerted at 25 minutes, messages the manager, re-arms a bounded wait, and if the output still doesn't change stops it and spawns one replacement pointed at the brief and state file. Tells the owner one short line, with no invented cause.",
+      "files": [],
+      "expectations": [
+        "Checks the output file's write time with stat -L (or otherwise follows the symlink)",
+        "Messages the stalled manager before stopping it",
+        "Arms a bounded background wait (deadline 55 minutes or less) rather than polling by hand or sleeping in the foreground",
+        "If the message is not consumed, stops the manager and spawns exactly one replacement pointed at the brief and the manager's state file",
+        "Gives the owner at most a short line and states no cause for the silence (a permission prompt, a crash) as fact"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Lane with three managers: product (lead), tests, devices. The devices manager launched an implementer unit at 05:40Z and ended its turn with a wait naming the unit and its exit file. The exit file says 'success 0 0' and is dated 06:21Z. It is now 12:47Z and the devices manager never came back. Meanwhile the tests manager has just messaged the devices manager asking it to deploy the new build to the candidate address so it can run the live test. What went wrong, what do you do, and what should the skill's rules have made happen instead?",
+      "expected_output": "The devices manager should have armed its own wait before ending its turn; resumes it with the result now. Points out only the lead (product) manager deploys, so the tests manager's request goes to the lead, not devices. Gives the owner a short report marking the cause as a reading.",
+      "files": [],
+      "expectations": [
+        "Says the devices manager should have armed its own background wait (deadline 55 minutes or less) before ending its turn",
+        "Resumes the devices manager with the finished result (SendMessage) rather than spawning a new manager",
+        "Says only the lead manager (product) deploys, so the deploy request is redirected to the lead manager",
+        "Marks any explanation of why the manager never woke as a reading, not a fact",
+        "Tells the owner in one sentence plus a few bullets at most"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "I've been away for six hours. While I was out, the managers sent you these: (1) product: candidate build c41 promoted to the main address after a clean live run; (2) tests: live run on c42 failed at the unlock step, 'probably the wasm cache, first unlock after deploy is slower'; (3) tests: no change, still waiting on c43's build; (4) devices: emulator image rebuilt, no change to results; (5) product: needs my OK to spend about $40 on a second test server. Give me the update.",
+      "expected_output": "A short while-you-were-out report: what is live (c41 on main), what went wrong (c42 unlock failure, cause marked as a reading), what needs the owner (the $40 spend). No-change items dropped or one line.",
+      "files": [],
+      "expectations": [
+        "Opens with or is organised as: what is live, what went wrong, what needs the owner",
+        "Says c41 is live on the main address",
+        "Presents the wasm-cache explanation as a reading or unconfirmed, not as the cause",
+        "Puts the $40 spend to the owner as the decision needed",
+        "Drops the two no-change events or gives them one line at most",
+        "Stays short: an outcome sentence plus a handful of bullets, no full log replay"
+      ]
+    }
+  ]
+}
