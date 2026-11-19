@@ -230,12 +230,6 @@ if it did.
 - Independently watch the manager's exit so its death cannot strand a child job.
   If it exits with an unfinished job, take over the job's watcher and resume from
   the recorded state. Watch the child directly when a sol manager returns a wait.
-- **Stall watch.** While a subagent manager's turn runs, keep one background wait on its output
-  file (the path in the spawn result). Read the file's write time with `stat -L`, since the path
-  is a symlink. The wait alerts after 25 minutes without a write and has a deadline of 55 minutes.
-  On an alert, message the manager and re-arm, counting the next 25 minutes from the message. If
-  that alert finds the message unconsumed (no write since it), stop the manager and spawn one
-  replacement as section 3's "A manager that stops mid-task" says.
 - For a manager unit, have that same watcher wake after 30 minutes without new
   output (`$D/out` mtime; count from launch if empty). Silence triggers inspection,
   not a stall verdict: read `err` and the tail of `out`. Use the running command's
@@ -247,6 +241,19 @@ if it did.
   turn and confirm it has exited before taking over unfinished jobs' watchers and
   resuming from recorded state. Never start a replacement while the old manager can
   still act.
+- **Stall watch.** While a subagent manager's turn runs, keep one background wait on its output
+  file (the path in the spawn result). Read the file's write time with `stat -L`, since the path
+  is a symlink. The wait alerts after 25 minutes without a write and has a deadline of 55 minutes.
+  A manager whose turn ended on its own armed wait (it has a line in the wait record) is not
+  stalled. On any other alert, look at the end of the output file for a tool call with no result.
+  If there is one, it is a permission prompt: tell the owner, and leave the manager running.
+  Otherwise message the manager and re-arm. Replace it only when its process is gone, as
+  section 3's "A manager that stops mid-task" says.
+- **Wait record.** A lane can keep one small file of armed waits, one line each:
+  `manager | unit | exit path | deadline` (fastlane's launch-unit.sh writes it). Read it at every
+  manager notification and whenever a recorded deadline has passed (the stall watch's alerts wake
+  you for those), and flag two cases to the line's manager: the exit file exists (the job finished and nobody is waiting on it), or the
+  deadline has passed with no exit file (unknown: a reboot, or the unit is gone).
 - The assistant uses one event-driven wait on Runs, jobs, watchers and manager
   units, with a deadline of at most 55 minutes (3300 seconds), for a terminal result
   or an action someone must take. Re-arm on expiry; keep a wake-up that only re-arms

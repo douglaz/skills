@@ -52,8 +52,9 @@ The fast lane removes test gates, never safety gates.
     the last one started, so the lane is one task with no boundary to clear at.
   - Never replace it for context size. If it stops mid-lane, resume it; spawn one replacement only if the resume is
     refused, and point it at the lane's state file.
-- **Assistant** (the main session) watches every wait and relays to the owner in one line per meaningful event.
-  When delegated, the manager never runs its own monitor or sleep loop. It ends its turn with a wait command.
+- **Assistant** (the main session) watches the manager (delegate-to-manager section 4) and relays to the owner in
+  one line per meaningful event. When delegated, the manager arms its own wait before it ends a turn that leaves a
+  job running: the `scripts/wait.sh` call below as one background command, re-armed on 124.
 - Without a manager (the owner asked the main session to do it directly), the session plays both roles.
 
 ## Set up once per project

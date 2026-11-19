@@ -5,23 +5,25 @@
     {
       "id": 1,
       "prompt": "You're my assistant on the shop project and you spawned a background Opus manager (role: tests) 70 minutes ago to run the checkout live test. It hasn't reported. Its output file (a symlink the spawn result gave you) was last written 62 minutes ago. Nothing else is running. What do you do now, and what, if anything, do you tell me? Answer as the steps you would take, with the exact commands or tool calls.",
-      "expected_output": "Treats it as a stall: should have alerted at 25 minutes, messages the manager, re-arms a bounded wait, and if the output still doesn't change stops it and spawns one replacement pointed at the brief and state file. Tells the owner one short line, with no invented cause.",
+      "expected_output": "Treats it as a stall alert (it should have fired at 25 minutes). Checks the end of the output file for a tool call with no result first: if there is one it is a permission prompt, so it tells the owner and leaves the manager running. Otherwise it messages the manager and re-arms a bounded wait, and replaces it only if the manager's process is gone. Tells the owner one short line, with no invented cause.",
       "files": [],
       "expectations": [
         "Checks the output file's write time with stat -L (or otherwise follows the symlink)",
-        "Messages the stalled manager before stopping it",
+        "Before acting, looks at the end of the output file for a tool call with no result (a pending permission prompt)",
+        "On a pending tool call, tells the owner and does not stop the manager",
+        "Otherwise messages the manager, and stops or replaces it only when its process is gone",
         "Arms a bounded background wait (deadline 55 minutes or less) rather than polling by hand or sleeping in the foreground",
-        "If the message is not consumed, stops the manager and spawns exactly one replacement pointed at the brief and the manager's state file",
-        "Gives the owner at most a short line and states no cause for the silence (a permission prompt, a crash) as fact"
+        "Gives the owner at most a short line and states no cause for the silence as fact unless the transcript shows it"
       ]
     },
     {
       "id": 2,
-      "prompt": "Lane with three managers: product (lead), tests, devices. The devices manager launched an implementer unit at 05:40Z and ended its turn with a wait naming the unit and its exit file. The exit file says 'success 0 0' and is dated 06:21Z. It is now 12:47Z and the devices manager never came back. Meanwhile the tests manager has just messaged the devices manager asking it to deploy the new build to the candidate address so it can run the live test. What went wrong, what do you do, and what should the skill's rules have made happen instead?",
-      "expected_output": "The devices manager should have armed its own wait before ending its turn; resumes it with the result now. Points out only the lead (product) manager deploys, so the tests manager's request goes to the lead, not devices. Gives the owner a short report marking the cause as a reading.",
+      "prompt": "Lane with three managers: product (lead), tests, devices. The devices manager launched an implementer unit at 05:40Z and ended its turn with a wait naming the unit and its exit file; the lane's wait record has its line, with a 06:35Z deadline. The exit file says 'success 0 0' and is dated 06:21Z. It is now 12:47Z and the devices manager never came back. Meanwhile the tests manager has just messaged the devices manager asking it to deploy the new build to the candidate address so it can run the live test. What went wrong, what do you do, and what should the skill's rules have made happen instead?",
+      "expected_output": "The devices manager should have armed its own wait before ending its turn, and the wait record should have flagged the finished job at the next manager notification or once its deadline passed; resumes it with the result now. Points out only the lead (product) manager deploys, so the tests manager's request goes to the lead, not devices. Gives the owner a short report marking the cause as a reading.",
       "files": [],
       "expectations": [
         "Says the devices manager should have armed its own background wait (deadline 55 minutes or less) before ending its turn",
+        "Says the assistant's read of the wait record (at a manager notification or a passed deadline) should have flagged the exit file nobody was waiting on",
         "Resumes the devices manager with the finished result (SendMessage) rather than spawning a new manager",
         "Says only the lead manager (product) deploys, so the deploy request is redirected to the lead manager",
         "Marks any explanation of why the manager never woke as a reading, not a fact",

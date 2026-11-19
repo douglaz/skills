@@ -258,8 +258,9 @@ a completed phase too.
 
 - **As a subagent manager,** arm your own wait before you end a turn that leaves a job running: one
   background command that returns when the job's exit file appears or at a deadline of at most 55
-  minutes (3300 seconds). Its return wakes you; act on the result, or re-arm on expiry. End the turn
-  with a wait naming the unit, out/err/exit paths, next action and a watch command.
+  minutes (3300 seconds). Its return wakes you; act on the result, or re-arm on expiry. In a lane that
+  keeps a wait record, the wait has its line there. End the turn with a wait naming the unit,
+  out/err/exit paths, next action and a watch command.
 - **As a sol manager,** poll waits expected to end within about an hour in chunks of 270 seconds
   (4.5 minutes) or less. Each chunk is one bounded command returning within 270 seconds; re-arm
   until the result arrives. Do not use one long command that sleeps internally in chunks without
