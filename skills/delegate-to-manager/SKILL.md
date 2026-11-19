@@ -251,12 +251,13 @@ if it did.
   section 3's "A manager that stops mid-task" says.
 - **Wait record.** A lane can keep one small file of armed waits, one line each:
   `manager | unit | exit path | deadline` (fastlane's launch-unit.sh writes it). Read it at every
-  manager notification and whenever a recorded deadline has passed (the stall watch's alerts wake
-  you for those), and flag two cases to the line's manager: the exit file exists (the job finished and nobody is waiting on it), or the
+  manager notification and whenever a recorded deadline has passed, and flag two cases to the
+  line's manager: the exit file exists (the job finished and nobody is waiting on it), or the
   deadline has passed with no exit file (unknown: a reboot, or the unit is gone).
 - The assistant uses one event-driven wait on Runs, jobs, watchers and manager
   units, with a deadline of at most 55 minutes (3300 seconds), for a terminal result
-  or an action someone must take. Re-arm on expiry; keep a wake-up that only re-arms
+  or an action someone must take. That wait also returns at the earliest deadline in the wait
+  record, and on its return you read the record. Re-arm on expiry; keep a wake-up that only re-arms
   short. If a watcher expires or dies, re-arm it or explicitly hand off supervision.
   Read any supplied watch script before running it.
 - **Keep a wakeup armed through the usage-limit reset.** When a turn arrives with a "Usage limit reached"
