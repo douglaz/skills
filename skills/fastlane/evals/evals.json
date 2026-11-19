@@ -1,0 +1,44 @@
+{
+  "skill_name": "fastlane",
+  "_note": "Scenario prompts: the agent answers as the manager would act, without running anything. Taken from a 14-hour, seven-manager fast-lane day (issue #134).",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "You are the tests manager (a subagent manager) in the shop fast lane; the product manager is the lead. The lane's work directory is /var/tmp/shop-manager/fastlane-checkout/. You want to start the checkout live test on the candidate build now. You don't know whether product is deploying right now. What do you run, in order, with exact commands, and what do you do if something is in the way?",
+      "expected_output": "Launches the live run through launch-unit.sh with --kind live (or runs --check live first), lets the busy check refuse while a recorded deploy is active, waits rather than overriding it, and arms its own background wait.sh before ending its turn.",
+      "files": [],
+      "expectations": [
+        "Starts the live run through scripts/launch-unit.sh with --kind live, or runs launch-unit.sh --check live before starting",
+        "On a refusal (exit 1 from --check, or 3 from a launch), waits for the deploy to finish instead of starting anyway, and does not deploy itself (only the lead deploys)",
+        "Passes its manager name (--manager or FASTLANE_MANAGER) so the record line names it",
+        "Arms its own wait.sh wait (deadline 3300 s or less) as a background command before ending a turn that leaves the live run going",
+        "Does not list all units (systemctl list-units) to decide whether something is busy"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "You are the devices manager in a fast lane. You just launched the implementer with scripts/implement.sh into i4/impl, which can take up to two hours. You have nothing else to do until it finishes, and you're about to end your turn. Separately, the lead manager said it will hand you a signed build later, outside any unit. What exactly do you do before ending the turn, and what does the lane's waits file look like afterwards?",
+      "expected_output": "Arms wait.sh 3300 i4/impl as one background command (re-armed on 124), ends the turn with a wait naming the unit and paths; the waits file holds the launch-unit/wait.sh line for the implementer and a hand-written line with '-' for the unit for the peer hand-off.",
+      "files": [],
+      "expectations": [
+        "Runs scripts/wait.sh with a deadline of 3300 s or less on i4/impl as one background command, and re-arms on 124",
+        "Ends the turn with a wait naming the unit, out/err/exit paths and the next action",
+        "Shows a waits line of the form 'manager | unit | exit path | deadline' with an absolute exit path and an ISO UTC deadline",
+        "Adds a hand-written line with '-' for the unit for the peer hand-off, and says it removes it when the hand-off arrives",
+        "Does not hand the two-hour wait to the assistant instead of waiting itself"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Fast lane on the emulator project. The device-test script runs `nix build /data/emulator-images#runner` (that folder is 15 GB and not a git checkout) and calls tools through `nix shell nixpkgs#adb`. df shows 41 GiB free on /. You need to launch the next device test now. What do you do, and what do you change?",
+      "expected_output": "Expects launch-unit.sh to refuse below the 45 GiB floor and frees space rather than lowering the floor without reason; moves the build to a git flake or small dedicated folder; builds tools once to an out-link and calls them through it; cleans rebuildable output from finished worktrees at lane end.",
+      "files": [],
+      "expectations": [
+        "Says launch-unit.sh refuses below the 45 GiB default floor (41 GiB free), and frees space first rather than just lowering the floor",
+        "Says a flake in a non-git folder is copied whole into the nix store on each call, and moves the build to a git checkout or a small dedicated folder",
+        "Builds adb once with nix build --out-link into the lane's tools folder and calls it through the link instead of nix shell",
+        "Mentions removing rebuildable output (target/) from finished worktrees, at the latest when the lane ends"
+      ]
+    }
+  ]
+}
