@@ -73,3 +73,24 @@ _Avoid_: review round, CI round
 A command and its exit code, or a quoted line of output. The only thing that closes a
 phase; an assertion that something passed is not evidence.
 _Avoid_: verification, proof, confirmation
+
+### Delegated work
+
+**Lane**:
+A standing way of working on a project, such as the fast lane or the drain lane, with a named
+scope. It ends on the owner's word or when its scope is done; a drain lane also ends with the
+session.
+_Avoid_: mode, track, session
+
+**Manager**:
+A background agent that does a task's repo work and reports to the assistant, who relays to the
+owner. A lane may run several, one per role.
+_Avoid_: coordinator, worker, orchestrator
+
+**Lead manager**:
+The one manager in a lane that alone merges, deploys and promotes.
+_Avoid_: coordinator, main manager, primary
+
+**Promotion**:
+Moving a build from the candidate address to the main address.
+_Avoid_: deploy, release, ship
