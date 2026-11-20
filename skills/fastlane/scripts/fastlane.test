@@ -77,6 +77,15 @@ check "a manager waiting on a peer's unit leaves the peer's line alone" \
   'grep -q "^product | fl-i5-deploy |" "$FIX/lane/waits" && ! grep -q "^tests |" "$FIX/lane/waits"' "$(cat "$FIX/lane/waits")"
 
 new_fix
+launch --manager devices fl-i6-impl i1/impl -- /bin/true > /dev/null
+echo "lead | - | /abs/peer-handoff/exit | 2026-11-19T18:30Z" >> "$FIX/lane/waits"
+before=$(cat "$FIX/lane/waits")
+mkdir -p "$WORK/failbin"; printf '#!/bin/sh\nexit 1\n' > "$WORK/failbin/awk"; chmod +x "$WORK/failbin/awk"
+env PATH="$WORK/failbin:$PATH" "$WS" 0 "$FIX/lane/i1/impl" > "$FIX/wait.out" 2>&1
+check "a record rewrite that fails (a full disk) leaves the record as it was" \
+  '[ "$(cat "$FIX/lane/waits")" = "$before" ] && ! ls "$FIX/lane"/waits.tmp.* > /dev/null 2>&1' "$(cat "$FIX/lane/waits")"
+
+new_fix
 launch --manager tests fl-i3-live i1/live -- /bin/true > /dev/null
 "$WS" 3300 "$FIX/lane/i1/live" > "$FIX/wait.out" 2>&1 & wpid=$!
 for _ in $(seq 50); do grep -q "fl-i3-live" "$FIX/lane/waits" && [ -e "$FIX/lane/waits.lock" ] && break; sleep 0.1; done

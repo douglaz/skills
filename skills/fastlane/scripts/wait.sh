@@ -28,12 +28,16 @@ record() {
     [ -f "$rec" ] || continue
     (
       flock 9
-      awk -F'|' -v m="$m" -v u="$u" -v e="$e" '{
+      # Replace the record only when the new copy was written in full (a full disk must not empty it).
+      if awk -F'|' -v m="$m" -v u="$u" -v e="$e" '{
         f1 = $1; f2 = $2; f3 = $3
         gsub(/^ +| +$/, "", f1); gsub(/^ +| +$/, "", f2); gsub(/^ +| +$/, "", f3)
-        if (!(f1 == m && f2 == u && f3 == e)) print }' "$rec" > "$rec.tmp.$$"
-      [ "$MODE" = ADD ] && printf '%s\n' "$m | $u | $e | $STAMP" >> "$rec.tmp.$$"
-      mv "$rec.tmp.$$" "$rec"
+        if (!(f1 == m && f2 == u && f3 == e)) print }' "$rec" > "$rec.tmp.$$" \
+        && { [ "$MODE" != ADD ] || printf '%s\n' "$m | $u | $e | $STAMP" >> "$rec.tmp.$$"; }; then
+        mv "$rec.tmp.$$" "$rec"
+      else
+        rm -f "$rec.tmp.$$"; echo "wait record $rec not updated" >&2
+      fi
     ) 9>> "$rec.lock"
   done
 }
