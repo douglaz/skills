@@ -9,3 +9,4 @@ set -euo pipefail
 ./skills/lnd-payments/scripts/lnpay.test
 ./skills/token-ledger/scripts/token_ledger.test
 ./skills/pdf-to-kindle-epub/scripts/pdf2epub.test
+./skills/fastlane/scripts/fastlane.test

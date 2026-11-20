@@ -33,5 +33,8 @@ across repositories; prefer fixing or replacing an existing rule.
   than setup or an unrelated error. Use a disposable environment for a deliberate
   break that could affect live systems or funds; otherwise report that the red
   run was not performed.
+- Build a nix flake from a git checkout or a small dedicated folder. A flake in
+  a folder outside git, or one named with `path:`, is copied whole into the nix
+  store on every call.
 
 Gate for this repo: `{{GATE}}`

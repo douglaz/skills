@@ -26,6 +26,11 @@ Use the user's own actions (open, type, click, pay, wait, read), not internal ca
 - How to confirm the deployed artefacts are the commit's own, for example by hashes.
 - How to roll back.
 
+## Promotion criteria
+
+If the project has a candidate address and a main address, write here what a build must show before it is promoted
+from one to the other. Leave it empty otherwise.
+
 ## How it's driven
 
 - The driver script's path and how to run it as a unit.

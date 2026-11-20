@@ -48,13 +48,16 @@ The fast lane removes test gates, never safety gates.
 
 - **Manager** runs the lane: an Opus subagent at effort high (delegate-to-manager skill). It writes task files,
   launches codex and the readers, judges findings, commits, deploys and runs the live test.
-  - One manager runs the whole lane, every iteration until the live test is perfect. Each iteration continues what
-    the last one started, so the lane is one task with no boundary to clear at.
+  - A manager runs its part of the lane, every iteration until the live test is perfect. Each iteration continues
+    what the last one started, so the lane is one task with no boundary to clear at.
+  - A lane can run several managers, one per role, as delegate-to-manager's "Several managers in one lane" says. Only
+    the lead manager deploys, promotes and merges.
   - Never replace it for context size. If it stops mid-lane, resume it; spawn one replacement only if the resume is
     refused, and point it at the lane's state file.
 - **Assistant** (the main session) watches the manager (delegate-to-manager section 4) and relays to the owner in
   one line per meaningful event. When delegated, the manager arms its own wait before it ends a turn that leaves a
-  job running: the `scripts/wait.sh` call below as one background command, re-armed on 124.
+  job running: the `scripts/wait.sh` call below as one background command, re-armed on 124. The lane's wait record
+  shows the assistant every armed wait (see Waits).
 - Without a manager (the owner asked the main session to do it directly), the session plays both roles.
 
 ## Set up once per project
@@ -80,7 +83,9 @@ The fast lane removes test gates, never safety gates.
 2. **Make a work directory** next to the brief: `fastlane-<topic>/`. It holds:
    - `progress.md`: one UTC line per event.
    - `deferred-tests.md`: test-only findings and broken tests, kept for later.
-   - `followups.md`: P2/P3 findings, filed at the end.
+   - `followups.md`: P2/P3 findings, filed when the lane ends. With several managers, each one numbers its items from
+     its own id range (the brief's role line), so ids never collide before filing.
+   - `waits`: the wait record, empty at first (see Waits).
    - One `iN/` directory per iteration.
 3. **Record the switch.** Note in the brief and memory that the project is in the fast lane, quoting the owner.
    - If an rloop Run is live, stop it: `systemctl --user stop <unit>`.
@@ -90,7 +95,23 @@ The fast lane removes test gates, never safety gates.
 ## The loop
 
 Each iteration lives in `iN/`. The scripts are in `scripts/` next to this file. Every one launches a capped
-`systemd-run --user` unit (16G, no swap, OOMPolicy=continue, an exit file) and returns at once.
+`systemd-run --user` unit (16G, no swap, OOMPolicy=continue, an exit file) through `scripts/launch-unit.sh` and
+returns at once. `launch-unit.sh` also guards the host and the lane:
+- **Disk floor.** It refuses while the working directory's filesystem or the nix store has less than 45 GiB free
+  (`FASTLANE_MIN_FREE_GB` sets a lane's own floor). Build a flake from a git checkout or a small dedicated folder: a
+  flake in a folder outside git, or named with `path:`, is copied whole into the nix store on every call. Build
+  each tool the lane calls once, with `nix build --out-link <work dir>/tools/<name>`, and call it through the link,
+  because the nix daemon collects garbage on its own when space runs low. When the lane ends, delete rebuildable
+  output (`target/`) in the worktrees it has finished with.
+- **Busy check.** Start a deploy with `--kind deploy` and a live run with `--kind live`; anything else is `other`.
+  A deploy refuses while a live unit started in the work directory is active, and a live run refuses while a deploy
+  is. Nothing else blocks: a test never blocks development. The guard sees only active units, so a deploy or a live
+  run, a promote script included, runs inside its `--kind` unit for the whole run, started through
+  `launch-unit.sh`: the unit of that kind is active exactly as long as the work. A launcher that hands off to
+  another unit stays active until that unit ends. `scripts/launch-unit.sh --check deploy|live <work dir>` is only
+  an early warning for a caller (exit 1 prints the holders), never the guard.
+- **Manager.** `--manager <name>` puts the manager's name on the unit's wait-record line. `implement.sh` and
+  `review.sh` take it from `FASTLANE_MANAGER`.
 
 1. **Task.** Write `iN/task.md` from [references/prompts.md](references/prompts.md), including:
    - What the live test showed: the step, what the user saw, and the evidence paths.
@@ -159,8 +180,9 @@ Each iteration lives in `iN/`. The scripts are in `scripts/` next to this file. 
 - the next run would pass a spending cap;
 - the live test can't run for a reason outside the code, such as a vendor being down or credentials expiring.
 
-Whatever ends the lane, a stop above or the owner lifting it, file `followups.md` under the severity rule before you
-report: each item that still holds at the committed tip.
+A lane ends on the owner's word or when its named scope is done; a stop above pauses it for the owner. Whatever ends
+the lane, file `followups.md` under the severity rule before you report: each item that still holds at the committed
+tip. Until then, each day's summary to the owner carries the count of unfiled follow-ups.
 
 After the same live failure survives two fixes, revisit the diagnosis and report progress to the owner. Continue
 unless an authorised limit or an outside blocker prevents it.
@@ -230,6 +252,15 @@ the owner a proposal.
 
 Deadlines are at most 3300 s, so the prompt cache stays warm. Re-arm on 124. The live-test driver gets its own watch
 script with the same codes, plus a "findings printed, keep waiting" mode if it streams progress.
+
+**Wait record.** The work directory's `waits` file has one line per armed wait: `manager | unit | exit path |
+deadline`, the deadline in UTC (`2026-11-19T18:30Z`) and the exit path absolute. `launch-unit.sh` appends the line
+for each unit it starts. `wait.sh` rewrites it with its own deadline while it waits and removes it when it returns,
+on every exit path, its own deadline included. To wait on a peer's unit, run
+`env FASTLANE_MANAGER=<your name> scripts/wait.sh ...`, so the line is yours and the peer's stays. For a wait on a
+peer's hand-off, write a line by hand with `-` for the unit and remove it when the hand-off arrives; `wait.sh`
+touches only its own manager's lines for the units it waits on. The assistant reads the record as
+delegate-to-manager section 4 says.
 
 ## Don'ts
 

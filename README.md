@@ -332,8 +332,11 @@ writing the spec.
 ```
 
 Every codex run and reader is a capped `systemd-run --user` unit that writes an exit file.
-`scripts/wait.sh` waits on them with the usual 0/1/2/124 codes. `references/live-test-template.md`
-is where each project defines what its live test means.
+`scripts/wait.sh` waits on them with the usual 0/1/2/124 codes. `scripts/launch-unit.sh` refuses
+below a free-space floor (45 GiB by default) and refuses a deploy during a live run and the reverse;
+it and `wait.sh` keep the lane's wait record, one line per armed wait, so a finished job nobody waits
+on shows up. `references/live-test-template.md` is where each project defines what its live test
+means. `scripts/fastlane.test`, run by `./check.sh`, covers the record, the busy check and the floor.
 
 ### token-ledger
 
@@ -551,8 +554,8 @@ directories created by `--migrate-existing`.
 - `python3`, poppler's `pdftohtml`, `pdftoppm` and `pdftotext`, and calibre's
   `ebook-convert` for `pdf-to-kindle-epub`; ImageMagick's `magick` is optional
   and shrinks images. Its offline test in `./check.sh` needs only `python3`
-- `codex` and `claude` on `PATH`, `systemd-run --user`, and GNU `timeout` for
-  `fastlane`
+- `codex` and `claude` on `PATH`, `systemd-run --user`, GNU `timeout`, `date`
+  and `df`, and `flock` for `fastlane`
 
 ## License
 

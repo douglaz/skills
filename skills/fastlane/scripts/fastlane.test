@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+# fastlane.test — offline checks for launch-unit.sh and wait.sh: the wait record, the busy check and
+# the disk floor. `systemctl`, `systemd-run` and `df` are stubs: a unit is "active" while
+# $FIX/active/<unit> exists, systemd-run marks its unit active and logs its arguments to $FIX/runs,
+# and df reports $FIX/free-kb KiB free. Starts no unit.
+#
+# Usage: ./fastlane.test          (exits 0 if all pass)
+
+set -uo pipefail
+HERE=$(cd "$(dirname "$0")" && pwd)
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+PASS=0; FAIL=0
+
+mkdir -p "$WORK/bin"
+cat > "$WORK/bin/systemctl" <<'STUB'
+#!/usr/bin/env bash
+# systemctl --user is-active --quiet UNIT
+[ "$1 $2 $3" = "--user is-active --quiet" ] || { echo "unexpected systemctl call: $*" >&2; exit 9; }
+[ -e "$FIX/active/$4" ]
+STUB
+cat > "$WORK/bin/systemd-run" <<'STUB'
+#!/usr/bin/env bash
+echo "$*" >> "$FIX/runs"
+for a in "$@"; do case $a in --unit=*) touch "$FIX/active/${a#--unit=}" ;; esac; done
+STUB
+cat > "$WORK/bin/df" <<'STUB'
+#!/usr/bin/env bash
+printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\nfake 999999999 1 %s 1%% /\n' "$(cat "$FIX/free-kb")"
+STUB
+chmod +x "$WORK/bin/systemctl" "$WORK/bin/systemd-run" "$WORK/bin/df"
+PATH="$WORK/bin:$PATH"
+LU=$HERE/launch-unit.sh WS=$HERE/wait.sh
+
+new_fix() { # a fresh lane folder with an empty record, 100 GiB free, nothing active
+  FIX="$WORK/fix"; rm -rf "$FIX"; mkdir -p "$FIX/active" "$FIX/lane/i1"
+  : > "$FIX/lane/waits"; echo $((100 * 1048576)) > "$FIX/free-kb"; : > "$FIX/runs"
+  export FIX
+}
+ok() { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
+bad() { FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '       %s\n' "$2"; }
+check() { if eval "$2"; then ok "$1"; else bad "$1" "$3"; fi; }
+launch() { (cd "$FIX/lane" && env FASTLANE_CWD="$FIX/lane" "$LU" "$@") > "$FIX/launch.out" 2>&1; echo $?; }
+ISO='[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}Z'
+
+# --- the wait record ---------------------------------------------------------------------------
+new_fix
+rc=$(launch --manager devices --kind other fl-i1-impl i1/impl -- /bin/true)
+line=$(cat "$FIX/lane/waits")
+check "launch in a lane exits 0" '[ "$rc" = 0 ]' "rc $rc: $(cat "$FIX/launch.out")"
+check "launch appends one record line: manager | unit | exit path | ISO deadline" \
+  '[ "$(wc -l < "$FIX/lane/waits")" = 1 ] && [[ "$line" =~ ^devices\ \|\ fl-i1-impl\ \|\ $FIX/lane/i1/impl/exit\ \|\ $ISO$ ]]' "line: $line"
+check "launch writes unit, kind, manager and the record path into DIR" \
+  '[ "$(cat "$FIX/lane/i1/impl/unit")" = fl-i1-impl ] && [ "$(cat "$FIX/lane/i1/impl/kind")" = other ] &&
+   [ "$(cat "$FIX/lane/i1/impl/manager")" = devices ] && [ "$(cat "$FIX/lane/i1/impl/record")" = "$FIX/lane/waits" ]'
+
+echo "lead | - | /abs/peer-handoff/exit | 2026-11-19T18:30Z" >> "$FIX/lane/waits"
+rm "$FIX/active/fl-i1-impl"; echo "success exited 0" > "$FIX/lane/i1/impl/exit"
+"$WS" 60 "$FIX/lane/i1/impl" > "$FIX/wait.out" 2>&1; rc=$?
+check "wait.sh exits 0 on a finished unit" '[ "$rc" = 0 ]' "rc $rc: $(cat "$FIX/wait.out")"
+check "wait.sh removes its line when the job has finished" '! grep -q "fl-i1-impl" "$FIX/lane/waits"' "$(cat "$FIX/lane/waits")"
+check "wait.sh leaves a hand-written line (unit -) alone" \
+  'grep -qx "lead | - | /abs/peer-handoff/exit | 2026-11-19T18:30Z" "$FIX/lane/waits"' "$(cat "$FIX/lane/waits")"
+
+new_fix
+launch --manager tests fl-i2-live i1/live -- /bin/true > /dev/null
+launch --manager devices fl-i2-impl i1/impl -- /bin/true > /dev/null
+"$WS" 0 "$FIX/lane/i1/live" > "$FIX/wait.out" 2>&1; rc=$?
+check "wait.sh returns 124 at its own deadline" '[ "$rc" = 124 ]' "rc $rc: $(cat "$FIX/wait.out")"
+check "wait.sh removes its line at its own deadline too" '! grep -q "fl-i2-live" "$FIX/lane/waits"' "$(cat "$FIX/lane/waits")"
+check "wait.sh leaves another unit's line alone" 'grep -q "^devices | fl-i2-impl |" "$FIX/lane/waits"' "$(cat "$FIX/lane/waits")"
+
+new_fix
+launch --manager product --kind deploy fl-i5-deploy i1/deploy -- /bin/true > /dev/null
+env FASTLANE_MANAGER=tests "$WS" 0 "$FIX/lane/i1/deploy" > "$FIX/wait.out" 2>&1
+check "a manager waiting on a peer's unit leaves the peer's line alone" \
+  'grep -q "^product | fl-i5-deploy |" "$FIX/lane/waits" && ! grep -q "^tests |" "$FIX/lane/waits"' "$(cat "$FIX/lane/waits")"
+
+new_fix
+launch --manager devices fl-i6-impl i1/impl -- /bin/true > /dev/null
+echo "lead | - | /abs/peer-handoff/exit | 2026-11-19T18:30Z" >> "$FIX/lane/waits"
+before=$(cat "$FIX/lane/waits")
+mkdir -p "$WORK/failbin"; printf '#!/bin/sh\nexit 1\n' > "$WORK/failbin/awk"; chmod +x "$WORK/failbin/awk"
+env PATH="$WORK/failbin:$PATH" "$WS" 0 "$FIX/lane/i1/impl" > "$FIX/wait.out" 2>&1
+check "a record rewrite that fails (a full disk) leaves the record as it was" \
+  '[ "$(cat "$FIX/lane/waits")" = "$before" ] && ! ls "$FIX/lane"/waits.tmp.* > /dev/null 2>&1' "$(cat "$FIX/lane/waits")"
+
+new_fix
+launch --manager tests fl-i3-live i1/live -- /bin/true > /dev/null
+"$WS" 3300 "$FIX/lane/i1/live" > "$FIX/wait.out" 2>&1 & wpid=$!
+for _ in $(seq 50); do grep -q "fl-i3-live" "$FIX/lane/waits" && [ -e "$FIX/lane/waits.lock" ] && break; sleep 0.1; done
+sleep 0.5
+during=$(cat "$FIX/lane/waits")
+kill -TERM "$wpid"; wait "$wpid" 2>/dev/null
+check "a running wait.sh keeps the unit's line, with its own deadline" \
+  '[ "$(grep -c "fl-i3-live" <<<"$during")" = 1 ] && [[ "$during" =~ ^tests\ \|\ fl-i3-live\ \|\ .*/i1/live/exit\ \|\ $ISO$ ]]' "during: $during"
+check "a wait.sh stopped by a signal removes its line" '! grep -q "fl-i3-live" "$FIX/lane/waits"' "$(cat "$FIX/lane/waits")"
+
+new_fix
+(cd "$FIX" && mkdir -p elsewhere && env FASTLANE_CWD="$FIX" "$LU" fl-x "$FIX/elsewhere/x" -- /bin/true) > "$FIX/launch.out" 2>&1; rc=$?
+check "outside a lane folder a launch still starts, and writes no record" \
+  '[ "$rc" = 0 ] && [ ! -e "$FIX/elsewhere/x/record" ] && [ ! -s "$FIX/lane/waits" ]' "rc $rc: $(cat "$FIX/launch.out")"
+
+# --- the busy check ----------------------------------------------------------------------------
+new_fix
+launch --kind live fl-live i1/live -- /bin/true > /dev/null
+runs_before=$(wc -l < "$FIX/runs")
+rc=$(launch --kind deploy fl-deploy i1/deploy -- /bin/true)
+check "a deploy refuses (exit 3) while a recorded live unit is active" '[ "$rc" = 3 ]' "rc $rc: $(cat "$FIX/launch.out")"
+check "the refusal names the holder and starts nothing" \
+  'grep -q "live unit fl-live is active" "$FIX/launch.out" && [ "$(wc -l < "$FIX/runs")" = "$runs_before" ] && ! grep -q fl-deploy "$FIX/lane/waits"' \
+  "$(cat "$FIX/launch.out")"
+"$WS" 0 "$FIX/lane/i1/live" > /dev/null 2>&1
+rc=$(launch --kind deploy fl-deploy i1/deploy -- /bin/true)
+check "the live unit still blocks a deploy after its wait returned and dropped its record line" \
+  '[ "$rc" = 3 ] && ! grep -q "fl-live " "$FIX/lane/waits"' "rc $rc: $(cat "$FIX/launch.out"); $(cat "$FIX/lane/waits")"
+rc=$(launch --kind other fl-impl i1/impl -- /bin/true)
+check "an 'other' launch is not blocked by a live unit" '[ "$rc" = 0 ]' "rc $rc: $(cat "$FIX/launch.out")"
+rc=$(launch --kind live fl-live2 i1/live2 -- /bin/true)
+check "a second live run is not blocked by a live unit" '[ "$rc" = 0 ]' "rc $rc: $(cat "$FIX/launch.out")"
+out=$("$LU" --check deploy "$FIX/lane" 2>&1); rc=$?
+check "--check deploy exits 1 and prints the holders" '[ "$rc" = 1 ] && grep -q "fl-live" <<<"$out"' "rc $rc: $out"
+out=$(cd "$FIX/lane/i1/impl" && "$LU" --check deploy 2>&1); rc=$?
+check "--check deploy run from inside a unit's directory still finds the lane and its live unit" \
+  '[ "$rc" = 1 ] && grep -q "fl-live" <<<"$out"' "rc $rc: $out"
+out=$(cd "$FIX/lane/i1" && "$LU" --check other 2>&1); rc=$?
+check "--check other exits 0, finding the lane folder above the current directory" '[ "$rc" = 0 ] && [ -z "$out" ]' "rc $rc: $out"
+rm "$FIX/active/fl-live" "$FIX/active/fl-live2"
+out=$("$LU" --check deploy "$FIX/lane" 2>&1); rc=$?
+check "a finished live unit no longer blocks a deploy" '[ "$rc" = 0 ]' "rc $rc: $out"
+rc=$(launch --kind deploy fl-deploy i1/deploy -- /bin/true)
+check "with the live run over, the deploy starts" '[ "$rc" = 0 ]' "rc $rc: $(cat "$FIX/launch.out")"
+rc=$(launch --kind live fl-live3 i1/live3 -- /bin/true)
+check "a live run refuses (exit 3) while a recorded deploy is active" '[ "$rc" = 3 ] && grep -q "deploy unit fl-deploy" "$FIX/launch.out"' "rc $rc: $(cat "$FIX/launch.out")"
+new_fix
+mkdir -p "$FIX/lane/i9/stale"; echo live > "$FIX/lane/i9/stale/kind"; echo fl-gone > "$FIX/lane/i9/stale/unit"
+out=$("$LU" --check deploy "$FIX/lane" 2>&1); rc=$?
+check "a live dir whose unit is gone with no exit file (a reboot) doesn't block --check deploy" '[ "$rc" = 0 ] && [ -z "$out" ]' "rc $rc: $out"
+rc=$(launch --kind deploy fl-after-reboot i1/deploy -- /bin/true)
+check "nor a deploy launch" '[ "$rc" = 0 ]' "rc $rc: $(cat "$FIX/launch.out")"
+out=$("$LU" --check build "$FIX/lane" 2>&1); rc=$?
+check "an unknown kind is a usage error (exit 2)" '[ "$rc" = 2 ]' "rc $rc: $out"
+
+# --- the disk floor ----------------------------------------------------------------------------
+new_fix
+echo $((40 * 1048576)) > "$FIX/free-kb"
+rc=$(launch fl-low i1/low -- /bin/true)
+check "below the 45 GiB default floor a launch refuses (exit 3) and starts nothing" \
+  '[ "$rc" = 3 ] && grep -q "disk floor" "$FIX/launch.out" && [ ! -s "$FIX/runs" ] && [ ! -s "$FIX/lane/waits" ]' "rc $rc: $(cat "$FIX/launch.out")"
+out=$( (cd "$FIX/lane" && env FASTLANE_CWD="$FIX/lane" FASTLANE_MIN_FREE_GB=30 "$LU" fl-low i1/low3 -- /bin/true) 2>&1); rc=$?
+check "a lane's lower floor (FASTLANE_MIN_FREE_GB=30) lets the same launch start" '[ "$rc" = 0 ]' "rc $rc: $out"
+
+echo "passed $PASS, failed $FAIL"
+[[ "$FAIL" == 0 ]]
