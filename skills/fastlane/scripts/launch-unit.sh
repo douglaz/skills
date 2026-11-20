@@ -17,14 +17,17 @@
 # - Busy check: KIND is deploy, live or other (the default). A deploy refuses while a live unit
 #   started in the lane folder is active, and a live run refuses while a deploy is; nothing else
 #   blocks. Units are found by their DIR/kind files and checked by name, never by listing units.
-#   `--check KIND [LANE_DIR]` runs that check alone (LANE_DIR defaults to the nearest lane folder
-#   at or above the current directory): exit 1 and the holders when it would refuse, else 0.
+#   It sees only active units: run a deploy or a live run inside its --kind unit for the whole run,
+#   and keep a launcher that hands off to another unit active until that unit ends.
+#   `--check KIND [LANE_DIR]` is an early warning for a caller, never the guard (LANE_DIR defaults
+#   to the nearest lane folder at or above the current directory): exit 1 and the holders when a
+#   launch of KIND would refuse now, else 0.
 # - Disk floor: refuse when the working directory's filesystem, or /nix/store's, has less than
 #   FASTLANE_MIN_FREE_GB GiB free (default 45).
 set -eu
 usage() {
   echo "usage: $0 [--kind deploy|live|other] [--manager NAME] UNIT DIR [--stdout FILE] -- CMD [ARGS...]" >&2
-  echo "       $0 --check deploy|live|other [LANE_DIR]" >&2
+  echo "       $0 --check deploy|live|other [LANE_DIR]   (an early warning; the launch is the guard)" >&2
   exit 2
 }
 

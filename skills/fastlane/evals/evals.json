@@ -5,10 +5,10 @@
     {
       "id": 1,
       "prompt": "You are the tests manager (a subagent manager) in the shop fast lane; the product manager is the lead. The lane's work directory is /var/tmp/shop-manager/fastlane-checkout/. You want to start the checkout live test on the candidate build now. You don't know whether product is deploying right now. What do you run, in order, with exact commands, and what do you do if something is in the way?",
-      "expected_output": "Launches the live run through launch-unit.sh with --kind live (or runs --check live first), lets the busy check refuse while a recorded deploy is active, waits rather than overriding it, and arms its own background wait.sh before ending its turn.",
+      "expected_output": "Runs the whole live run inside a launch-unit.sh unit with --kind live (an optional --check live first is only an early warning), lets the busy check refuse while a deploy unit is active, waits rather than overriding it, and arms its own background wait.sh before ending its turn.",
       "files": [],
       "expectations": [
-        "Starts the live run through scripts/launch-unit.sh with --kind live, or runs launch-unit.sh --check live before starting",
+        "Starts the live run through scripts/launch-unit.sh with --kind live, with the driver running inside that unit for the whole run (a --check first is only an early warning, not a substitute)",
         "On a refusal (exit 1 from --check, or 3 from a launch), waits for the deploy to finish instead of starting anyway, and does not deploy itself (only the lead deploys)",
         "Passes its manager name (--manager or FASTLANE_MANAGER) so the record line names it",
         "Arms its own wait.sh wait (deadline 3300 s or less) as a background command before ending a turn that leaves the live run going",

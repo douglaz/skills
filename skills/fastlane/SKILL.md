@@ -105,9 +105,11 @@ returns at once. `launch-unit.sh` also guards the host and the lane:
   output (`target/`) in the worktrees it has finished with.
 - **Busy check.** Start a deploy with `--kind deploy` and a live run with `--kind live`; anything else is `other`.
   A deploy refuses while a live unit started in the work directory is active, and a live run refuses while a deploy
-  is. Nothing else blocks: a test never blocks development. A deploy or live-launch script that doesn't start
-  through `launch-unit.sh` (a promote script, say) runs `scripts/launch-unit.sh --check deploy|live <work dir>`
-  before its first step and stops on exit 1, which prints the holders.
+  is. Nothing else blocks: a test never blocks development. The guard sees only active units, so a deploy or a live
+  run, a promote script included, runs inside its `--kind` unit for the whole run, started through
+  `launch-unit.sh`: the unit of that kind is active exactly as long as the work. A launcher that hands off to
+  another unit stays active until that unit ends. `scripts/launch-unit.sh --check deploy|live <work dir>` is only
+  an early warning for a caller (exit 1 prints the holders), never the guard.
 - **Manager.** `--manager <name>` puts the manager's name on the unit's wait-record line. `implement.sh` and
   `review.sh` take it from `FASTLANE_MANAGER`.
 
