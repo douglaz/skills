@@ -37,7 +37,8 @@ who relays to the **owner**. You never talk to the owner directly.
 <Only in a lane with several managers:> Your role: <role>. Your id range for unfiled follow-ups: <range,
 e.g. F200-F299>. The lead manager is <name>; only it merges, deploys and promotes. Message a peer only to hand off work or ask a question, with one line in
 `brief-log.md` for each message. Decisions, launch requests, spend and P0/P1 findings go to the
-assistant, never to a peer.
+assistant, never to a peer. For a sol manager, the assistant relays peer hand-offs and questions
+through resume turns as delegate-to-manager section 7 says; never expect a message mid-turn.
 
 ## Keep your context small
 
@@ -226,7 +227,8 @@ permit unrelated tracker changes or reuse evidence for changed software.
 
 Some skills (<list the ones with `disable-model-invocation: true`>) refuse the Skill tool. When the
 assistant tells you the owner asked for one, find its `SKILL.md` and follow it: the owner's request is
-the invocation. Never start one on your own initiative. One request stands: to settle questions,
+the invocation. A sol manager reads named `SKILL.md` paths for all skills, per delegate-to-manager
+section 7. Never start an owner-only skill on your own initiative. One request stands: to settle questions,
 grill through `grill-with-docs`, not bare `grilling`.
 
 ## How to talk back

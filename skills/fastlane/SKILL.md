@@ -46,18 +46,19 @@ The fast lane removes test gates, never safety gates.
 
 ## Roles
 
-- **Manager** runs the lane: an Opus subagent at effort high (delegate-to-manager skill). It writes task files,
+- **Manager** runs the lane: a sol manager at effort high, per
+  [delegate-to-manager section 7](../delegate-to-manager/SKILL.md#7-a-sol-manager). It writes task files,
   launches codex and the readers, judges findings, commits, deploys and runs the live test.
   - A manager runs its part of the lane, every iteration until the live test is perfect. Each iteration continues
     what the last one started, so the lane is one task with no boundary to clear at.
   - A lane can run several managers, one per role, as delegate-to-manager's "Several managers in one lane" says. Only
-    the lead manager deploys, promotes and merges.
+    the lead manager deploys, promotes and merges. The assistant relays peer hand-offs and questions through
+    section 7's resume turns; managers cannot receive messages mid-turn.
   - Never replace it for context size. If it stops mid-lane, resume it; spawn one replacement only if the resume is
     refused, and point it at the lane's state file.
 - **Assistant** (the main session) watches the manager (delegate-to-manager section 4) and relays to the owner in
-  one line per meaningful event. When delegated, the manager arms its own wait before it ends a turn that leaves a
-  job running: the `scripts/wait.sh` call below as one background command, re-armed on 124. The lane's wait record
-  shows the assistant every armed wait (see Waits).
+  one line per meaningful event. The manager waits and the assistant resumes it as delegate-to-manager section 7
+  says. The lane's wait record shows the assistant the units and hand-offs being watched (see Waits).
 - Without a manager (the owner asked the main session to do it directly), the session plays both roles.
 
 ## Set up once per project
@@ -124,7 +125,7 @@ returns at once. `launch-unit.sh` also guards the host and the lane:
    exactly high, in the worktree.
    - Codex edits and compiles what gets deployed. It doesn't commit, push, deploy or write the tracker, and it doesn't
      touch tests.
-   - Wait with `scripts/wait.sh 3300 iN/impl`.
+   - Wait with `scripts/wait.sh <deadline> iN/impl`, following Waits below.
    - Then read its handoff and build exits. A failed build goes straight back to codex with the error, in a new
      `iN/impl-2`, without review.
 3. **Review.**
@@ -134,8 +135,8 @@ returns at once. `launch-unit.sh` also guards the host and the lane:
      as the template has them, the owner's text: never add, drop or reword a clause for one change.
    - Run `scripts/review.sh <worktree> iN/review-brief.md iN/review <tag>` for opus, astra and sol. To add the
      optional seat, name all four: `scripts/review.sh <worktree> iN/review-brief.md iN/review <tag> opus astra sol fable`.
-   - Wait only on the required seats: `scripts/wait.sh 3300 iN/review/opus iN/review/astra iN/review/sol`. Read
-     fable's answer if it has arrived by then, and never wait for it.
+   - Wait only on the required seats: `scripts/wait.sh <deadline> iN/review/opus iN/review/astra iN/review/sol`,
+     following Waits below. Read fable's answer if it has arrived by then, and never wait for it.
    - On a re-review after a fix, the brief covers the delta and the earlier findings, not the whole change again.
 4. **Judge.** Read every finding against the code before believing it. Votes never outweigh a verified defect, and a
    unanimous finding can still be wrong.
@@ -250,7 +251,8 @@ the owner a proposal.
 | 2 | a unit is gone with no exit file |
 | 124 | deadline |
 
-Deadlines are at most 3300 s, so the prompt cache stays warm. Re-arm on 124. The live-test driver gets its own watch
+Choose polling deadlines and hand off longer waits as [delegate-to-manager section 7](../delegate-to-manager/SKILL.md#7-a-sol-manager)
+says, including when the assistant must resume the manager. Re-arm on 124. The live-test driver gets its own watch
 script with the same codes, plus a "findings printed, keep waiting" mode if it streams progress.
 
 **Wait record.** The work directory's `waits` file has one line per armed wait: `manager | unit | exit path |
