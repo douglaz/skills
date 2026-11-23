@@ -4,28 +4,28 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "You are the tests manager (a subagent manager) in the shop fast lane; the product manager is the lead. The lane's work directory is /var/tmp/shop-manager/fastlane-checkout/. You want to start the checkout live test on the candidate build now. You don't know whether product is deploying right now. What do you run, in order, with exact commands, and what do you do if something is in the way?",
-      "expected_output": "Runs the whole live run inside a launch-unit.sh unit with --kind live (an optional --check live first is only an early warning), lets the busy check refuse while a deploy unit is active, waits rather than overriding it, and arms its own background wait.sh before ending its turn.",
+      "prompt": "You are the tests manager (a sol manager) in the shop fast lane; the product manager is the lead. The lane's work directory is /var/tmp/shop-manager/fastlane-checkout/. You want to start the checkout live test on the candidate build now. You don't know whether product is deploying right now. What do you run, in order, with exact commands, and what do you do if something is in the way?",
+      "expected_output": "Runs the whole live run inside a launch-unit.sh unit with --kind live (an optional --check live first is only an early warning), lets the busy check refuse while a deploy unit is active, waits rather than overriding it, and follows delegate-to-manager section 7 for bounded polling or a longer-wait handoff to the assistant.",
       "files": [],
       "expectations": [
         "Starts the live run through scripts/launch-unit.sh with --kind live, with the driver running inside that unit for the whole run (a --check first is only an early warning, not a substitute)",
         "On a refusal (exit 1 from --check, or 3 from a launch), waits for the deploy to finish instead of starting anyway, and does not deploy itself (only the lead deploys)",
         "Passes its manager name (--manager or FASTLANE_MANAGER) so the record line names it",
-        "Arms its own wait.sh wait (deadline 3300 s or less) as a background command before ending a turn that leaves the live run going",
+        "Uses delegate-to-manager section 7 bounded polling while its turn runs, or returns a wait with unit, out/err/exit paths, next action and watch command for the assistant to supervise and resume",
         "Does not list all units (systemctl list-units) to decide whether something is busy"
       ]
     },
     {
       "id": 2,
       "prompt": "You are the devices manager in a fast lane. You just launched the implementer with scripts/implement.sh into i4/impl, which can take up to two hours. You have nothing else to do until it finishes, and you're about to end your turn. Separately, the lead manager said it will hand you a signed build later, outside any unit. What exactly do you do before ending the turn, and what does the lane's waits file look like afterwards?",
-      "expected_output": "Arms wait.sh 3300 i4/impl as one background command (re-armed on 124), ends the turn with a wait naming the unit and paths; the waits file holds the launch-unit/wait.sh line for the implementer and a hand-written line with '-' for the unit for the peer hand-off.",
+      "expected_output": "Hands the two-hour wait to the assistant per delegate-to-manager section 7, ending the turn with the unit, out/err/exit paths, next action and watch command. The waits file keeps the launch-unit line for the implementer and a hand-written line with '-' for the peer hand-off; the assistant delivers results and the hand-off in a resume turn.",
       "files": [],
       "expectations": [
-        "Runs scripts/wait.sh with a deadline of 3300 s or less on i4/impl as one background command, and re-arms on 124",
+        "Hands the two-hour wait to the assistant under delegate-to-manager section 7 instead of arming a background wait to wake itself",
         "Ends the turn with a wait naming the unit, out/err/exit paths and the next action",
         "Shows a waits line of the form 'manager | unit | exit path | deadline' with an absolute exit path and an ISO UTC deadline",
         "Adds a hand-written line with '-' for the unit for the peer hand-off, and says it removes it when the hand-off arrives",
-        "Does not hand the two-hour wait to the assistant instead of waiting itself"
+        "Expects the assistant to resume the same thread with results and peer hand-offs, not messages during a running turn"
       ]
     },
     {

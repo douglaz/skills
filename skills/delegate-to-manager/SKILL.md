@@ -22,8 +22,8 @@ Three roles:
 | **Assistant** | you, the main session | keeps the brief, relays decisions, watches manager exits, decides boundaries, writes memory |
 | **Manager** | a background subagent per task, or several in one lane (section 1) | all the repo work: reads, grills, triages, runs panels and rloop, edits, reviews, PRs |
 
-The assistant runs on Fable (owner, 2026-11-19). Managers don't: an Opus manager stays an Opus
-subagent with effort high passed explicitly (section 1, step 3).
+The assistant runs on Fable (owner, 2026-11-19). Managers use the owner's session or standing
+project choice (section 1, step 3): an Opus subagent or a sol manager, both at effort high.
 
 The point is context hygiene and less repetitive steering. Every task starts in an empty manager
 context, so it reasons sharply, and inside a task the manager keeps what it has learned. Your own
