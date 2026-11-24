@@ -10,3 +10,4 @@ set -euo pipefail
 ./skills/token-ledger/scripts/token_ledger.test
 ./skills/pdf-to-kindle-epub/scripts/pdf2epub.test
 ./skills/fastlane/scripts/fastlane.test
+./skills/cfastlane/scripts/cfastlane.test

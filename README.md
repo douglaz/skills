@@ -338,6 +338,29 @@ it and `wait.sh` keep the lane's wait record, one line per armed wait, so a fini
 on shows up. `references/live-test-template.md` is where each project defines what its live test
 means. `scripts/fastlane.test`, run by `./check.sh`, covers the record, the busy check and the floor.
 
+### cfastlane
+
+The fast lane with one combined session. A single codex session (`gpt-6.1-sol` at `high`) plans the
+change, writes the code, builds it and writes the handoff, so there is no separate manager and no
+manager-to-implementer handoff to pay for. Scripts do the mechanical steps: commit after scans, and
+write the reproduction receipt a reviewer reads. One independent read-only reviewer reads the diff
+and the receipt (any of the fast lane's seats can be named instead). The assistant judges the
+findings, and a call at the blocking line goes to the owner, because the session that wrote the code
+must not rate findings against it. Use it for one bounded change that one session can hold; keep
+`fastlane` for long multi-iteration lanes.
+
+```text
+/cfastlane add the admission step
+```
+
+Tokens are measured, never limited. `scripts/meter.py` reads the packet's codex and reviewer
+transcripts, or one transcript such as the assistant's own, and reports new tokens: uncached input
+plus output. `scripts/session.sh` starts the session and later resumes the same one.
+`scripts/close.py` commits after its scans, `scripts/receipt.py` writes the manifest and
+`scripts/review.sh` starts the reviewer. It reuses `fastlane`'s `launch-unit.sh`, `wait.sh`,
+`make-diff.sh` and `review.sh`, so install both. `scripts/cfastlane.test`, run by `./check.sh`,
+covers the meter, the commit scans, the receipt and the launchers.
+
 ### token-ledger
 
 Measures how many tokens a project consumed across Claude Code and Codex. It builds the figures from
@@ -555,7 +578,7 @@ directories created by `--migrate-existing`.
   `ebook-convert` for `pdf-to-kindle-epub`; ImageMagick's `magick` is optional
   and shrinks images. Its offline test in `./check.sh` needs only `python3`
 - `codex` and `claude` on `PATH`, `systemd-run --user`, GNU `timeout`, `date`
-  and `df`, and `flock` for `fastlane`
+  and `df`, and `flock` for `fastlane` and `cfastlane`
 
 ## License
 
