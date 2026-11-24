@@ -99,7 +99,8 @@ Scripts are in `scripts/` next to this file; `F` is fastlane's `scripts/` folder
    a P0/P1 is reachable in a supported case, and write `PKT/judgement.md` with one line per finding.
    - **Nothing at P0/P1**: go to step 8.
    - **A verified P0/P1**: resume the session with a note naming the smallest change that removes it
-     (step 2's resume), then repeat steps 3–7 on the delta.
+     (step 2's resume), then repeat steps 3–7 on the delta. `close.py` commits the repair on top of
+     its last commit; the diff and the receipt still run from the packet's base.
    - **A call at the blocking line** goes to the owner before you act on it: a reviewer's P0/P1 you
      would lower, or a finding you would raise to P0/P1. You wrote the task and the brief, so you are
      not a neutral judge of whether the result is acceptable; the owner is the tiebreak.

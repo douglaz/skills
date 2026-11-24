@@ -93,8 +93,16 @@ check "check mode passes clean work and commits nothing" "[ $RC = 0 ] && [ ! -e 
 python3 -I "$HERE/close.py" "$FIX/pkt" commit > "$FIX/close.out" 2> "$FIX/close.err"; RC=$?
 check "commits clean work with the configured identity" "[ $RC = 0 ] && [ \"\$(git -C '$FIX/wt' log -1 --format='%an <%ae> %s')\" = 'Tester <t@example.org> Add b' ]"
 check "records the candidate commit" '[ "$(cat "$FIX/pkt/candidate")" = "$(git -C "$FIX/wt" rev-parse HEAD)" ]'
+echo repair > "$FIX/wt/src/c.txt"; echo "Repair c" > "$FIX/pkt/commit-subject.txt"
+python3 -I "$HERE/close.py" "$FIX/pkt" commit > "$FIX/close.out" 2> "$FIX/close.err"; RC=$?
+check "a repair turn's work commits on top of the last candidate" "[ $RC = 0 ] && [ \"\$(git -C '$FIX/wt' log -1 --format=%s)\" = 'Repair c' ] && [ \"\$(cat '$FIX/pkt/candidate')\" = \"\$(git -C '$FIX/wt' rev-parse HEAD)\" ]"
+check "the repair commit's scans cover only the new work" "grep -q 'src/c.txt' '$FIX/close.out' && ! grep -q 'src/b.txt' '$FIX/close.out'"
+echo sneaky > "$FIX/wt/src/d.txt"; git -C "$FIX/wt" add -A
+git -C "$FIX/wt" -c user.name=s -c user.email=s@s commit -q -m "session commits by itself"
+echo more > "$FIX/wt/src/e.txt"
 python3 -I "$HERE/close.py" "$FIX/pkt" check > /dev/null 2> "$FIX/close.err"; RC=$?
-check "refuses when HEAD has moved off the base" "[ $RC != 0 ] && grep -q 'HEAD moved off the base' '$FIX/close.err'"
+check "refuses when the session committed by itself" "[ $RC != 0 ] && grep -q 'HEAD moved off the expected commit' '$FIX/close.err'"
+git -C "$FIX/wt" reset -q --hard "$(cat "$FIX/pkt/candidate")"; rm "$FIX/wt/src/e.txt"
 git -C "$FIX/wt" diff "$(cat "$FIX/pkt/base")" HEAD > "$FIX/pkt/diff.patch"
 echo '{"exit": 0}' > "$FIX/pkt/summary.json"
 python3 -I "$HERE/receipt.py" "$FIX/pkt" "$FIX/pkt/summary.json" > "$FIX/receipt.out"; RC=$?

@@ -8,9 +8,10 @@ Reads PKT/config.json ("worktree"; optional "banned_text", a regular expression 
 case against added lines and the commit message; optional "allowed_paths", a list of path prefixes
 every changed file must fall under; optional "identity": {"name", "email"}) and PKT/base (the commit
 the session started from). The commit message comes from PKT/commit-subject.txt and
-PKT/commit-body.txt, which the session writes.
+PKT/commit-body.txt, which the session writes. After a repair turn, run it again: it expects HEAD
+at the commit it made last (PKT/candidate) and scans only the work added since.
 
-Blocks on: HEAD moved off the base, banned text, a file outside the allowed paths, or a missing
+Blocks on: HEAD moved off the expected commit, banned text, a file outside the allowed paths, or a missing
 message. Lines that add `sorry`, an axiom or a kernel bypass are printed for the judge to look at,
 never blocked, because their meaning depends on the project.
 """
@@ -31,8 +32,12 @@ def main():
     def git(*args, check=True):
         return subprocess.run(['git', '-C', wt, *args], capture_output=True, text=True, check=check).stdout
 
+    # A repair turn builds on the last commit this script made, so that commit is the expected HEAD
+    # and the scans cover only the new work. The review diff still runs from PKT/base.
+    candidate = pkt / 'candidate'
+    base = candidate.read_text().strip() if candidate.exists() else base
     if git('rev-parse', 'HEAD').strip() != base:
-        sys.exit(f'HEAD moved off the base {base}: the session must not commit')
+        sys.exit(f'HEAD moved off the expected commit {base}: the session must not commit')
     git('add', '-A', '-N')  # so new files show in the diff
     status = git('status', '--porcelain')
     if not status.strip():
