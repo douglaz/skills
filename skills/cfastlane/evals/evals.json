@@ -1,0 +1,45 @@
+{
+  "skill_name": "cfastlane",
+  "_note": "Scenario prompts: the agent answers as the assistant would act, without running anything. Taken from the first combined-session packet, which followed a manager-plus-implementer pilot.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "The owner approved one bounded change on the ledger project and said: run it as a combined fast lane, one sol session for both roles, and tell me what it cost. The worktree is /home/dev/p/ledger-slice on branch slice/ledger-1, clean. Your packet folder is /var/tmp/ledger-manager/packet-s1/. What do you write and run, in order, to get the session started, and how will you know the cost at the end?",
+      "expected_output": "Writes config.json (name, worktree, optional scans and identity), writes a one-page self-contained task.md from the template, starts with scripts/session.sh PKT and waits with fastlane's wait.sh. Sets no cap, checkpoint or stop. At close-out takes three meter readings: session, review and the assistant's own transcript, in new tokens.",
+      "files": [],
+      "expectations": [
+        "Writes a self-contained task.md that tells the session not to commit, push, start other models or judge findings",
+        "Starts the session with scripts/session.sh PKT rather than a hand-written codex command",
+        "Sets no token cap, checkpoint or stop, and does not tell the session to ration its reading",
+        "Plans three meter readings at close-out: the session, the reviewers, and the assistant's own session",
+        "Reports new tokens (uncached input plus output), with totals as a diagnostic only"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Combined fast lane, packet folder /var/tmp/shop-manager/packet-c2/. The session's first turn ended with 'HANDOFF: partial': the new module fails to build with one type error at cart.rs:88, and the handoff says the fix needs a decision between two ways to model a discount. The owner picked the second way. What do you do next?",
+      "expected_output": "Writes a short note file with the owner's answer and the next step, and runs scripts/session.sh PKT NOTE_FILE to resume the same session; does not start a fresh session or a separate implementer, and does not hand-run codex; then waits on the new turn's folder.",
+      "files": [],
+      "expectations": [
+        "Resumes the same session with scripts/session.sh PKT NOTE_FILE instead of starting a new session",
+        "Says why: the session's history comes back from cache, so nothing is read in twice",
+        "The note states the owner's decision and the next step, and that the task and its rules still stand",
+        "Does not fix the build error itself in the worktree while the session owns it",
+        "Waits on the new turn's folder with fastlane's wait.sh"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Combined fast lane. The session's work is committed, the live test passed, and the one reviewer answered VERDICT: REVISE with one P1 ('the refusal check compares a value with itself, so it cannot fail') and two P3s. You read the code: the refusal type carries no state, so the check is redundant rather than wrong, and you think it is a P3. What happens next, and who decides?",
+      "expected_output": "Re-rates each finding against the code and writes judgement.md; because lowering a reviewer's P1 is a call at the blocking line and the assistant wrote the task and the brief, takes that one call to the owner with the file:line evidence before acting; does not ask the session to rate the finding; files the P3s as follow-ups and fixes none of them in this change; if the owner keeps it at P1, resumes the session through session.sh with a note naming only that finding.",
+      "files": [],
+      "expectations": [
+        "Takes the proposed lowering of the reviewer's P1 to the owner, with file:line evidence, instead of deciding it alone",
+        "Does not let the session that wrote the code judge or rate the finding",
+        "Writes judgement.md with one line per finding: the reviewer's rating, the judge's rating, the evidence and where it went",
+        "Files the P3 findings as follow-ups and does not fix them in this change, even if the session is resumed",
+        "If a repair is needed, resumes through scripts/session.sh with a note naming only the verified P0/P1"
+      ]
+    }
+  ]
+}

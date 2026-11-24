@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+# cfastlane.test — offline checks for the packet meter, the commit and receipt scripts
+# and the session launcher. Model transcripts are fixtures, `systemctl` and fastlane's launch-unit.sh
+# are stubs that log their arguments, and git runs in a throwaway repository. Starts no unit and no model.
+#
+# Usage: ./cfastlane.test          (exits 0 if all pass)
+
+set -uo pipefail
+HERE=$(cd "$(dirname "$0")" && pwd)
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+PASS=0; FAIL=0
+ok() { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
+bad() { FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; }
+check() { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
+
+mkdir -p "$WORK/bin" "$WORK/fl"
+cat > "$WORK/bin/systemctl" <<'STUB'
+#!/usr/bin/env bash
+echo "$*" >> "$FIX/systemctl"
+STUB
+cat > "$WORK/fl/launch-unit.sh" <<'STUB'
+#!/usr/bin/env bash
+echo "$*" >> "$FIX/launches"
+STUB
+cp "$WORK/fl/launch-unit.sh" "$WORK/fl/review.sh"
+chmod +x "$WORK/bin/systemctl" "$WORK/fl/launch-unit.sh" "$WORK/fl/review.sh"
+PATH="$WORK/bin:$PATH"
+export CFASTLANE_FASTLANE_SCRIPTS=$WORK/fl
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+
+codex_session() { # NAME CWD INPUT CACHED OUTPUT
+  local d=$CFASTLANE_CODEX_SESSIONS/2026/01/01; mkdir -p "$d"
+  { printf '{"type":"session_meta","payload":{"cwd":"%s"}}\n' "$2"
+    printf '{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1,"total_tokens":2}}}}\n'
+    printf '{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":%s,"cached_input_tokens":%s,"output_tokens":%s,"total_tokens":%s}}}}\n' "$3" "$4" "$5" "$(($3 + $5))"
+  } > "$d/$1.jsonl"
+}
+claude_session() { # NAME CWD  (two records of one message, then another message)
+  local d=$CFASTLANE_CLAUDE_PROJECTS/${2//[^A-Za-z0-9]/-}; mkdir -p "$d"
+  { printf '{"type":"assistant","timestamp":"2026-01-01T00:00:01Z","message":{"id":"m1","usage":{"input_tokens":5,"cache_creation_input_tokens":5,"cache_read_input_tokens":900,"output_tokens":1}}}\n'
+    printf '{"type":"assistant","timestamp":"2026-01-01T00:00:02Z","message":{"id":"m1","usage":{"input_tokens":10,"cache_creation_input_tokens":90,"cache_read_input_tokens":900,"output_tokens":50}}}\n'
+    printf '{"type":"assistant","timestamp":"2026-01-01T00:00:09Z","message":{"id":"m2","usage":{"input_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":30}}}\n'
+  } > "$d/$1.jsonl"
+}
+new_fix() { # a packet, a clean worktree with one commit, empty transcript stores
+  FIX="$WORK/fix"; rm -rf "$FIX"; mkdir -p "$FIX/pkt" "$FIX/wt/src" "$FIX/elsewhere"
+  export FIX CFASTLANE_CODEX_SESSIONS=$FIX/codex CFASTLANE_CLAUDE_PROJECTS=$FIX/claude
+  mkdir -p "$CFASTLANE_CODEX_SESSIONS" "$CFASTLANE_CLAUDE_PROJECTS"
+  : > "$FIX/systemctl"; : > "$FIX/launches"
+  git -C "$FIX/wt" init -q
+  echo one > "$FIX/wt/src/a.txt"
+  git -C "$FIX/wt" add -A
+  git -C "$FIX/wt" -c user.name=t -c user.email=t@t commit -q -m base
+  cat > "$FIX/pkt/config.json" <<EOF
+{"name": "p1", "worktree": "$FIX/wt", 
+ "banned_text": "forbidden", "allowed_paths": ["src/"], "identity": {"name": "Tester", "email": "t@example.org"}}
+EOF
+  echo 0 > "$FIX/pkt/meter-start"; echo 0 > "$FIX/pkt/review-start"
+  git -C "$FIX/wt" rev-parse HEAD > "$FIX/pkt/base"
+}
+new_tokens() { python3 -I "$HERE/meter.py" "$FIX/pkt" "$@" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["new_tokens"])'; }
+
+echo "meter"
+new_fix
+codex_session in-worktree "$FIX/wt" 1000 700 50          # 350 new
+codex_session in-packet "$FIX/pkt" 100 0 10              # 110 new
+codex_session other-project "$FIX/elsewhere" 9000 0 9000 # not ours
+check "counts sessions under the packet and the worktree, last counter only" '[ "$(new_tokens)" = 460 ]'
+check "writes meter.json" '[ -s "$FIX/pkt/meter.json" ]'
+date -d "+1 hour" +%s > "$FIX/pkt/meter-start"
+check "ignores sessions written before the start stamp" '[ "$(new_tokens)" = 0 ]'
+echo 0 > "$FIX/pkt/meter-start"
+claude_session reviewer "$FIX/wt"                        # m1 final 150, m2 50 = 200 new
+check "review phase adds Claude reviewers, one row per message id" '[ "$(new_tokens --phase review)" = 660 ]'
+check "session phase leaves Claude transcripts out" '[ "$(new_tokens)" = 460 ]'
+T=$(python3 -I "$HERE/meter.py" --claude-transcript "$CFASTLANE_CLAUDE_PROJECTS"/*/reviewer.jsonl --since 2026-01-01T00:00:05Z)
+check "a single transcript can be metered from a time on" '[[ "$T" == *"\"new\": 50"* ]]'
+
+echo "commit and receipt"
+new_fix
+echo "a forbidden word" > "$FIX/wt/src/b.txt"
+echo "Add b" > "$FIX/pkt/commit-subject.txt"; echo "Body." > "$FIX/pkt/commit-body.txt"
+python3 -I "$HERE/close.py" "$FIX/pkt" commit > "$FIX/close.out" 2> "$FIX/close.err"; RC=$?
+check "blocks banned text in an added line" "[ $RC != 0 ] && grep -q 'banned text in added lines' '$FIX/close.err'"
+check "a blocked commit leaves HEAD on the base" '[ "$(git -C "$FIX/wt" rev-parse HEAD)" = "$(cat "$FIX/pkt/base")" ]'
+echo fine > "$FIX/wt/src/b.txt"; echo stray > "$FIX/wt/top.txt"
+python3 -I "$HERE/close.py" "$FIX/pkt" check > "$FIX/close.out" 2> "$FIX/close.err"; RC=$?
+check "blocks a file outside the allowed paths" "[ $RC != 0 ] && grep -q 'outside the allowed paths' '$FIX/close.err'"
+rm "$FIX/wt/top.txt"
+python3 -I "$HERE/close.py" "$FIX/pkt" check > "$FIX/close.out" 2> "$FIX/close.err"; RC=$?
+check "check mode passes clean work and commits nothing" "[ $RC = 0 ] && [ ! -e '$FIX/pkt/candidate' ]"
+python3 -I "$HERE/close.py" "$FIX/pkt" commit > "$FIX/close.out" 2> "$FIX/close.err"; RC=$?
+check "commits clean work with the configured identity" "[ $RC = 0 ] && [ \"\$(git -C '$FIX/wt' log -1 --format='%an <%ae> %s')\" = 'Tester <t@example.org> Add b' ]"
+check "records the candidate commit" '[ "$(cat "$FIX/pkt/candidate")" = "$(git -C "$FIX/wt" rev-parse HEAD)" ]'
+echo repair > "$FIX/wt/src/c.txt"; echo "Repair c" > "$FIX/pkt/commit-subject.txt"
+python3 -I "$HERE/close.py" "$FIX/pkt" commit > "$FIX/close.out" 2> "$FIX/close.err"; RC=$?
+check "a repair turn's work commits on top of the last candidate" "[ $RC = 0 ] && [ \"\$(git -C '$FIX/wt' log -1 --format=%s)\" = 'Repair c' ] && [ \"\$(cat '$FIX/pkt/candidate')\" = \"\$(git -C '$FIX/wt' rev-parse HEAD)\" ]"
+check "the repair commit's scans cover only the new work" "grep -q 'src/c.txt' '$FIX/close.out' && ! grep -q 'src/b.txt' '$FIX/close.out'"
+echo sneaky > "$FIX/wt/src/d.txt"; git -C "$FIX/wt" add -A
+git -C "$FIX/wt" -c user.name=s -c user.email=s@s commit -q -m "session commits by itself"
+echo more > "$FIX/wt/src/e.txt"
+python3 -I "$HERE/close.py" "$FIX/pkt" check > /dev/null 2> "$FIX/close.err"; RC=$?
+check "refuses when the session committed by itself" "[ $RC != 0 ] && grep -q 'HEAD moved off the expected commit' '$FIX/close.err'"
+git -C "$FIX/wt" reset -q --hard "$(cat "$FIX/pkt/candidate")"; rm "$FIX/wt/src/e.txt"
+git -C "$FIX/wt" diff "$(cat "$FIX/pkt/base")" HEAD > "$FIX/pkt/diff.patch"
+echo '{"exit": 0}' > "$FIX/pkt/summary.json"
+python3 -I "$HERE/receipt.py" "$FIX/pkt" "$FIX/pkt/summary.json" > "$FIX/receipt.out"; RC=$?
+M=$FIX/pkt/manifest.json
+check "writes a manifest naming the candidate, a clean tree and the diff hash" "[ $RC = 0 ] && grep -q '\"commit_is_candidate\": true' '$M' && grep -q '\"worktree_clean\": true' '$M' && grep -q \"\$(sha256sum '$FIX/pkt/diff.patch' | cut -d' ' -f1)\" '$M'"
+check "the manifest carries the evidence file's hash and content" "grep -q \"\$(sha256sum '$FIX/pkt/summary.json' | cut -d' ' -f1)\" '$M' && grep -q '\"exit\": 0' '$M'"
+
+echo "session launcher"
+new_fix
+echo task > "$FIX/pkt/task.md"; rm "$FIX/pkt/meter-start" "$FIX/pkt/base"
+echo dirty > "$FIX/wt/src/a.txt"
+sh "$HERE/session.sh" "$FIX/pkt" > /dev/null 2>&1; check "refuses a dirty worktree on the first turn" "[ $? = 3 ] && [ ! -s '$FIX/launches' ]"
+git -C "$FIX/wt" checkout -q -- src/a.txt
+sh "$HERE/session.sh" "$FIX/pkt" > /dev/null 2>&1; RC=$?
+check "first turn stamps the meter and the base" "[ $RC = 0 ] && [ -s '$FIX/pkt/meter-start' ] && [ \"\$(cat '$FIX/pkt/base')\" = \"\$(git -C '$FIX/wt' rev-parse HEAD)\" ]"
+check "starts exactly one unit, the session, in the worktree" '[ "$(wc -l < "$FIX/launches")" = 1 ] && sed -n 1p "$FIX/launches" | grep -q "^cfl-p1-s1 .* exec --dangerously"'
+check "the session runs sol at effort high" 'sed -n 1p "$FIX/launches" | grep -q -- "-m gpt-6.1-sol -c model_reasoning_effort=high"'
+echo note > "$FIX/note.md"
+sh "$HERE/session.sh" "$FIX/pkt" "$FIX/note.md" > /dev/null 2>&1; check "refuses a resume while the last turn has no exit file" "[ $? = 3 ]"
+mkdir -p "$FIX/pkt/turns/1/session"; echo "success exited 0" > "$FIX/pkt/turns/1/session/exit"
+printf 'banner\nsession id: abc-123\n' > "$FIX/pkt/turns/1/session/err"
+sh "$HERE/session.sh" "$FIX/pkt" > /dev/null 2>&1; check "a later turn needs a note file" "[ $? = 2 ]"
+sh "$HERE/session.sh" "$FIX/pkt" "$FIX/note.md" > /dev/null 2>&1; RC=$?
+check "a later turn resumes the same session as a new unit" "[ $RC = 0 ] && sed -n 2p '$FIX/launches' | grep -q '^cfl-p1-s2 .* exec resume abc-123 '"
+
+echo "review launcher"
+new_fix
+echo brief > "$FIX/pkt/review-brief.md"; rm "$FIX/pkt/review-start"
+sh "$HERE/review.sh" "$FIX/pkt" > /dev/null 2>&1; RC=$?
+check "stamps the review start and starts one opus reviewer by default" "[ $RC = 0 ] && [ -s '$FIX/pkt/review-start' ] && sed -n 1p '$FIX/launches' | grep -q 'review-brief.md $FIX/pkt/review p1 opus$'"
+
+echo
+echo "$PASS passed, $FAIL failed"
+[ "$FAIL" -eq 0 ]
