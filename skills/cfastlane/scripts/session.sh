@@ -2,7 +2,8 @@
 # session.sh PKT [NOTE_FILE]
 #
 # Start the packet's one combined session (it plans, implements, builds, reviews and judges), or
-# resume it.
+# resume it. The prompt tells it to stop early only for a named obstacle and to review only a
+# complete candidate.
 #
 #   session.sh PKT             first turn: the session reads PKT/task.md
 #   session.sh PKT NOTE_FILE   later turn: resume the same session; it reads NOTE_FILE
@@ -56,7 +57,8 @@ else
   P="Read the note $NOTE in full, then continue under the same task file and the same rules. $TESTS"
   set -- resume "$ID"
 fi
-P="$P In this turn write the review brief from the fixed fastlane template, filling fields without rewording reviewer instructions or P0-P3 lines. Run $H/review.sh $PKT (it probes grok), wait on required seats with $F/wait.sh, judge every finding, repair accepted P0/P1 and re-review the delta under the task's rules. Do not launch models or agents except through that reviewer launcher. Never lower a reviewer's P0/P1 on your own: end your turn with the evidence and call for the owner. Also end for an owner call if you raise a finding to P0/P1 and will not fix it. The assistant relays those calls; it does not judge. Finish by writing the handoff, final review and judgement paths, and commit message files the task names. If the turn ends with reviewers still active, report their units and exit paths so the same session can be resumed without launching duplicates."
+P="$P Do all the work the task asks before you stop. End the turn early only for a named obstacle: evidence that a requirement cannot be met as written, one specific step with what you tried and why each attempt failed, a run or decision the task reserves for the assistant or the owner, or the turn's time limit. Work that merely remains is not an obstacle; keep going. Review only a complete candidate: on an early stop launch no reviewers and write the handoff as partial, naming the obstacle."
+P="$P Once the candidate is complete, write the review brief from the fixed fastlane template, filling fields without rewording reviewer instructions or P0-P3 lines. Run $H/review.sh $PKT (it probes grok), wait on required seats with $F/wait.sh, judge every finding, repair accepted P0/P1 and re-review the delta under the task's rules. A P0/P1 the task already requires you to fix is repaired in this turn, whether a reviewer rated it or you raised it; that is no owner call. Do not launch models or agents except through that reviewer launcher. Never lower a reviewer's P0/P1 on your own: end your turn with the evidence and call for the owner. Also end for an owner call if you raise a finding to P0/P1 and believe it should not or cannot be fixed within the task: give the reason. The assistant relays those calls; it does not judge. Finish by writing the handoff, final review and judgement paths, and commit message files the task names. Before ending, collect and judge every required reader you launched unless that wait would pass the turn's limit. If the turn still ends with reviewers active, report their units and exit paths so the same session can be resumed without launching duplicates."
 P="$P Read $H/../SKILL.md for the review and wait rules, and read $F/../references/prompts.md for the exact fixed review template. For a failed seat's one retry or a delta re-review, run $H/review.sh $PKT --out $PKT/review-<round> --tag <fresh-tag> [SEAT...], using a fresh output directory and tag. Never move active readers' directories. Wait on the required seat directories under the --out just launched, including grok only when that round launched it; read grok-missing from that same output. Never use an earlier round's exit files or wait on fable."
 T=$PKT/turns/$N
 mkdir -p "$T"  # the turn exists from here on, whatever the launch does

@@ -16,7 +16,14 @@ Copy fastlane's task template, changing only these combined-session details:
 - Keep its constraints, including "Tests are suspended. Don't run, fix, edit or add tests,
   fixtures or test scripts." Add "Launch models only through cfastlane's reviewer launcher;
   don't start other agents or models."
-- Before Handoff add: "Read <absolute cfastlane skill path>/SKILL.md for review and wait rules,
+- Add: "Do all the work this task asks before you stop. End early only for a named obstacle:
+  evidence that a requirement cannot be met as written, one specific step with what you tried and
+  why each attempt failed, a run or decision reserved for the assistant or the owner, or the
+  turn's time limit. Work that merely remains is not an obstacle. On an early stop call no
+  reviewers; write the handoff as partial and name the obstacle." If the task has its own stop
+  condition, write it as one of these obstacles, never as "if X cannot be finished".
+- Before Handoff add: "Once the candidate is complete:
+  Read <absolute cfastlane skill path>/SKILL.md for review and wait rules,
   and <absolute fastlane skill path>/references/prompts.md for the exact fixed review template.
   Make the diff with fastlane's make-diff.sh. Fill that template without rewording reviewer
   instructions or P0–P3 lines. Run cfastlane's review.sh PKT
@@ -27,11 +34,14 @@ Copy fastlane's task template, changing only these combined-session details:
   active readers' directories. Wait on every required seat under the --out just launched;
   detect grok and read grok-missing in that same output. Never wait on an earlier round's
   exit files or on fable. Defer test-only findings and P2/P3.
+  A P0/P1 this task already requires you to fix is repaired in this turn, whoever rated it.
   Never lower a reviewer's P0/P1 yourself: end your turn with that call and evidence for the
-  owner. Likewise end for the owner if you raise one to P0/P1 and won't fix it."
+  owner. Likewise end for the owner if you raise one to P0/P1 and believe it should not or
+  cannot be fixed within this task; give the reason. Collect and judge every required reader
+  you launched before ending, unless that wait would pass the turn's limit."
 - Append to Handoff: "Write <PKT>/commit-subject.txt (one line) and <PKT>/commit-body.txt.
   Include the final review and judgement paths, missing seats and any owner call. Leave the
-  worktree uncommitted. If partial, name one precise remaining goal; if readers remain active,
+  worktree uncommitted. If partial, name the obstacle and one precise remaining goal; if readers remain active,
   name their units and exit paths so a resume collects them without launching duplicates. End with
   `HANDOFF: complete` or `HANDOFF: partial`."
 
@@ -45,10 +55,14 @@ After the live test passes, lift the task's test ban exactly as fastlane require
 
 <The owner's decision on the session's call, the live failure, or the remaining goal.>
 <Next step.> Continue in the same session; reuse what you already learned.
-You still call and wait on reviewers, judge, repair accepted P0/P1 and re-review in this turn.
-Do not reword the fixed review brief. Never lower a reviewer's P0/P1 yourself, or leave a raised
-one unfixed without ending your turn for the owner's decision.
+You still call and wait on reviewers, judge, repair accepted P0/P1 and re-review in this turn,
+once the candidate is complete. Stop early only for a named obstacle.
+Do not reword the fixed review brief. Never lower a reviewer's P0/P1 yourself; end your turn for
+the owner's decision before that, or if you raise one you believe should not or cannot be fixed.
 ```
+
+When the last turn ended partial with no named obstacle, say so in the first sentence, list the
+remaining work in order and resume; that needs no owner decision.
 
 A review repair names only verified P0/P1 product findings, never P2/P3 or suspended test-only
 findings. The session judges; the assistant only relays the calls reserved for the owner.

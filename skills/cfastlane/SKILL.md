@@ -23,7 +23,7 @@ waits and return to tests. This skill is a delta on it and must be installed bes
 |---|---|---|
 | Session | One codex `gpt-6.1-sol` session at effort high plans, codes, builds and writes the handoff. Resume it for repairs; never restart it. No separate manager or implementer. | One session holds the packet's context. |
 | Commit | The session never commits. The assistant runs `close.py`, keeping its banned-text and allowed-path scans. | Commit checks stay mechanical. |
-| Review ownership | The same session writes the fixed review brief, launches and waits on readers, judges, repairs accepted P0/P1 and re-reviews inside its turn. It must end its turn for the owner before lowering a reviewer's P0/P1, or leaving a raised P0/P1 unfixed. | The owner chose the session as judge, with these guards. |
+| Review ownership | The same session writes the fixed review brief, launches and waits on readers, judges, repairs accepted P0/P1 and re-reviews inside its turn, on a complete candidate only. It must end its turn for the owner before lowering a reviewer's P0/P1, or when it raises a finding to P0/P1 that it believes should not or cannot be fixed within the task. | The owner chose the session as judge, with these guards. |
 | Tokens | Measure and report per role; never impose a token cap, checkpoint or stop. | Report the cost of finished work. |
 | Scope | One bounded change, called a packet. | Use fastlane for an open-ended lane or several managers. |
 
@@ -35,6 +35,35 @@ launcher. Reviewers are the same panel as fastlane: **opus,
 astra and sol by default, plus grok when its one-word probe answers**. Fable is optional and never
 waited on. Use fastlane's failed-seat rule (relaunch once; at least two of opus, astra, sol must
 answer), and name missing seats, including unavailable grok, in the report.
+
+## Stopping early
+
+The session does all the work the task asks before it stops. A partial handoff is for a **named
+obstacle**, never for work that merely remains:
+
+- evidence that a requirement cannot be met as written (a counterexample, a contradiction between
+  two requirements);
+- one specific step, with what was tried and why each attempt failed;
+- a run or decision the task reserves for the assistant or the owner;
+- the turn's time limit.
+
+A task's own stop condition ("if X cannot be finished, stop") means one of these, so write it that
+way: name the obstacle that justifies the stop. In one packet a session read "not yet proved" as
+"cannot be finished", stopped 35 minutes into a six-hour turn without attempting the proof, and
+finished it within the hour once resumed.
+
+Two rules follow:
+
+- **No review of a partial candidate.** On an early stop the session launches no reviewers and
+  writes the handoff. A panel on a candidate its own handoff calls unfinished mostly reports the
+  omissions the handoff already lists; in that packet it cost more new tokens than the session.
+- **A required fix is not an owner call.** A P0/P1 the task already requires fixing is repaired in
+  the turn, whether a reviewer rated it or the session raised it. The owner call is for a
+  reviewer's P0/P1 the session would lower, or a raised one it believes should not or cannot be
+  fixed within the task; it gives the reason.
+
+When a turn does end partial without a named obstacle, the assistant resumes the same session with
+a note that says so and names the remaining work; that is not a call for the owner.
 
 ## Set up a packet
 
@@ -72,9 +101,12 @@ live-run output directories each round; keep earlier findings and judgments for 
    session; wait on `PKT/turns/N/session`. Never start a separate implementer. The session performs
    steps 2–3 inside its turn before writing its final handoff. The default turn timeout is six
    hours (`CFASTLANE_TIMEOUT` overrides), allowing coding, two 90-minute review rounds and one
-   seat retry. This is a wall-clock limit, never a token limit. If it ends with readers active,
-   report their units and exit paths and resume the same session to collect them, without duplicates.
-2. **Review** (step 3), by the session: `F/make-diff.sh WORKTREE BASE PKT/diff.patch`, where BASE
+   seat retry. This is a wall-clock limit, never a token limit. The session collects and judges
+   every required reader it launched before it ends, unless that wait would pass the limit; if it
+   still ends with readers active, it reports their units and exit paths and the assistant resumes
+   the same session to collect them, without duplicates.
+2. **Review** (step 3), by the session, once the candidate is complete (see "Stopping early"):
+   `F/make-diff.sh WORKTREE BASE PKT/diff.patch`, where BASE
    is the commit in `PKT/base`. Fill `PKT/review-brief.md` from the fixed template in our
    references; never reword reviewer instructions or P0–P3 lines. `scripts/review.sh PKT` checks
    the fixed instructions and Report section against fastlane's source before launching.
@@ -93,9 +125,10 @@ live-run output directories each round; keep earlier findings and judgments for 
    round. Test-only findings go to `deferred-tests.md`; P2/P3 go to `followups.md`, never into a
    repair. Never lower a reviewer's P0/P1 on your own: end the turn with the proposed call and
    evidence for the assistant to take to the owner. Likewise end for an owner call if you raise
-   a finding to P0/P1 and will not fix it. Resume only with the owner's decision. For an accepted
-   P0/P1, repair it in this turn with only the smallest required fix. Keep the old review and
-   judgment, make the new diff and the delta from the previously reviewed tree, and re-review
+   a finding to P0/P1 and believe it should not or cannot be fixed within the task, giving the
+   reason; one the task already requires fixing is simply repaired. Resume only with the owner's
+   decision. For an accepted P0/P1, repair it in this turn with only the smallest required fix.
+   Keep the old review and judgment, make the new diff and the delta from the previously reviewed tree, and re-review
    with fresh `--out` and `--tag` values using fastlane's earlier-findings and follow-ups rules.
    Wait on the required seats under that new `--out`, as step 2 says.
    No commit yet.

@@ -343,8 +343,9 @@ means. `scripts/fastlane.test`, run by `./check.sh`, covers the record, the busy
 The fast lane for one bounded packet, inheriting its rules with five exceptions: one sol session
 plans, codes, builds and writes the handoff; a script commits after scans; the session fills the
 fixed review brief, calls reviewers, waits, judges, repairs accepted P0/P1 and re-reviews in its
-turn, ending for the owner before lowering a reviewer's P0/P1 or leaving a raised one unfixed;
-tokens are measured per role without a
+turn, ending for the owner before lowering a reviewer's P0/P1 or when it raises one it believes
+should not or cannot be fixed; it stops early only for a named obstacle and reviews only a
+complete candidate; tokens are measured per role without a
 limit; and the scope stays bounded. The same session is resumed for repairs, with no separate
 manager or implementer. opus, astra and sol review before commit, plus grok when available; fable
 is optional and never waited on. The script commits, then the live test decides. Tests stay

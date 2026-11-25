@@ -133,6 +133,10 @@ check "session owns review launch, waits, judgment and repairs" 'grep -q "review
 check "session receives exact fixed-template source and skill rules" 'grep -q "Read .*SKILL.md for the review and wait rules, and read $WORK/fl/../references/prompts.md for the exact fixed review template" "$FIX/launches"'
 check "session receives fresh retry command and waits on current output" 'grep -q -- "review.sh $FIX/pkt --out $FIX/pkt/review-<round> --tag <fresh-tag>.*Wait on the required seat directories under the --out just launched" "$FIX/launches"'
 check "session must end for owner before lowering a reviewer P0/P1" 'grep -q "Never lower a reviewer.*P0/P1 on your own: end your turn" "$FIX/launches"'
+check "session stops early only for a named obstacle, never for remaining work" 'grep -q "End the turn early only for a named obstacle.*Work that merely remains is not an obstacle" "$FIX/launches"'
+check "session reviews only a complete candidate" 'grep -q "Review only a complete candidate: on an early stop launch no reviewers.*Once the candidate is complete, write the review brief" "$FIX/launches"'
+check "a P0/P1 the task requires is repaired, not sent to the owner" 'grep -q "A P0/P1 the task already requires you to fix is repaired in this turn.*that is no owner call" "$FIX/launches" && grep -q "believe it should not or cannot be fixed within the task: give the reason" "$FIX/launches"'
+check "session collects its readers before ending" 'grep -q "Before ending, collect and judge every required reader you launched unless that wait would pass the turn.s limit" "$FIX/launches"'
 check "first turn suspends running and editing tests" 'grep -q "Tests are suspended: do not run, fix, edit or add tests" "$FIX/launches"'
 echo note > "$FIX/note.md"
 sh "$HERE/session.sh" "$FIX/pkt" "$FIX/note.md" > /dev/null 2>&1; check "refuses a resume while the last turn has no exit file" "[ $? = 3 ]"
@@ -141,7 +145,8 @@ printf 'banner\nsession id: abc-123\n' > "$FIX/pkt/turns/1/session/err"
 sh "$HERE/session.sh" "$FIX/pkt" > /dev/null 2>&1; check "a later turn needs a note file" "[ $? = 2 ]"
 sh "$HERE/session.sh" "$FIX/pkt" "$FIX/note.md" > /dev/null 2>&1; RC=$?
 check "a later turn resumes the same session as a new unit" "[ $RC = 0 ] && sed -n 2p '$FIX/launches' | grep -q '^cfl-p1-s2 .* exec resume abc-123 '"
-check "resume retains review ownership and the fixed-brief guard" 'sed -n 2p "$FIX/launches" | grep -q "In this turn write the review brief from the fixed fastlane template.*judge every finding"'
+check "resume retains review ownership and the fixed-brief guard" 'sed -n 2p "$FIX/launches" | grep -q "write the review brief from the fixed fastlane template.*judge every finding"'
+check "resume retains the early-stop and complete-candidate rules" 'sed -n 2p "$FIX/launches" | grep -q "End the turn early only for a named obstacle.*Review only a complete candidate"'
 
 check "repair turn keeps tests suspended" 'sed -n 2p "$FIX/launches" | grep -q "Tests are suspended: do not run, fix, edit or add tests"'
 mkdir -p "$FIX/pkt/turns/2/session"; echo "success exited 0" > "$FIX/pkt/turns/2/session/exit"
