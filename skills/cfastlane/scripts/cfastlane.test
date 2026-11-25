@@ -127,7 +127,7 @@ sh "$HERE/session.sh" "$FIX/pkt" > /dev/null 2>&1; RC=$?
 check "keeps an inherited uncommitted candidate, like fastlane" '[ "$RC" = 0 ] && [ "$(cat "$FIX/wt/src/a.txt")" = dirty ]'
 check "first turn stamps the meter and the base" "[ $RC = 0 ] && [ -s '$FIX/pkt/meter-start' ] && [ \"\$(cat '$FIX/pkt/base')\" = \"\$(git -C '$FIX/wt' rev-parse HEAD)\" ]"
 check "starts exactly one unit, the session, in the worktree" '[ "$(wc -l < "$FIX/launches")" = 1 ] && sed -n 1p "$FIX/launches" | grep -q "^cfl-p1-s1 .* exec --dangerously"'
-check "the session runs sol at effort high" 'sed -n 1p "$FIX/launches" | grep -q -- "-m gpt-6.1-sol -c model_reasoning_effort=high"'
+check "the session runs sol at effort high" 'sed -n 1p "$FIX/launches" | grep -q -- "-m gpt-6.2-sol -c model_reasoning_effort=high"'
 check "turn timeout permits implementation and review rounds" 'grep -q "21600 .* exec" "$FIX/launches"'
 check "session owns review launch, waits, judgment and repairs" 'grep -q "review.sh $FIX/pkt .*wait on required seats.*judge every finding, repair accepted P0/P1 and re-review" "$FIX/launches"'
 check "session receives exact fixed-template source and skill rules" 'grep -q "Read .*SKILL.md for the review and wait rules, and read $WORK/fl/../references/prompts.md for the exact fixed review template" "$FIX/launches"'

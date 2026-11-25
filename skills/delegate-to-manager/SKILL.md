@@ -310,7 +310,7 @@ them for any agent.
 
 ## 7. A sol manager
 
-When the owner chooses a sol manager (section 1 step 3), it is codex `gpt-6.1-sol` at
+When the owner chooses a sol manager (section 1 step 3), it is codex `gpt-6.2-sol` at
 `model_reasoning_effort=high`, run through the codex CLI, because the Agent tool only runs Claude
 models.
 
@@ -329,7 +329,7 @@ systemd-run --user --unit=manager-$(basename $D) --collect --expand-environment=
   -p "StandardOutput=file:$D/out" -p "StandardError=file:$D/err" \
   -p "ExecStopPost=/bin/sh -c 'printenv SERVICE_RESULT EXIT_CODE EXIT_STATUS | xargs > $D/exit.tmp && mv $D/exit.tmp $D/exit'" \
   "$C" exec <resume> --json --dangerously-bypass-approvals-and-sandbox \
-  -m gpt-6.1-sol -c model_reasoning_effort=high -o "$D/report" <thread_id> "$(cat "$D/prompt")"
+  -m gpt-6.2-sol -c model_reasoning_effort=high -o "$D/report" <thread_id> "$(cat "$D/prompt")"
 ```
 
 - **Spawn:** leave out `resume` and `<thread_id>`. The prompt is the one from section 1 step 3.
@@ -373,10 +373,15 @@ What differs from the subagent:
   no owner-only skill on its own initiative, and the bounded waits and
   longer-wait handoff above within the authorized phase.
 
+Checked on 2026-11-25 with codex-cli 0.172.0 and `gpt-6.2-sol` at `high`. The start and resume
+units both exited 0 and reported the same thread id. The resume recalled the literal text from the
+start, including backticks, `$(…)`, `$HOME`, quotes and `%n`. See the
+[check record](references/sol-manager-check.md#recheck-2026-11-25).
+
 Checked on codex-cli 0.164.0, 2026-10-25, with trivial prompts: a start and a resume turn, both run
 directly and as units like the one above, exited 0. Each resume reported the start's thread id and
 recalled a word given in the start turn. The non-JSON resume banner and the start turns' session
-files under `~/.codex/sessions` record `gpt-6.1-sol` with `xhigh` effort. With this exact unit line,
+files under `~/.codex/sessions` record `gpt-6.1-sol` with `xhigh` effort. With the unit line from that check,
 a start and a resume whose `$D/prompt` held backticks, `$(…)`, `$HOME`, quotes and `%n` echoed
 them back unchanged. The commands, streams and
 results are in [references/sol-manager-check.md](references/sol-manager-check.md).

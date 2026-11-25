@@ -21,7 +21,7 @@ waits and return to tests. This skill is a delta on it and must be installed bes
 
 | | cfastlane exception | Why |
 |---|---|---|
-| Session | One codex `gpt-6.1-sol` session at effort high plans, codes, builds and writes the handoff. Resume it for repairs; never restart it. No separate manager or implementer. | One session holds the packet's context. |
+| Session | One codex `gpt-6.2-sol` session at effort high plans, codes, builds and writes the handoff. Resume it for repairs; never restart it. No separate manager or implementer. | One session holds the packet's context. |
 | Commit | The session never commits. The assistant runs `close.py`, keeping its banned-text and allowed-path scans. | Commit checks stay mechanical. |
 | Review ownership | The same session writes the fixed review brief, launches and waits on readers, judges, repairs accepted P0/P1 and re-reviews inside its turn. It must end its turn for the owner before lowering a reviewer's P0/P1, or leaving a raised P0/P1 unfixed. | The owner chose the session as judge, with these guards. |
 | Tokens | Measure and report per role; never impose a token cap, checkpoint or stop. | Report the cost of finished work. |
