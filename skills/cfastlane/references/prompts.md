@@ -62,7 +62,9 @@ the owner's decision before that, or if you raise one you believe should not or 
 ```
 
 When the last turn ended partial with no named obstacle, say so in the first sentence, list the
-remaining work in order and resume; that needs no owner decision.
+remaining work in order and resume; that needs no owner decision. When it named one, follow the
+table in SKILL.md's "Stopping early" before writing the note: a reserved decision or an unmeetable
+requirement gets the owner's decision first, and the note carries it.
 
 A review repair names only verified P0/P1 product findings, never P2/P3 or suspended test-only
 findings. The session judges; the assistant only relays the calls reserved for the owner.

@@ -62,8 +62,18 @@ Two rules follow:
   reviewer's P0/P1 the session would lower, or a raised one it believes should not or cannot be
   fixed within the task; it gives the reason.
 
-When a turn does end partial without a named obstacle, the assistant resumes the same session with
-a note that says so and names the remaining work; that is not a call for the owner.
+What the assistant does with a partial handoff depends on what it names:
+
+| The handoff names | The assistant |
+|---|---|
+| No obstacle: work merely remains | Resumes the same session with a note that says so and lists the remaining work. No owner call. |
+| The turn's time limit | Resumes the same session to continue. No owner call. |
+| A run reserved for the assistant | Does the run, then resumes with its result. |
+| A decision reserved for the owner, or evidence that a requirement cannot be met as written | Takes it to the owner with the session's evidence and resumes only with the owner's decision. Never resumes against the unchanged requirement. |
+| One specific step that failed | Resumes once if it can add something the session lacked (a fact, a pointer, a different approach). Otherwise, or if the same step fails again, takes it to the owner. |
+
+The assistant sorts a handoff into these rows by what it says; that is routing, not judging a
+review finding.
 
 ## Set up a packet
 
@@ -96,9 +106,10 @@ live-run output directories each round; keep earlier findings and judgments for 
 
 1. **Task and session** (fastlane steps 1–2): the assistant runs `scripts/session.sh PKT`, which records the base, stamps
    the meter and starts the one combined session. Wait with `F/wait.sh <deadline>
-   PKT/turns/1/session`. Read `PKT/handoff.md` and build exits. On an incomplete result or build
-   failure, write a short note and run `scripts/session.sh PKT NOTE_FILE`, resuming the same
-   session; wait on `PKT/turns/N/session`. Never start a separate implementer. The session performs
+   PKT/turns/1/session`. Read `PKT/handoff.md` and build exits. On a build failure, write a
+   short note and run `scripts/session.sh PKT NOTE_FILE`, resuming the same session; wait on
+   `PKT/turns/N/session`. On a partial handoff, follow the table in "Stopping early" first: some
+   obstacles go to the owner before any resume. Never start a separate implementer. The session performs
    steps 2–3 inside its turn before writing its final handoff. The default turn timeout is six
    hours (`CFASTLANE_TIMEOUT` overrides), allowing coding, two 90-minute review rounds and one
    seat retry. This is a wall-clock limit, never a token limit. The session collects and judges
