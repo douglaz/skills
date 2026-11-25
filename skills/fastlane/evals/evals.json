@@ -48,7 +48,7 @@
       "expectations": [
         "Default panel is opus astra sol plus grok when available",
         "Grok availability requires a responding one-word probe, not command -v alone",
-        "Grok probe and reader use their own 8G units, no swap, null stdin and the standing grok-4.7 xhigh command",
+        "Grok probe and reader use their own 8G units, no swap, null stdin and the standing grok-4.7 high command",
         "Waits on grok when launched; reports missing grok without waiting if probe fails",
         "Never waits for fable; failed required seats get one relaunch and at least two of opus/astra/sol must answer"
       ]
