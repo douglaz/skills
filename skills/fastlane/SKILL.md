@@ -239,12 +239,12 @@ the owner a proposal.
 | opus | `claude-opus-5-5` | `claude -p` limited to Read, Grep and Glob, no MCP servers; 5-minute prompt cache |
 | astra | codex `gpt-6-astra` | `codex exec --sandbox read-only` |
 | sol | codex `gpt-6.1-sol` | `codex exec --sandbox read-only` |
-| grok (when available) | `grok-4.7`, effort xhigh | `grok -p`, 8G, no swap, stdin from `/dev/null`; one-word probe first |
+| grok (when available) | `grok-4.7` | `grok -p`, 8G, no swap, stdin from `/dev/null`; one-word probe first |
 | fable (optional) | `claude-fable-5-2` | like opus; never waited on; a limit line is a missing seat |
 
 - Override a model with the `FASTLANE_*_MODEL` variables the scripts list.
-- Codex effort is always high, never xhigh. Grok uses xhigh.
-- Grok runs with `--no-auto-update --model grok-4.7 --effort xhigh --output-format plain --always-approve
+- Every seat runs at effort high, never xhigh, grok included.
+- Grok runs with `--no-auto-update --model grok-4.7 --effort high --output-format plain --always-approve
   --sandbox off --no-subagents --no-memory --disable-web-search
   --disallowed-tools "search_replace,write,search_tool,use_tool" --tools "read_file,grep,list_dir"`.
   The read-only allowlist excludes shell and other built-in tools; explicitly denying `search_tool`

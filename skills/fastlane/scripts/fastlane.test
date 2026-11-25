@@ -177,7 +177,7 @@ echo good > "$FIX/probe-mode"; echo brief > "$FIX/lane/brief.md"
 check "default panel launches opus, astra, sol, and available grok" \
   '[ "$rc" = 0 ] && [ "$(wc -l < "$FIX/runs")" = 5 ] && [ -f "$FIX/lane/review/opus/unit" ] && [ -f "$FIX/lane/review/astra/unit" ] && [ -f "$FIX/lane/review/sol/unit" ] && [ -f "$FIX/lane/review/grok/unit" ] && [ ! -d "$FIX/lane/review/fable" ]' "rc $rc: $(cat "$FIX/review.out")"
 check "grok probe and reviewer use 8G, no swap, null stdin and the standing command" \
-  '[ "$(grep -c -- "MemoryMax=8G.*MemorySwapMax=0.*StandardInput=null.*--no-auto-update -p .*--model grok-4.7 --effort xhigh --output-format plain --always-approve --sandbox off --no-subagents --no-memory --disable-web-search --disallowed-tools search_replace,write" "$FIX/runs")" = 2 ]' "$(cat "$FIX/runs")"
+  '[ "$(grep -c -- "MemoryMax=8G.*MemorySwapMax=0.*StandardInput=null.*--no-auto-update -p .*--model grok-4.7 --effort high --output-format plain --always-approve --sandbox off --no-subagents --no-memory --disable-web-search --disallowed-tools search_replace,write" "$FIX/runs")" = 2 ]' "$(cat "$FIX/runs")"
 check "both grok calls allow only read-only repository tools" \
   '[ "$(grep -c -- "--tools read_file,grep,list_dir" "$FIX/runs")" = 2 ]' "$(cat "$FIX/runs")"
 check "both grok calls remove MCP discovery and invocation tools" \

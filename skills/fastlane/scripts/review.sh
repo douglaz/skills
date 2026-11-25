@@ -7,7 +7,7 @@
 # Each OUT_DIR/SEAT gets unit, err, exit and answer.md.
 # Models: FASTLANE_OPUS_MODEL (claude-opus-5-5), FASTLANE_FABLE_MODEL (claude-fable-5-2),
 #         FASTLANE_ASTRA_MODEL (gpt-6-astra), FASTLANE_SOL_MODEL (gpt-6.1-sol). Effort high.
-# Grok: grok-4.7, effort xhigh, 8G; probe is bounded at 90 seconds. On probe failure,
+# Grok: grok-4.7, effort high, 8G; probe is bounded at 90 seconds. On probe failure,
 # OUT_DIR/grok-missing records why; no grok reader starts and nothing waits on that seat.
 # Readers can't run commands: put the diff in a file (make-diff.sh) and name it in the brief.
 set -eu
@@ -47,13 +47,13 @@ for s in "$@"; do
       PROBE=$OUT/grok-probe
       FASTLANE_MEM=8G FASTLANE_CWD=$WT "$H/launch-unit.sh" "$U-probe" "$PROBE" --stdout "$PROBE/answer.md" -- \
         "$TIMEOUT" 90 "$GROK" --no-auto-update -p "Reply with exactly one word: GROK_OK" \
-        --model grok-4.7 --effort xhigh --output-format plain --always-approve --sandbox off \
+        --model grok-4.7 --effort high --output-format plain --always-approve --sandbox off \
         --no-subagents --no-memory --disable-web-search \
         --disallowed-tools "search_replace,write,search_tool,use_tool" --tools "read_file,grep,list_dir"
       if "$H/wait.sh" 120 "$PROBE" && grep -qx 'GROK_OK' "$PROBE/answer.md"; then
         FASTLANE_MEM=8G FASTLANE_CWD=$WT "$H/launch-unit.sh" "$U" "$D" --stdout "$D/answer.md" -- \
           "$TIMEOUT" 5400 "$GROK" --no-auto-update -p "$P" \
-          --model grok-4.7 --effort xhigh --output-format plain --always-approve --sandbox off \
+          --model grok-4.7 --effort high --output-format plain --always-approve --sandbox off \
           --no-subagents --no-memory --disable-web-search \
           --disallowed-tools "search_replace,write,search_tool,use_tool" --tools "read_file,grep,list_dir"
       else
