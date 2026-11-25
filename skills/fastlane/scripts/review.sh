@@ -6,7 +6,7 @@
 # To add optional fable name all five: opus astra sol grok fable (never wait on fable).
 # Each OUT_DIR/SEAT gets unit, err, exit and answer.md.
 # Models: FASTLANE_OPUS_MODEL (claude-opus-5-5), FASTLANE_FABLE_MODEL (claude-fable-5-2),
-#         FASTLANE_ASTRA_MODEL (gpt-6-astra), FASTLANE_SOL_MODEL (gpt-6.1-sol). Effort high.
+#         FASTLANE_ASTRA_MODEL (gpt-6.2-astra), FASTLANE_SOL_MODEL (gpt-6.2-sol). Effort high.
 # Grok: grok-4.7, effort high, 8G; probe is bounded at 90 seconds. On probe failure,
 # OUT_DIR/grok-missing records why; no grok reader starts and nothing waits on that seat.
 # Readers can't run commands: put the diff in a file (make-diff.sh) and name it in the brief.
@@ -34,7 +34,7 @@ for s in "$@"; do
         --dangerously-skip-permissions --tools Read,Grep,Glob \
         --safe-mode --strict-mcp-config --mcp-config '{"mcpServers":{}}' ;;
     astra|sol)
-      if [ "$s" = astra ]; then M=${FASTLANE_ASTRA_MODEL:-gpt-6-astra}; else M=${FASTLANE_SOL_MODEL:-gpt-6.1-sol}; fi
+      if [ "$s" = astra ]; then M=${FASTLANE_ASTRA_MODEL:-gpt-6.2-astra}; else M=${FASTLANE_SOL_MODEL:-gpt-6.2-sol}; fi
       FASTLANE_CWD=$WT "$H/launch-unit.sh" "$U" "$D" -- \
         "$TIMEOUT" 5400 "$CODEX" exec --skip-git-repo-check --sandbox read-only \
         -m "$M" -c model_reasoning_effort=high -o "$D/answer.md" "$P" ;;

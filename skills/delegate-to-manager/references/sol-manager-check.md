@@ -1,6 +1,6 @@
 # Sol manager live check
 
-The record behind SKILL.md section 7's "Checked on" paragraph. codex-cli 0.164.0
+The original check behind SKILL.md section 7's dated records. codex-cli 0.164.0
 (`codex --version`), 2026-10-25, run in an empty scratch directory `$S` that is not a git
 repository, hence `--skip-git-repo-check`. Every prompt is trivial. Re-run it to disagree.
 
@@ -79,3 +79,19 @@ The commands and observations above are the 2026-10-25 record, kept as measured;
 for a new check, set `F` with `-c model_reasoning_effort=high` instead. Running
 turns keep their current setting until they restart. This amendment records the
 policy change, not a new live check.
+
+## Recheck, 2026-11-25
+
+With codex-cli 0.172.0, repeated the prompt-file start and resume using the
+section 7 unit command with `-m gpt-6.2-sol -c model_reasoning_effort=high`.
+Both turns ran in the same scratch directory outside git with `--skip-git-repo-check`.
+The prompts were the same as in "Prompt from a file, atomic exit file" above.
+
+| Turn | `$D/exit` | `$D/err` | `$D/report` |
+|---|---|---|---|
+| Start | `success exited 0` | `Reading additional input from stdin...` | ``cost $HOME `uname` $(echo hi) "q" 'q' 100% %n done`` |
+| Resume | `success exited 0` | empty | ``cost $HOME `uname` $(echo hi) "q" 'q' 100% %n done $USER`` |
+
+Both `out` files began with `thread.started` and the same thread id. Each unit
+left `exit` and no `exit.tmp`. Both `turn_context` records in the session JSONL
+reported `"model":"gpt-6.2-sol"` and `"effort":"high"`.
