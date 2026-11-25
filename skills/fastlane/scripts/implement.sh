@@ -22,7 +22,7 @@ if [ "${FASTLANE_TESTS:-off}" = on ]; then
 else
   T="Tests are suspended: do not run, fix, edit or add tests. Compile only what the task file says gets deployed."
 fi
-P="Read the task file $TASK in full before doing anything, then do exactly what it says. Work only in $WT. Do not commit, push, deploy, change branches, stash, reset, or write any issue tracker. $T Finish by writing the handoff file the task names."
+P="Read the task file $TASK in full before doing anything, then do exactly what it says. Work only in $WT. Do not commit, push, deploy, change branches, stash, reset, or write any issue tracker. $T Do all the work the task asks before you stop. Leave something undone only for a named obstacle: evidence that a requirement cannot be met as written, one specific step with what you tried and why each attempt failed, something the task reserves for the manager or the owner, or the time limit. Work that merely remains is not an obstacle; keep going. Finish by writing the handoff file the task names; if anything is undone, it names the obstacle."
 FASTLANE_CWD=$WT exec "$H/launch-unit.sh" "$UNIT" "$OUT" -- \
   "$TIMEOUT" "$TO" "$CODEX" exec --dangerously-bypass-approvals-and-sandbox \
   -m "${FASTLANE_IMPL_MODEL:-gpt-6.2-sol}" -c model_reasoning_effort=high \

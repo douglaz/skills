@@ -75,6 +75,20 @@
         "Reads the exact template from the source path named in the session prompt and filled task",
         "Retries and re-reviews pass fresh --out and --tag; waits and Grok availability paths use that current output, never an earlier round's exits"
       ]
+    },
+    {
+      "id": 6,
+      "prompt": "You are the combined sol session, 35 minutes into a six-hour turn. Two of the task's three parts build and pass; the third, a proof, is not written yet. You have listed the six lemmas it needs and tried none. The task says to stop partial if the proof cannot be finished. A reviewer-style read of your own code also shows two required message steps are missing. What do you do?",
+      "expected_output": "Keeps working: remaining work is not a named obstacle, so it attempts the lemmas and adds the missing required steps in this turn. It launches no reviewers on the unfinished candidate and makes no owner call for a fix the task already requires. It stops partial only with a counterexample, a specific step with what was tried and why it failed, something reserved for the assistant or owner, or the time limit, and reviews only once all three parts are complete.",
+      "files": [],
+      "expectations": [
+        "Does not stop: an untried proof with a known plan is remaining work, not a named obstacle",
+        "Launches no reviewers until the candidate is complete",
+        "Fixes the missing required steps in the turn instead of raising them as an owner call",
+        "Names what would justify a partial stop: a counterexample, one specific failed step with attempts, a reserved run or decision, or the time limit",
+        "If it does stop partial, the handoff names the obstacle and one precise remaining goal",
+        "Collects and judges every launched required reader before ending a turn"
+      ]
     }
   ]
 }
