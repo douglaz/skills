@@ -44,7 +44,8 @@ anything left undone; anything that looked wrong but was out of scope.
 # Review iN: <one-line goal>
 
 Read-only review. Don't edit files, commit, or run builds or tests. Tests are suspended until the
-live test passes, so don't ask for them.
+live test passes, so don't ask for them. Do not read credential files or model config folders
+`~/.claude`, `~/.codex`, `~/.grok`.
 
 ## What the change is for
 <the task's goal and the live failure it fixes, in plain words; link iN/task.md>

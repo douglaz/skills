@@ -8,11 +8,15 @@
       "expected_output": "Writes config.json (name, worktree, optional scans and identity), writes a one-page self-contained task.md from the template, starts with scripts/session.sh PKT and waits with fastlane's wait.sh. Sets no cap, checkpoint or stop. At close-out takes three meter readings: session, review and the assistant's own transcript, in new tokens.",
       "files": [],
       "expectations": [
-        "Writes a self-contained task.md that tells the session not to commit, push, start other models or judge findings",
+        "Writes a self-contained task.md that tells the session not to commit or push, and to launch models only through the reviewer launcher",
         "Starts the session with scripts/session.sh PKT rather than a hand-written codex command",
         "Sets no token cap, checkpoint or stop, and does not tell the session to ration its reading",
         "Plans three meter readings at close-out: the session, the reviewers, and the assistant's own session",
-        "Reports new tokens (uncached input plus output), with totals as a diagnostic only"
+        "Reports new tokens (uncached input plus output), with totals as a diagnostic only",
+        "Creates waits at the packet root so session and review units enter the shared wait record",
+        "Keeps the test suspension in the task and session until the live test passes",
+        "The session fills the fixed brief, launches reviewers, waits, judges and repairs in its turn; the assistant reads the report and final round",
+        "Session and reviewer meters use the combined session id to avoid double-counting; names missing Grok measurement if unavailable"
       ]
     },
     {
@@ -30,15 +34,46 @@
     },
     {
       "id": 3,
-      "prompt": "Combined fast lane. The session's work is committed, the live test passed, and the one reviewer answered VERDICT: REVISE with one P1 ('the refusal check compares a value with itself, so it cannot fail') and two P3s. You read the code: the refusal type carries no state, so the check is redundant rather than wrong, and you think it is a P3. What happens next, and who decides?",
-      "expected_output": "Re-rates each finding against the code and writes judgement.md; because lowering a reviewer's P1 is a call at the blocking line and the assistant wrote the task and the brief, takes that one call to the owner with the file:line evidence before acting; does not ask the session to rate the finding; files the P3s as follow-ups and fixes none of them in this change; if the owner keeps it at P1, resumes the session through session.sh with a note naming only that finding.",
+      "prompt": "You are the combined sol session. You built the uncommitted candidate, filled the fixed brief and ran the reviewers. The required reviewers answered; opus reports one P1 (the refusal check compares a value with itself, so it cannot fail) and two P3s. You read the code: the refusal type carries no state, so the check is redundant rather than wrong, and you think it is a P3. What happens next, and who decides?",
+      "expected_output": "The session judges each finding and writes judgement.md, but must end its turn with the proposed lowering and file:line evidence for the owner. The assistant relays that call and does not judge. P3s stay as follow-ups. The same session resumes with the owner's decision; if it remains P1 the session repairs and re-reviews the delta before the assistant runs close.py.",
       "files": [],
       "expectations": [
-        "Takes the proposed lowering of the reviewer's P1 to the owner, with file:line evidence, instead of deciding it alone",
-        "Does not let the session that wrote the code judge or rate the finding",
+        "Ends the session turn with the proposed lowering of the reviewer's P1 and file:line evidence for the owner",
+        "The session judges findings; the assistant relays the owner call without judging",
         "Writes judgement.md with one line per finding: the reviewer's rating, the judge's rating, the evidence and where it went",
         "Files the P3 findings as follow-ups and does not fix them in this change, even if the session is resumed",
-        "If a repair is needed, resumes through scripts/session.sh with a note naming only the verified P0/P1"
+        "If a repair is needed, resumes through scripts/session.sh with a note naming only the verified P0/P1",
+        "Judges before close.py commits, then deploys and runs the live test only after review clears"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "You are the combined sol session and the packet built successfully. What panel do you launch and wait on in your turn? Grok is installed but its one-word probe fails. Sol fails twice. Fable is still running. Can you proceed, and what happens next?",
+      "expected_output": "Uses the shared fastlane panel: opus, astra, sol plus grok only after an answering probe; fable optional. Waits on launched required seats, relaunches a failed seat once, proceeds if opus and astra answered, names sol and grok missing, never waits for fable. Judges findings before a scanned close.py commit, then deploys and live-tests.",
+      "files": [],
+      "expectations": [
+        "Defaults to opus astra sol and grok when available, never one reviewer",
+        "Requires an answering one-word grok -p probe before launching grok; reports failed probe missing without waiting or blocking",
+        "Relaunches sol once; with two of opus/astra/sol answered can continue and names sol missing",
+        "Never waits for fable",
+        "The session launches the reviewer script, which runs the grok probe; the assistant does not launch reviewers or judge",
+        "Review and judgment precede close.py commit, which precedes the live test"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "A bounded combined packet needs a second live iteration. A reviewer also flagged missing unit-test coverage and two P2s. The next live run passes. Describe repair, review, evidence and test handling without starting another session.",
+      "expected_output": "Resumes the same session with the live failures, defers test-only findings and P2s, re-reviews the delta with earlier findings and followups, checks the reviewed diff hash before close.py commit, deploys and live-tests, cleans up, reads the post-live receipt for close-out, then restores suspended tests using FASTLANE_TESTS=on on a resume.",
+      "files": [],
+      "expectations": [
+        "Resumes the same combined session; bounded live iterations are supported",
+        "Defers missing coverage to deferred-tests.md and P2s to followups.md without repairing them",
+        "Uses fastlane review format, exact P0-P3 lines, delta and earlier findings for re-review",
+        "Checks diff hash before close.py commits, then runs live test and cleanup",
+        "Brings tests back after live pass with updated task and FASTLANE_TESTS=on on the resumed session",
+        "Receipt is post-live evidence for close-out, never a prerequisite for review",
+        "Reads the exact template from the source path named in the session prompt and filled task",
+        "Retries and re-reviews pass fresh --out and --tag; waits and Grok availability paths use that current output, never an earlier round's exits"
       ]
     }
   ]

@@ -1,153 +1,149 @@
 ---
 name: cfastlane
 description: >-
-  Run a fast-lane change with ONE combined session instead of a manager plus an implementer: a
-  single codex session plans the work, writes the code, builds it and writes the handoff; scripts
-  commit, reproduce and write a receipt; one independent reviewer reads the diff and the receipt;
-  the assistant judges the findings; a meter reports what the change cost in tokens, without
-  limiting anything. Use this whenever the owner says "cfastlane", "combined fast lane", "single
-  manager/implementer", "one sol session for both", "no separate manager" or "manager-less fast
-  lane", and whenever a fast lane's manager turns are costing more than the work they coordinate.
-  Prefer it over fastlane for one bounded change (a slice, a packet, a single feature or proof)
-  that one session can hold; keep fastlane for long multi-iteration lanes, several managers, or
-  deploy-and-retest loops.
+  Run fastlane for one bounded change with one combined sol session that plans, codes, builds and
+  writes the handoff, resumed for repairs. All fastlane rules apply except the five listed role,
+  commit, review ownership, token and scope differences. The session calls opus, astra and sol before the script
+  commits, with grok when available and fable optional; then the live test decides. Tests stay
+  suspended until it passes. Use for "cfastlane", "combined fast lane", "single manager/implementer",
+  "one sol session for both", "no separate manager" or "manager-less fast lane", and when manager
+  turns cost more than the bounded work they coordinate. Use fastlane for several managers or an
+  open-ended lane.
 ---
 
 # Combined fast lane
 
-The fast lane splits a change between a manager, which writes a task file and coordinates, and an
-implementer, which codes. On small bounded changes that split costs more than it buys: each manager
-turn re-reads the project before doing anything, then transcribes instructions the assistant already
-wrote. In one measured pilot the manager spent 63,843 new tokens beside an implementer's 102,801;
-the next, larger slice ran as one combined session for 116,053 in 18 minutes.
+Read [fastlane](../fastlane/SKILL.md) in full first. **Everything there applies**, including its
+setup, loop order, review and re-review rules, records, stops, spec-only work, live-run cleanup,
+waits and return to tests. This skill is a delta on it and must be installed beside it.
 
-This lane keeps the fast lane's idea, the live test decides, and changes who does what:
+## The five exceptions
 
-| | fastlane | cfastlane |
+| | cfastlane exception | Why |
 |---|---|---|
-| Plans and writes the task | Manager | The assistant writes one page; the session plans its own work |
-| Implements | Separate codex implementer | The same session |
-| Commits, reproduces | Manager | Scripts the assistant starts |
-| Reviews | opus, astra, sol | One independent reviewer by default (any fastlane seats on request) |
-| Judges findings | Manager | The assistant; blocking-line calls go to the owner |
-| Tokens | Not measured | Measured per role and reported; never limited |
+| Session | One codex `gpt-6.1-sol` session at effort high plans, codes, builds and writes the handoff. Resume it for repairs; never restart it. No separate manager or implementer. | One session holds the packet's context. |
+| Commit | The session never commits. The assistant runs `close.py`, keeping its banned-text and allowed-path scans. | Commit checks stay mechanical. |
+| Review ownership | The same session writes the fixed review brief, launches and waits on readers, judges, repairs accepted P0/P1 and re-reviews inside its turn. It must end its turn for the owner before lowering a reviewer's P0/P1, or leaving a raised P0/P1 unfixed. | The owner chose the session as judge, with these guards. |
+| Tokens | Measure and report per role; never impose a token cap, checkpoint or stop. | Report the cost of finished work. |
+| Scope | One bounded change, called a packet. | Use fastlane for an open-ended lane or several managers. |
 
-What does not change: the project's hard safety lines, who may push and merge, the severity rule
-(only P0/P1 send work back; P2/P3 become follow-ups), and the fast lane's definition of a live test.
-Read [fastlane](../fastlane/SKILL.md) for those; this skill reuses its scripts and must be installed
-beside it.
-
-## Roles
-
-- **Session**: one codex `gpt-6.1-sol` session at effort high. It plans, codes, builds, runs the
-  project's own checks and writes the handoff and a commit message. It never commits, pushes, starts
-  other models, writes the tracker or judges review findings.
-- **Scripts**: meter, commit, diff, receipt. Everything mechanical lives here so no model spends
-  tokens on it.
-- **Reviewer**: read-only, independent of the session. It reads the diff and the receipt.
-- **Assistant** (the main session): writes the task and the review brief, starts the scripts, judges
-  findings, relays to the owner in a line per event, and meters itself.
-
-One separation is easy to lose once the manager is gone: the session that wrote the code must not
-rate findings against it. That is why the assistant judges, and why the assistant in turn hands the
-owner any call at the blocking line.
+The assistant starts and resumes the session, reads its report and final review round, relays owner
+calls, and performs the commit, deploy, live-test and close-out steps. It neither launches reviewers
+nor judges findings. It writes one page of scope; the session plans its own work. The session never
+commits, pushes, deploys or writes the tracker; it launches other models only through the reviewer
+launcher. Reviewers are the same panel as fastlane: **opus,
+astra and sol by default, plus grok when its one-word probe answers**. Fable is optional and never
+waited on. Use fastlane's failed-seat rule (relaunch once; at least two of opus, astra, sol must
+answer), and name missing seats, including unavailable grok, in the report.
 
 ## Set up a packet
 
-A packet is one bounded change. Give it a folder beside the project's brief, for example
-`/var/tmp/<project>-manager/packet-<name>/`, called PKT below, and a worktree on a fresh branch.
+Use fastlane's setup and records in a folder beside the brief, for example
+`/var/tmp/<project>-manager/packet-<name>/`, called PKT below. Create `progress.md`,
+`deferred-tests.md`, `followups.md` and an empty `waits` in **PKT itself** so fastlane's launcher
+finds the packet as its lane folder. Define `live-test.md` from fastlane's template (spec-only
+work follows its spec-only section). Use a working branch; keep any inherited uncommitted
+candidate and save its resume copy before launching, as fastlane requires.
 
-1. **Get the scope from the owner**: what the change must achieve, and which follow-ups, if any,
-   they name into it. A filed follow-up enters only when the owner names it.
-2. **Write `PKT/config.json`**:
+Write `PKT/config.json` (only `name` and `worktree` are required):
 
-   ```json
-   {
-     "name": "n1",
-     "worktree": "/abs/path/to/worktree",
-     "banned_text": "<regex for text the project forbids in commits>",
-     "allowed_paths": ["src/"],
-     "identity": {"name": "…", "email": "…"}
-   }
-   ```
+```json
+{
+  "name": "n1",
+  "worktree": "/abs/path/to/worktree",
+  "banned_text": "<regex for text the project forbids in commits>",
+  "allowed_paths": ["src/"],
+  "identity": {"name": "…", "email": "…"}
+}
+```
 
-   Only `name` and `worktree` are required.
-3. **Write `PKT/task.md`** from [references/prompts.md](references/prompts.md). It is the session's
-   whole handoff: one page it can act on without reading a brief, a plan or earlier sessions.
+Write `PKT/task.md` using [references/prompts.md](references/prompts.md). Keep fastlane's test
+suspension in the task: no running, fixing, editing or adding tests until the live test is perfect.
 
-## The loop
+## The loop: fastlane's order
 
-Scripts are in `scripts/` next to this file; `F` is fastlane's `scripts/` folder.
+Scripts here are in `scripts/`; `F` below is fastlane's `scripts/` folder. Use fresh review and
+live-run output directories each round; keep earlier findings and judgments for re-review.
 
-1. **Start the session**: `scripts/session.sh PKT`. It refuses a dirty worktree, records the base
-   commit, stamps the meter's start and starts the session. Wait with
-   `F/wait.sh <deadline> PKT/turns/1/session` and re-arm on 124.
-2. **Read the result**: `PKT/handoff.md`, and the plan or claim file if the task asked for one. A
-   partial handoff names one exact remaining goal: decide whether to continue, and if so write a
-   short note file and run `scripts/session.sh PKT NOTE_FILE`. That resumes the same session, whose
-   history comes back from cache, so nothing is read in twice. Never start a second session for the
-   same packet: it would pay the read-in again and lose what the first one learned.
-3. **Commit**: `scripts/close.py PKT check`, read the scans, then `scripts/close.py PKT commit`. It
-   blocks on banned text, files outside the allowed paths, or a session that committed by itself.
-4. **Live test**: run the project's live test on that commit from a fresh clone, as its own unit
-   (`F/launch-unit.sh --kind live …`), exactly as the fast lane defines it.
-5. **Receipt**: `F/make-diff.sh WORKTREE BASE PKT/diff.patch`, then
-   `scripts/receipt.py PKT <the live run's summary and exit files>`. It writes `PKT/manifest.json`.
-6. **Review**: write `PKT/review-brief.md` from the references, then `scripts/review.sh PKT`. Wait
-   with `F/wait.sh <deadline> PKT/review/opus`.
-7. **Judge** every finding against the code, as the fast lane's step 4 says: re-rate each one, check
-   a P0/P1 is reachable in a supported case, and write `PKT/judgement.md` with one line per finding.
-   - **Nothing at P0/P1**: go to step 8.
-   - **A verified P0/P1**: resume the session with a note naming the smallest change that removes it
-     (step 2's resume), then repeat steps 3–7 on the delta. `close.py` commits the repair on top of
-     its last commit; the diff and the receipt still run from the packet's base.
-   - **A call at the blocking line** goes to the owner before you act on it: a reviewer's P0/P1 you
-     would lower, or a finding you would raise to P0/P1. You wrote the task and the brief, so you are
-     not a neutral judge of whether the result is acceptable; the owner is the tiebreak.
-8. **Close out**: file P2/P3 follow-ups under the severity rule, close any follow-ups the packet
-   resolved, push and open the PR as the project's rule allows, take the meters (next section) and
-   report to the owner: what was shown, the live result, the findings and what it cost.
+1. **Task and session** (fastlane steps 1–2): the assistant runs `scripts/session.sh PKT`, which records the base, stamps
+   the meter and starts the one combined session. Wait with `F/wait.sh <deadline>
+   PKT/turns/1/session`. Read `PKT/handoff.md` and build exits. On an incomplete result or build
+   failure, write a short note and run `scripts/session.sh PKT NOTE_FILE`, resuming the same
+   session; wait on `PKT/turns/N/session`. Never start a separate implementer. The session performs
+   steps 2–3 inside its turn before writing its final handoff. The default turn timeout is six
+   hours (`CFASTLANE_TIMEOUT` overrides), allowing coding, two 90-minute review rounds and one
+   seat retry. This is a wall-clock limit, never a token limit. If it ends with readers active,
+   report their units and exit paths and resume the same session to collect them, without duplicates.
+2. **Review** (step 3), by the session: `F/make-diff.sh WORKTREE BASE PKT/diff.patch`, where BASE
+   is the commit in `PKT/base`. Fill `PKT/review-brief.md` from the fixed template in our
+   references; never reword reviewer instructions or P0–P3 lines. `scripts/review.sh PKT` checks
+   the fixed instructions and Report section against fastlane's source before launching.
+   The session runs it; the shared launcher launches opus, astra, sol and probes grok.
+   Let `<review-output>` mean this launch's output: `PKT/review` on the first round, the
+   chosen `--out` on retries and re-reviews. Wait with `F/wait.sh <deadline>
+   <review-output>/opus <review-output>/astra <review-output>/sol`, adding
+   `<review-output>/grok` only if that reader launched (`<review-output>/grok/unit` exists).
+   Read `<review-output>/grok-missing` if present. Never use an earlier round's exits.
+   To add fable, name all five seats:
+   `scripts/review.sh PKT opus astra sol grok fable`; never include fable in the wait.
+   For a failed seat's one retry, run `scripts/review.sh PKT --out PKT/review-retry-N
+   --tag <fresh-tag> <seat>` and wait on that output directory's seat. Keep active seats in
+   place; do not move their directories or wait for optional fable to end.
+3. **Judge** (step 4), by the session: follow fastlane's full judgment rules and write `PKT/judgement.md` each
+   round. Test-only findings go to `deferred-tests.md`; P2/P3 go to `followups.md`, never into a
+   repair. Never lower a reviewer's P0/P1 on your own: end the turn with the proposed call and
+   evidence for the assistant to take to the owner. Likewise end for an owner call if you raise
+   a finding to P0/P1 and will not fix it. Resume only with the owner's decision. For an accepted
+   P0/P1, repair it in this turn with only the smallest required fix. Keep the old review and
+   judgment, make the new diff and the delta from the previously reviewed tree, and re-review
+   with fresh `--out` and `--tag` values using fastlane's earlier-findings and follow-ups rules.
+   Wait on the required seats under that new `--out`, as step 2 says.
+   No commit yet.
+4. **Commit** (step 5), by the assistant: read the handoff and final review round; unresolved owner
+   calls return to the owner. Re-run `make-diff.sh` and confirm the sha matches what the reviewers read.
+   Run `scripts/close.py PKT check`, inspect the scans, then `scripts/close.py PKT commit`.
+   It blocks banned text, disallowed paths and a session that committed by itself. After a live
+   failure, repairs build on its last candidate; reviews still cover the packet from its base,
+   with re-reviews focused on the delta.
+5. **Deploy and live test** (step 6): use fastlane's exact rules and `live-test.md`. Start deploy
+   and live units through `F/launch-unit.sh --kind deploy|live …` with output directories under
+   PKT, keeping the work inside the unit for its entire run. Wait, read evidence, clean up what
+   the run created and log the result. A live failure resumes the same session and repeats this
+   loop, including review **before** the next `close.py` commit.
+   After the run, `scripts/receipt.py PKT <summary and exit files>` writes `PKT/manifest.json`.
+   The assistant reads it at close-out to bind the commit and diff to the live evidence; it is
+   not a prerequisite for pre-commit review. Keep each round's receipt with its evidence.
+6. **Close out**: follow fastlane's end-of-lane records, stops, follow-ups and cleanup. After the
+   live test is perfect (or spec writing is done), bring tests and checks back as fastlane says:
+   update the task to lift its test ban and resume with
+   `FASTLANE_TESTS=on scripts/session.sh PKT NOTE_FILE`. Any resulting product fix goes through
+   review, script commit and live test again. Push, PR and merge only as the project's rule
+   allows. Take the readings below and report the result, findings, missing seats and cost.
+
+Use fastlane's wait record and busy check unchanged: session and review units are `other`, and
+nothing about naming the lane folder a packet changes the guards. Set `FASTLANE_MANAGER` to the
+coordinator's name for recorded waits. Use its bounded polling and wait hand-off rules, re-arming
+on 124. Never override a busy deploy or live run.
 
 ## Measuring tokens
 
-The lane measures what a change cost and limits nothing: no cap, no checkpoint, no stop. A stop set
-too low costs more than it saves (a first checkpoint placed below a session's read-in once killed it
-within a minute), and the owner would rather see the real cost of finished work than a partial
-result that stayed inside a guess.
+Measure without limiting anything. At close-out, report new tokens (uncached input plus output)
+for each role, with total tokens as a diagnostic:
 
-Take three readings at close-out and report each:
+- `scripts/meter.py PKT`: the combined session.
+- `scripts/meter.py PKT --phase review`: reviewers, including earlier rounds (keep `review-start`).
+- `scripts/meter.py --claude-transcript <your transcript> --since <packet start, ISO UTC>`:
+  the coordinating session when it is Claude. For a different transcript format use the
+  project's token ledger.
 
-- `scripts/meter.py PKT`: the session.
-- `scripts/meter.py PKT --phase review`: the reviewers.
-- `scripts/meter.py --claude-transcript <your transcript> --since <packet start, ISO UTC>`: your own
-  session. A packet has cost the assistant roughly as much as the session; leaving it out makes the
-  lane look cheaper than it is.
-
-The figure is **new tokens**: uncached input plus output. A long session re-reads its own history
-from cache at every step, so total tokens measure the number of steps, not the work; the total is
-printed as a diagnostic only. The meter can be run at any time for a progress reading.
-
-Reference points from measured packets, for telling the owner what to expect, not for limiting:
-a sol session spends roughly 50,000 new tokens reading a mid-sized project before it writes
-anything; an Opus reviewer has cost about 110 new tokens per diff line (92,140 for 812 lines;
-121,137 for 1,105).
-
-Limits that are not about tokens stay: each unit's memory cap, the disk floor and the session's
-wall-clock timeout come from the fast lane's launcher, and the project's quota rules still apply.
+The meter selects the combined session by its recorded session ID and excludes that ID from
+review totals, even when the session resumes after starting readers. It reads Codex and Claude
+transcripts. Report Grok usage separately from its
+available usage records; if it cannot be measured, name that limitation rather than reporting zero
+or including it in a claimed panel total. No missing measurement stops work. Memory, disk,
+wall-clock and project quota limits still apply as in fastlane.
 
 ## When not to use it
 
-- The change needs many deploy-and-retest iterations, or several managers working in parallel: use
-  the fast lane. One session's context is the limit here.
-- The owner wants three reviewers and a manager's separation by default: use the fast lane.
-- The work is so small you would finish it in a few edits: just do it.
-
-## Don'ts
-
-- Don't let the session commit, push, call a reviewer or rate a finding.
-- Don't add a token cap, checkpoint or stop of your own, and don't tell the session to ration its
-  reading. Measure and report.
-- Don't fix a P2 or P3 in the same change, and don't fold in a filed follow-up the owner did not name.
-- Don't hand the reviewer the session's own summary as fact. The brief calls the handoff "claims to
-  check", and the receipt, not the handoff, says what ran.
-- Don't count a result the receipt does not cover as shown.
+Use fastlane when the scope is open-ended or needs several managers. A bounded packet can repeat
+its deploy-and-live-test loop with the same session. If a few edits suffice without a lane, do them.

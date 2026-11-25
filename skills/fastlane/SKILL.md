@@ -3,7 +3,7 @@ name: fastlane
 description: >-
   Ship a change fast by iterating against a live end-to-end test instead of rloop Runs and test
   suites. A manager writes a short task file and calls codex directly to implement it. opus, astra
-  and sol review the diff, with fable as an optional extra seat. The manager commits, deploys and
+  and sol review the diff, with grok when available and fable as an optional extra seat. The manager commits, deploys and
   runs the live test: the system exercised exactly the way a real user would. The loop repeats
   until the live test is perfect. Tests are neither run nor fixed until then. For spec-only work
   the lane is about writing the spec, and there is no live test. Use this whenever the owner says
@@ -31,7 +31,7 @@ writing it".
 | | Normal lane | Fast lane |
 |---|---|---|
 | Implementation | rloop Run: instruction, panel, Implementer, Rounds | Manager writes a task file; codex implements it directly |
-| Review | Five rloop Reviewer seats every Round | opus, astra, sol read the diff; fable optional; grok not seated |
+| Review | Five rloop Reviewer seats every Round | opus, astra, sol read the diff; grok when available; fable optional |
 | Tests | Suite, per-round checks, qualification | None run, fixed, edited or added until the live test is perfect |
 | Gate | Round acceptance plus CI | The live test, run on the deployed candidate |
 | Builds | Everything | Only what gets deployed: codex compiles that |
@@ -96,7 +96,7 @@ The fast lane removes test gates, never safety gates.
 ## The loop
 
 Each iteration lives in `iN/`. The scripts are in `scripts/` next to this file. Every one launches a capped
-`systemd-run --user` unit (16G, no swap, OOMPolicy=continue, an exit file) through `scripts/launch-unit.sh` and
+`systemd-run --user` unit (16G, or 8G for grok; no swap, OOMPolicy=continue, an exit file) through `scripts/launch-unit.sh` and
 returns at once. `launch-unit.sh` also guards the host and the lane:
 - **Disk floor.** It refuses while the working directory's filesystem or the nix store has less than 45 GiB free
   (`FASTLANE_MIN_FREE_GB` sets a lane's own floor). Build a flake from a git checkout or a small dedicated folder: a
@@ -133,10 +133,14 @@ returns at once. `launch-unit.sh` also guards the host and the lane:
      prints the diff's sha.
    - Write `iN/review-brief.md` from [references/prompts.md](references/prompts.md). Keep its P0–P3 lines exactly
      as the template has them, the owner's text: never add, drop or reword a clause for one change.
-   - Run `scripts/review.sh <worktree> iN/review-brief.md iN/review <tag>` for opus, astra and sol. To add the
-     optional seat, name all four: `scripts/review.sh <worktree> iN/review-brief.md iN/review <tag> opus astra sol fable`.
-   - Wait only on the required seats: `scripts/wait.sh <deadline> iN/review/opus iN/review/astra iN/review/sol`,
-     following Waits below. Read fable's answer if it has arrived by then, and never wait for it.
+   - Run `scripts/review.sh <worktree> iN/review-brief.md iN/review <tag>` for opus, astra, sol and grok when
+     available. To add fable, name all five:
+     `scripts/review.sh <worktree> iN/review-brief.md iN/review <tag> opus astra sol grok fable`.
+   - Grok is available only if its bounded one-word `grok -p` probe answers. Otherwise `iN/review/grok-missing`
+     records the missing seat: name it in the report, never wait on it and never block on it.
+   - Wait on the required seats: `scripts/wait.sh <deadline> iN/review/opus iN/review/astra iN/review/sol`, adding
+     `iN/review/grok` only when its reader launched (`iN/review/grok/unit` exists). Follow Waits below. Read
+     fable's answer if it has arrived by then, and never wait for it.
    - On a re-review after a fix, the brief covers the delta and the earlier findings, not the whole change again.
 4. **Judge.** Read every finding against the code before believing it. Votes never outweigh a verified defect, and a
    unanimous finding can still be wrong.
@@ -204,7 +208,7 @@ the owner a proposal.
 - There is no deploy and no live test.
 - Running and fixing model checks, proofs, linters and other gates is suspended like tests until the writing is
   done. Writing a formal model or proof that the scope asks for is part of the writing, not suspended.
-- The loop is task → codex writes → opus, astra and sol read the text → judge → commit.
+- The loop is task → codex writes → opus, astra, sol and available grok read the text → judge → commit.
 - Readers look for contradictions, unmet scope, ambiguity an implementer would trip on, and claims the text doesn't
   support.
 - Done means the owner's scope is fully written and no reader raises a verified P0/P1. Then the suspended checks come
@@ -235,12 +239,19 @@ the owner a proposal.
 | opus | `claude-opus-5-5` | `claude -p` limited to Read, Grep and Glob, no MCP servers; 5-minute prompt cache |
 | astra | codex `gpt-6-astra` | `codex exec --sandbox read-only` |
 | sol | codex `gpt-6.1-sol` | `codex exec --sandbox read-only` |
+| grok (when available) | `grok-4.7`, effort xhigh | `grok -p`, 8G, no swap, stdin from `/dev/null`; one-word probe first |
 | fable (optional) | `claude-fable-5-2` | like opus; never waited on; a limit line is a missing seat |
 
 - Override a model with the `FASTLANE_*_MODEL` variables the scripts list.
-- Codex effort is always high, never xhigh.
-- grok isn't seated. The owner's seat list replaces the general fifth-reader rule for fast-lane reviews.
-- Readers can't run commands. The review brief gives them the diff file, and they read the repo for context.
+- Codex effort is always high, never xhigh. Grok uses xhigh.
+- Grok runs with `--no-auto-update --model grok-4.7 --effort xhigh --output-format plain --always-approve
+  --sandbox off --no-subagents --no-memory --disable-web-search
+  --disallowed-tools "search_replace,write,search_tool,use_tool" --tools "read_file,grep,list_dir"`.
+  The read-only allowlist excludes shell and other built-in tools; explicitly denying `search_tool`
+  and `use_tool` also removes MCP discovery and invocation, which survive the built-in allowlist.
+  Its probe and reader each run in their own 8G unit with no swap and stdin from `/dev/null`.
+- Readers must not run commands. The review brief gives them the diff file, and they read the repo for context.
+- Reader no-read list: credential files and model config folders `~/.claude`, `~/.codex`, `~/.grok`.
 
 **Waits.** `wait.sh DEADLINE DIR...` waits until every DIR has an exit file. Its exit codes:
 

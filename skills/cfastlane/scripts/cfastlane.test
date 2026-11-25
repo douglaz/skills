@@ -24,14 +24,16 @@ cat > "$WORK/fl/launch-unit.sh" <<'STUB'
 echo "$*" >> "$FIX/launches"
 STUB
 cp "$WORK/fl/launch-unit.sh" "$WORK/fl/review.sh"
+mkdir -p "$WORK/references"
+cp "$HERE/../../fastlane/references/prompts.md" "$WORK/references/prompts.md"
 chmod +x "$WORK/bin/systemctl" "$WORK/fl/launch-unit.sh" "$WORK/fl/review.sh"
 PATH="$WORK/bin:$PATH"
 export CFASTLANE_FASTLANE_SCRIPTS=$WORK/fl
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 
-codex_session() { # NAME CWD INPUT CACHED OUTPUT
+codex_session() { # NAME CWD INPUT CACHED OUTPUT; NAME is also the recorded session id
   local d=$CFASTLANE_CODEX_SESSIONS/2026/01/01; mkdir -p "$d"
-  { printf '{"type":"session_meta","payload":{"cwd":"%s"}}\n' "$2"
+  { printf '{"type":"session_meta","payload":{"id":"%s","cwd":"%s"}}\n' "$1" "$2"
     printf '{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1,"total_tokens":2}}}}\n'
     printf '{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":%s,"cached_input_tokens":%s,"output_tokens":%s,"total_tokens":%s}}}}\n' "$3" "$4" "$5" "$(($3 + $5))"
   } > "$d/$1.jsonl"
@@ -60,20 +62,27 @@ EOF
   git -C "$FIX/wt" rev-parse HEAD > "$FIX/pkt/base"
 }
 new_tokens() { python3 -I "$HERE/meter.py" "$FIX/pkt" "$@" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["new_tokens"])'; }
+review_brief() {
+  sed -n '/^# Review iN:/,/^```$/ { /^```$/d; p; }' "$WORK/references/prompts.md" > "$FIX/pkt/review-brief.md"
+}
 
 echo "meter"
 new_fix
-codex_session in-worktree "$FIX/wt" 1000 700 50          # 350 new
+mkdir -p "$FIX/pkt/turns/1/session"
+echo 'session id: combined' > "$FIX/pkt/turns/1/session/err"
+codex_session combined "$FIX/wt" 1000 700 50             # 350 new
 codex_session in-packet "$FIX/pkt" 100 0 10              # 110 new
 codex_session other-project "$FIX/elsewhere" 9000 0 9000 # not ours
-check "counts sessions under the packet and the worktree, last counter only" '[ "$(new_tokens)" = 460 ]'
+check "session reading selects only the combined id, last counter only" '[ "$(new_tokens)" = 350 ]'
 check "writes meter.json" '[ -s "$FIX/pkt/meter.json" ]'
 date -d "+1 hour" +%s > "$FIX/pkt/meter-start"
 check "ignores sessions written before the start stamp" '[ "$(new_tokens)" = 0 ]'
 echo 0 > "$FIX/pkt/meter-start"
 claude_session reviewer "$FIX/wt"                        # m1 final 150, m2 50 = 200 new
-check "review phase adds Claude reviewers, one row per message id" '[ "$(new_tokens --phase review)" = 660 ]'
-check "session phase leaves Claude transcripts out" '[ "$(new_tokens)" = 460 ]'
+check "review phase adds Claude reviewers and excludes the combined session" '[ "$(new_tokens --phase review)" = 310 ]'
+check "session phase excludes all reviewer transcripts" '[ "$(new_tokens)" = 350 ]'
+codex_session combined "$FIX/wt" 1100 700 50             # resumed after reviewers: 450 new
+check "resumed combined session never leaks into reviewer totals" '[ "$(new_tokens)" = 450 ] && [ "$(new_tokens --phase review)" = 310 ]'
 T=$(python3 -I "$HERE/meter.py" --claude-transcript "$CFASTLANE_CLAUDE_PROJECTS"/*/reviewer.jsonl --since 2026-01-01T00:00:05Z)
 check "a single transcript can be metered from a time on" '[[ "$T" == *"\"new\": 50"* ]]'
 
@@ -114,12 +123,17 @@ echo "session launcher"
 new_fix
 echo task > "$FIX/pkt/task.md"; rm "$FIX/pkt/meter-start" "$FIX/pkt/base"
 echo dirty > "$FIX/wt/src/a.txt"
-sh "$HERE/session.sh" "$FIX/pkt" > /dev/null 2>&1; check "refuses a dirty worktree on the first turn" "[ $? = 3 ] && [ ! -s '$FIX/launches' ]"
-git -C "$FIX/wt" checkout -q -- src/a.txt
 sh "$HERE/session.sh" "$FIX/pkt" > /dev/null 2>&1; RC=$?
+check "keeps an inherited uncommitted candidate, like fastlane" '[ "$RC" = 0 ] && [ "$(cat "$FIX/wt/src/a.txt")" = dirty ]'
 check "first turn stamps the meter and the base" "[ $RC = 0 ] && [ -s '$FIX/pkt/meter-start' ] && [ \"\$(cat '$FIX/pkt/base')\" = \"\$(git -C '$FIX/wt' rev-parse HEAD)\" ]"
 check "starts exactly one unit, the session, in the worktree" '[ "$(wc -l < "$FIX/launches")" = 1 ] && sed -n 1p "$FIX/launches" | grep -q "^cfl-p1-s1 .* exec --dangerously"'
 check "the session runs sol at effort high" 'sed -n 1p "$FIX/launches" | grep -q -- "-m gpt-6.1-sol -c model_reasoning_effort=high"'
+check "turn timeout permits implementation and review rounds" 'grep -q "21600 .* exec" "$FIX/launches"'
+check "session owns review launch, waits, judgment and repairs" 'grep -q "review.sh $FIX/pkt .*wait on required seats.*judge every finding, repair accepted P0/P1 and re-review" "$FIX/launches"'
+check "session receives exact fixed-template source and skill rules" 'grep -q "Read .*SKILL.md for the review and wait rules, and read $WORK/fl/../references/prompts.md for the exact fixed review template" "$FIX/launches"'
+check "session receives fresh retry command and waits on current output" 'grep -q -- "review.sh $FIX/pkt --out $FIX/pkt/review-<round> --tag <fresh-tag>.*Wait on the required seat directories under the --out just launched" "$FIX/launches"'
+check "session must end for owner before lowering a reviewer P0/P1" 'grep -q "Never lower a reviewer.*P0/P1 on your own: end your turn" "$FIX/launches"'
+check "first turn suspends running and editing tests" 'grep -q "Tests are suspended: do not run, fix, edit or add tests" "$FIX/launches"'
 echo note > "$FIX/note.md"
 sh "$HERE/session.sh" "$FIX/pkt" "$FIX/note.md" > /dev/null 2>&1; check "refuses a resume while the last turn has no exit file" "[ $? = 3 ]"
 mkdir -p "$FIX/pkt/turns/1/session"; echo "success exited 0" > "$FIX/pkt/turns/1/session/exit"
@@ -127,12 +141,34 @@ printf 'banner\nsession id: abc-123\n' > "$FIX/pkt/turns/1/session/err"
 sh "$HERE/session.sh" "$FIX/pkt" > /dev/null 2>&1; check "a later turn needs a note file" "[ $? = 2 ]"
 sh "$HERE/session.sh" "$FIX/pkt" "$FIX/note.md" > /dev/null 2>&1; RC=$?
 check "a later turn resumes the same session as a new unit" "[ $RC = 0 ] && sed -n 2p '$FIX/launches' | grep -q '^cfl-p1-s2 .* exec resume abc-123 '"
+check "resume retains review ownership and the fixed-brief guard" 'sed -n 2p "$FIX/launches" | grep -q "In this turn write the review brief from the fixed fastlane template.*judge every finding"'
+
+check "repair turn keeps tests suspended" 'sed -n 2p "$FIX/launches" | grep -q "Tests are suspended: do not run, fix, edit or add tests"'
+mkdir -p "$FIX/pkt/turns/2/session"; echo "success exited 0" > "$FIX/pkt/turns/2/session/exit"
+env FASTLANE_TESTS=on sh "$HERE/session.sh" "$FIX/pkt" "$FIX/note.md" > /dev/null 2>&1; RC=$?
+check "after the live pass a resume can bring tests back" '[ "$RC" = 0 ] && sed -n 3p "$FIX/launches" | grep -q "Tests are back: run, fix, edit or add tests only as the task file says"'
 
 echo "review launcher"
 new_fix
-echo brief > "$FIX/pkt/review-brief.md"; rm "$FIX/pkt/review-start"
+review_brief; rm "$FIX/pkt/review-start"
 sh "$HERE/review.sh" "$FIX/pkt" > /dev/null 2>&1; RC=$?
-check "stamps the review start and starts one opus reviewer by default" "[ $RC = 0 ] && [ -s '$FIX/pkt/review-start' ] && sed -n 1p '$FIX/launches' | grep -q 'review-brief.md $FIX/pkt/review p1 opus$'"
+check "stamps the review start and delegates the default fastlane panel" "[ $RC = 0 ] && [ -s '$FIX/pkt/review-start' ] && sed -n 1p '$FIX/launches' | grep -q 'review-brief.md $FIX/pkt/review p1 opus astra sol grok$'"
+
+echo 123 > "$FIX/pkt/review-start"
+sh "$HERE/review.sh" "$FIX/pkt" sol grok > /dev/null 2>&1; RC=$?
+check "re-review preserves the meter start and explicit seat selection" '[ "$RC" = 0 ] && [ "$(cat "$FIX/pkt/review-start")" = 123 ] && sed -n 2p "$FIX/launches" | grep -q "review p1 sol grok$"'
+mkdir -p "$FIX/pkt/review/opus"
+echo active > "$FIX/pkt/review/opus/unit"
+sh "$HERE/review.sh" "$FIX/pkt" --out "$FIX/pkt/review-retry" --tag p1-retry sol > /dev/null 2>&1; RC=$?
+check "a failed seat retries in a fresh directory and tag without moving active peers" '[ "$RC" = 0 ] && [ "$(cat "$FIX/pkt/review/opus/unit")" = active ] && sed -n 3p "$FIX/launches" | grep -q "review-retry p1-retry sol$"'
+rm -r "$FIX/pkt/review"
+sed -i 's/P0: money/P0: trivial/' "$FIX/pkt/review-brief.md"
+sh "$HERE/review.sh" "$FIX/pkt" > /dev/null 2> "$FIX/review.err"; RC=$?
+check "a reworded severity section fails before launching any reader" '[ "$RC" != 0 ] && grep -q "review brief reworded" "$FIX/review.err" && [ "$(wc -l < "$FIX/launches")" = 3 ]'
+review_brief
+sed -i 's/Read-only review/Editable review/' "$FIX/pkt/review-brief.md"
+sh "$HERE/review.sh" "$FIX/pkt" > /dev/null 2> "$FIX/review.err"; RC=$?
+check "reworded reviewer instructions fail before launching any reader" '[ "$RC" != 0 ] && grep -q "review brief reworded" "$FIX/review.err" && [ "$(wc -l < "$FIX/launches")" = 3 ]'
 
 echo
 echo "$PASS passed, $FAIL failed"

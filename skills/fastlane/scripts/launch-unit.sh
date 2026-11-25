@@ -130,6 +130,7 @@ systemd-run --user --unit="$UNIT" --collect --expand-environment=no \
   -E PATH="$NPM_BIN:$PATH" -E GIT_OPTIONAL_LOCKS=0 \
   -p KillMode=mixed -p TimeoutStopSec=120 \
   -p MemoryMax="${FASTLANE_MEM:-16G}" -p MemorySwapMax=0 -p OOMPolicy=continue \
+  -p StandardInput=null \
   -p "StandardOutput=file:$OUT" -p "StandardError=file:$DIR/err" \
   -p "ExecStopPost=/bin/sh -c 'printenv SERVICE_RESULT EXIT_CODE EXIT_STATUS | xargs > $DIR/exit'" \
   "$@"
