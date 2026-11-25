@@ -1,7 +1,7 @@
 {
   "as_of": "2026-10-29",
   "unit": "USD per million tokens, standard tier",
-  "note": "List rates gathered from public pricing pages and pricing aggregators on the as_of date. Refresh before quoting a cost. A model missing here is reported as unpriced, never guessed. Keys match an exact model id, a dated snapshot (key-YYYYMMDD) or a bracketed tier (key[...]); never a bare prefix. A Claude model may also set web_search_per_request (USD per request) and fast_multiplier.",
+  "note": "List rates gathered from public pricing pages and pricing aggregators on the as_of date. The GPT-6.2 entries were verified on 2026-11-25. Refresh before quoting a cost. A model missing here is reported as unpriced, never guessed. Keys match an exact model id, a dated snapshot (key-YYYYMMDD) or a bracketed tier (key[...]); never a bare prefix. A Claude model may also set web_search_per_request (USD per request) and fast_multiplier.",
   "assumed": [
     "claude-opus-5 cache writes: 1.25x (5m) and 2x (1h) input, the usual ratios",
     "claude-fable-5 cache_read: 4x claude-fable-5-1, from the reported 75% cut",
@@ -18,7 +18,10 @@
     "https://www.eesel.ai/blog/gpt-6-astra-pricing",
     "https://www.eesel.ai/blog/claude-sonnet-5-5-pricing",
     "https://anotherwrapper.com/llm-pricing/claude-opus-4-8",
-    "https://developers.openai.com/api/docs/models/gpt-5.6-sol"
+    "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+    "https://developers.openai.com/api/docs/pricing",
+    "https://developers.openai.com/api/docs/models/gpt-6.2-sol",
+    "https://developers.openai.com/api/docs/models/gpt-6.2-astra"
   ],
   "claude": {
     "claude-opus-5-5": {"input": 4, "cache_read": 0.2, "cache_write_5m": 5, "cache_write_1h": 8, "output": 20, "fast_multiplier": 2},
@@ -30,6 +33,10 @@
     "claude-fable-5": {"input": 10, "cache_read": 1.0, "cache_write_5m": 12.5, "cache_write_1h": 20, "output": 50}
   },
   "codex": {
+    "gpt-6.2-sol": {"input": 2, "cached_input": 0.1, "cache_write": 2.5, "output": 10,
+                    "long_context": {"threshold": 272000, "input": 4, "cached_input": 0.2, "cache_write": 5, "output": 15}},
+    "gpt-6.2-astra": {"input": 8, "cached_input": 0.4, "cache_write": 10, "output": 40,
+                      "long_context": {"threshold": 272000, "input": 16, "cached_input": 0.8, "cache_write": 20, "output": 60}},
     "gpt-6.1-sol": {"input": 2, "cached_input": 0.1, "cache_write": 2.5, "output": 10,
                     "long_context": {"threshold": 272000, "input": 4, "cached_input": 0.2, "cache_write": 5, "output": 15}},
     "gpt-6-sol": {"input": 2, "cached_input": 0.2, "cache_write": 2.5, "output": 10,

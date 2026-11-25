@@ -359,7 +359,7 @@ RC_TIMEOUT=1500   # 25 min; a normal pass is 5-15
 
 "$TO" --kill-after=60 "$RC_TIMEOUT" \
   codex review --base "$DIFF_BASE" \
-  -c 'model="gpt-6.1-sol"' -c 'model_reasoning_effort="high"' \
+  -c 'model="gpt-6.2-sol"' -c 'model_reasoning_effort="high"' \
   </dev/null >"$CODEX_OUT" 2>"$CODEX_ERR" &
 CODEX_PID=$!
 

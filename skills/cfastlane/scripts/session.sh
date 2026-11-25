@@ -13,7 +13,7 @@
 # meter counts from, and records the worktree's HEAD in PKT/base. Inherited uncommitted work is kept,
 # as in fastlane; save its resume copy before launching. A later turn always resumes the same session: its
 # history comes back from cache, so nothing is read in twice.
-# Model: CFASTLANE_MODEL (default gpt-6.1-sol); effort is always high. Timeout: CFASTLANE_TIMEOUT
+# Model: CFASTLANE_MODEL (default gpt-6.2-sol); effort is always high. Timeout: CFASTLANE_TIMEOUT
 # seconds (default 21600: coding, two 90-minute review rounds and one seat retry fit in a turn).
 # Caps, exit file and the disk floor come from fastlane's launch-unit.sh.
 set -eu
@@ -64,6 +64,6 @@ T=$PKT/turns/$N
 mkdir -p "$T"  # the turn exists from here on, whatever the launch does
 FASTLANE_CWD=$WT "$F/launch-unit.sh" "cfl-$NAME-s$N" "$T/session" -- \
   "$TIMEOUT" "${CFASTLANE_TIMEOUT:-21600}" "$CODEX" exec "$@" --dangerously-bypass-approvals-and-sandbox \
-  -m "${CFASTLANE_MODEL:-gpt-6.1-sol}" -c model_reasoning_effort=high \
+  -m "${CFASTLANE_MODEL:-gpt-6.2-sol}" -c model_reasoning_effort=high \
   -c model_auto_compact_token_limit=250000 -o "$T/session/answer.md" "$P"
 echo "turn $N: wait on $T/session"

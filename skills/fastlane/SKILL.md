@@ -121,7 +121,7 @@ returns at once. `launch-unit.sh` also guards the host and the lane:
    - The handoff file codex writes.
 
    Put every failure from the same live run into one task. Fixing them one by one costs a deploy each.
-2. **Implement.** Run `scripts/implement.sh <worktree> iN/task.md iN/impl <unit>`. That is codex gpt-6.1-sol, effort
+2. **Implement.** Run `scripts/implement.sh <worktree> iN/task.md iN/impl <unit>`. That is codex gpt-6.2-sol, effort
    exactly high, in the worktree.
    - Codex edits and compiles what gets deployed. It doesn't commit, push, deploy or write the tracker, and it doesn't
      touch tests.
@@ -240,10 +240,10 @@ the owner a proposal.
 
 | Seat | Model, effort high | Runs as |
 |---|---|---|
-| Implementer | codex `gpt-6.1-sol` | `codex exec --dangerously-bypass-approvals-and-sandbox`, auto-compact at 250k |
+| Implementer | codex `gpt-6.2-sol` | `codex exec --dangerously-bypass-approvals-and-sandbox`, auto-compact at 250k |
 | opus | `claude-opus-5-5` | `claude -p` limited to Read, Grep and Glob, no MCP servers; 5-minute prompt cache |
-| astra | codex `gpt-6-astra` | `codex exec --sandbox read-only` |
-| sol | codex `gpt-6.1-sol` | `codex exec --sandbox read-only` |
+| astra | codex `gpt-6.2-astra` | `codex exec --sandbox read-only` |
+| sol | codex `gpt-6.2-sol` | `codex exec --sandbox read-only` |
 | grok (when available) | `grok-4.7`, effort xhigh | `grok -p`, 8G, no swap, stdin from `/dev/null`; one-word probe first |
 | fable (optional) | `claude-fable-5-2` | like opus; never waited on; a limit line is a missing seat |
 

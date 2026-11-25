@@ -281,7 +281,7 @@ if $RUN_CODEX; then
     --ephemeral \
     --ignore-user-config \
     -c 'mcp_servers={}' \
-    -m gpt-6.1-sol \
+    -m gpt-6.2-sol \
     -c 'model_reasoning_effort="high"' \
     --output-last-message "$CODEX_OUT" \
     "$(<"$AUDIT_PROMPT_FILE")" \
@@ -526,7 +526,7 @@ require another audit.
 
 | Symptom | Action |
 |---|---|
-| Codex model unavailable | Retry once without `-m gpt-6.1-sol`; record the environment-default fallback. |
+| Codex model unavailable | Retry once without `-m gpt-6.2-sol`; record the environment-default fallback. |
 | Codex auth/non-zero error | Surface stderr; continue `DEGRADED` with the Claude auditor. |
 | Claude `is_error`, rate limit, overload, or auth error | Retry once. If it fails again, **re-resolve the ladder once** and rerun on the next model before degrading — credits can expire between the probe and a 900s audit, and degrading with an untried rung is the exact outcome the ladder exists to prevent. `DEGRADED` when that single re-resolution is spent or the candidates run out, whichever is first. |
 | Output ambiguous | Reread the prompt file and rerun that reviewer once. A second ambiguity is a reviewer failure. |
