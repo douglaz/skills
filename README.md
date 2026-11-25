@@ -320,7 +320,7 @@ front used about 110k tokens before starting work.
 
 Trades the full implement-and-review loop for speed. Instead of rloop Runs, the manager writes a
 short task file and calls codex (`gpt-6.1-sol` at `high`) directly. opus, astra and sol read the
-diff; fable is an optional fourth seat that nobody waits on. The manager judges the findings,
+diff, joined by grok when its one-word probe answers; fable is optional and never waited on. The manager judges the findings,
 commits, deploys and runs the live test: one full end-to-end journey through the deployed system,
 driven the way a real user would drive it. The loop repeats until the live test is perfect. Tests
 are neither run nor fixed until then; test-only findings go on a deferred list, which becomes the
@@ -340,26 +340,29 @@ means. `scripts/fastlane.test`, run by `./check.sh`, covers the record, the busy
 
 ### cfastlane
 
-The fast lane with one combined session. A single codex session (`gpt-6.1-sol` at `high`) plans the
-change, writes the code, builds it and writes the handoff, so there is no separate manager and no
-manager-to-implementer handoff to pay for. Scripts do the mechanical steps: commit after scans, and
-write the reproduction receipt a reviewer reads. One independent read-only reviewer reads the diff
-and the receipt (any of the fast lane's seats can be named instead). The assistant judges the
-findings, and a call at the blocking line goes to the owner, because the session that wrote the code
-must not rate findings against it. Use it for one bounded change that one session can hold; keep
-`fastlane` for long multi-iteration lanes.
+The fast lane for one bounded packet, inheriting its rules with five exceptions: one sol session
+plans, codes, builds and writes the handoff; a script commits after scans; the session fills the
+fixed review brief, calls reviewers, waits, judges, repairs accepted P0/P1 and re-reviews in its
+turn, ending for the owner before lowering a reviewer's P0/P1 or leaving a raised one unfixed;
+tokens are measured per role without a
+limit; and the scope stays bounded. The same session is resumed for repairs, with no separate
+manager or implementer. opus, astra and sol review before commit, plus grok when available; fable
+is optional and never waited on. The script commits, then the live test decides. Tests stay
+suspended until it passes, just as in fastlane. Use fastlane for an open-ended lane or several
+managers.
 
 ```text
 /cfastlane add the admission step
 ```
 
-Tokens are measured, never limited. `scripts/meter.py` reads the packet's codex and reviewer
-transcripts, or one transcript such as the assistant's own, and reports new tokens: uncached input
-plus output. `scripts/session.sh` starts the session and later resumes the same one.
-`scripts/close.py` commits after its scans, `scripts/receipt.py` writes the manifest and
-`scripts/review.sh` starts the reviewer. It reuses `fastlane`'s `launch-unit.sh`, `wait.sh`,
-`make-diff.sh` and `review.sh`, so install both. `scripts/cfastlane.test`, run by `./check.sh`,
-covers the meter, the commit scans, the receipt and the launchers.
+`scripts/session.sh` starts and resumes the session. `scripts/close.py` commits after its banned-text
+and allowed-path scans. `scripts/review.sh` reuses fastlane's panel; `scripts/receipt.py` records
+post-live evidence for close-out. `scripts/meter.py` reads Codex and Claude transcripts and reports
+new tokens (uncached input plus output), separating the combined session from reviewer seats by its
+recorded session ID; report other usage separately or name missing measurements.
+It reuses `fastlane`'s `launch-unit.sh`, `wait.sh`, `make-diff.sh` and `review.sh`, so install both.
+Keep the packet's `waits` file at its root for the shared wait record and deploy/live busy check.
+`scripts/cfastlane.test`, run by `./check.sh`, covers the meter, scans, receipt and launchers.
 
 ### token-ledger
 

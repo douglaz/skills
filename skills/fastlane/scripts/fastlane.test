@@ -22,12 +22,32 @@ STUB
 cat > "$WORK/bin/systemd-run" <<'STUB'
 #!/usr/bin/env bash
 echo "$*" >> "$FIX/runs"
-for a in "$@"; do case $a in --unit=*) touch "$FIX/active/${a#--unit=}" ;; esac; done
+unit= out=
+for a in "$@"; do
+  case $a in
+    --unit=*) unit=${a#--unit=}; touch "$FIX/active/$unit" ;;
+    StandardOutput=file:*) out=${a#StandardOutput=file:} ;;
+  esac
+done
+case $unit in *-grok-probe)
+  d=$(dirname "$out")
+  case $(cat "$FIX/probe-mode") in
+    good) echo GROK_OK > "$out"; echo 'success exited 0' > "$d/exit" ;;
+    empty) : > "$out"; echo 'success exited 0' > "$d/exit" ;;
+    failed) echo GROK_OK > "$out"; echo 'exit-code exited 1' > "$d/exit" ;;
+  esac
+  rm "$FIX/active/$unit"
+  ;;
+esac
 STUB
 cat > "$WORK/bin/df" <<'STUB'
 #!/usr/bin/env bash
 printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\nfake 999999999 1 %s 1%% /\n' "$(cat "$FIX/free-kb")"
 STUB
+for tool in codex claude grok; do
+  printf '#!/bin/sh\nexit 99\n' > "$WORK/bin/$tool"
+  chmod +x "$WORK/bin/$tool"
+done
 chmod +x "$WORK/bin/systemctl" "$WORK/bin/systemd-run" "$WORK/bin/df"
 PATH="$WORK/bin:$PATH"
 LU=$HERE/launch-unit.sh WS=$HERE/wait.sh
@@ -149,6 +169,49 @@ check "below the 45 GiB default floor a launch refuses (exit 3) and starts nothi
   '[ "$rc" = 3 ] && grep -q "disk floor" "$FIX/launch.out" && [ ! -s "$FIX/runs" ] && [ ! -s "$FIX/lane/waits" ]' "rc $rc: $(cat "$FIX/launch.out")"
 out=$( (cd "$FIX/lane" && env FASTLANE_CWD="$FIX/lane" FASTLANE_MIN_FREE_GB=30 "$LU" fl-low i1/low3 -- /bin/true) 2>&1); rc=$?
 check "a lane's lower floor (FASTLANE_MIN_FREE_GB=30) lets the same launch start" '[ "$rc" = 0 ]' "rc $rc: $out"
+
+# --- panel seats and grok availability ---------------------------------------------------------
+new_fix
+echo good > "$FIX/probe-mode"; echo brief > "$FIX/lane/brief.md"
+"$HERE/review.sh" "$FIX/lane" "$FIX/lane/brief.md" "$FIX/lane/review" panel > "$FIX/review.out" 2>&1; rc=$?
+check "default panel launches opus, astra, sol, and available grok" \
+  '[ "$rc" = 0 ] && [ "$(wc -l < "$FIX/runs")" = 5 ] && [ -f "$FIX/lane/review/opus/unit" ] && [ -f "$FIX/lane/review/astra/unit" ] && [ -f "$FIX/lane/review/sol/unit" ] && [ -f "$FIX/lane/review/grok/unit" ] && [ ! -d "$FIX/lane/review/fable" ]' "rc $rc: $(cat "$FIX/review.out")"
+check "grok probe and reviewer use 8G, no swap, null stdin and the standing command" \
+  '[ "$(grep -c -- "MemoryMax=8G.*MemorySwapMax=0.*StandardInput=null.*--no-auto-update -p .*--model grok-4.7 --effort xhigh --output-format plain --always-approve --sandbox off --no-subagents --no-memory --disable-web-search --disallowed-tools search_replace,write" "$FIX/runs")" = 2 ]' "$(cat "$FIX/runs")"
+check "both grok calls allow only read-only repository tools" \
+  '[ "$(grep -c -- "--tools read_file,grep,list_dir" "$FIX/runs")" = 2 ]' "$(cat "$FIX/runs")"
+check "both grok calls remove MCP discovery and invocation tools" \
+  '[ "$(grep -c -- "--disallowed-tools search_replace,write,search_tool,use_tool" "$FIX/runs")" = 2 ]' "$(cat "$FIX/runs")"
+check "probe wait removes only its line; required reviewers stay recorded" \
+  '! grep -q "grok-probe" "$FIX/lane/waits" && [ "$(wc -l < "$FIX/lane/waits")" = 4 ]' "$(cat "$FIX/lane/waits")"
+check "reader prompt names grok config in the no-read list" \
+  'grep -q "~/.grok" "$FIX/runs"' "$(cat "$FIX/runs")"
+for mode in failed empty; do
+  new_fix
+  echo "$mode" > "$FIX/probe-mode"; echo brief > "$FIX/lane/brief.md"
+  "$HERE/review.sh" "$FIX/lane" "$FIX/lane/brief.md" "$FIX/lane/review" panel > "$FIX/review.out" 2>&1; rc=$?
+  check "$mode grok probe is reported missing and leaves no reader to wait on" \
+    '[ "$rc" = 0 ] && [ -s "$FIX/lane/review/grok-missing" ] && [ ! -d "$FIX/lane/review/grok" ] && [ "$(wc -l < "$FIX/lane/waits")" = 3 ]' "rc $rc: $(cat "$FIX/review.out")"
+done
+
+# --- combined packet integration with the real shared launcher and wait ------------------------
+new_fix
+mkdir -p "$FIX/packet" "$FIX/wt"
+: > "$FIX/packet/waits"; echo task > "$FIX/packet/task.md"
+git -C "$FIX/wt" init -q
+git -C "$FIX/wt" -c user.name=t -c user.email=t@t commit -q --allow-empty -m base
+printf '{"name":"packet","worktree":"%s"}\n' "$FIX/wt" > "$FIX/packet/config.json"
+env FASTLANE_MANAGER=coordinator "$HERE/../../cfastlane/scripts/session.sh" "$FIX/packet" > "$FIX/session.out" 2>&1; rc=$?
+check "a combined session finds its packet wait record and is kind other" \
+  '[ "$rc" = 0 ] && grep -q "^coordinator | cfl-packet-s1 | $FIX/packet/turns/1/session/exit |" "$FIX/packet/waits" && [ "$(cat "$FIX/packet/turns/1/session/kind")" = other ]' "rc $rc: $(cat "$FIX/session.out")"
+echo 'success exited 0' > "$FIX/packet/turns/1/session/exit"
+"$WS" 0 "$FIX/packet/turns/1/session" > "$FIX/wait.out" 2>&1; rc=$?
+check "wait.sh consumes a combined session exit and clears its packet record" \
+  '[ "$rc" = 0 ] && [ ! -s "$FIX/packet/waits" ]' "rc $rc: $(cat "$FIX/wait.out")"
+"$LU" --kind live packet-live "$FIX/packet/live" -- /bin/true > "$FIX/launch.out" 2>&1
+"$LU" --kind deploy packet-deploy "$FIX/packet/deploy" -- /bin/true > "$FIX/launch.out" 2>&1; rc=$?
+check "packet-root live unit blocks deployment through the same busy check" \
+  '[ "$rc" = 3 ] && grep -q "live unit packet-live is active" "$FIX/launch.out"' "rc $rc: $(cat "$FIX/launch.out")"
 
 echo "passed $PASS, failed $FAIL"
 [[ "$FAIL" == 0 ]]

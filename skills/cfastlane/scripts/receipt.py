@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Write the reproduction receipt the reviewer reads: PKT/manifest.json.
+"""Write the post-live reproduction receipt the assistant reads: PKT/manifest.json.
 
   receipt.py PKT [EVIDENCE_FILE ...]
 
 Run it after the commit, the diff (fastlane's make-diff.sh into PKT/diff.patch) and the live run.
 It records the commit, its tree, whether the worktree is clean, the diff's sha256 and line count,
 the changed files, the scan of added lines, and for each EVIDENCE_FILE its sha256 and, for a JSON
-file or a unit's exit file, its content. Reviewers are read-only and cannot run the check
-themselves; this file is how they know which bytes were tested and what the run said. Nobody edits
+file or a unit's exit file, its content. The assistant reads it at close-out
+to check which bytes were tested and what the run said; review happens before the commit. Nobody edits
 it by hand.
 """
 import hashlib

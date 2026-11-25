@@ -8,7 +8,9 @@ It only measures. Nothing here stops, caps or warns: the lane reports what a cha
 owner decides what to do with the number.
 
 PKT holds config.json and a start stamp in epoch seconds: meter-start (phase session, the default)
-or review-start (phase review). A codex session counts when its transcript was written after the
+or review-start (phase review). The combined session is selected by the id session.sh resumes,
+read from turns/*/session/err. The review phase excludes that id. Other codex sessions count when
+their transcript was written after the
 stamp and its working directory is one of the packet's roots (config "roots", default: PKT and the
 worktree) or below one. In phase review, Claude transcripts whose working directory is the worktree
 count too, so the reading covers every reviewer seat.
@@ -53,16 +55,16 @@ def codex_last_usage(path):
     return last
 
 
-def codex_cwd(path):
+def codex_meta(path):
     try:
         with path.open() as f:
             meta = json.loads(next(f))
-        return Path(meta.get('payload', {}).get('cwd', '/nonexistent')).resolve()
+        return meta.get('payload', {})
     except (OSError, StopIteration, json.JSONDecodeError):
         return None
 
 
-def codex_rows(roots, since):
+def codex_rows(roots, since, combined_id, phase):
     rows = []
     for path in sorted(CODEX_SESSIONS.glob('*/*/*/*.jsonl')):
         try:
@@ -70,8 +72,14 @@ def codex_rows(roots, since):
                 continue
         except OSError:
             continue
-        cwd = codex_cwd(path)
-        if cwd is None or not any(cwd == r or r in cwd.parents for r in roots):
+        meta = codex_meta(path)
+        if meta is None:
+            continue
+        is_combined = meta.get('id') == combined_id
+        if is_combined != (phase == 'session'):
+            continue
+        cwd = Path(meta.get('cwd', '/nonexistent')).resolve()
+        if not any(cwd == r or r in cwd.parents for r in roots):
             continue
         u = codex_last_usage(path)
         if u:
@@ -120,7 +128,15 @@ def reading(pkt, phase='session'):
     cfg = config(pkt)
     stamp = pkt / ('meter-start' if phase == 'session' else 'review-start')
     since = float(stamp.read_text().strip())
-    rows = codex_rows([Path(r).resolve() for r in cfg['roots']], since)
+    combined_id = None
+    for log in sorted(pkt.glob('turns/*/session/err')):
+        match = re.search(r'^session id: *([A-Za-z0-9-]+)', log.read_text(), re.M)
+        if match:
+            combined_id = match[1]
+            break
+    if combined_id is None:
+        sys.exit('combined session id unavailable: cannot separate session and reviewer tokens')
+    rows = codex_rows([Path(r).resolve() for r in cfg['roots']], since, combined_id, phase)
     if phase == 'review':
         rows += claude_rows(Path(cfg['worktree']).resolve(), since)
     return dict(packet=cfg['name'], phase=phase, new_tokens=sum(r['new'] for r in rows),
