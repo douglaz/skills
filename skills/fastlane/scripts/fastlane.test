@@ -213,5 +213,12 @@ check "wait.sh consumes a combined session exit and clears its packet record" \
 check "packet-root live unit blocks deployment through the same busy check" \
   '[ "$rc" = 3 ] && grep -q "live unit packet-live is active" "$FIX/launch.out"' "rc $rc: $(cat "$FIX/launch.out")"
 
+# --- the implementer prompt ---------------------------------------------------------------------
+new_fix
+echo task > "$FIX/lane/i1/task.md"
+(cd "$FIX/lane" && "$HERE/implement.sh" "$FIX/lane" i1/task.md i1/impl fl-i1-impl) > "$FIX/launch.out" 2>&1; rc=$?
+check "the implementer leaves work undone only for a named obstacle, never for remaining work" \
+  '[ "$rc" = 0 ] && grep -q "Leave something undone only for a named obstacle.*Work that merely remains is not an obstacle.*if anything is undone, it names the obstacle" "$FIX/runs"' "rc $rc: $(cat "$FIX/launch.out")"
+
 echo "passed $PASS, failed $FAIL"
 [[ "$FAIL" == 0 ]]

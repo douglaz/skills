@@ -128,6 +128,11 @@ returns at once. `launch-unit.sh` also guards the host and the lane:
    - Wait with `scripts/wait.sh <deadline> iN/impl`, following Waits below.
    - Then read its handoff and build exits. A failed build goes straight back to codex with the error, in a new
      `iN/impl-2`, without review.
+   - So does a handoff that leaves part of the task undone: review only a complete candidate. Readers on an
+     unfinished one mostly report the omissions its handoff already lists. Send it back naming the remaining
+     work. Take it to the assistant only when the handoff names a real obstacle: evidence that a requirement
+     cannot be met as written, one specific step with what was tried and why it failed, or something reserved
+     for you or the owner. Work that merely remains is not one.
 3. **Review.**
    - Run `scripts/make-diff.sh <worktree> <base> iN/diff.patch`. It captures tracked changes plus new files, and
      prints the diff's sha.

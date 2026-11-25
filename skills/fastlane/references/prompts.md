@@ -35,8 +35,15 @@ Record each command, its exit code and its wall time in the handoff.
 
 ## Handoff
 Write `<path>/handoff.md`: what changed, by file and why; each build command with its exit code;
-anything left undone; anything that looked wrong but was out of scope.
+anything left undone and the obstacle that stopped it; anything that looked wrong but was out of
+scope. Do all of the Change before you stop: leave something undone only for a named obstacle
+(evidence a requirement cannot be met as written, one specific step with what you tried and why
+it failed, something reserved for the manager or the owner, the time limit), never because work
+remains.
 ```
+
+If the task needs its own stop condition, write it as a named obstacle, never as "if X cannot be
+finished": an implementer reads that as leave to stop before trying.
 
 ## Review brief (`iN/review-brief.md`)
 
