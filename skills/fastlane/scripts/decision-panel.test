@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+# Offline ballot and vote-rule fixtures. No model commands run.
+set -uo pipefail
+HERE=$(cd "$(dirname "$0")" && pwd)
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+PASS=0; FAIL=0
+
+write_ballot() {
+  local seat=$1 pick=$2 rank remaining
+  mkdir -p "$WORK/panel/$seat"
+  rank=$pick
+  for remaining in A B C; do
+    if [ "$remaining" != "$pick" ]; then rank="$rank $remaining"; fi
+  done
+  printf 'PICK: %s\nRANKING: %s\nCAN LIVE WITH: A C\nARGUMENT: %s gives the best result.\n' \
+    "$pick" "$rank" "$pick" > "$WORK/panel/$seat/answer.md"
+  echo 'success exited 0' > "$WORK/panel/$seat/exit"
+}
+
+check_tally() {
+  local name=$1 counts=$2 expected=$3
+  shift 3
+  local seats=(opus astra sol grok fable) seat state index=0 actual rc
+  rm -rf "$WORK/panel"
+  mkdir "$WORK/panel"
+  printf 'A\nB\nC\n' > "$WORK/panel/options"
+  touch "$WORK/panel/launch-complete"
+  for state in "$@"; do
+    seat=${seats[index++]}
+    case $state in
+      A|B|C) write_ballot "$seat" "$state" ;;
+      -) ;;
+      failed) write_ballot "$seat" B; echo 'exit-code exited 1' > "$WORK/panel/$seat/exit" ;;
+      pending) write_ballot "$seat" B; rm "$WORK/panel/$seat/exit" ;;
+      launch-failed) touch "$WORK/panel/$seat-launch-failed" ;;
+      malformed) write_ballot "$seat" B; sed -i 's/RANKING:.*/RANKING: B A A/' "$WORK/panel/$seat/answer.md" ;;
+      unknown) write_ballot "$seat" B; sed -i 's/CAN LIVE WITH:.*/CAN LIVE WITH: X/' "$WORK/panel/$seat/answer.md" ;;
+      limit) write_ballot "$seat" B; printf "You've hit your limit · resets at 9am\n" > "$WORK/panel/$seat/answer.md" ;;
+    esac
+  done
+  actual=$("$HERE/decision-panel.py" collect 0 "$WORK/panel"); rc=$?
+  if [ "$expected" != OWNER_DECISION ]; then
+    expected="$expected accepted under the owner's 2026-11-05 panel rule"
+  fi
+  expected=$(printf 'Counts (%s answering): %s\nVERDICT: %s' "${counts%% *}" "${counts#* }" "$expected")
+  if [ "$rc" = 0 ] && [ "$actual" = "$expected" ] && [ "$(tail -n 2 "$WORK/panel/synthesis.md")" = "$expected" ]; then
+    PASS=$((PASS+1)); printf '  ok   %s\n' "$name"
+  else
+    FAIL=$((FAIL+1)); printf '  FAIL %s (exit %s)\n       expected: %s\n       actual: %s\n' "$name" "$rc" "$expected" "$actual"
+  fi
+}
+
+check_tally 'zero answers go to the owner' '0 A=0 B=0 C=0' OWNER_DECISION
+check_tally 'one answering reader is unanimous even without opus' '1 A=0 B=1 C=0' B - B
+check_tally 'two answering readers may agree without opus' '2 A=0 B=0 C=2' C - C C
+check_tally 'all five readers agree' '5 A=5 B=0 C=0' A A A A A A
+check_tally '2 of 3 including opus' '3 A=2 B=1 C=0' A A B A
+check_tally '2 of 3 with opus in the minority' '3 A=2 B=1 C=0' OWNER_DECISION B A A
+check_tally '2 of 3 with opus missing' '3 A=2 B=1 C=0' OWNER_DECISION - A A B
+check_tally '3 of 4 including opus' '4 A=3 B=1 C=0' A A A B A
+check_tally '3 of 4 with opus in the minority' '4 A=3 B=1 C=0' OWNER_DECISION B A A A
+check_tally '3 of 4 with opus missing' '4 A=3 B=1 C=0' OWNER_DECISION - A A B A
+check_tally '4 of 5 including opus' '5 A=4 B=1 C=0' A A A A B A
+check_tally '4 of 5 with opus in the minority' '5 A=4 B=1 C=0' OWNER_DECISION B A A A A
+check_tally '3 of 5 including opus still goes to the owner' '5 A=3 B=2 C=0' OWNER_DECISION A A A B B
+check_tally 'a two-way tie goes to the owner' '4 A=2 B=2 C=0' OWNER_DECISION A B A B
+check_tally 'a three-way split goes to the owner' '3 A=1 B=1 C=1' OWNER_DECISION A B C
+check_tally 'a tie for first with five votes goes to the owner' '5 A=2 B=2 C=1' OWNER_DECISION A B A B C
+check_tally 'fable limit line leaves 3 of 4' '4 A=3 B=1 C=0' A A A B A limit
+check_tally 'unfinished fable answer leaves 2 of 3' '3 A=2 B=1 C=0' A A A B - pending
+before=$(cat "$WORK/panel/synthesis.md")
+echo 'success exited 0' > "$WORK/panel/fable/exit"
+actual=$("$HERE/decision-panel.py" collect 0 "$WORK/panel"); rc=$?
+if [ "$rc" = 0 ] && [[ "$actual" == "Counts (3 answering): A=2 B=1 C=0"* ]] &&
+   [ "$(cat "$WORK/panel/synthesis.md")" = "$before" ]; then
+  PASS=$((PASS+1)); printf '  ok   late fable cannot change a published verdict\n'
+else
+  FAIL=$((FAIL+1)); printf '  FAIL late fable cannot change a published verdict (exit %s): %s\n' "$rc" "$actual"
+fi
+
+check_tally 'failed and malformed answers are missing' '1 A=1 B=0 C=0' A A failed malformed unknown launch-failed
+if grep -qx -- '- opus picked A. A gives the best result.' "$WORK/panel/synthesis.md"; then
+  PASS=$((PASS+1)); printf '  ok   synthesis includes the pick and argument\n'
+else
+  FAIL=$((FAIL+1)); printf '  FAIL synthesis includes the pick and argument\n'
+fi
+
+rm "$WORK/panel/launch-complete" "$WORK/panel/synthesis.md"
+actual=$("$HERE/decision-panel.py" collect 0 "$WORK/panel" 2>&1); rc=$?
+if [ "$rc" = 2 ] && [ ! -e "$WORK/panel/synthesis.md" ] && [[ "$actual" == *"launch did not complete"* ]]; then
+  PASS=$((PASS+1)); printf '  ok   an interrupted launch cannot produce a verdict\n'
+else
+  FAIL=$((FAIL+1)); printf '  FAIL an interrupted launch cannot produce a verdict (exit %s): %s\n' "$rc" "$actual"
+fi
+
+mkdir "$WORK/bin"
+cat > "$WORK/bin/systemctl" <<'STUB'
+#!/bin/sh
+case "$1 $2" in
+  '--user is-active') exit 1 ;;
+  '--user show')
+    if [ "$PANEL_UNIT_STATE" = unreachable ]; then exit 1; fi
+    printf '%s\n' "$PANEL_UNIT_STATE" ;;
+  *) exit 9 ;;
+esac
+STUB
+printf '#!/bin/sh\nexit 0\n' > "$WORK/bin/sleep"
+chmod +x "$WORK/bin/systemctl" "$WORK/bin/sleep"
+
+touch "$WORK/panel/launch-complete"
+printf 'fastlane-fixture-astra\n' > "$WORK/panel/astra/unit"
+rm "$WORK/panel/astra/exit"
+for state in unreachable active inactive; do
+  rm -f "$WORK/panel/synthesis.md"
+  actual=$(env PANEL_UNIT_STATE="$state" PATH="$WORK/bin:$PATH" \
+    "$HERE/decision-panel.py" collect 0 "$WORK/panel" 2>&1); rc=$?
+  if { [ "$state" = inactive ] && [ "$rc" = 0 ] && [[ "$actual" == *"Counts (1 answering): A=1 B=0 C=0"* ]]; } ||
+     { [ "$state" != inactive ] && [ "$rc" = 2 ] && [ ! -e "$WORK/panel/synthesis.md" ]; }; then
+    PASS=$((PASS+1)); printf '  ok   collection handles a required unit whose confirmed state is %s\n' "$state"
+  else
+    FAIL=$((FAIL+1)); printf '  FAIL collection with required unit state %s (exit %s): %s\n' "$state" "$rc" "$actual"
+  fi
+done
+
+rm "$WORK/panel/synthesis.md"
+touch "$WORK/panel/astra-launch-failed"
+actual=$(env PANEL_UNIT_STATE=active PATH="$WORK/bin:$PATH" \
+  "$HERE/decision-panel.py" collect 0 "$WORK/panel" 2>&1); rc=$?
+if [ "$rc" = 2 ] && [ ! -e "$WORK/panel/synthesis.md" ]; then
+  PASS=$((PASS+1)); printf '  ok   a launcher error does not exclude a running required unit\n'
+else
+  FAIL=$((FAIL+1)); printf '  FAIL a launcher error excluded a running required unit (exit %s): %s\n' "$rc" "$actual"
+fi
+
+rm -f "$WORK/panel/synthesis.md"
+echo 'success exited 0' > "$WORK/panel/astra/exit"
+actual=$("$HERE/decision-panel.py" collect 0 "$WORK/panel" 2>&1); rc=$?
+if [ "$rc" = 0 ] && [[ "$actual" == *"Counts (2 answering): A=1 B=1 C=0"* ]]; then
+  PASS=$((PASS+1)); printf '  ok   a completed ballot counts despite a launcher error\n'
+else
+  FAIL=$((FAIL+1)); printf '  FAIL a launcher error discarded a completed ballot (exit %s): %s\n' "$rc" "$actual"
+fi
+
+echo "passed $PASS, failed $FAIL"
+[[ "$FAIL" == 0 ]]

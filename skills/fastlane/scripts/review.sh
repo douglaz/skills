@@ -11,6 +11,13 @@
 # OUT_DIR/grok-missing records why; no grok reader starts and nothing waits on that seat.
 # Readers can't run commands: put the diff in a file (make-diff.sh) and name it in the brief.
 set -eu
+# The decision-panel entry point supplies its own brief and optional seat lenses.
+DECISION=no
+if [ "${1:-}" = --decision ]; then
+  DECISION=yes; shift
+  # The voting rule depends on the model behind each named seat.
+  unset FASTLANE_OPUS_MODEL FASTLANE_FABLE_MODEL FASTLANE_ASTRA_MODEL FASTLANE_SOL_MODEL
+fi
 [ $# -ge 4 ] || { echo "usage: $0 WORKTREE BRIEF_FILE OUT_DIR TAG [SEAT...]" >&2; exit 2; }
 WT=$1 BRIEF=$2 OUT=$3 TAG=$4; shift 4
 [ $# -gt 0 ] || set -- opus astra sol grok
@@ -22,20 +29,38 @@ mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 CODEX=$HOME/.npm-global/bin/codex; [ -x "$CODEX" ] || CODEX=$(command -v codex)
 CLAUDE=$HOME/.npm-global/bin/claude; [ -x "$CLAUDE" ] || CLAUDE=$(command -v claude)
 TIMEOUT=$(command -v timeout) ENV=$(command -v env)
-P="You are a code reviewer in a fast lane. Read the review brief $BRIEF in full first and follow it. You are read-only: never edit files, commit, check out, stash, reset or clean, and never run builds or tests (tests are suspended until the live test passes). Do not read credential files or the model config folders ~/.claude, ~/.codex, ~/.grok."
+launch_reader() {
+  "$H/launch-unit.sh" "$@" || {
+    rc=$?
+    [ "$DECISION" = yes ] || return "$rc"
+    printf 'launch failed (exit %s)\n' "$rc" > "$OUT/$s-launch-failed"
+  }
+}
+wait_probe() {
+  if [ "$DECISION" = yes ]; then set -- --exit-file-only; fi
+  "$H/wait.sh" "$@" 120 "$PROBE"
+}
 for s in "$@"; do
   D=$OUT/$s U=fastlane-$TAG-$s
+  if [ "$DECISION" = yes ]; then
+    P="Read the decision brief $BRIEF in full first and answer its question in the specified format. Read project files for context. Use commands only to read files. Do not edit files, change git state, or run builds or tests. Do not read credential files or the model config folders ~/.claude, ~/.codex, ~/.grok."
+    if [ -s "$OUT/$s.lens.md" ]; then
+      P="$P Also read $OUT/$s.lens.md for your lens. Keep the brief's answer format."
+    fi
+  else
+    P="You are a code reviewer in a fast lane. Read the review brief $BRIEF in full first and follow it. You are read-only: never edit files, commit, check out, stash, reset or clean, and never run builds or tests (tests are suspended until the live test passes). Do not read credential files or the model config folders ~/.claude, ~/.codex, ~/.grok."
+  fi
   case $s in
     opus|fable)
       if [ "$s" = opus ]; then M=${FASTLANE_OPUS_MODEL:-claude-opus-5-5}; else M=${FASTLANE_FABLE_MODEL:-claude-fable-5-2}; fi
-      FASTLANE_CWD=$WT "$H/launch-unit.sh" "$U" "$D" --stdout "$D/answer.md" -- \
+      FASTLANE_CWD=$WT launch_reader "$U" "$D" --stdout "$D/answer.md" -- \
         "$ENV" -u CLAUDE_CODE_AUTO_COMPACT_WINDOW CLAUDE_CODE_PROMPT_CACHE_TTL=5m \
         "$TIMEOUT" 5400 "$CLAUDE" -p "$P" --model "$M" --effort high \
         --dangerously-skip-permissions --tools Read,Grep,Glob \
         --safe-mode --strict-mcp-config --mcp-config '{"mcpServers":{}}' ;;
     astra|sol)
       if [ "$s" = astra ]; then M=${FASTLANE_ASTRA_MODEL:-gpt-6.2-astra}; else M=${FASTLANE_SOL_MODEL:-gpt-6.2-sol}; fi
-      FASTLANE_CWD=$WT "$H/launch-unit.sh" "$U" "$D" -- \
+      FASTLANE_CWD=$WT launch_reader "$U" "$D" -- \
         "$TIMEOUT" 5400 "$CODEX" exec --skip-git-repo-check --sandbox read-only \
         -m "$M" -c model_reasoning_effort=high -o "$D/answer.md" "$P" ;;
     grok)
@@ -45,13 +70,17 @@ for s in "$@"; do
         continue
       fi
       PROBE=$OUT/grok-probe
+      probe_rc=0
       FASTLANE_MEM=8G FASTLANE_CWD=$WT "$H/launch-unit.sh" "$U-probe" "$PROBE" --stdout "$PROBE/answer.md" -- \
         "$TIMEOUT" 90 "$GROK" --no-auto-update -p "Reply with exactly one word: GROK_OK" \
         --model grok-4.7 --effort high --output-format plain --always-approve --sandbox off \
         --no-subagents --no-memory --disable-web-search \
-        --disallowed-tools "search_replace,write,search_tool,use_tool" --tools "read_file,grep,list_dir"
-      if "$H/wait.sh" 120 "$PROBE" && grep -qx 'GROK_OK' "$PROBE/answer.md"; then
-        FASTLANE_MEM=8G FASTLANE_CWD=$WT "$H/launch-unit.sh" "$U" "$D" --stdout "$D/answer.md" -- \
+        --disallowed-tools "search_replace,write,search_tool,use_tool" --tools "read_file,grep,list_dir" || probe_rc=$?
+      if [ "$probe_rc" -ne 0 ] && [ "$DECISION" = no ]; then exit "$probe_rc"; fi
+      # In decision mode, a failed status query can leave a probe still running.
+      if { [ "$probe_rc" -eq 0 ] || [ -s "$PROBE/unit" ]; } &&
+        wait_probe && grep -qx 'GROK_OK' "$PROBE/answer.md"; then
+        FASTLANE_MEM=8G FASTLANE_CWD=$WT launch_reader "$U" "$D" --stdout "$D/answer.md" -- \
           "$TIMEOUT" 5400 "$GROK" --no-auto-update -p "$P" \
           --model grok-4.7 --effort high --output-format plain --always-approve --sandbox off \
           --no-subagents --no-memory --disable-web-search \
