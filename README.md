@@ -332,11 +332,15 @@ writing the spec.
 ```
 
 Every codex run and reader is a capped `systemd-run --user` unit that writes an exit file.
-`scripts/wait.sh` waits on them with the usual 0/1/2/124 codes. `scripts/launch-unit.sh` refuses
+`scripts/wait.sh` takes its deadline in seconds and returns 0/1/2/124. `scripts/launch-unit.sh` refuses
 below a free-space floor (45 GiB by default) and refuses a deploy during a live run and the reverse;
 it and `wait.sh` keep the lane's wait record, one line per armed wait, so a finished job nobody waits
 on shows up. `references/live-test-template.md` is where each project defines what its live test
 means. `scripts/fastlane.test`, run by `./check.sh`, covers the record, the busy check and the floor.
+
+`scripts/decision-panel.py` uses the same readers for owner questions with a set of options. It
+records ballots, applies the owner's 2026-11-05 vote rule and writes a synthesis. See the
+[decision panel instructions](skills/fastlane/SKILL.md#owner-decision-panels).
 
 ### cfastlane
 

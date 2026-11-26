@@ -125,7 +125,7 @@ returns at once. `launch-unit.sh` also guards the host and the lane:
    exactly high, in the worktree.
    - Codex edits and compiles what gets deployed. It doesn't commit, push, deploy or write the tracker, and it doesn't
      touch tests.
-   - Wait with `scripts/wait.sh <deadline> iN/impl`, following Waits below.
+   - Wait with `scripts/wait.sh <deadline_seconds> iN/impl`, following Waits below.
    - Then read its handoff and build exits. A failed build goes straight back to codex with the error, in a new
      `iN/impl-2`, without review.
    - So does a handoff that leaves part of the task undone: review only a complete candidate. Readers on an
@@ -143,7 +143,7 @@ returns at once. `launch-unit.sh` also guards the host and the lane:
      `scripts/review.sh <worktree> iN/review-brief.md iN/review <tag> opus astra sol grok fable`.
    - Grok is available only if its bounded one-word `grok -p` probe answers. Otherwise `iN/review/grok-missing`
      records the missing seat: name it in the report, never wait on it and never block on it.
-   - Wait on the required seats: `scripts/wait.sh <deadline> iN/review/opus iN/review/astra iN/review/sol`, adding
+   - Wait on the required seats: `scripts/wait.sh <deadline_seconds> iN/review/opus iN/review/astra iN/review/sol`, adding
      `iN/review/grok` only when its reader launched (`iN/review/grok/unit` exists). Follow Waits below. Read
      fable's answer if it has arrived by then, and never wait for it.
    - On a re-review after a fix, the brief covers the delta and the earlier findings, not the whole change again.
@@ -258,7 +258,8 @@ the owner a proposal.
 - Readers must not run commands. The review brief gives them the diff file, and they read the repo for context.
 - Reader no-read list: credential files and model config folders `~/.claude`, `~/.codex`, `~/.grok`.
 
-**Waits.** `wait.sh DEADLINE DIR...` waits until every DIR has an exit file. Its exit codes:
+**Waits.** `wait.sh DEADLINE_SECONDS DIR...` waits until every DIR has an exit file. The deadline is in
+seconds, capped at 3300. Pass `3300` for 55 minutes. Its exit codes are:
 
 | Code | Meaning |
 |---|---|
@@ -279,6 +280,38 @@ on every exit path, its own deadline included. To wait on a peer's unit, run
 peer's hand-off, write a line by hand with `-` for the unit and remove it when the hand-off arrives; `wait.sh`
 touches only its own manager's lines for the units it waits on. The assistant reads the record as
 delegate-to-manager section 4 says.
+
+## Owner decision panels
+
+Use `scripts/decision-panel.py` when readers should pick from options in an owner question. It uses the
+same seat commands as `review.sh` with the listed models fixed for voting. It requires Python 3 and
+the fastlane launcher dependencies above.
+
+Put the question, context and option descriptions in `BRIEF_DIR/question.md`. List the corresponding
+option IDs in `BRIEF_DIR/options`, one per line. Use at least two distinct IDs. Each starts with an
+ASCII letter or digit and can also contain `_` and `-`. For a seat-specific lens, put its instructions
+in `BRIEF_DIR/SEAT.lens.md`, for example `opus.lens.md`. Launch snapshots these inputs in the output
+directory. Use a fresh output directory and tag for each run.
+
+```sh
+scripts/decision-panel.py launch /path/to/worktree /tmp/deploy-question /tmp/deploy-panel deploy-1 --fable
+scripts/decision-panel.py collect 1200 /tmp/deploy-panel
+```
+
+Launch starts opus, astra and sol, probes grok and starts it when the probe answers. `--fable` adds
+the optional fable seat. Run `collect` after `launch` succeeds. Collect waits on the launched
+required seats only. Its deadline is in seconds, capped at 3300. Exit 124 means the wait expired.
+Run `collect` again on the same directory to resume. If systemd could not confirm a required seat
+stopped, collection returns 2. Retry when systemd is reachable. Exit 0 means the tally is ready,
+including when the decision goes to the owner. Later collections return the published verdict.
+
+Each ballot gives a pick, a full ranking, the options the reader can live with, and its strongest
+argument. The tally counts picks from valid, completed ballots, including fable if ready when collected.
+A limit line, a failed unit or a missing answer contributes no vote. A unanimous nonempty panel is
+accepted. A split of 2 of 3, 3 of 4 or 4 of 5 is accepted only when opus picked the majority option.
+Other splits and an empty panel go to the owner. Collect prints the counts and verdict and writes
+`OUT_DIR/synthesis.md` with each pick and argument. When recording an accepted pick, name any narrowing
+or widening of an earlier owner pick.
 
 ## Don'ts
 

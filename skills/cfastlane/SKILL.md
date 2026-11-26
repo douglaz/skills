@@ -105,7 +105,7 @@ Scripts here are in `scripts/`; `F` below is fastlane's `scripts/` folder. Use f
 live-run output directories each round; keep earlier findings and judgments for re-review.
 
 1. **Task and session** (fastlane steps 1–2): the assistant runs `scripts/session.sh PKT`, which records the base, stamps
-   the meter and starts the one combined session. Wait with `F/wait.sh <deadline>
+   the meter and starts the one combined session. Wait with `F/wait.sh <deadline_seconds>
    PKT/turns/1/session`. Read `PKT/handoff.md` and build exits. On a partial handoff, follow the
    table in "Stopping early" before anything else, whether or not the build also failed: some
    obstacles go to the owner before any resume. Otherwise, on a build failure, write a short note
@@ -124,7 +124,7 @@ live-run output directories each round; keep earlier findings and judgments for 
    the fixed instructions and Report section against fastlane's source before launching.
    The session runs it; the shared launcher launches opus, astra, sol and probes grok.
    Let `<review-output>` mean this launch's output: `PKT/review` on the first round, the
-   chosen `--out` on retries and re-reviews. Wait with `F/wait.sh <deadline>
+   chosen `--out` on retries and re-reviews. Wait with `F/wait.sh <deadline_seconds>
    <review-output>/opus <review-output>/astra <review-output>/sol`, adding
    `<review-output>/grok` only if that reader launched (`<review-output>/grok/unit` exists).
    Read `<review-output>/grok-missing` if present. Never use an earlier round's exits.
@@ -167,8 +167,8 @@ live-run output directories each round; keep earlier findings and judgments for 
 
 Use fastlane's wait record and busy check unchanged: session and review units are `other`, and
 nothing about naming the lane folder a packet changes the guards. Set `FASTLANE_MANAGER` to the
-coordinator's name for recorded waits. Use its bounded polling and wait hand-off rules, re-arming
-on 124. Never override a busy deploy or live run.
+coordinator's name for recorded waits. `wait.sh` takes seconds. Pass `3300` for 55 minutes. Use its
+bounded polling and wait hand-off rules, re-arming on 124. Never override a busy deploy or live run.
 
 ## Measuring tokens
 
