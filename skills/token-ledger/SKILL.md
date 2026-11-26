@@ -164,6 +164,9 @@ call something expensive from token counts alone.
   by an order of magnitude or more. Don't report it as spend.
 - **Missing tools:** tools that leave no local token records, such as grok, are absent. Say so rather
   than estimating them.
+- **Readers without transcripts:** `claude -p --no-session-persistence` writes no transcript, so those
+  readers are absent too. Before reporting a project's reviewer spend, grep its panel and manager
+  folders for the flag. If it's there, count the launches and say the ledger leaves them out.
 - **Bad timestamps:** a call with a missing or malformed timestamp is left out and counted in the
   report's gaps, and a timestamp with no timezone is read as UTC.
 - **Forked sessions:** a forked Claude session repeats message ids in another file. Each id counts

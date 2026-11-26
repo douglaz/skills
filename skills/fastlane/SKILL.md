@@ -241,7 +241,7 @@ the owner a proposal.
 | Seat | Model, effort high | Runs as |
 |---|---|---|
 | Implementer | codex `gpt-6.2-sol` | `codex exec --dangerously-bypass-approvals-and-sandbox`, auto-compact at 250k |
-| opus | `claude-opus-5-5` | `claude -p` limited to Read, Grep and Glob, no MCP servers; 5-minute prompt cache |
+| opus | `claude-opus-5-5` | `claude -p` limited to Read, Grep and Glob, no MCP servers; 5-minute prompt cache; keeps its transcript (no `--no-session-persistence`), so `token-ledger` can count it |
 | astra | codex `gpt-6.2-astra` | `codex exec --sandbox read-only` |
 | sol | codex `gpt-6.2-sol` | `codex exec --sandbox read-only` |
 | grok (when available) | `grok-4.7` | `grok -p`, 8G, no swap, stdin from `/dev/null`; one-word probe first |

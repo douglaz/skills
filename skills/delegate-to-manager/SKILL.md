@@ -367,6 +367,8 @@ What differs from the subagent:
   it, from `~/.codex/skills`, where `install.sh` installs this repo's skills. For any other skill,
   including owner-only ones (section 5), give the path to its `SKILL.md`. Steps a skill runs as a
   Claude subagent, such as panel readers, run as `env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW CLAUDE_CODE_PROMPT_CACHE_TTL=5m claude -p` or `codex exec -c model_reasoning_effort=high` commands instead.
+  Don't add `--no-session-persistence` to a `claude -p` reader: it leaves no transcript, and the
+  `token-ledger` skill then can't count the reader's spend.
 - **No sandbox and no deny list.** The bypass flag is required, because sandboxed codex cannot reach
   the nix daemon socket and cannot run gates (rloop-spec `AGT-10`). The brief's hard safety lines are
   its only fence. The brief's other rules hold as written: one question per turn,
