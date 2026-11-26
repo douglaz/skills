@@ -297,7 +297,6 @@ if $RUN_CLAUDE; then
       --model "$CLAUDE_MODEL" \
       --effort high \
       --output-format json \
-      --no-session-persistence \
       --safe-mode \
       --strict-mcp-config \
       --mcp-config '{"mcpServers":{}}' \
@@ -337,6 +336,8 @@ when Claude restricts file access to declared working directories; the absence o
 write-capable tools keeps that added directory read-only in practice. The
 coordinator supplies the exported graph and authority copies. Do not add
 `Bash`, remove the MCP isolation flags, or use `--permission-mode acceptEdits`.
+The auditor keeps its session transcript, so the `token-ledger` skill can count its spend.
+Only the one-line ladder probe passes `--no-session-persistence`, because it has nothing worth counting.
 
 ## Unwrap and validate the Claude auditor
 
