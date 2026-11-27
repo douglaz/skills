@@ -82,12 +82,18 @@ def entries_from(path):
     return entries
 
 
-def run(*args, input=None):
-    result = subprocess.run(args, input=input, check=True, stdout=subprocess.PIPE, text=True)
+def run(*args, input=None, env=None):
+    result = subprocess.run(args, input=input, env=env, check=True, stdout=subprocess.PIPE, text=True)
     return result.stdout
 
 
-def br(*args, input=None):
+def br(*args, input=None, auto_flush=False):
+    if auto_flush:
+        # Override sync.auto_flush for this create only, including any env alias.
+        env = {key: value for key, value in os.environ.items()
+               if re.sub(r"[.-]", "_", key.upper()) != "BD_SYNC_AUTO_FLUSH"}
+        env["BD_SYNC.AUTO_FLUSH"] = "true"
+        return json.loads(run("br", "--no-auto-import", *args, "--json", input=input, env=env))
     return json.loads(run("br", "--no-auto-flush", "--no-auto-import", *args, "--json", input=input))
 
 
@@ -172,7 +178,8 @@ def file_entries(entries, export, relative):
                        and coverage.get("db_exportable_issues") == 0
                        and coverage.get("jsonl_unique_ids") == 0)
         fresh_export = sync.get("jsonl_newer") is False and stored_hash == current["worktree_raw_sha256"]
-        if sync.get("dirty_count") != 0 or sync.get("coverage_drift") is not False or not (fresh_empty or fresh_export):
+        if (sync.get("dirty_count") != 0 or sync.get("db_newer") is not False
+                or sync.get("coverage_drift") is not False or not (fresh_empty or fresh_export)):
             raise ValueError("the Beads database and export have pending changes")
         if identity(observe(export, relative)[0]) != identity(current):
             raise ValueError("Beads export changed before filing")
@@ -181,17 +188,25 @@ def file_entries(entries, export, relative):
             continue
         issue = br("create", f"--title={entry.title}", "--type", "task", "--priority",
                    str(entry.priority), "--labels", entry.label, "--description-file", "-",
-                   input=entry.description)
+                   input=entry.description, auto_flush=True)
         new_id = issue["id"]
-        if identity(observe(export, relative)[0]) != identity(current):
-            raise ValueError(f"Beads export changed during create of {new_id}. Inspect before flushing")
-        if br("sync", "--status").get("dirty_count") != 1:
+        status, issue = review_export(export, relative, current, before, entry, new_id)
+        # A dirty explicit flush can reserialize old rows. Create's automatic flush
+        # has already exported the new row, so the required explicit flush must be a no-op.
+        sync = br("sync", "--status")
+        if (sync.get("dirty_count") != 0 or sync.get("db_newer") is not False or sync.get("coverage_drift") is not False
+                or sync.get("jsonl_newer") is not False
+                or sync.get("jsonl_content_hash") != status["worktree_raw_sha256"]):
             raise ValueError(f"unexpected pending tracker changes after creating {new_id}. Inspect before flushing")
+        if identity(observe(export, relative)[0]) != identity(status):
+            raise ValueError(f"Beads export changed after reviewing {new_id}. Inspect before flushing")
         try:
             br("sync", "--flush-only")
         except subprocess.CalledProcessError as error:
-            raise ValueError(f"could not export {new_id}. Inspect the tracker before retrying") from error
-        status, issue = review_export(export, relative, current, before, entry, new_id)
+            raise ValueError(f"could not confirm the export of {new_id}. Inspect the tracker before retrying") from error
+        if identity(observe(export, relative)[0]) != identity(status):
+            print(export_diff(export, "HEAD"), file=sys.stderr, end="")
+            raise ValueError(f"unexpected export after flushing {new_id}. Inspect the changes before continuing")
         approved = status
         rows.append(issue)
         print(f"Filed {new_id} {entry.title}", flush=True)
