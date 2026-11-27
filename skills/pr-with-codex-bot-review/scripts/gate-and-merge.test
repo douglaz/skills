@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# Offline command-boundary tests. No fixture can reach GitHub.
+set -euo pipefail
+HERE=$(cd "$(dirname "$0")" && pwd)
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+mkdir "$WORK/bin"
+cp "$HERE/gate-and-merge" "$WORK/"
+export FIX="$WORK" PATH="$WORK/bin:$PATH"
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+git init -qb master "$WORK/upstream.git"
+git -C "$WORK/upstream.git" -c user.name=Test -c user.email=test@example.org commit -qm base --allow-empty
+git clone -q "$WORK/upstream.git" "$WORK/checkout"
+cd "$WORK/checkout"
+git checkout -qb topic
+git -c user.name=Test -c user.email=test@example.org commit -qm candidate --allow-empty
+export TIP
+TIP=$(git rev-parse HEAD)
+
+cat > "$WORK/bot-gate" <<'STUB'
+#!/usr/bin/env bash
+[[ "$*" == '42 --json' ]] || exit 99
+echo gate >> "$FIX/calls"
+case "$MODE" in
+  blocked) verdict=BLOCKED; rc=1 ;;
+  unattributed*) verdict=BLOCKED_UNATTRIBUTED; rc=4 ;;
+  gate-error) exit 3 ;;
+  empty) exit 0 ;;
+  *) verdict=NO_PENDING_EVIDENCE; rc=0 ;;
+esac
+repo=$REPO tip=$TIP
+[[ "$MODE" != *other-repo ]] || repo=owner/fork
+[[ "$MODE" != *other-tip ]] || tip=0000000000000000000000000000000000000000
+[[ "$MODE" != dirty-during-gate ]] || touch late-edit
+jq -n --arg repo "$repo" --arg tip "$tip" --arg verdict "$verdict" \
+  '{repo:$repo,tip:$tip,verdict:$verdict,observed_from:"2000-01-01T00:00:00Z",observed_to:"2000-01-01T00:00:01Z"}' |
+  tee "$FIX/gate.json"
+if [[ "$MODE" == multiple ]]; then
+  cat "$FIX/gate.json"
+fi
+exit "$rc"
+STUB
+cat > "$WORK/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+set -eu
+case "$*" in
+  "pr view 42 -R $REPO --json baseRefName -q .baseRefName")
+    if [[ "$MODE" == retarget && -f "$FIX/base-read" ]]; then
+      echo other
+    else
+      echo master
+      touch "$FIX/base-read"
+    fi ;;
+  "repo view $REPO --json url -q .url")
+    echo "$FIX/upstream" ;;
+  "pr merge 42 -R $REPO --squash --delete-branch --match-head-commit $TIP")
+    echo merge >> "$FIX/calls"
+    echo "merge command output"
+    [[ "$MODE" != merge-error ]] ;;
+  *) echo "unexpected gh command: $*" >&2; exit 99 ;;
+esac
+STUB
+chmod +x "$WORK/bot-gate" "$WORK/bin/gh"
+
+run() {
+  local mode=$1 expected=$2 calls=$3 rc=0
+  shift 3
+  rm -f "$WORK/base-read" "$WORK/gate.json"
+  : > "$WORK/calls"
+  MODE="$mode" REPO="$REPO" "$WORK/gate-and-merge" "$REPO" 42 "${1:-$TIP}" >"$WORK/out" 2>"$WORK/err" || rc=$?
+  if [[ $rc != "$expected" || $(cat "$WORK/calls") != "$calls" ]]; then
+    echo "FAIL $mode: exit $rc, expected $expected"
+    cat "$WORK/out" "$WORK/err" "$WORK/calls"
+    exit 1
+  fi
+  if [[ "$mode" != multiple && -f "$WORK/gate.json" ]]; then
+    cmp "$WORK/gate.json" "$WORK/out"
+  fi
+  echo "ok $mode"
+}
+
+REPO=owner/repo
+run short-tip 2 "" "${TIP:0:8}"
+run stale-checkout 1 "" 0000000000000000000000000000000000000000
+run blocked 1 gate
+run unattributed 4 gate
+run unattributed-other-repo 1 gate
+run unattributed-other-tip 1 gate
+run gate-error 3 gate
+run empty 1 gate
+run multiple 1 gate
+run other-repo 1 gate
+run other-tip 1 gate
+run dirty-during-gate 1 gate
+rm late-edit
+run retarget 1 gate
+run merge-error 1 $'gate\nmerge'
+run cleared 0 $'gate\nmerge'
+REPO=owner_corp/repo run managed-owner 0 $'gate\nmerge'
+git -C "$WORK/upstream.git" -c user.name=Test -c user.email=test@example.org commit -qm advanced --allow-empty
+run advanced-base 1 gate

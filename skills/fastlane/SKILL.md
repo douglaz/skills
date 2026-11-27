@@ -246,6 +246,7 @@ the owner a proposal.
    - an older P0/P1 at its own priority, labelled `review-preexisting`, holding nothing;
    - a P0/P1 a review round cap left open, at its own priority, labelled `review-followup`.
 4. Push, PR and merge as the project's rule allows.
+   The merge lane uses [gate-and-merge](../pr-with-codex-bot-review-merge/SKILL.md#normal-merge).
 
 ## Seats and commands
 

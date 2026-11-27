@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# gate-and-merge OWNER/REPO PR FULL_TIP
+# For the merge lane, after local review and CI. Stdout is the bot-gate JSON.
+set -euo pipefail
+
+refuse() { printf '%s\n' "$*" >&2; exit 1; }
+
+if [[ $# != 3 || ! $1 =~ ^[a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+$ ||
+      ! $2 =~ ^[1-9][0-9]*$ || ! $3 =~ ^[a-f0-9]{40}$ ]]; then
+  echo "usage: gate-and-merge OWNER/REPO PR FULL_TIP" >&2
+  exit 2
+fi
+repo=$1 pr=$2 tip=$3
+here=$(dirname "$0")
+
+check_checkout() {
+  local status head
+  status=$(git status --porcelain) || refuse "cannot read the worktree"
+  [[ -z $status ]] || refuse "worktree is dirty"
+  head=$(git rev-parse --verify HEAD) || refuse "cannot read local HEAD"
+  [[ $head == "$tip" ]] || refuse "local HEAD differs from the reviewed tip"
+}
+
+check_checkout
+base=$(gh pr view "$pr" -R "$repo" --json baseRefName -q .baseRefName) \
+  || refuse "cannot read the merge target"
+git check-ref-format "refs/heads/$base" || refuse "invalid merge target: $base"
+
+gate_rc=0
+gate_json=$("$here/bot-gate" "$pr" --json) || gate_rc=$?
+if [[ -n $gate_json ]]; then
+  printf '%s\n' "$gate_json"
+fi
+case $gate_rc in
+  0) verdict=NO_PENDING_EVIDENCE ;;
+  4) verdict=BLOCKED_UNATTRIBUTED ;;
+  *) exit "$gate_rc" ;;
+esac
+if ! jq -se --arg repo "$repo" --arg tip "$tip" --arg verdict "$verdict" \
+    'length == 1 and (.[0] | .verdict == $verdict and .repo == $repo and .tip == $tip)' \
+    >/dev/null <<<"$gate_json"; then
+  refuse "bot-gate evidence does not match $repo PR $pr at $tip"
+fi
+(( gate_rc == 0 )) || exit "$gate_rc"
+
+# Check ancestry after the gate and re-read the base immediately before merging.
+url=$(gh repo view "$repo" --json url -q .url) || refuse "cannot resolve the clone URL"
+[[ -n $url ]] || refuse "empty clone URL"
+git fetch "$url.git" "+refs/heads/$base:refs/remotes/upstream/$base" >&2 \
+  || refuse "cannot fetch the merge target"
+git merge-base --is-ancestor "refs/remotes/upstream/$base" "$tip" \
+  || refuse "rebase first: $base advanced since review"
+check_checkout
+base_now=$(gh pr view "$pr" -R "$repo" --json baseRefName -q .baseRefName) \
+  || refuse "cannot re-read the merge target"
+[[ $base_now == "$base" ]] || refuse "PR was retargeted ($base -> ${base_now:-unknown})"
+gh pr merge "$pr" -R "$repo" --squash --delete-branch --match-head-commit "$tip" >&2 \
+  || refuse "merge request failed"

@@ -179,7 +179,8 @@ live-run output directories each round; keep earlier findings and judgments for 
    the diff, match its SHA to the new reviewed diff, then run `scripts/close.py PKT check` and
    `scripts/close.py PKT commit` again before filing follow-ups. Any resulting product fix goes through
    review, script commit and live test again. Push, PR and merge only as the project's rule
-   allows. Take the readings below and report the result, findings, missing seats and cost.
+   allows. The merge lane uses [gate-and-merge](../pr-with-codex-bot-review-merge/SKILL.md#normal-merge).
+   Take the readings below and report the result, findings, missing seats and cost.
 
 Use fastlane's wait record and busy check unchanged: session and review units are `other`, and
 nothing about naming the lane folder a packet changes the guards. Set `FASTLANE_MANAGER` to the

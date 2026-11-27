@@ -873,9 +873,10 @@ Load exact companion skill
 [`pr-with-codex-bot-review-merge`](../pr-with-codex-bot-review-merge/SKILL.md)
 before merging. It contains the required gate re-check, repository disambiguation,
 base-freshness and retarget checks, merge-queue wait, evidence capture, safe branch
-reset, and post-merge build. Run that sequence as written for the normal
+reset, and post-merge build. Use its `scripts/gate-and-merge` procedure for the normal
 `NO_PENDING_EVIDENCE` path. For a deliberate `BLOCKED_UNATTRIBUTED` degraded merge,
-start the companion normally and complete its repository disambiguation first. When its
+start at the companion's [Degraded merge](../pr-with-codex-bot-review-merge/SKILL.md#degraded-merge)
+section and complete its repository disambiguation first. When its
 gate call returns exit 4, § 8b may replace only the gate-admission predicate: preserve
 the original gate JSON, pin its tip to the locally verified and attested tree, then
 resume at the companion's `DEGRADED REENTRY B` marker. Base and retarget checks,
@@ -963,7 +964,8 @@ The merge companion preserves the first exit-4 response under the git directory 
 its unset-tip guard aborts; keep that file as incident evidence, not merge admission.
 After the human authorizes the degraded substitution above, return to the shell that
 already completed the companion's repository disambiguation. If that shell exited, rerun
-the companion from its start through its `DEGRADED REENTRY A` marker, stopping before
+the companion from its [Degraded merge](../pr-with-codex-bot-review-merge/SKILL.md#degraded-merge)
+section through its `DEGRADED REENTRY A` marker, stopping before
 the initial gate call. Then run
 the gate **again** immediately before re-entry. A live exit 0 uses the normal verdict; a
 live exit 4 may use the authorized degraded substitution; every other exit still blocks.
@@ -973,6 +975,8 @@ authorization before running this block:
 ```bash
 [ -n "${AUTHORIZED_TIP:-}" ] \
   || { echo "set AUTHORIZED_TIP to the SHA covered by local CI and human authorization"; exit 1; }
+[ "$AUTHORIZED_TIP" = "$EXPECTED_TIP" ] && [ "$R" = "$EXPECTED_REPO" ] \
+  || { echo "intended repository or tip changed; repeat the gate and get new authorization"; exit 1; }
 [ "$(git rev-parse HEAD)" = "$AUTHORIZED_TIP" ] \
   || { echo "HEAD moved after degraded authorization; repeat § 8b for this tree"; exit 1; }
 unset REVIEWED_TIP
@@ -989,10 +993,9 @@ else
   exit 1
 fi
 GATE_JSON=$LIVE_GATE_JSON
-LIVE_GATE_TIP=$(printf %s "$GATE_JSON" | jq -er .tip) \
-  || { echo "live gate JSON has no tip"; exit 1; }
-[ "$LIVE_GATE_TIP" = "$AUTHORIZED_TIP" ] \
-  || { echo "live gate names a tree that was not authorized; repeat § 8b"; exit 1; }
+printf '%s\n' "$GATE_JSON" | jq -se --arg repo "$EXPECTED_REPO" --arg tip "$AUTHORIZED_TIP" \
+  'length == 1 and (.[0] | .repo == $repo and .tip == $tip)' >/dev/null \
+  || { echo "live gate names a different repository or tip; repeat § 8b"; exit 1; }
 REVIEWED_TIP=$AUTHORIZED_TIP
 _LIVE_TREE=$(git status --porcelain) \
   || { echo "cannot inspect the worktree after degraded authorization"; exit 1; }
