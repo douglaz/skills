@@ -445,8 +445,15 @@ skills/multi-reviewer-loop-delegating-edits/SKILL.md|name: multi-reviewer-loop-d
 skills/multi-reviewer-loop-delegating-edits/SKILL.md|user-invocable: false
 skills/pr-with-codex-bot-review-merge/SKILL.md|name: pr-with-codex-bot-review-merge
 skills/pr-with-codex-bot-review-merge/SKILL.md|user-invocable: false
+skills/pr-with-codex-bot-review-merge/SKILL.md|## Normal merge
+skills/pr-with-codex-bot-review-merge/SKILL.md|## Degraded merge
+skills/pr-with-codex-bot-review-merge/SKILL.md|## Confirm landing and reset
+skills/fastlane/SKILL.md|../pr-with-codex-bot-review-merge/SKILL.md#normal-merge
+skills/cfastlane/SKILL.md|../pr-with-codex-bot-review-merge/SKILL.md#normal-merge
 skills/multi-reviewer-loop/SKILL.md|../multi-reviewer-loop-delegating-edits/SKILL.md
 skills/pr-with-codex-bot-review/SKILL.md|../pr-with-codex-bot-review-merge/SKILL.md
+skills/pr-with-codex-bot-review/SKILL.md|start at the companion's [Degraded merge](../pr-with-codex-bot-review-merge/SKILL.md#degraded-merge)
+skills/pr-with-codex-bot-review/SKILL.md|the companion from its [Degraded merge](../pr-with-codex-bot-review-merge/SKILL.md#degraded-merge)
 skills/multi-reviewer-loop-delegating-edits/SKILL.md|../multi-reviewer-loop/SKILL.md#1-preflight
 skills/pr-with-codex-bot-review-merge/SKILL.md|../pr-with-codex-bot-review/SKILL.md#8a-the-merge-report-must-quote-the-gate
 skills/pr-with-codex-bot-review-merge/SKILL.md|GATE_JSON=$("$BOT_GATE" <N> --json) || GATE_RC=$?
@@ -455,8 +462,13 @@ skills/pr-with-codex-bot-review-merge/SKILL.md|merge-gate-<N>.json
 skills/pr-with-codex-bot-review-merge/SKILL.md|pr-with-codex-bot-review § 8b
 skills/pr-with-codex-bot-review-merge/SKILL.md|# DEGRADED REENTRY A: stop here after repository and BOT_GATE resolution.
 skills/pr-with-codex-bot-review-merge/SKILL.md|# DEGRADED REENTRY B: resume here after completing main-skill § 8b.
+skills/pr-with-codex-bot-review-merge/SKILL.md|[ "$R" = "$EXPECTED_REPO" ] && [ "$(git rev-parse HEAD)" = "$EXPECTED_TIP" ]
+skills/pr-with-codex-bot-review-merge/SKILL.md|--arg repo "$EXPECTED_REPO" --arg tip "$EXPECTED_TIP"
+skills/pr-with-codex-bot-review-merge/SKILL.md|length == 1 and (.[0] | .repo == $repo and .tip == $tip)
+skills/pr-with-codex-bot-review/SKILL.md|[ "$AUTHORIZED_TIP" = "$EXPECTED_TIP" ] && [ "$R" = "$EXPECTED_REPO" ]
 skills/pr-with-codex-bot-review/SKILL.md|LIVE_GATE_JSON=$("$BOT_GATE" <N> --json) || LIVE_GATE_RC=$?
-skills/pr-with-codex-bot-review/SKILL.md|"$LIVE_GATE_TIP" = "$AUTHORIZED_TIP"
+skills/pr-with-codex-bot-review/SKILL.md|--arg repo "$EXPECTED_REPO" --arg tip "$AUTHORIZED_TIP"
+skills/pr-with-codex-bot-review/SKILL.md|length == 1 and (.[0] | .repo == $repo and .tip == $tip)
 skills/pr-with-codex-bot-review/SKILL.md|_LIVE_TREE=$(git status --porcelain)
 skills/multi-reviewer-loop/SKILL.md|### 1. Preflight
 skills/pr-with-codex-bot-review/SKILL.md|### 8a. The merge report must quote the gate

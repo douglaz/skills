@@ -20,15 +20,30 @@ allowed-tools:
 The required merge and local-reset sequence after § 7 has admitted a PR.
 Run it as written; it deliberately re-checks mutable forge and worktree state.
 
-## Contents
+## Normal merge
 
-- Verify a clean worktree and identify the one PR matching the reviewed head
-- Re-run `bot-gate` and retain the reviewed tip and JSON evidence
-- Fetch and verify the base, then detect a late PR retarget
-- Squash-merge with the reviewed full OID and wait for `MERGED`
-- Preserve merge evidence, fetch the landed base, and refuse unsafe resets
-- Reset the local base and run its authoritative build
-- File surviving Follow-ups on a fresh metadata branch and open its PR
+From the clean PR checkout, after § 7 and green CI, the merge lane runs the owning skill's
+script with the canonical repository, PR number and full reviewed tip as literal arguments.
+Save stdout outside the worktree and retain the command's exit status.
+
+```bash
+/path/to/pr-with-codex-bot-review/scripts/gate-and-merge owner/repo 42 0123456789abcdef0123456789abcdef01234567 > /path/outside/checkout/gate.json
+```
+
+The script checks the checkout, runs `bot-gate`, checks the admitted repository and tip,
+then verifies base ancestry and checks for retargeting before requesting the pinned squash.
+Exit 0 means GitHub accepted the request. Continue at [Confirm landing and reset](#confirm-landing-and-reset)
+with `R` and `REVIEWED_TIP` from the literal arguments and `GATE_JSON` from the saved stdout.
+Exit 4 with a saved `BLOCKED_UNATTRIBUTED` verdict leads to the degraded procedure below.
+Carry the same repository, PR number and tip into that procedure.
+Any other nonzero exit stops the merge.
+
+## Degraded merge
+
+Follow the owning skill's § 8b for a forge incident. Start here to resolve the repository and
+preserve exit-4 evidence before requesting authorization. Use its re-entry markers as directed.
+Substitute the intended repository, PR number and full reviewed tip from § 7 or the normal
+merge command throughout. Hold those values fixed during re-entry.
 
 ```bash
 # Two checks, because a FAILED `git status` also prints nothing: a corrupt index would
@@ -68,6 +83,10 @@ for _c in ${UP:+"$UP"} "$SELF"; do
 done
 [ "$_M" -le 1 ] || { echo "PR <N> matches this head in BOTH $UP and $SELF — ambiguous; re-run with the intended repo pinned in every -R"; exit 1; }
 [ -n "$R" ] || { echo "no PR <N> whose head is this tree in ${UP:+$UP or }$SELF"; exit 1; }
+EXPECTED_REPO=<OWNER/REPO>
+EXPECTED_TIP=<FULL_REVIEWED_TIP>
+[ "$R" = "$EXPECTED_REPO" ] && [ "$(git rev-parse HEAD)" = "$EXPECTED_TIP" ] \
+  || { echo "repository or local tip differs from the intended merge"; exit 1; }
 PR_REFS=$(gh pr view <N> -R "$R" --json baseRefName,headRefName) \
   || { echo "cannot resolve the PR branches"; exit 1; }
 BASE=$(printf %s "$PR_REFS" | jq -r '.baseRefName // ""')
@@ -103,6 +122,11 @@ unset REVIEWED_TIP
 # DEGRADED REENTRY A: stop here after repository and BOT_GATE resolution.
 GATE_RC=0
 GATE_JSON=$("$BOT_GATE" <N> --json) || GATE_RC=$?
+if [ "$GATE_RC" -eq 0 ] || [ "$GATE_RC" -eq 4 ]; then
+  printf '%s\n' "$GATE_JSON" | jq -se --arg repo "$EXPECTED_REPO" --arg tip "$EXPECTED_TIP" \
+    'length == 1 and (.[0] | .repo == $repo and .tip == $tip)' >/dev/null \
+    || { echo "gate evidence differs from the intended repository or tip"; exit 1; }
+fi
 if [ "$GATE_RC" -eq 0 ]; then
   [ "$(printf %s "$GATE_JSON" | jq -r .verdict)" = "NO_PENDING_EVIDENCE" ] \
     || { echo "gate verdict is not NO_PENDING_EVIDENCE"; exit 1; }
@@ -155,7 +179,13 @@ BASE_NOW=$(gh pr view <N> -R "$R" --json baseRefName -q .baseRefName) \
   || { echo "the PR was retargeted ($BASE -> ${BASE_NOW:-unknown}) — the panel reviewed a diff against $BASE; re-run § 7"; exit 1; }
 gh pr merge <N> -R "$R" --squash --delete-branch --match-head-commit "$REVIEWED_TIP" \
   || { echo "merge did not land — do NOT proceed"; exit 1; }
+```
 
+## Confirm landing and reset
+
+Use the PR number from the merge command and the captured `R`, `REVIEWED_TIP` and `GATE_JSON`.
+
+```bash
 # `gh pr merge` returning 0 means the PR was accepted for merging — which, in a repo with a
 # required merge queue, means ENQUEUED, not landed. Fetching now would read the still-old
 # base and any caller that closes a tracker item here would close it for a merge that has
@@ -175,6 +205,16 @@ done
 # ../pr-with-codex-bot-review/SKILL.md#8a-the-merge-report-must-quote-the-gate). Do not re-run the gate to
 # produce the quote — the PR is merged by now, so a fresh run describes a different world.
 printf '%s\n' "$GATE_JSON" > "${TMPDIR:-/tmp}/merge-evidence-<N>.json"
+
+PR_REFS=$(gh pr view <N> -R "$R" --json baseRefName,headRefName) \
+  || { echo "cannot read the merged PR branches"; exit 1; }
+BASE=$(printf %s "$PR_REFS" | jq -r '.baseRefName // ""')
+HEAD_BRANCH=$(printf %s "$PR_REFS" | jq -r '.headRefName // ""')
+[ -n "$BASE" ] && [ -n "$HEAD_BRANCH" ] \
+  || { echo "cannot resolve the merged PR branches"; exit 1; }
+R_URL=$(gh repo view "$R" --json url -q .url 2>/dev/null) \
+  || { echo "cannot resolve the clone URL for $R"; exit 1; }
+R_URL="$R_URL.git"
 
 # Re-fetch after the merge: the ref above predates the squash commit. Reset from where the
 # merge actually landed — `origin` is your fork and may not contain it at all. Fetch before

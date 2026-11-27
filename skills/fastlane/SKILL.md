@@ -235,6 +235,7 @@ the owner a proposal.
    - Product code changes only for a real defect a test exposes. Such a change goes through review and the live test
      again.
 4. Push, PR and merge as the project's rule allows.
+   The merge lane uses [gate-and-merge](../pr-with-codex-bot-review-merge/SKILL.md#normal-merge).
 
 ## Seats and commands
 
