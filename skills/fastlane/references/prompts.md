@@ -95,3 +95,28 @@ One finding per line, most severe first:
   open questions). Drop "Compile".
 - **Review brief:** readers check the text for contradictions, unmet scope, ambiguity an implementer would trip on,
   and claims the text doesn't support. PRODUCT then means "the spec text"; TEST still means deferred checks.
+
+## Follow-ups (`followups.md`)
+
+Write one `##` heading per defect. Use the lane's assigned number before the severity when
+several managers share the file. The `# Follow-ups` heading is optional.
+
+```markdown
+# Follow-ups
+
+## P2 <short title>
+Location: path/to/file:42
+
+<What is wrong, observed commit, reviewers, why this severity, smallest fix, verification and source.>
+
+## 601 P1 [preexisting] <short title>
+Location: path/to/file:77
+Existing: <bead ID if you verified an existing bead is the same defect>
+
+<Evidence and disposition.>
+```
+
+Use `[preexisting]` for an older P0/P1 and `[cap]` for a P0/P1 left open by the round cap.
+Omit the disposition on P2/P3. Omit the `Existing:` line unless naming a confirmed match.
+Keep the body below a blank line and use `###` or deeper headings in prose.
+Put literal lines starting with `## ` in a closed block with left-aligned fences.

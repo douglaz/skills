@@ -41,7 +41,8 @@ Copy fastlane's task template, changing only these combined-session details:
   [SEAT...]. Never move
   active readers' directories. Wait on every required seat under the --out just launched;
   detect grok and read grok-missing in that same output. Never wait on an earlier round's
-  exit files or on fable. Put suspended test-only findings in deferred-tests.md and P2/P3 in followups.md.
+  exit files or on fable. Put suspended test-only findings in deferred-tests.md and P2/P3 in
+  followups.md. Use fastlane's fixed entry format for all follow-ups.
   Take owner calls before lowering a reviewer's P0/P1 or leaving a raised P0/P1 open outside the
   cap rule. Finish independent work, look ahead for other owner decisions, and batch the calls with
   a recommendation and evidence for each. Read <PKT>/notes.md if present before each review round,

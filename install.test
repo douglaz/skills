@@ -252,6 +252,7 @@ pr-with-codex-bot-review|pr-with-codex-bot-review-merge
 pr-with-codex-bot-review-merge|pr-with-codex-bot-review
 bead-polish-loop|beads-jsonl-path
 plan-to-beads-transfer|beads-jsonl-path
+fastlane|beads-jsonl-path
 DEPENDENCIES
 if [[ -n "$dependency_failures" ]]; then fail "$t" "$dependency_failures"
 else pass "$t"; fi

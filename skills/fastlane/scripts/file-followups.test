@@ -1,0 +1,334 @@
+#!/usr/bin/env python3
+"""Offline filer tests with a stubbed br and disposable Git worktrees."""
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+
+
+FILER = Path(__file__).with_name("file-followups.py").resolve()
+BR = r'''
+import hashlib
+import json
+import os
+from pathlib import Path
+import sys
+
+root = Path(os.environ["FILER_TEST_ROOT"])
+export = root / ".beads/issues.jsonl"
+pending = root.parent / "pending"
+args = sys.argv[1:]
+assert args[:2] == ["--no-auto-flush", "--no-auto-import"]
+assert args[-1] == "--json"
+command, *options = args[2:-1]
+with (root.parent / "calls").open("a") as log:
+    print(command, *options, file=log)
+if command == "where":
+    print(json.dumps({"jsonl_path": os.environ.get("FILER_TEST_EXPORT", str(export))}))
+elif command == "vcs-status":
+    sys.stdout.write((root.parent / "status.json").read_text())
+elif command == "sync" and options == ["--status"]:
+    dirty = int(pending.exists()) + int((root.parent / "dirty").exists())
+    raw = export.read_bytes()
+    no_hash = (root.parent / "fresh-empty").exists()
+    stored_hash = "stale" if (root.parent / "stale-hash").exists() else hashlib.sha256(raw).hexdigest()
+    coverage = {key: int((root.parent / key).exists())
+                for key in ("db_exportable_issues", "jsonl_unique_ids")}
+    print(json.dumps({"dirty_count": dirty, "jsonl_newer": no_hash, "coverage_drift": False,
+                      "coverage": coverage, "jsonl_content_hash": None if no_hash else stored_hash}))
+elif command == "create":
+    assert not pending.exists()
+    count_path = root.parent / "counter"
+    count = int(count_path.read_text()) + 1
+    count_path.write_text(str(count))
+    if options[0] == "--title":
+        title = options[1]
+        if title.startswith("-"):
+            sys.exit("unexpected title option")
+        options = options[2:]
+    else:
+        flag, _, title = options.pop(0).partition("=")
+        assert flag == "--title"
+    args = dict(zip(options[::2], options[1::2]))
+    assert args["--description-file"] == "-"
+    issue = dict(id=f"fx-new{count}", title=title, description=sys.stdin.read(),
+                 issue_type=args["--type"], priority=int(args["--priority"]),
+                 labels=[args["--labels"]], status="open")
+    pending.write_text(json.dumps(issue) + "\n")
+    if (root.parent / "external-write").exists():
+        (root.parent / "dirty").touch()
+    print(json.dumps(issue))
+elif command == "sync" and options == ["--flush-only"]:
+    if (root.parent / "flush-fails").exists():
+        sys.exit(4)
+    old = export.read_text()
+    if (root.parent / "unexpected").exists():
+        old = old.replace("Unrelated", "Changed")
+    export.write_text(old + pending.read_text())
+    pending.unlink()
+    status_path = root.parent / "status.json"
+    status = json.loads(status_path.read_text())
+    raw = export.read_bytes()
+    status["worktree_raw_git_blob_hash"] = hashlib.sha1(f"blob {len(raw)}\0".encode() + raw).hexdigest()
+    status["worktree_raw_sha256"] = hashlib.sha256(raw).hexdigest()
+    status["worktree_clean"] = False
+    status_path.write_text(json.dumps(status))
+    print("{}")
+else:
+    sys.exit(f"unexpected br call: {args!r}")
+'''
+
+
+def entry(heading, location="src/main.sh:12", existing=None):
+    match = f"\nExisting: {existing}" if existing else ""
+    return f"## {heading}\nLocation: {location}{match}\n\nEvidence and first paragraph.\n\nA second paragraph.\n"
+
+
+def open_bead(title, priority=2, location="src/main.sh:12", status="open", id="fx-old"):
+    return dict(id=id, title=title,
+                description=f"Location: {location}\n\nEvidence and first paragraph.\n\nA second paragraph.",
+                issue_type="task", labels=["review-followup"], priority=priority, status=status)
+
+
+class FilerTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.scratch = Path(temporary.name)
+        self.root = self.scratch / "repo"
+        self.root.mkdir()
+        self.export = self.root / ".beads/issues.jsonl"
+        self.export.parent.mkdir()
+        self.calls = self.scratch / "calls"
+        self.counter = self.scratch / "counter"
+        self.counter.write_text("0")
+        self.status = self.scratch / "status.json"
+        fake_bin = self.scratch / "bin"
+        fake_bin.mkdir()
+        fake_br = fake_bin / "br"
+        fake_br.write_text(f"#!{sys.executable}\n" + BR)
+        fake_br.chmod(0o755)
+        self.env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        self.env.update(PATH=f"{fake_bin}:{os.environ['PATH']}", FILER_TEST_ROOT=str(self.root),
+                        GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_SYSTEM="/dev/null")
+        self.env.pop("BEADS_REVIEWED", None)
+        self.git("init", "-q", "--object-format=sha1")
+
+    def git(self, *args):
+        return subprocess.check_output(["git", *args], cwd=self.root, env=self.env, text=True).strip()
+
+    def track(self, *issues):
+        self.export.write_text("".join(json.dumps(issue) + "\n" for issue in issues))
+        self.git("add", ".beads/issues.jsonl")
+        self.git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.org", "commit", "-qm", "Base")
+        self.snapshot()
+
+    def snapshot(self):
+        path = ".beads/issues.jsonl"
+        self.status.write_text(json.dumps({
+            "schema": "br.vcs-export-status.v2", "available": True, "vcs": "git",
+            "tracked": True, "path_scope": "workspace", "path": path,
+            "head": {"object_id": self.git("rev-parse", f"HEAD:{path}")},
+            "index": {"object_id": self.git("rev-parse", f":{path}")},
+            "index_clean": not self.git("diff", "--cached", "--name-only"),
+            "worktree_clean": not self.git("diff", "--name-only"),
+            "worktree_raw_git_blob_hash": self.git("hash-object", "--no-filters", path),
+            "worktree_raw_sha256": hashlib.sha256(self.export.read_bytes()).hexdigest(),
+        }))
+
+    def file(self, body, expected=0, cwd=None):
+        followups = self.scratch / "followups.md"
+        followups.write_text(body)
+        result = subprocess.run([sys.executable, "-I", FILER, followups], cwd=cwd or self.root,
+                                env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, expected, (result.stdout, result.stderr))
+        return result
+
+    def rows(self):
+        return [json.loads(line) for line in self.export.read_text().splitlines()]
+
+    def test_labels_and_one_issue_per_entry(self):
+        self.track(open_bead("Unrelated"))
+        original = self.export.read_bytes()
+        body = "# Follow-ups\n\n" + "\n".join(map(entry, [
+            "17 P0 [cap] Check can pass incorrectly", "P1 [preexisting] Older failure",
+            "P2 [cap] can fail", "P3 -Minor wording",
+        ]))
+        subdir = self.root / "src"
+        subdir.mkdir()
+        result = self.file(body, cwd=subdir)
+        self.assertTrue(self.export.read_bytes().startswith(original))
+        self.assertEqual(result.stdout.count("Filed "), 4)
+        self.assertEqual([(i["priority"], i["labels"][0]) for i in self.rows()[1:]],
+                         [(0, "review-followup"), (1, "review-preexisting"),
+                          (2, "review-followup"), (3, "review-nit")])
+        self.assertEqual(self.rows()[-2]["title"], "[cap] can fail")
+        self.assertIn("A second paragraph.", self.rows()[-1]["description"])
+        self.assertEqual(self.calls.read_text().count("sync --flush-only"), 4)
+
+    def test_open_matching_id_and_exact_title_location_skip(self):
+        self.track(open_bead("Same"), open_bead("Earlier name", priority=1, status="in_progress",
+                                              id="fx-other"))
+        body = entry("P2 Same") + "\n" + entry("P2 Renamed", existing="fx-other")
+        result = self.file(body)
+        self.assertIn("Skipped fx-old Same", result.stdout)
+        self.assertIn("Skipped fx-other Renamed", result.stdout)
+        self.assertNotIn("create", self.calls.read_text())
+
+    def test_different_location_lower_priority_and_closed_are_distinct(self):
+        self.track(open_bead("Same", location="src/other.sh:12"),
+                   open_bead("Lower", priority=3, id="fx-lower"),
+                   open_bead("Closed", status="closed", id="fx-closed"))
+        body = "\n".join((entry("P2 Same"), entry("P2 Lower", existing="fx-lower"),
+                          entry("P2 Closed", existing="fx-closed"), entry("P2 Same")))
+        result = self.file(body)
+        self.assertEqual(result.stdout.count("Filed "), 3)
+        self.assertIn("Skipped fx-new1 Same", result.stdout)
+        self.assertEqual(self.file(body).stdout.count("Skipped "), 4)
+
+    def test_same_title_and_location_different_text_are_independent(self):
+        self.track(open_bead("Missing validation"))
+        body = entry("P2 Missing validation").replace("A second paragraph.", "Another defect.")
+        self.assertIn("Filed fx-new1 Missing validation", self.file(body).stdout)
+
+    def test_stale_database_cannot_report_a_skipped_duplicate(self):
+        self.track(open_bead("Same"))
+        (self.scratch / "dirty").touch()
+        result = self.file(entry("P2 Same"), expected=1)
+        self.assertIn("pending changes", result.stderr)
+        self.assertNotIn("Skipped ", result.stdout)
+        self.assertNotIn("create", self.calls.read_text())
+
+    def test_stored_hash_mismatch_is_refused_even_when_clean_flags_agree(self):
+        self.track(open_bead("Same"))
+        (self.scratch / "stale-hash").touch()
+        result = self.file(entry("P2 Same"), expected=1)
+        self.assertIn("pending changes", result.stderr)
+        self.assertNotIn("Skipped ", result.stdout)
+        self.assertNotIn("create", self.calls.read_text())
+
+    def test_first_entry_can_file_with_no_previous_export_hash(self):
+        self.track()
+        (self.scratch / "fresh-empty").touch()
+        self.assertIn("Filed fx-new1 First", self.file(entry("P2 First")).stdout)
+
+    def test_unhashed_tracker_must_be_empty_on_both_sides(self):
+        self.track()
+        (self.scratch / "fresh-empty").touch()
+        for key in ("db_exportable_issues", "jsonl_unique_ids"):
+            with self.subTest(key=key):
+                counter = self.scratch / key
+                counter.touch()
+                self.assertIn("pending changes", self.file(entry("P2 First"), expected=1).stderr)
+                counter.unlink()
+        self.export.write_text(json.dumps(open_bead("Unrelated")) + "\n")
+        self.git("add", ".beads/issues.jsonl")
+        self.git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.org", "commit", "-qm", "Add fixture")
+        self.snapshot()
+        self.assertIn("pending changes", self.file(entry("P2 First"), expected=1).stderr)
+        self.assertNotIn("create", self.calls.read_text())
+
+    def test_fenced_heading_does_not_split_evidence(self):
+        self.track()
+        evidence = "```markdown\n## Setup\n```"
+        self.file(entry("P2 First") + f"\n{evidence}\n\n" + entry("P3 Second"))
+        self.assertEqual(len(self.rows()), 2)
+        self.assertIn(evidence, self.rows()[0]["description"])
+
+    def test_inline_backticks_do_not_open_a_fence(self):
+        self.track()
+        evidence = "```set `FLAG` here``` applies only to this branch."
+        self.file(entry("P2 First") + f"\n{evidence}\n\n" + entry("P3 Second"))
+        self.assertEqual(len(self.rows()), 2)
+        self.assertIn(evidence, self.rows()[0]["description"])
+
+    def test_list_fences_do_not_capture_the_following_entry(self):
+        self.track()
+        evidence = "- ~~~sh\n  echo ok\n  ~~~"
+        self.file(entry("P2 First") + f"\n{evidence}\n\n" + entry("P3 Second"))
+        self.assertEqual(len(self.rows()), 2)
+        self.assertIn(evidence, self.rows()[0]["description"])
+
+    def test_whitespace_separator_preserves_first_line_indentation(self):
+        self.track()
+        body = "## P2 Evidence\nLocation: src/main.sh:12\n \t\n    git diff\n    git status\n"
+        self.file(body)
+        self.assertEqual(self.rows()[0]["description"],
+                         "Location: src/main.sh:12\n\n    git diff\n    git status")
+
+    def test_blank_lines_at_entry_boundaries_do_not_defeat_deduplication(self):
+        self.track(open_bead("Same"))
+        first = entry("P2 Same").replace("\n\nEvidence", "\n\n \t\nEvidence")
+        result = self.file(first + " \t\n" + entry("P3 Next"))
+        self.assertIn("Skipped fx-old Same", result.stdout)
+        self.assertIn("Filed fx-new1 Next", result.stdout)
+
+    def test_final_evidence_line_keeps_trailing_tabs(self):
+        self.track(dict(open_bead("Fields"), description="Location: src/main.sh:12\n\na\tb"))
+        body = "## P2 Fields\nLocation: src/main.sh:12\n\na\tb\t\n"
+        self.assertIn("Filed fx-new1 Fields", self.file(body).stdout)
+        self.assertEqual(self.rows()[-1]["description"], "Location: src/main.sh:12\n\na\tb\t")
+
+    def test_new_pending_change_blocks_flush(self):
+        self.track(open_bead("Unrelated"))
+        previous = self.export.read_bytes()
+        (self.scratch / "external-write").touch()
+        result = self.file(entry("P2 First"), expected=1)
+        self.assertIn("unexpected pending tracker changes", result.stderr)
+        self.assertNotIn("sync --flush-only", self.calls.read_text())
+        self.assertEqual(self.export.read_bytes(), previous)
+
+    def test_malformed_later_entry_and_unknown_match_make_no_writes(self):
+        self.track()
+        valid = entry("P2 Valid")
+        malformed = self.file(valid + "\n" + entry("P1 Missing disposition"), expected=1)
+        self.assertIn("invalid disposition", malformed.stderr)
+        self.assertFalse(self.calls.exists())
+        unknown = self.file(valid + "\n" + entry("P3 Unknown", existing="fx-missing"), expected=1)
+        self.assertIn("unknown Existing bead", unknown.stderr)
+        self.assertNotIn("create", self.calls.read_text())
+
+    def test_refuses_unreviewed_export_and_accepts_exact_checkpoint(self):
+        self.track(open_bead("Unrelated"))
+        with self.export.open("a") as output:
+            print(json.dumps(open_bead("Edited", id="fx-edited")), file=output)
+        self.snapshot()
+        result = self.file(entry("P2 First"), expected=1)
+        self.assertIn("existing Beads JSONL changes", result.stderr)
+        self.assertNotIn("create", self.calls.read_text())
+        self.env["BEADS_REVIEWED"] = self.status.read_text()
+        self.assertIn("Filed fx-new1 First", self.file(entry("P2 First")).stdout)
+
+    def test_outside_export_and_pending_database_are_refusals(self):
+        self.track()
+        self.env["FILER_TEST_EXPORT"] = str(self.scratch / "foreign/issues.jsonl")
+        self.assertIn("outside the current worktree", self.file(entry("P2 New"), expected=1).stderr)
+        self.env.pop("FILER_TEST_EXPORT")
+        (self.scratch / "dirty").touch()
+        self.assertIn("pending changes", self.file(entry("P2 New"), expected=1).stderr)
+        self.assertNotIn("create", self.calls.read_text())
+
+    def test_flush_failure_and_unexpected_edit_stop_before_next_write(self):
+        self.track(open_bead("Unrelated"))
+        body = entry("P2 First") + "\n" + entry("P2 Second")
+        (self.scratch / "flush-fails").touch()
+        result = self.file(body, expected=1)
+        self.assertIn("could not export fx-new1", result.stderr)
+        self.assertNotIn("Filed ", result.stdout)
+        self.assertEqual(self.counter.read_text(), "1")
+        (self.scratch / "flush-fails").unlink()
+        (self.scratch / "pending").unlink()
+        (self.scratch / "unexpected").touch()
+        result = self.file(body, expected=1)
+        self.assertIn("unexpected export after filing fx-new2", result.stderr)
+        self.assertNotIn("Filed ", result.stdout)
+        self.assertEqual(self.counter.read_text(), "2")
+        self.assertEqual(self.rows()[0]["title"], "Changed")
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

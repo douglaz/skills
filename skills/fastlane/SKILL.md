@@ -86,7 +86,8 @@ The fast lane removes test gates, never safety gates.
 2. **Make a work directory** next to the brief: `fastlane-<topic>/`. It holds:
    - `progress.md`: one UTC line per event.
    - `deferred-tests.md`: test-only findings and broken tests, kept for later.
-   - `followups.md`: review follow-ups, filed when the lane ends. With several managers, each one numbers its items from
+   - `followups.md`: [review follow-up entries](references/prompts.md#follow-ups-followupsmd), filed when the lane ends.
+     With several managers, each one numbers its items from
      its own id range (the brief's role line), so ids never collide before filing.
    - `waits`: the wait record, empty at first (see Waits).
    - One `iN/` directory per iteration.
@@ -198,8 +199,8 @@ returns at once. `launch-unit.sh` also guards the host and the lane:
 - the live test can't run for a reason outside the code, such as a vendor being down or credentials expiring.
 
 A lane ends on the owner's word or when its named scope is done; a stop above pauses it for the owner. Whatever ends
-the lane, file `followups.md` under the severity rule before you report: each item that still holds at the committed
-tip. Until then, each day's summary to the owner carries the count of unfiled follow-ups.
+the lane, file `followups.md` before you report, using [the filing step below](#file-follow-ups). Keep only
+items that still hold at the committed tip. Until then, each day's summary carries the count of unfiled follow-ups.
 
 After the same live failure survives two fixes, revisit the diagnosis and report progress to the owner. Continue
 unless an authorised limit or an outside blocker prevents it.
@@ -240,13 +241,23 @@ the owner a proposal.
      again.
    - Record the suite result. If tests-back changed files, review the stage, remake the diff, match it
      to the reviewed diff and commit.
-3. File the follow-ups after the tests-back stage and any resulting commit, deduped against open items:
-   - P2 at priority 2, labelled `review-followup`;
-   - P3 at priority 3, labelled `review-nit`;
-   - an older P0/P1 at its own priority, labelled `review-preexisting`, holding nothing;
-   - a P0/P1 a review round cap left open, at its own priority, labelled `review-followup`.
+3. [File the follow-ups](#file-follow-ups) after the tests-back stage and any resulting commit.
 4. Push, PR and merge as the project's rule allows.
    The merge lane uses [gate-and-merge](../pr-with-codex-bot-review-merge/SKILL.md#normal-merge).
+
+## File follow-ups
+
+Keep only surviving entries. Convert any free-form entries to the fixed format before filing.
+Search open beads and add `Existing: ID` when you confirm an earlier bead covers the same defect.
+With `br` and a tracked export, read [beads-jsonl-path](../beads-jsonl-path/SKILL.md) and run
+`/path/to/fastlane/scripts/file-followups.py /path/to/followups.md` from the intended worktree. The script checks
+the export, creates one bead per entry, flushes and verifies each addition, and prints its ID.
+It skips a bead of equal or higher priority with the named ID or the same title and full entry text.
+Export the companion's `BEADS_REVIEWED` checkpoint when a later run will write to an already reviewed export.
+Without `br`, file by hand using the same severity rule.
+
+P2 uses priority 2 and `review-followup`. P3 uses priority 3 and `review-nit`.
+P0/P1 keeps its own priority with `review-preexisting` for older defects or `review-followup` at the cap.
 
 ## Seats and commands
 
