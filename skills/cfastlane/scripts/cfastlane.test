@@ -24,6 +24,7 @@ cat > "$WORK/fl/launch-unit.sh" <<'STUB'
 echo "$*" >> "$FIX/launches"
 STUB
 cp "$WORK/fl/launch-unit.sh" "$WORK/fl/review.sh"
+cp "$HERE/../../fastlane/scripts/wait.sh" "$WORK/fl/wait.sh"
 mkdir -p "$WORK/references"
 cp "$HERE/../../fastlane/references/prompts.md" "$WORK/references/prompts.md"
 chmod +x "$WORK/bin/systemctl" "$WORK/fl/launch-unit.sh" "$WORK/fl/review.sh"
@@ -126,36 +127,89 @@ echo dirty > "$FIX/wt/src/a.txt"
 sh "$HERE/session.sh" "$FIX/pkt" > /dev/null 2>&1; RC=$?
 check "keeps an inherited uncommitted candidate, like fastlane" '[ "$RC" = 0 ] && [ "$(cat "$FIX/wt/src/a.txt")" = dirty ]'
 check "first turn stamps the meter and the base" "[ $RC = 0 ] && [ -s '$FIX/pkt/meter-start' ] && [ \"\$(cat '$FIX/pkt/base')\" = \"\$(git -C '$FIX/wt' rev-parse HEAD)\" ]"
-check "starts exactly one unit, the session, in the worktree" '[ "$(wc -l < "$FIX/launches")" = 1 ] && sed -n 1p "$FIX/launches" | grep -q "^cfl-p1-s1 .* exec --dangerously"'
+check "starts exactly one unit, the session, in the worktree" '[ "$(wc -l < "$FIX/launches")" = 1 ] && sed -n 1p "$FIX/launches" | grep -q "^cfl-p1-s1 .* exec --color never --dangerously"'
 check "the session runs sol at effort high" 'sed -n 1p "$FIX/launches" | grep -q -- "-m gpt-6.2-sol -c model_reasoning_effort=high"'
 check "turn timeout permits implementation and review rounds" 'grep -q "21600 .* exec" "$FIX/launches"'
-check "session owns review launch, waits, judgment and repairs" 'grep -q "review.sh $FIX/pkt .*wait on required seats.*judge every finding, repair accepted P0/P1 and re-review" "$FIX/launches"'
+check "session owns review launch, waits, judgment and repairs" 'grep -q "review.sh $FIX/pkt .*Wait on required seats.*judge every finding, repair eligible P0/P1 and re-review" "$FIX/launches"'
 check "session receives exact fixed-template source and skill rules" 'grep -q "Read .*SKILL.md for the review and wait rules, and read $WORK/fl/../references/prompts.md for the exact fixed review template" "$FIX/launches"'
-check "session receives fresh retry command and waits on current output" 'grep -q -- "review.sh $FIX/pkt --out $FIX/pkt/review-<round> --tag <fresh-tag>.*Wait on the required seat directories under the --out just launched" "$FIX/launches"'
-check "session must end for owner before lowering a reviewer P0/P1" 'grep -q "Never lower a reviewer.*P0/P1 on your own: end your turn" "$FIX/launches"'
+check "session receives fresh retry command and waits on current output" 'grep -q -- "review.sh $FIX/pkt --out <fresh-output> --tag <fresh-tag>.*Wait on the required seat directories under the --out just launched" "$FIX/launches"'
 check "session stops early only for a named obstacle, never for remaining work" 'grep -q "End the turn early only for a named obstacle.*Work that merely remains is not an obstacle" "$FIX/launches"'
-check "session reviews only a complete candidate" 'grep -q "Review only a complete candidate: on an early stop launch no reviewers.*Once the candidate is complete, write the review brief" "$FIX/launches"'
-check "a P0/P1 the task requires is repaired, not sent to the owner" 'grep -q "A P0/P1 the task already requires you to fix is repaired in this turn.*that is no owner call" "$FIX/launches" && grep -q "believe it should not or cannot be fixed within the task: give the reason" "$FIX/launches"'
+check "session reviews only a complete candidate" 'grep -q "Review only a complete candidate.*Once the candidate is complete, write the review brief" "$FIX/launches"'
 check "session collects its readers before ending" 'grep -q "Before ending, collect and judge every required reader you launched unless that wait would pass the turn.s limit" "$FIX/launches"'
-check "first turn suspends running and editing tests" 'grep -q "Tests are suspended: do not run, fix, edit or add tests" "$FIX/launches"'
 echo note > "$FIX/note.md"
 sh "$HERE/session.sh" "$FIX/pkt" "$FIX/note.md" > /dev/null 2>&1; check "refuses a resume while the last turn has no exit file" "[ $? = 3 ]"
 mkdir -p "$FIX/pkt/turns/1/session"; echo "success exited 0" > "$FIX/pkt/turns/1/session/exit"
 printf 'banner\nsession id: abc-123\n' > "$FIX/pkt/turns/1/session/err"
 sh "$HERE/session.sh" "$FIX/pkt" > /dev/null 2>&1; check "a later turn needs a note file" "[ $? = 2 ]"
 sh "$HERE/session.sh" "$FIX/pkt" "$FIX/note.md" > /dev/null 2>&1; RC=$?
-check "a later turn resumes the same session as a new unit" "[ $RC = 0 ] && sed -n 2p '$FIX/launches' | grep -q '^cfl-p1-s2 .* exec resume abc-123 '"
+check "a later turn resumes the same session as a new unit" "[ $RC = 0 ] && sed -n 2p '$FIX/launches' | grep -q '^cfl-p1-s2 .* exec --color never resume abc-123 '"
 check "resume retains review ownership and the fixed-brief guard" 'sed -n 2p "$FIX/launches" | grep -q "write the review brief from the fixed fastlane template.*judge every finding"'
 check "resume retains the early-stop and complete-candidate rules" 'sed -n 2p "$FIX/launches" | grep -q "End the turn early only for a named obstacle.*Review only a complete candidate"'
 
-check "repair turn keeps tests suspended" 'sed -n 2p "$FIX/launches" | grep -q "Tests are suspended: do not run, fix, edit or add tests"'
+for turn in 1 2; do
+  PROMPT=$(sed -n "${turn}p" "$FIX/launches")
+  check "turn $turn runs whole named checks with other tests suspended" '[[ "$PROMPT" == *"Run every check the task names as required, in full, including its tests. That is never a reason to stop. Other tests are suspended"* && "$PROMPT" == *"For standalone builds, compile only what the task says gets deployed"* ]]'
+  check "turn $turn counts each stage and live retry separately" '[[ "$PROMPT" == *"three for product code, two for test tooling and two for tests-back"* && "$PROMPT" == *"Count each separately committed stage from one, retaining the count across resumes in the stage. Start at one after a failed live test."* ]]'
+  check "turn $turn hands off capped findings and repairs exceptions" '[[ "$PROMPT" == *"At the cap, put every open finding in $FIX/pkt/followups.md"* && "$PROMPT" == *"Keep P0/P1 at their own priorities with the review-followup label. Findings touching money, data loss, machine deletion, secrets, broken core function or a check that can pass when it should fail still get a fix and another round."* ]]'
+  check "turn $turn preserves the P0/P1 owner guard" '[[ "$PROMPT" == *"Never lower a reviewer"*"P0/P1 without the owner"* ]]'
+  check "turn $turn finishes independent work before relaying owner calls" '[[ "$PROMPT" == *"finish independent work, look ahead for other owner decisions and report all calls together with a recommendation and evidence for each."* ]]'
+  check "turn $turn routes contradictions and runs a baseline before proposing changes" '[[ "$PROMPT" == *"Send contradictions within the packet brief, including task versus live-test instructions, to the assistant. Record preexisting gaps or defects in the handoff and continue. Before proposing a requirement change, run a baseline"* ]]'
+  check "turn $turn reads the notes before each review, repair and handoff" '[[ "$PROMPT" == *"Read $FIX/pkt/notes.md if present before each review round, before each repair and before writing the handoff."* ]]'
+  check "turn $turn uses fresh output for the first review of a new stage" '[[ "$PROMPT" == *"for each new launch, including a new stage"*"first round or a seat retry. Use a fresh output directory and tag."* ]]'
+  check "turn $turn records check evidence before opening each review" '[[ "$PROMPT" == *"Before each review, put the current candidate"*"required check commands and exits in $FIX/pkt/handoff.md. Refresh checks a repair can affect before re-review."* ]]'
+done
+check "resume rereads corrected packet files" '[[ "$PROMPT" == *"the current $FIX/pkt/task.md in full. Re-read any corrected packet files the note names"* ]]'
 mkdir -p "$FIX/pkt/turns/2/session"; echo "success exited 0" > "$FIX/pkt/turns/2/session/exit"
 env FASTLANE_TESTS=on sh "$HERE/session.sh" "$FIX/pkt" "$FIX/note.md" > /dev/null 2>&1; RC=$?
 check "after the live pass a resume can bring tests back" '[ "$RC" = 0 ] && sed -n 3p "$FIX/launches" | grep -q "Tests are back: run, fix, edit or add tests only as the task file says"'
+check "tests-back close matches the new diff and commits before filing" 'grep -Fq "match its SHA to the new reviewed diff" "$HERE/../SKILL.md" && grep -Eq "close.py PKT commit. again before filing follow-ups" "$HERE/../SKILL.md"'
+PROMPT=$(sed -n 3p "$FIX/launches")
+check "a complete tests-back run at the clean accepted commit skips review and close" \
+  '[[ "$PROMPT" == *"If tests-back is complete, HEAD is the last accepted candidate in $FIX/pkt/candidate"*"and git status --porcelain --untracked-files=all --ignore-submodules=none succeeds with empty output, record the suite result and finish the handoff without a new review."* ]] &&
+   grep -Fq "is complete, HEAD matches" "$HERE/../SKILL.md" &&
+   grep -Fq -- "git status --porcelain --untracked-files=all --ignore-submodules=none" "$HERE/../SKILL.md" &&
+   grep -Fq "finish the handoff without a new review or close" "$HERE/../SKILL.md"'
+check "the launcher, task and resume note honor the tests-back exception" \
+  '[[ "$PROMPT" == *"If completing tests-back with the no-change handoff above, skip these review steps."* ]] &&
+   grep -Fq "review it unless the tests-back no-change" "$HERE/../references/prompts.md" &&
+   grep -Fq "unless the tests-back no-change handoff applies" "$HERE/../references/prompts.md"'
+check "tests-back keeps tests on across every resume" 'grep -Fq "on every resume within tests-back" "$HERE/../SKILL.md"'
+check "every session turn uses the filter-aware wait" 'grep -Fq "Wait for each session turn with" "$HERE/../SKILL.md" && grep -Fq -- "--wait <deadline_seconds> PKT/turns/N/session" "$HERE/../SKILL.md"'
+
+echo "session wait"
+TURN="$FIX/pkt/turns/3/session"
+mkdir -p "$TURN"
+# Codex CLI 0.172.0, human output, observed with a local response.incomplete SSE fixture.
+FILTER_ERROR='ERROR: stream disconnected before completion: Incomplete response returned, reason: content_filter'
+wait_session() {
+  sh "$HERE/session.sh" --wait 0 "$TURN" >"$FIX/wait.out" 2>"$FIX/wait.err"
+  WAIT_RC=$?
+}
+printf '%s\n' "$FILTER_ERROR" "$FILTER_ERROR" "tokens used" "24" > "$TURN/err"
+echo "exit-code exited 1" > "$TURN/exit"
+wait_session
+check "terminal provider error reports CONTENT_FILTER and exit 4" '[ "$WAIT_RC" = 4 ] && grep -Fxq "CONTENT_FILTER $TURN" "$FIX/wait.out"'
+echo "ERROR: stream disconnected before completion: stream closed before response.completed" >> "$TURN/err"
+wait_session
+check "a later transport error remains an ordinary failure" '[ "$WAIT_RC" = 1 ] && ! grep -q "^CONTENT_FILTER " "$FIX/wait.out"'
+printf 'The task mentions content_filter.\n' > "$TURN/err"
+wait_session
+check "a mention of the filter is insufficient" '[ "$WAIT_RC" = 1 ] && ! grep -q "^CONTENT_FILTER " "$FIX/wait.out"'
+echo "$FILTER_ERROR" > "$TURN/err"
+echo "success killed TERM" > "$TURN/exit"
+wait_session
+check "a deliberate stop remains exit 1" '[ "$WAIT_RC" = 1 ] && ! grep -q "^CONTENT_FILTER " "$FIX/wait.out"'
+echo "success exited 0" > "$TURN/exit"
+wait_session
+check "a successful turn stays successful" '[ "$WAIT_RC" = 0 ] && ! grep -q "^CONTENT_FILTER " "$FIX/wait.out"'
+rm "$TURN/exit"
+wait_session
+check "unknown session state stays unknown" '[ "$WAIT_RC" = 2 ] && ! grep -q "^CONTENT_FILTER " "$FIX/wait.out"'
 
 echo "review launcher"
 new_fix
 review_brief; rm "$FIX/pkt/review-start"
+check "review source asks for required check evidence and defers only suspended tests" 'grep -Fq "commands and exits of checks the task requires" "$FIX/pkt/review-brief.md" && grep -Fq "TEST marks a finding only about suspended tests" "$FIX/pkt/review-brief.md"'
 sh "$HERE/review.sh" "$FIX/pkt" > /dev/null 2>&1; RC=$?
 check "stamps the review start and delegates the default fastlane panel" "[ $RC = 0 ] && [ -s '$FIX/pkt/review-start' ] && sed -n 1p '$FIX/launches' | grep -q 'review-brief.md $FIX/pkt/review p1 opus astra sol grok$'"
 

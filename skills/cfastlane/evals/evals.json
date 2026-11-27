@@ -5,7 +5,7 @@
     {
       "id": 1,
       "prompt": "The owner approved one bounded change on the ledger project and said: run it as a combined fast lane, one sol session for both roles, and tell me what it cost. The worktree is /home/dev/p/ledger-slice on branch slice/ledger-1, clean. Your packet folder is /var/tmp/ledger-manager/packet-s1/. What do you write and run, in order, to get the session started, and how will you know the cost at the end?",
-      "expected_output": "Writes config.json (name, worktree, optional scans and identity), writes a one-page self-contained task.md from the template, starts with scripts/session.sh PKT and waits with fastlane's wait.sh. Sets no cap, checkpoint or stop. At close-out takes three meter readings: session, review and the assistant's own transcript, in new tokens.",
+      "expected_output": "Writes config.json (name, worktree, optional scans and identity), writes a one-page self-contained task.md from the template, starts with scripts/session.sh PKT and waits with scripts/session.sh --wait. Sets no token cap, checkpoint or stop. At close-out takes three meter readings: session, review and the assistant's own transcript, in new tokens.",
       "files": [],
       "expectations": [
         "Writes a self-contained task.md that tells the session not to commit or push, and to launch models only through the reviewer launcher",
@@ -14,7 +14,7 @@
         "Plans three meter readings at close-out: the session, the reviewers, and the assistant's own session",
         "Reports new tokens (uncached input plus output), with totals as a diagnostic only",
         "Creates waits at the packet root so session and review units enter the shared wait record",
-        "Keeps the test suspension in the task and session until the live test passes",
+        "Runs checks the task requires in full and keeps other tests suspended until the live test passes",
         "The session fills the fixed brief, launches reviewers, waits, judges and repairs in its turn; the assistant reads the report and final round",
         "Session and reviewer meters use the combined session id to avoid double-counting; names missing Grok measurement if unavailable"
       ]
@@ -29,7 +29,7 @@
         "Says why: the session's history comes back from cache, so nothing is read in twice",
         "The note states the owner's decision and the next step, and that the task and its rules still stand",
         "Does not fix the build error itself in the worktree while the session owns it",
-        "Waits on the new turn's folder with fastlane's wait.sh"
+        "Waits on the new turn's folder with scripts/session.sh --wait"
       ]
     },
     {

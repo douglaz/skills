@@ -48,7 +48,7 @@ for s in "$@"; do
       P="$P Also read $OUT/$s.lens.md for your lens. Keep the brief's answer format."
     fi
   else
-    P="You are a code reviewer in a fast lane. Read the review brief $BRIEF in full first and follow it. You are read-only: never edit files, commit, check out, stash, reset or clean, and never run builds or tests (tests are suspended until the live test passes). Do not read credential files or the model config folders ~/.claude, ~/.codex, ~/.grok."
+    P="You are a code reviewer in a fast lane. Read the review brief $BRIEF in full first and follow it. You are read-only: never edit files, commit, check out, stash, reset or clean, and never run builds or tests. Do not read credential files or the model config folders ~/.claude, ~/.codex, ~/.grok."
   fi
   case $s in
     opus|fable)

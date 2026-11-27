@@ -79,6 +79,8 @@ The manager ends each turn with exactly one of three things: a **question**, a *
 **wait**.
 
 **A question.** Before you put it to the owner:
+- In fastlane, relay the manager's batch of owner calls together with a recommendation and
+  evidence for each. The checks below apply to each call.
 - **Already settled?** If a recorded decision answers it (an ADR, a memory feedback rule, the standing
   workflow, an earlier answer in this session), answer it yourself. Tell the owner in one line which
   source settled it, so they can overrule you.
@@ -302,8 +304,8 @@ them for any agent.
 
 - **Don't edit the repo while the manager owns it.** Two writers on one worktree collide. Changes
   outside the repo that the owner asks you for directly are fine.
-- **Don't let the manager talk to the owner.** It never uses `AskUserQuestion`. It ends its turn with
-  one question; grilling skills that ask "the whole frontier" are overridden to one question per turn.
+- **Don't let the manager talk to the owner.** It never uses `AskUserQuestion`. For owner decisions it
+  ends its turn with the question or the fastlane batch, as the brief's "How to talk back" says.
 - **Don't relay a denied tool call as a workaround request.** If the manager reports a refusal, bring
   it to the owner.
 - **Don't quote the manager's internal agent ID, thread id or transcript paths** to the owner.
@@ -371,7 +373,7 @@ What differs from the subagent:
   `token-ledger` skill then can't count the reader's spend.
 - **No sandbox and no deny list.** The bypass flag is required, because sandboxed codex cannot reach
   the nix daemon socket and cannot run gates (rloop-spec `AGT-10`). The brief's hard safety lines are
-  its only fence. The brief's other rules hold as written: one question per turn,
+  its only fence. The brief's other rules hold as written, including how it asks questions,
   no owner-only skill on its own initiative, and the bounded waits and
   longer-wait handoff above within the authorized phase.
 

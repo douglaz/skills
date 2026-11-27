@@ -5,7 +5,7 @@
 # The prompt only points at TASK_FILE, so the task can be any length.
 # OUT_DIR gets unit, out (codex progress), err, exit and answer.md (codex's final message).
 # Model: FASTLANE_IMPL_MODEL (default gpt-6.2-sol); effort is always high. Timeout default 7200 s.
-# Tests stay banned unless FASTLANE_TESTS=on (only after the live test is perfect).
+# Only task-required checks run until FASTLANE_TESTS=on (after the live test is perfect).
 set -eu
 [ $# -ge 4 ] || { echo "usage: $0 WORKTREE TASK_FILE OUT_DIR UNIT [TIMEOUT_SECONDS]" >&2; exit 2; }
 WT=$1 TASK=$2 OUT=$3 UNIT=$4 TO=${5:-7200}
@@ -20,8 +20,9 @@ TIMEOUT=$(command -v timeout)
 if [ "${FASTLANE_TESTS:-off}" = on ]; then
   T="Tests are back: run, fix, edit or add tests only as the task file says."
 else
-  T="Tests are suspended: do not run, fix, edit or add tests. Compile only what the task file says gets deployed."
+  T="Other tests are suspended: do not run, fix, edit or add them. For standalone builds, compile only what the task says gets deployed."
 fi
+T="Run every check the task names as required, in full, including its tests. That is never a reason to stop. $T"
 P="Read the task file $TASK in full before doing anything, then do exactly what it says. Work only in $WT. Do not commit, push, deploy, change branches, stash, reset, or write any issue tracker. $T Do all the work the task asks before you stop. Leave something undone only for a named obstacle: evidence that a requirement cannot be met as written, one specific step with what you tried and why each attempt failed, something the task reserves for the manager or the owner, or the time limit. Work that merely remains is not an obstacle; keep going. Finish by writing the handoff file the task names; if anything is undone, it names the obstacle."
 FASTLANE_CWD=$WT exec "$H/launch-unit.sh" "$UNIT" "$OUT" -- \
   "$TIMEOUT" "$TO" "$CODEX" exec --dangerously-bypass-approvals-and-sandbox \
