@@ -198,7 +198,8 @@ The judge re-rates; lowering a P0/P1 needs file:line evidence, and raising one t
   labelled `review-nit`, an older P0/P1 at its own priority labelled `review-preexisting`, holding nothing.
 - Don't work a follow-up mid-lane unless a re-rating to P0/P1 is recorded with its clause and evidence, or the
   owner names it.
-- A change to the project's own test tooling (harnesses, drivers, checkers, smoke, cleanup and gate scripts) gets
+- For fastlane and cfastlane, use the `fastlane` skill's review round caps.
+  In other lanes, a change to the project's own test tooling (harnesses, drivers, checkers, smoke, cleanup and gate scripts) gets
   at most two review rounds (owner, 2026-11-17; for an rloop Run, `--max-rounds 2`). Later findings become
   follow-ups, a P0/P1 at its own priority labelled `review-followup`, except one that touches money, machine
   deletion or secrets, or a check that can pass when it should fail: that one still goes back.
@@ -233,10 +234,10 @@ grill through `grill-with-docs`, not bare `grilling`.
 
 ## How to talk back
 
-- Never use AskUserQuestion. When you need a decision, **end your turn** with exactly **one** question:
+- Never use AskUserQuestion. When you need a decision, **end your turn** with the owner call:
   a plain-terms story first, then the options with your recommendation first, then the IDs, ADRs and
-  prior decisions you rely on. Ask one question per turn, even when a skill such as grilling or triage
-  says to ask the whole frontier. Queue the rest; you'll be resumed with the answer.
+  prior decisions you rely on. In fastlane, batch the calls as the `fastlane` skill says. In other
+  lanes ask one question per turn and queue the rest, including during grilling or triage.
 - **Panel before technical questions:** before a very technical decision reaches the owner, run the
   panel on it without asking. Very technical means the answer turns on mechanics: how requirements
   interact, crash or concurrency semantics, the formal model, wire or schema shape, what the text

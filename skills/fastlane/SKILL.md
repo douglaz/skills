@@ -5,7 +5,7 @@ description: >-
   suites. A manager writes a short task file and calls codex directly to implement it. opus, astra
   and sol review the diff, with grok when available and fable as an optional extra seat. The manager commits, deploys and
   runs the live test: the system exercised exactly the way a real user would. The loop repeats
-  until the live test is perfect. Tests are neither run nor fixed until then. For spec-only work
+  until the live test is perfect. Tests stay suspended except for checks required by the task. For spec-only work
   the lane is about writing the spec, and there is no live test. Use this whenever the owner says
   "fastlane", "fast lane", "suspend rloops", "skip the Runs", "focus on live testing", "suspend the
   test suite", "the manager calls codex directly", "just get it working live", or otherwise trades
@@ -32,7 +32,7 @@ writing it".
 |---|---|---|
 | Implementation | rloop Run: instruction, panel, Implementer, Rounds | Manager writes a task file; codex implements it directly |
 | Review | Five rloop Reviewer seats every Round | opus, astra, sol read the diff; grok when available; fable optional |
-| Tests | Suite, per-round checks, qualification | None run, fixed, edited or added until the live test is perfect |
+| Tests | Suite, per-round checks, qualification | Only task-required checks run before the live test is perfect |
 | Gate | Round acceptance plus CI | The live test, run on the deployed candidate |
 | Builds | Everything | Only what gets deployed: codex compiles that |
 
@@ -56,9 +56,11 @@ The fast lane removes test gates, never safety gates.
     section 7's resume turns; managers cannot receive messages mid-turn.
   - Never replace it for context size. If it stops mid-lane, resume it; spawn one replacement only if the resume is
     refused, and point it at the lane's state file.
+  - A [cfastlane filter handoff](../cfastlane/SKILL.md#the-loop-fastlanes-order) uses an Opus manager
+    at effort high under [delegate-to-manager section 1](../delegate-to-manager/SKILL.md#1-set-up).
 - **Assistant** (the main session) watches the manager (delegate-to-manager section 4) and relays to the owner in
-  one line per meaningful event. The manager waits and the assistant resumes it as delegate-to-manager section 7
-  says. The lane's wait record shows the assistant the units and hand-offs being watched (see Waits).
+  one line per meaningful event. Use delegate-to-manager section 7 for Sol resumes and section 2 for Opus relays.
+  The lane's wait record shows the assistant the units and hand-offs being watched (see Waits).
 - Without a manager (the owner asked the main session to do it directly), the session plays both roles.
 
 ## Set up once per project
@@ -84,7 +86,7 @@ The fast lane removes test gates, never safety gates.
 2. **Make a work directory** next to the brief: `fastlane-<topic>/`. It holds:
    - `progress.md`: one UTC line per event.
    - `deferred-tests.md`: test-only findings and broken tests, kept for later.
-   - `followups.md`: P2/P3 findings, filed when the lane ends. With several managers, each one numbers its items from
+   - `followups.md`: review follow-ups, filed when the lane ends. With several managers, each one numbers its items from
      its own id range (the brief's role line), so ids never collide before filing.
    - `waits`: the wait record, empty at first (see Waits).
    - One `iN/` directory per iteration.
@@ -124,7 +126,7 @@ returns at once. `launch-unit.sh` also guards the host and the lane:
 2. **Implement.** Run `scripts/implement.sh <worktree> iN/task.md iN/impl <unit>`. That is codex gpt-6.2-sol, effort
    exactly high, in the worktree.
    - Codex edits and compiles what gets deployed. It doesn't commit, push, deploy or write the tracker, and it doesn't
-     touch tests.
+     change suspended tests. It runs any check the task names as required in full, including its tests.
    - Wait with `scripts/wait.sh <deadline_seconds> iN/impl`, following Waits below.
    - Then read its handoff and build exits. A failed build goes straight back to codex with the error, in a new
      `iN/impl-2`, without review.
@@ -133,6 +135,10 @@ returns at once. `launch-unit.sh` also guards the host and the lane:
      work. Take it to the assistant only when the handoff names a real obstacle: evidence that a requirement
      cannot be met as written, one specific step with what was tried and why it failed, or something reserved
      for you or the owner. Work that merely remains is not one.
+   - Route contradictions within the lane brief to the assistant. Record preexisting gaps or defects in the handoff
+     and continue. Before proposing a requirement change, run a baseline to establish whether the symptom predates
+     this work. For an owner call, finish independent work and look ahead for other owner decisions, then report all
+     calls together with a recommendation and evidence for each.
 3. **Review.**
    - Run `scripts/make-diff.sh <worktree> <base> iN/diff.patch`. It captures tracked changes plus new files, and
      prints the diff's sha.
@@ -156,13 +162,14 @@ returns at once. `launch-unit.sh` also guards the host and the lane:
      is the lowering's evidence. Spec-only text has no such path: judge its findings against the scope's
      requirements.
    - **Verified P0/P1 product defect the change introduces, or one that leaves the task unmet:** goes back to step 1
-     as a fix task, with a re-review of the delta. Any seat can raise one. The fix task names the smallest change
+     as a fix task, subject to the round cap below, with a re-review of the delta. Any seat can raise one.
+     The fix task names the smallest change
      that removes each P0/P1; anything beyond it is a follow-up. An older P0/P1 outside the task goes to
      `followups.md` as `review-preexisting` instead.
    - **Test-only finding:** a test unrun, a fixture broken, missing coverage, a check that "can't fail". Add it to
      `deferred-tests.md`; it is never a blocker here. Check first that it really is test-only. A test that fails
      because the product misbehaves is a product defect. This covers the suspended test suite only, not the
-     live-test driver or its checks.
+     live-test driver or checks the task requires.
    - **P2/P3:** add it to `followups.md`, to be filed at the end (severity rule). Never fix it in this change, not
      even beside a P0/P1 or on the same lines. If a later live run shows it, re-rate it in that iteration's
      `judgement.md` with the run as evidence; it then enters the next task as a live failure.
@@ -197,11 +204,13 @@ tip. Until then, each day's summary to the owner carries the count of unfiled fo
 After the same live failure survives two fixes, revisit the diagnosis and report progress to the owner. Continue
 unless an authorised limit or an outside blocker prevents it.
 
-**Test tooling gets two review rounds** (owner, 2026-11-17). Test tooling is the project's own live-test driver,
-checkers, smoke, cleanup and gate scripts, and the lane's tools. After a tooling change's second review round,
-commit it, put every finding still open in `followups.md` (a P0/P1 at its own priority labelled
-`review-followup`), and let the live run judge the result. Only a finding that touches money, machine deletion or
-secrets, or a check that can pass when it should fail, still goes back for a fix and another round.
+**Review round caps.** Each stage that ends in its own commit has a separate count: three rounds for product
+code, two for test tooling (live-test driver, checkers, smoke, cleanup, gate scripts and lane tools), and two
+for bringing tests back. Keep the count across resumes in the same stage. A repair after a failed live test starts at one.
+After the last allowed round, put every finding still open in `followups.md` (a P0/P1 at its own priority labelled
+`review-followup`), commit and let the live test judge. A finding that touches money, data loss, machine
+deletion, secrets, broken core function or a check that can pass when it should fail still goes back for a fix
+and another round.
 
 **Time each live test.** The owner's iteration rule covers it. If a run goes over 20 minutes, first make it faster:
 reuse setup that isn't under test, and cut idle waits. If it's still over, halt before the next iteration and bring
@@ -212,7 +221,7 @@ the owner a proposal.
 "For spec only work the focus is writing it."
 - There is no deploy and no live test.
 - Running and fixing model checks, proofs, linters and other gates is suspended like tests until the writing is
-  done. Writing a formal model or proof that the scope asks for is part of the writing, not suspended.
+  done, except for checks the task requires. Writing a formal model or proof that the scope asks for is part of the writing.
 - The loop is task → codex writes → opus, astra, sol and available grok read the text → judge → commit.
 - Readers look for contradictions, unmet scope, ambiguity an implementer would trip on, and claims the text doesn't
   support.
@@ -222,18 +231,20 @@ the owner a proposal.
 ## When the live test is perfect
 
 1. Tell the owner in one line that the live test passed, and what comes next.
-2. File the follow-ups under the severity rule, deduped against open items:
-   - P2 at priority 2, labelled `review-followup`;
-   - P3 at priority 3, labelled `review-nit`;
-   - an older P0/P1 at its own priority, labelled `review-preexisting`, holding nothing;
-   - a P0/P1 the test-tooling cap left open, at its own priority, labelled `review-followup`.
-3. Bring the tests back. Unless the owner redirects, the suspension ends here, and `deferred-tests.md` becomes the
+2. Bring the tests back. Unless the owner redirects, the suspension ends here, and `deferred-tests.md` becomes the
    next fast-lane task:
    - Codex updates the tests to the new behaviour, and the suite runs once, within the iteration-check limits.
      Launch it with `FASTLANE_TESTS=on scripts/implement.sh ...`, which lifts the launcher's test ban, and drop the
      tests line from the task file's constraints.
    - Product code changes only for a real defect a test exposes. Such a change goes through review and the live test
      again.
+   - Record the suite result. If tests-back changed files, review the stage, remake the diff, match it
+     to the reviewed diff and commit.
+3. File the follow-ups after the tests-back stage and any resulting commit, deduped against open items:
+   - P2 at priority 2, labelled `review-followup`;
+   - P3 at priority 3, labelled `review-nit`;
+   - an older P0/P1 at its own priority, labelled `review-preexisting`, holding nothing;
+   - a P0/P1 a review round cap left open, at its own priority, labelled `review-followup`.
 4. Push, PR and merge as the project's rule allows.
 
 ## Seats and commands
@@ -268,8 +279,8 @@ seconds, capped at 3300. Pass `3300` for 55 minutes. Its exit codes are:
 | 2 | a unit is gone with no exit file |
 | 124 | deadline |
 
-Choose polling deadlines and hand off longer waits as [delegate-to-manager section 7](../delegate-to-manager/SKILL.md#7-a-sol-manager)
-says, including when the assistant must resume the manager. Re-arm on 124. The live-test driver gets its own watch
+For longer waits follow delegate-to-manager's [Sol procedure](../delegate-to-manager/SKILL.md#7-a-sol-manager)
+or [Opus procedure](../delegate-to-manager/SKILL.md#4-watching-long-jobs). Re-arm on 124. The live-test driver gets its own watch
 script with the same codes, plus a "findings printed, keep waiting" mode if it streams progress.
 
 **Wait record.** The work directory's `waits` file has one line per armed wait: `manager | unit | exit path |
@@ -315,7 +326,7 @@ or widening of an earlier owner pick.
 
 ## Don'ts
 
-- Don't run, fix, edit or add tests until the live test is perfect. That includes "just this one quick case".
+- Run any check the task requires in full. Leave other tests suspended until the live test is perfect.
 - Don't count a test-only shortcut as live evidence. If a step can't be driven the way a user drives it, say so.
 - Don't let codex commit, and don't let readers edit. Run one implementer per worktree at a time.
 - Don't push, open a PR or merge beyond what the project's rule allows.

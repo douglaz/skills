@@ -287,6 +287,16 @@ echo task > "$FIX/lane/i1/task.md"
 (cd "$FIX/lane" && "$HERE/implement.sh" "$FIX/lane" i1/task.md i1/impl fl-i1-impl) > "$FIX/launch.out" 2>&1; rc=$?
 check "the implementer leaves work undone only for a named obstacle, never for remaining work" \
   '[ "$rc" = 0 ] && grep -q "Leave something undone only for a named obstacle.*Work that merely remains is not an obstacle.*if anything is undone, it names the obstacle" "$FIX/runs"' "rc $rc: $(cat "$FIX/launch.out")"
+check "the implementer runs named checks in full while other tests are suspended" \
+  'grep -q "Run every check the task names as required, in full, including its tests. That is never a reason to stop. Other tests are suspended" "$FIX/runs" &&
+   grep -q "For standalone builds, compile only what the task says gets deployed" "$FIX/runs"' "rc $rc: $(cat "$FIX/launch.out")"
+check "the manager brief uses the lane caps and the Opus fallback uses its wait procedure" \
+  'grep -Fq "For fastlane and cfastlane, use" "$HERE/../../delegate-to-manager/references/manager-brief-template.md" &&
+   grep -Fq "section 7 for Sol resumes and section 2 for Opus relays" "$HERE/../SKILL.md" &&
+   grep -Fq "#4-watching-long-jobs" "$HERE/../SKILL.md"' ""
+check "the manager brief and relay preserve fastlane batching" \
+  'grep -Fq "In fastlane, batch the calls" "$HERE/../../delegate-to-manager/references/manager-brief-template.md" &&
+   grep -Fq "In fastlane, relay the manager" "$HERE/../../delegate-to-manager/SKILL.md"' ""
 
 echo "passed $PASS, failed $FAIL"
 [[ "$FAIL" == 0 ]]
