@@ -26,6 +26,32 @@ def option_ids(path):
     return options
 
 
+def panel_seats(fable):
+    """The seats to launch: all of REQUIRED, or without astra when FASTLANE_SEATS leaves it out."""
+    if "FASTLANE_SEATS" not in os.environ:
+        return SEATS if fable else REQUIRED
+    # review.sh owns the switch's checks and prints the accepted list.
+    listed = subprocess.run(
+        [SCRIPTS / "review.sh", "--seats"], stdout=subprocess.PIPE, text=True,
+    )
+    if listed.returncode:
+        raise ValueError("FASTLANE_SEATS refused; see the message above")
+    names = listed.stdout.split()
+    required = tuple(seat for seat in REQUIRED if seat in names)
+    if required not in (REQUIRED, ("opus", "sol", "grok")):
+        raise ValueError("FASTLANE_SEATS: a decision panel seats opus, sol and grok,"
+                         f" with astra optional, plus optional fable: {' '.join(names)}")
+    return (*required, "fable") if fable or "fable" in names else required
+
+
+def seated(out):
+    """The seats a launch started; an output directory from before the seats file had them all."""
+    try:
+        return (out / "seats").read_text().split()
+    except FileNotFoundError:
+        return list(SEATS)
+
+
 def launch(args):
     if not args.worktree.is_dir():
         raise ValueError(f"no worktree at {args.worktree}")
@@ -35,7 +61,7 @@ def launch(args):
     if not question:
         raise ValueError("question.md is empty")
     options = option_ids(args.brief / "options")
-    seats = SEATS if args.fable else REQUIRED
+    seats = panel_seats(args.fable)
     lenses = {}
     for seat in seats:
         path = args.brief / f"{seat}.lens.md"
@@ -45,6 +71,7 @@ def launch(args):
     out = args.out.resolve()
     out.mkdir(parents=True)
     (out / "options").write_text("\n".join(options) + "\n")
+    (out / "seats").write_text(" ".join(seats) + "\n")
     for seat, lens in lenses.items():
         (out / f"{seat}.lens.md").write_text(lens)
     brief = out / "brief.md"
@@ -96,28 +123,36 @@ def ballot(directory, options):
 
 
 def tally(out, options):
+    # An unseated seat is not a missing or failed one: it is left out of the panel entirely.
+    seats = seated(out)
     answers = {}
-    for seat in SEATS:
+    for seat in seats:
         answer = ballot(out / seat, options)
         if answer is not None:
             answers[seat] = answer
 
     counts = Counter(pick for pick, _ in answers.values())
     total = len(answers)
+    unseated = [seat for seat in REQUIRED if seat not in seats]
     verdict = "OWNER_DECISION"
     if total:
         pick, votes = counts.most_common(1)[0]
         opus_agrees = "opus" in answers and answers["opus"][0] == pick
-        if votes == total or (opus_agrees and (votes, total) in {(2, 3), (3, 4), (4, 5)}):
+        # Without astra, opus must be in the majority even when every answer agrees.
+        if ((votes == total and (opus_agrees or not unseated))
+                or (opus_agrees and (votes, total) in {(2, 3), (3, 4), (4, 5)})):
             verdict = f"{pick} accepted under the owner's 2026-11-05 panel rule"
 
     counts_line = " ".join(f"{option}={counts[option]}" for option in options)
-    result = f"Counts ({total} answering): {counts_line}\nVERDICT: {verdict}\n"
+    result = f"Not seated: {' '.join(unseated)}\n" if unseated else ""
+    result += f"Counts ({total} answering): {counts_line}\nVERDICT: {verdict}\n"
     synthesis = ["# Decision panel", ""]
     for seat in SEATS:
         if seat in answers:
             pick, argument = answers[seat]
             synthesis.append(f"- {seat} picked {pick}. {argument}")
+        elif seat in unseated:
+            synthesis.append(f"- {seat} was not seated.")
         else:
             synthesis.append(f"- {seat} had no valid completed ballot.")
     synthesis.extend(["", "## Tally", "", result])
@@ -126,8 +161,9 @@ def tally(out, options):
 
 def wait_for_readers(out, deadline_seconds):
     end = time.monotonic() + min(deadline_seconds, 3300)
-    # Wait on each required seat so a gone unit cannot end the wait for the others.
-    for seat in REQUIRED:
+    # Wait on each seated required seat so a gone unit cannot end the wait for the others.
+    seats = seated(out)
+    for seat in (seat for seat in REQUIRED if seat in seats):
         directory = out / seat
         # A launch error can be reported after systemd has already started the unit.
         if not (directory / "unit").is_file():

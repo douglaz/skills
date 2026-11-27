@@ -10,6 +10,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 PASS=0; FAIL=0
+unset FASTLANE_SEATS  # the default seats unless a check sets the switch
 ok() { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 bad() { FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; }
 check() { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
@@ -23,7 +24,12 @@ cat > "$WORK/fl/launch-unit.sh" <<'STUB'
 #!/usr/bin/env bash
 echo "$*" >> "$FIX/launches"
 STUB
-cp "$WORK/fl/launch-unit.sh" "$WORK/fl/review.sh"
+# The review stub logs a launch like the launcher; its seat-list check is fastlane's real one.
+cat > "$WORK/fl/review.sh" <<STUB
+#!/usr/bin/env bash
+if [ "\$1" = --seats ]; then exec "$HERE/../../fastlane/scripts/review.sh" --seats; fi
+echo "\$*" >> "\$FIX/launches"
+STUB
 # Model CLIs found on PATH are stubs that never reach a model; tests that run a command add their own.
 for tool in codex claude; do printf '#!/bin/sh\nexit 99\n' > "$WORK/bin/$tool"; chmod +x "$WORK/bin/$tool"; done
 cp "$HERE/../../fastlane/scripts/wait.sh" "$WORK/fl/wait.sh"
@@ -147,6 +153,7 @@ check "session receives fresh retry command and waits on current output" 'grep -
 check "session stops early only for a named obstacle, never for remaining work" 'grep -q "End the turn early only for a named obstacle.*Work that merely remains is not an obstacle" "$FIX/launches"'
 check "session reviews only a complete candidate" 'grep -q "Review only a complete candidate.*Once the candidate is complete, write the review brief" "$FIX/launches"'
 check "session collects its readers before ending" 'grep -q "Before ending, collect and judge every required reader you launched unless that wait would pass the turn.s limit" "$FIX/launches"'
+check "without FASTLANE_SEATS the prompt keeps the default seats" 'grep -Fq "run $HERE/review.sh $FIX/pkt (it probes grok)" "$FIX/launches" && ! grep -q "review seats are" "$FIX/launches"'
 echo note > "$FIX/note.md"
 sh "$HERE/session.sh" "$FIX/pkt" "$FIX/note.md" > /dev/null 2>&1; check "refuses a resume while the last turn has no exit file" "[ $? = 3 ]"
 mkdir -p "$FIX/pkt/turns/1/session"; echo "success exited 0" > "$FIX/pkt/turns/1/session/exit"
@@ -297,6 +304,38 @@ echo 'session id: old-codex-thread' > "$FIX/pkt/turns/1/session/err"
 echo note > "$FIX/note.md"
 sh "$HERE/session.sh" "$FIX/pkt" "$FIX/note.md" > /dev/null 2>&1; RC=$?
 check "and resumes on codex by default" '[ "$RC" = 0 ] && sed -n 1p "$FIX/launches" | grep -q "^cfl-p1-s2 .* exec --color never resume old-codex-thread "'
+
+echo "seat switch"
+new_fix
+echo task > "$FIX/pkt/task.md"; rm "$FIX/pkt/meter-start" "$FIX/pkt/base"
+env FASTLANE_SEATS="opus sol grok" sh "$HERE/session.sh" "$FIX/pkt" > /dev/null 2>&1; RC=$?
+PROMPT=$(sed -n 1p "$FIX/launches")
+check "FASTLANE_SEATS names its seats on the session's first review launch" '[ "$RC" = 0 ] && [[ "$PROMPT" == *"run $HERE/review.sh $FIX/pkt opus sol grok (it probes grok)"* ]]'
+check "the session names the seats on every launch and waits only on launched seats" \
+  '[[ "$PROMPT" == *"This packet'"'"'s review seats are opus sol grok. Name them on every review.sh launch, after --out and --tag, except a failed seat'"'"'s one retry, which names only that seat. Wait only on the seats a round launched: opus sol, plus grok only when that round launched it; never wait on a seat that was not launched."* ]]'
+check "the failed-seat rule counts only the seated ones" '[[ "$PROMPT" == *"The failed-seat rule needs at least two of the seated ones among opus, astra and sol (opus sol) to answer."* ]]'
+mkdir -p "$FIX/pkt/turns/1/session"; echo "success exited 0" > "$FIX/pkt/turns/1/session/exit"
+echo 'session id: abc-123' > "$FIX/pkt/turns/1/session/err"; echo note > "$FIX/note.md"
+env FASTLANE_SEATS="opus astra grok" sh "$HERE/session.sh" "$FIX/pkt" "$FIX/note.md" > /dev/null 2>&1; RC=$?
+PROMPT=$(sed -n 2p "$FIX/launches")
+check "a resume carries the switch's seats too" '[ "$RC" = 0 ] && [[ "$PROMPT" == *"review seats are opus astra grok."*"Wait only on the seats a round launched: opus astra,"* ]]'
+for seats in '' 'sol grok' 'opus grok' 'opus sol gpt'; do
+  new_fix
+  echo task > "$FIX/pkt/task.md"; rm "$FIX/pkt/meter-start" "$FIX/pkt/base"
+  env FASTLANE_SEATS="$seats" sh "$HERE/session.sh" "$FIX/pkt" > /dev/null 2> "$FIX/session.err"; RC=$?
+  check "session.sh refuses FASTLANE_SEATS='$seats' before the turn is reserved" \
+    '[ "$RC" = 2 ] && grep -q FASTLANE_SEATS "$FIX/session.err" && [ ! -s "$FIX/launches" ] && [ ! -e "$FIX/pkt/turns" ] && [ ! -e "$FIX/pkt/base" ]'
+done
+new_fix
+review_brief; rm "$FIX/pkt/review-start"
+env FASTLANE_SEATS="opus sol grok" sh "$HERE/review.sh" "$FIX/pkt" > /dev/null 2>&1; RC=$?
+check "cfastlane review.sh takes its default seats from FASTLANE_SEATS" "[ $RC = 0 ] && sed -n 1p '$FIX/launches' | grep -q 'review-brief.md $FIX/pkt/review p1 opus sol grok$'"
+rm -r "$FIX/pkt/review" 2>/dev/null; rm -f "$FIX/pkt/review-start"
+env FASTLANE_SEATS="sol grok" sh "$HERE/review.sh" "$FIX/pkt" > /dev/null 2> "$FIX/review.err"; RC=$?
+check "cfastlane review.sh refuses a list without opus before stamping or launching" \
+  '[ "$RC" = 2 ] && grep -q "FASTLANE_SEATS must name opus" "$FIX/review.err" && [ "$(wc -l < "$FIX/launches")" = 1 ] && [ ! -e "$FIX/pkt/review-start" ]'
+env FASTLANE_SEATS="opus sol grok" sh "$HERE/review.sh" "$FIX/pkt" --out "$FIX/pkt/review-retry" --tag p1-retry astra > /dev/null 2>&1; RC=$?
+check "a named seat retry keeps working under the switch" '[ "$RC" = 0 ] && sed -n 2p "$FIX/launches" | grep -q "review-retry p1-retry astra$"'
 
 echo "review launcher"
 new_fix

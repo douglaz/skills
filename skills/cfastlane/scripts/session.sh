@@ -19,6 +19,8 @@
 # refused. The first turn fixes it for the packet: a resume uses the first turn's engine and refuses
 # a different CFASTLANE_ENGINE. Both engines record "session id: ID" in the turn's err.
 # Model: CFASTLANE_MODEL (default gpt-6.2-sol, or claude-opus-5-5 for claude); effort is always high.
+# Seats: FASTLANE_SEATS, when set, is checked by fastlane's review.sh and written into the turn's
+# prompt, so the session launches, waits on and counts only those seats.
 # Timeout: CFASTLANE_TIMEOUT seconds (default 21600).
 # Caps, exit file and the disk floor come from fastlane's launch-unit.sh.
 set -eu
@@ -48,6 +50,12 @@ fi
 ENGINE=${CFASTLANE_ENGINE:-}
 case "$ENGINE" in ''|codex|claude) ;; *) echo "CFASTLANE_ENGINE must be codex or claude: $ENGINE" >&2; exit 2 ;; esac
 [ -x "$F/launch-unit.sh" ] || { echo "fastlane scripts not found at $F (install the fastlane skill beside this one)" >&2; exit 2; }
+# FASTLANE_SEATS reaches the session's review launches only through the prompt, checked here first.
+SEATS= WAITS=
+if [ "${FASTLANE_SEATS+set}" = set ]; then
+  SEATS=$("$F/review.sh" --seats) || exit 2
+  for s in $SEATS; do case $s in opus|astra|sol) WAITS=$WAITS${WAITS:+ }$s ;; esac; done
+fi
 PKT=$(cd "$1" && pwd)
 [ -s "$PKT/config.json" ] || { echo "no $PKT/config.json" >&2; exit 2; }
 PY=$(command -v python3)
@@ -102,11 +110,14 @@ else
   if [ "$ENGINE" = claude ]; then set -- --resume "$ID"; else set -- resume "$ID"; fi
 fi
 P="$P Do all the work the task asks before you stop. End the turn early only for a named obstacle: evidence that a requirement cannot be met as written, one specific step with what you tried and why each attempt failed, a run or decision the task reserves for the assistant or the owner, or the turn's time limit. Work that merely remains is not an obstacle; keep going. On an early stop write the handoff as partial, naming the obstacle. Send contradictions within the packet brief, including task versus live-test instructions, to the assistant. Record preexisting gaps or defects in the handoff and continue. Before proposing a requirement change, run a baseline to determine whether the symptom predates the packet."
-P="$P Review only a complete candidate. If completing tests-back with the no-change handoff above, skip these review steps. Before each review, put the current candidate's required check commands and exits in $PKT/handoff.md. Refresh checks a repair can affect before re-review. Once the candidate is complete, write the review brief from the fixed fastlane template without rewording reviewer instructions or P0-P3 lines. On the packet's first review launch run $H/review.sh $PKT (it probes grok). Wait on required seats with $F/wait.sh, judge every finding, repair eligible P0/P1 and re-review the delta. Do not launch models or agents except through that reviewer launcher."
+P="$P Review only a complete candidate. If completing tests-back with the no-change handoff above, skip these review steps. Before each review, put the current candidate's required check commands and exits in $PKT/handoff.md. Refresh checks a repair can affect before re-review. Once the candidate is complete, write the review brief from the fixed fastlane template without rewording reviewer instructions or P0-P3 lines. On the packet's first review launch run $H/review.sh $PKT${SEATS:+ $SEATS} (it probes grok). Wait on required seats with $F/wait.sh, judge every finding, repair eligible P0/P1 and re-review the delta. Do not launch models or agents except through that reviewer launcher."
 P="$P Apply fastlane's round caps: three for product code, two for test tooling and two for tests-back. Count each separately committed stage from one, retaining the count across resumes in the stage. Start at one after a failed live test. At the cap, put every open finding in $PKT/followups.md for the assistant to commit the candidate and let the live test judge. Keep P0/P1 at their own priorities with the review-followup label. Findings touching money, data loss, machine deletion, secrets, broken core function or a check that can pass when it should fail still get a fix and another round. Write all follow-ups in the fixed entry format in $F/../references/prompts.md."
 P="$P Never lower a reviewer's P0/P1 without the owner's decision. Also take a raised P0/P1 to the owner if you believe it should not or cannot be fixed within the task, except when deferring it at the cap. Do the required repairs under the cap rule. Before ending for an owner call, finish independent work, look ahead for other owner decisions and report all calls together with a recommendation and evidence for each."
 P="$P Read $PKT/notes.md if present before each review round, before each repair and before writing the handoff. Finish by writing the handoff, final review and judgement paths, and commit message files the task names. Before ending, collect and judge every required reader you launched unless that wait would pass the turn's limit. If the turn still ends with reviewers active, report their units and exit paths so the same session can be resumed without launching duplicates."
 P="$P Read $H/../SKILL.md for the review and wait rules, and read $F/../references/prompts.md for the exact fixed review template. After the packet's first review launch, run $H/review.sh $PKT --out <fresh-output> --tag <fresh-tag> [SEAT...] for each new launch, including a new stage's first round or a seat retry. Use a fresh output directory and tag. Never move active readers' directories. Wait on the required seat directories under the --out just launched, including grok only when that round launched it; read grok-missing from that same output. Never use an earlier round's exit files or wait on fable."
+if [ -n "$SEATS" ]; then
+  P="$P This packet's review seats are $SEATS. Name them on every review.sh launch, after --out and --tag, except a failed seat's one retry, which names only that seat. Wait only on the seats a round launched: $WAITS, plus grok only when that round launched it; never wait on a seat that was not launched. The failed-seat rule needs at least two of the seated ones among opus, astra and sol ($WAITS) to answer."
+fi
 T=$PKT/turns/$N
 mkdir -p "$T/session"  # the turn exists from here on, whatever the launch does
 printf '%s\n' "$ENGINE" > "$T/session/engine"
