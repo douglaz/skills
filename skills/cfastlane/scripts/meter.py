@@ -9,8 +9,9 @@ owner decides what to do with the number.
 
 PKT holds config.json and a start stamp in epoch seconds: meter-start (phase session, the default)
 or review-start (phase review). The combined session is selected by the id session.sh resumes,
-read from turns/*/session/err. The review phase excludes that id. Other codex sessions count when
-their transcript was written after the
+read from turns/*/session/err, whether it ran on codex or, with CFASTLANE_ENGINE=claude, on Claude
+(the transcript named by that id in the worktree's Claude project folder). The review phase excludes
+that id. Other codex sessions count when their transcript was written after the
 stamp and its working directory is one of the packet's roots (config "roots", default: PKT and the
 worktree) or below one. In phase review, Claude transcripts whose working directory is the worktree
 count too, so the reading covers every reviewer seat.
@@ -110,10 +111,13 @@ def claude_usage(path, since_iso=''):
     return dict(messages=len(seen), uncached_input=fresh, output=out, new=fresh + out, total=fresh + out + cached)
 
 
-def claude_rows(worktree, since):
+def claude_rows(worktree, since, combined_id, phase):
     folder = CLAUDE_PROJECTS / re.sub(r'[^A-Za-z0-9]', '-', str(worktree))
     rows = []
     for path in sorted(folder.glob('*.jsonl')):
+        # A Claude transcript is named by its session id; a claude-engine session is one of them.
+        if (path.stem == combined_id) != (phase == 'session'):
+            continue
         try:
             if path.stat().st_mtime < since:
                 continue
@@ -137,8 +141,7 @@ def reading(pkt, phase='session'):
     if combined_id is None:
         sys.exit('combined session id unavailable: cannot separate session and reviewer tokens')
     rows = codex_rows([Path(r).resolve() for r in cfg['roots']], since, combined_id, phase)
-    if phase == 'review':
-        rows += claude_rows(Path(cfg['worktree']).resolve(), since)
+    rows += claude_rows(Path(cfg['worktree']).resolve(), since, combined_id, phase)
     return dict(packet=cfg['name'], phase=phase, new_tokens=sum(r['new'] for r in rows),
                 total_diagnostic=sum(r['total'] for r in rows), participants=rows,
                 measurement='Latest cumulative counters per session; a response in flight is not counted.')

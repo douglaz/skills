@@ -126,6 +126,8 @@ returns at once. `launch-unit.sh` also guards the host and the lane:
    Put every failure from the same live run into one task. Fixing them one by one costs a deploy each.
 2. **Implement.** Run `scripts/implement.sh <worktree> iN/task.md iN/impl <unit>`. That is codex gpt-6.2-sol, effort
    exactly high, in the worktree.
+   - For quota balancing, `FASTLANE_IMPL_ENGINE=claude` runs Opus (`claude-opus-5-5`, effort high, `claude -p`)
+     under the same unit, prompt and timeout instead. It is off by default; any other value is refused.
    - Codex edits and compiles what gets deployed. It doesn't commit, push, deploy or write the tracker, and it doesn't
      change suspended tests. It runs any check the task names as required in full, including its tests.
    - Wait with `scripts/wait.sh <deadline_seconds> iN/impl`, following Waits below.
