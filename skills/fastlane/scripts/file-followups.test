@@ -22,23 +22,53 @@ root = Path(os.environ["FILER_TEST_ROOT"])
 export = root / ".beads/issues.jsonl"
 pending = root.parent / "pending"
 args = sys.argv[1:]
-assert args[:2] == ["--no-auto-flush", "--no-auto-import"]
+auto_flush = args[0] != "--no-auto-flush"
+if not auto_flush:
+    args.pop(0)
+assert args[0] == "--no-auto-import"
 assert args[-1] == "--json"
-command, *options = args[2:-1]
+command, *options = args[1:-1]
+assert not auto_flush or command == "create"
 with (root.parent / "calls").open("a") as log:
     print(command, *options, file=log)
+
+
+def flush(automatic):
+    if not pending.exists():
+        return
+    old = export.read_text()
+    if not automatic and (root.parent / "legacy-export").exists():
+        rows = [json.loads(line) for line in old.splitlines()]
+        for row in rows:
+            row.pop("source_repo_path", None)
+        old = "".join(json.dumps(row) + "\n" for row in rows)
+    if (root.parent / "unexpected").exists():
+        old = old.replace("Unrelated", "Changed")
+    export.write_text(old + pending.read_text())
+    pending.unlink()
+    (root.parent / "fresh-empty").unlink(missing_ok=True)
+    status_path = root.parent / "status.json"
+    status = json.loads(status_path.read_text())
+    raw = export.read_bytes()
+    status["worktree_raw_git_blob_hash"] = hashlib.sha1(f"blob {len(raw)}\0".encode() + raw).hexdigest()
+    status["worktree_raw_sha256"] = hashlib.sha256(raw).hexdigest()
+    status["worktree_clean"] = False
+    status_path.write_text(json.dumps(status))
+
+
 if command == "where":
     print(json.dumps({"jsonl_path": os.environ.get("FILER_TEST_EXPORT", str(export))}))
 elif command == "vcs-status":
     sys.stdout.write((root.parent / "status.json").read_text())
 elif command == "sync" and options == ["--status"]:
     dirty = int(pending.exists()) + int((root.parent / "dirty").exists())
+    db_newer = bool(dirty) or (root.parent / "needs-flush").exists()
     raw = export.read_bytes()
     no_hash = (root.parent / "fresh-empty").exists()
     stored_hash = "stale" if (root.parent / "stale-hash").exists() else hashlib.sha256(raw).hexdigest()
     coverage = {key: int((root.parent / key).exists())
                 for key in ("db_exportable_issues", "jsonl_unique_ids")}
-    print(json.dumps({"dirty_count": dirty, "jsonl_newer": no_hash, "coverage_drift": False,
+    print(json.dumps({"dirty_count": dirty, "db_newer": db_newer, "jsonl_newer": no_hash, "coverage_drift": False,
                       "coverage": coverage, "jsonl_content_hash": None if no_hash else stored_hash}))
 elif command == "create":
     assert not pending.exists()
@@ -59,24 +89,20 @@ elif command == "create":
                  issue_type=args["--type"], priority=int(args["--priority"]),
                  labels=[args["--labels"]], status="open")
     pending.write_text(json.dumps(issue) + "\n")
+    enabled = ((not (root.parent / "auto-flush-disabled").exists()
+                or os.environ.get("BD_SYNC.AUTO_FLUSH") == "true")
+               and os.environ.get("BD_SYNC_AUTO_FLUSH") != "false")
+    if auto_flush and enabled and not (root.parent / "no-auto-export").exists():
+        flush(automatic=True)
     if (root.parent / "external-write").exists():
         (root.parent / "dirty").touch()
+    if (root.parent / "needs-flush-after-create").exists():
+        (root.parent / "needs-flush").touch()
     print(json.dumps(issue))
 elif command == "sync" and options == ["--flush-only"]:
     if (root.parent / "flush-fails").exists():
         sys.exit(4)
-    old = export.read_text()
-    if (root.parent / "unexpected").exists():
-        old = old.replace("Unrelated", "Changed")
-    export.write_text(old + pending.read_text())
-    pending.unlink()
-    status_path = root.parent / "status.json"
-    status = json.loads(status_path.read_text())
-    raw = export.read_bytes()
-    status["worktree_raw_git_blob_hash"] = hashlib.sha1(f"blob {len(raw)}\0".encode() + raw).hexdigest()
-    status["worktree_raw_sha256"] = hashlib.sha256(raw).hexdigest()
-    status["worktree_clean"] = False
-    status_path.write_text(json.dumps(status))
+    flush(automatic=False)
     print("{}")
 else:
     sys.exit(f"unexpected br call: {args!r}")
@@ -169,6 +195,25 @@ class FilerTest(unittest.TestCase):
         self.assertEqual(self.rows()[-2]["title"], "[cap] can fail")
         self.assertIn("A second paragraph.", self.rows()[-1]["description"])
         self.assertEqual(self.calls.read_text().count("sync --flush-only"), 4)
+
+    def test_legacy_source_repo_path_rows_are_preserved_byte_for_byte(self):
+        self.track(dict(open_bead("Unrelated"), source_repo_path="/older/checkout"),
+                   open_bead("Another", id="fx-other"))
+        (self.scratch / "legacy-export").touch()
+        before = self.export.read_bytes()
+        body = entry("P2 First") + "\n" + entry("P3 Second")
+        result = self.file(body)
+        self.assertIn("Filed fx-new1 First", result.stdout)
+        self.assertIn("Filed fx-new2 Second", result.stdout)
+        after = self.export.read_bytes().splitlines(keepends=True)
+        self.assertEqual(b"".join(after[:-2]), before)
+        self.assertEqual(self.git("diff", "--numstat", "HEAD"), "2\t0\t.beads/issues.jsonl")
+
+    def test_create_overrides_disabled_auto_flush(self):
+        self.track(open_bead("Unrelated"))
+        (self.scratch / "auto-flush-disabled").touch()
+        self.env["BD_SYNC_AUTO_FLUSH"] = "false"
+        self.assertIn("Filed fx-new1 First", self.file(entry("P2 First")).stdout)
 
     def test_open_matching_id_and_exact_title_location_skip(self):
         self.track(open_bead("Same"), open_bead("Earlier name", priority=1, status="in_progress",
@@ -277,8 +322,37 @@ class FilerTest(unittest.TestCase):
         self.track(open_bead("Unrelated"))
         previous = self.export.read_bytes()
         (self.scratch / "external-write").touch()
-        result = self.file(entry("P2 First"), expected=1)
+        result = self.file(entry("P2 First") + "\n" + entry("P2 Second"), expected=1)
         self.assertIn("unexpected pending tracker changes", result.stderr)
+        self.assertNotIn("sync --flush-only", self.calls.read_text())
+        self.assertEqual(self.counter.read_text(), "1")
+        self.assertEqual(self.export.read_bytes().splitlines(keepends=True)[0], previous)
+
+    def test_full_export_required_without_dirty_issues_blocks_writes(self):
+        self.track(dict(open_bead("Unrelated"), source_repo_path="/older/checkout"))
+        before = self.export.read_bytes()
+        (self.scratch / "needs-flush").touch()
+        result = self.file(entry("P2 First"), expected=1)
+        self.assertIn("pending changes", result.stderr)
+        self.assertNotIn("create", self.calls.read_text())
+        self.assertEqual(self.export.read_bytes(), before)
+
+    def test_full_export_required_after_create_blocks_explicit_flush(self):
+        self.track(dict(open_bead("Unrelated"), source_repo_path="/older/checkout"))
+        before = self.export.read_bytes()
+        (self.scratch / "needs-flush-after-create").touch()
+        result = self.file(entry("P2 First") + "\n" + entry("P2 Second"), expected=1)
+        self.assertIn("unexpected pending tracker changes", result.stderr)
+        self.assertNotIn("sync --flush-only", self.calls.read_text())
+        self.assertEqual(self.counter.read_text(), "1")
+        self.assertEqual(self.export.read_bytes().splitlines(keepends=True)[0], before)
+
+    def test_missing_automatic_export_blocks_dirty_flush(self):
+        self.track(dict(open_bead("Unrelated"), source_repo_path="/older/checkout"))
+        previous = self.export.read_bytes()
+        (self.scratch / "no-auto-export").touch()
+        result = self.file(entry("P2 First"), expected=1)
+        self.assertIn("unexpected export after filing fx-new1", result.stderr)
         self.assertNotIn("sync --flush-only", self.calls.read_text())
         self.assertEqual(self.export.read_bytes(), previous)
 
@@ -312,21 +386,23 @@ class FilerTest(unittest.TestCase):
         self.assertIn("pending changes", self.file(entry("P2 New"), expected=1).stderr)
         self.assertNotIn("create", self.calls.read_text())
 
-    def test_flush_failure_and_unexpected_edit_stop_before_next_write(self):
+    def test_flush_failure_stops_before_next_write(self):
         self.track(open_bead("Unrelated"))
         body = entry("P2 First") + "\n" + entry("P2 Second")
         (self.scratch / "flush-fails").touch()
         result = self.file(body, expected=1)
-        self.assertIn("could not export fx-new1", result.stderr)
+        self.assertIn("could not confirm the export of fx-new1", result.stderr)
         self.assertNotIn("Filed ", result.stdout)
         self.assertEqual(self.counter.read_text(), "1")
-        (self.scratch / "flush-fails").unlink()
-        (self.scratch / "pending").unlink()
+
+    def test_unexpected_edit_stops_before_flush_and_next_write(self):
+        self.track(open_bead("Unrelated"))
         (self.scratch / "unexpected").touch()
-        result = self.file(body, expected=1)
-        self.assertIn("unexpected export after filing fx-new2", result.stderr)
+        result = self.file(entry("P2 First") + "\n" + entry("P2 Second"), expected=1)
+        self.assertIn("unexpected export after filing fx-new1", result.stderr)
+        self.assertNotIn("sync --flush-only", self.calls.read_text())
         self.assertNotIn("Filed ", result.stdout)
-        self.assertEqual(self.counter.read_text(), "2")
+        self.assertEqual(self.counter.read_text(), "1")
         self.assertEqual(self.rows()[0]["title"], "Changed")
 
 
