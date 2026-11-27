@@ -116,7 +116,11 @@ live-run output directories each round; keep earlier findings and judgments for 
    `PKT/turns/N/session`. Keep `FASTLANE_TESTS=on` on every resume within tests-back.
    Never start a separate implementer. The session performs
    steps 2–3 inside its turn before writing its final handoff. The default turn timeout is six
-   hours (`CFASTLANE_TIMEOUT` overrides). This is a wall-clock limit, never a token limit. The session collects and judges
+   hours (`CFASTLANE_TIMEOUT` overrides). This is a wall-clock limit, never a token limit.
+   For quota balancing, `CFASTLANE_ENGINE=claude` on the first turn runs the session on Opus
+   (`claude-opus-5-5`, effort high, `claude -p`) instead. It is off by default, and resumes keep the
+   first turn's engine. Exit 4 below is codex-only: a Claude refusal or limit line is an
+   ordinary wait result. The session collects and judges
    every required reader it launched before it ends, unless that wait would pass the limit; if it
    still ends with readers active, it reports their units and exit paths and the assistant resumes
    the same session to collect them, without duplicates.

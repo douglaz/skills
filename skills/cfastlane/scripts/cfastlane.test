@@ -24,6 +24,8 @@ cat > "$WORK/fl/launch-unit.sh" <<'STUB'
 echo "$*" >> "$FIX/launches"
 STUB
 cp "$WORK/fl/launch-unit.sh" "$WORK/fl/review.sh"
+# Model CLIs found on PATH are stubs that never reach a model; tests that run a command add their own.
+for tool in codex claude; do printf '#!/bin/sh\nexit 99\n' > "$WORK/bin/$tool"; chmod +x "$WORK/bin/$tool"; done
 cp "$HERE/../../fastlane/scripts/wait.sh" "$WORK/fl/wait.sh"
 mkdir -p "$WORK/references"
 cp "$HERE/../../fastlane/references/prompts.md" "$WORK/references/prompts.md"
@@ -86,6 +88,15 @@ codex_session combined "$FIX/wt" 1100 700 50             # resumed after reviewe
 check "resumed combined session never leaks into reviewer totals" '[ "$(new_tokens)" = 450 ] && [ "$(new_tokens --phase review)" = 310 ]'
 T=$(python3 -I "$HERE/meter.py" --claude-transcript "$CFASTLANE_CLAUDE_PROJECTS"/*/reviewer.jsonl --since 2026-01-01T00:00:05Z)
 check "a single transcript can be metered from a time on" '[[ "$T" == *"\"new\": 50"* ]]'
+new_fix
+mkdir -p "$FIX/pkt/turns/1/session"
+CID=0b6f1c9e-0000-4000-8000-000000000001
+printf 'session id: %s\n' "$CID" > "$FIX/pkt/turns/1/session/err"
+claude_session "$CID" "$FIX/wt"                          # the claude-engine session: 200 new
+claude_session reviewer "$FIX/wt"                        # an opus reviewer: 200 new
+codex_session astra "$FIX/pkt" 100 0 10                  # a codex reviewer: 110 new
+check "a claude-engine session is metered by its transcript, reviewers excluded" '[ "$(new_tokens)" = 200 ]'
+check "the review phase excludes the claude-engine session" '[ "$(new_tokens --phase review)" = 310 ]'
 
 echo "commit and receipt"
 new_fix
@@ -206,6 +217,86 @@ check "a successful turn stays successful" '[ "$WAIT_RC" = 0 ] && ! grep -q "^CO
 rm "$TURN/exit"
 wait_session
 check "unknown session state stays unknown" '[ "$WAIT_RC" = 2 ] && ! grep -q "^CONTENT_FILTER " "$FIX/wait.out"'
+echo "$FILTER_ERROR" > "$TURN/err"; echo "exit-code exited 1" > "$TURN/exit"; echo claude > "$TURN/engine"
+wait_session
+check "the content-filter exit is codex-only: a claude turn's failure stays exit 1" '[ "$WAIT_RC" = 1 ] && ! grep -q "^CONTENT_FILTER " "$FIX/wait.out"'
+
+echo "claude engine"
+new_fix
+echo task > "$FIX/pkt/task.md"; rm "$FIX/pkt/meter-start" "$FIX/pkt/base"
+env CFASTLANE_ENGINE=opus sh "$HERE/session.sh" "$FIX/pkt" > /dev/null 2> "$FIX/session.err"; RC=$?
+check "an unknown engine is refused and starts nothing" '[ "$RC" = 2 ] && grep -q "CFASTLANE_ENGINE must be codex or claude" "$FIX/session.err" && [ ! -s "$FIX/launches" ] && [ ! -e "$FIX/pkt/turns" ]'
+env CFASTLANE_ENGINE=claude sh "$HERE/session.sh" "$FIX/pkt" > /dev/null 2>&1; RC=$?
+L=$(sed -n 1p "$FIX/launches")
+SID=$(sed -n 's/.* --session-id \([0-9a-f-]*\) .*/\1/p' <<<"$L")
+check "CFASTLANE_ENGINE=claude starts one Opus session at effort high with a fresh session id" \
+  '[ "$RC" = 0 ] && [ "$(wc -l < "$FIX/launches")" = 1 ] && [[ "$SID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] &&
+   [[ "$L" == "cfl-p1-s1 $FIX/pkt/turns/1/session --stdout $FIX/pkt/turns/1/session/answer.md -- /bin/sh -c "*" $SID "*" -u CLAUDE_CODE_AUTO_COMPACT_WINDOW BASH_MAX_TIMEOUT_MS=3600000 "*"timeout 21600 "*"claude -p Read the task file $FIX/pkt/task.md"*" --session-id $SID --model claude-opus-5-5 --effort high --dangerously-skip-permissions --strict-mcp-config --mcp-config"* ]]'
+check "the claude session keeps its transcript and the long-session cache" '[[ "$L" != *"--no-session-persistence"* && "$L" != *"CLAUDE_CODE_PROMPT_CACHE_TTL"* && "$L" != *" exec --color"* ]]'
+check "the claude session gets the same review-owning prompt" '[[ "$L" == *"End the turn early only for a named obstacle"*"Review only a complete candidate"*"judge every finding, repair eligible P0/P1 and re-review"* ]]'
+check "the claude session is told to follow the project's AGENTS.md" '[[ "$L" == *"Read and follow every AGENTS.md from the repository root down to $FIX/wt."* ]]'
+check "the first turn records its engine" '[ "$(cat "$FIX/pkt/turns/1/session/engine")" = claude ]'
+
+# Run the launched command for real, with a stub claude, to see the wrapper record the session id.
+mkdir -p "$WORK/flx" "$WORK/xbin" "$WORK/home"
+cat > "$WORK/flx/launch-unit.sh" <<'STUB'
+#!/usr/bin/env bash
+echo "$*" >> "$FIX/launches"
+dir=$2; out=$2/out; shift 2
+if [ "$1" = --stdout ]; then out=$2; shift 2; fi
+shift
+mkdir -p "$dir"
+"$@" > "$out" 2> "$dir/err"; echo "exited $?" > "$dir/exit"
+STUB
+cat > "$WORK/xbin/claude" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FIX/claude-args"
+printf 'compact=%s max=%s\n' "${CLAUDE_CODE_AUTO_COMPACT_WINDOW-unset}" "${BASH_MAX_TIMEOUT_MS-unset}" >> "$FIX/claude-env"
+echo "final message"
+STUB
+chmod +x "$WORK/flx/launch-unit.sh" "$WORK/xbin/claude"
+cp "$WORK/fl/wait.sh" "$WORK/flx/wait.sh"
+xrun() { env HOME="$WORK/home" PATH="$WORK/xbin:$PATH" CFASTLANE_FASTLANE_SCRIPTS="$WORK/flx" CLAUDE_CODE_AUTO_COMPACT_WINDOW=1 "$@"; }
+new_fix
+echo task > "$FIX/pkt/task.md"; rm "$FIX/pkt/meter-start" "$FIX/pkt/base"
+xrun env CFASTLANE_ENGINE=claude sh "$HERE/session.sh" "$FIX/pkt" > /dev/null 2>&1; RC=$?
+SID=$(sed -n 's/.*--session-id \([0-9a-f-]*\) .*/\1/p' "$FIX/claude-args")
+check "the session id is recorded in err, where codex prints its own" \
+  '[ "$RC" = 0 ] && [ -n "$SID" ] && [ "$(cat "$FIX/pkt/turns/1/session/err")" = "session id: $SID" ] && [ "$(cat "$FIX/pkt/turns/1/session/answer.md")" = "final message" ]'
+check "claude runs without the auto-compact override and with hour-long shell calls" '[ "$(cat "$FIX/claude-env")" = "compact=unset max=3600000" ]'
+echo note > "$FIX/note.md"
+xrun sh "$HERE/session.sh" "$FIX/pkt" "$FIX/note.md" > /dev/null 2>&1; RC=$?
+R=$(sed -n 2p "$FIX/claude-args")
+check "a resume without CFASTLANE_ENGINE resumes the same claude session" \
+  '[ "$RC" = 0 ] && [[ "$R" == "-p Read the note $FIX/note.md"*" --resume $SID --model claude-opus-5-5 --effort high"* && "$R" != *"--session-id"* ]] &&
+   [ "$(cat "$FIX/pkt/turns/2/session/err")" = "session id: $SID" ] && [ "$(cat "$FIX/pkt/turns/2/session/engine")" = claude ]'
+xrun env CFASTLANE_ENGINE=codex sh "$HERE/session.sh" "$FIX/pkt" "$FIX/note.md" > /dev/null 2> "$FIX/session.err"; RC=$?
+check "a resume on the other engine is refused and starts nothing" \
+  '[ "$RC" = 2 ] && grep -q "started on claude and resumes only there" "$FIX/session.err" && [ ! -e "$FIX/pkt/turns/3" ] && [ "$(wc -l < "$FIX/claude-args")" = 2 ]'
+xrun env CFASTLANE_ENGINE=claude sh "$HERE/session.sh" "$FIX/pkt" "$FIX/note.md" > /dev/null 2>&1; RC=$?
+check "naming the packet's own engine on a resume is accepted" '[ "$RC" = 0 ] && sed -n 3p "$FIX/claude-args" | grep -q -- "--resume $SID "'
+claude_session "$SID" "$FIX/wt"
+check "the meter reads the recorded claude session" '[ "$(new_tokens)" = 200 ]'
+new_fix
+echo task > "$FIX/pkt/task.md"
+mkdir -p "$FIX/pkt/turns/1/session"; echo "success exited 0" > "$FIX/pkt/turns/1/session/exit"
+echo 'session id: old-codex-thread' > "$FIX/pkt/turns/1/session/err"
+echo note > "$FIX/note.md"
+env CFASTLANE_ENGINE=claude sh "$HERE/session.sh" "$FIX/pkt" "$FIX/note.md" > /dev/null 2> "$FIX/session.err"; RC=$?
+check "a packet started before the switch is codex and refuses a claude resume" '[ "$RC" = 2 ] && grep -q "started on codex" "$FIX/session.err" && [ ! -s "$FIX/launches" ]'
+mkdir -p "$WORK/nobin"
+for tool in python3 git sed head date mkdir cat dirname timeout env; do ln -sf "$(command -v "$tool")" "$WORK/nobin/$tool"; done
+new_fix
+echo task > "$FIX/pkt/task.md"
+env HOME="$WORK/home" PATH="$WORK/nobin" CFASTLANE_ENGINE=claude /bin/sh "$HERE/session.sh" "$FIX/pkt" > /dev/null 2>&1; RC=$?
+check "a missing engine CLI fails before the turn is reserved, so a retry can start" '[ "$RC" != 0 ] && [ ! -e "$FIX/pkt/turns/1" ] && [ ! -s "$FIX/launches" ]'
+new_fix
+echo task > "$FIX/pkt/task.md"
+mkdir -p "$FIX/pkt/turns/1/session"; echo "success exited 0" > "$FIX/pkt/turns/1/session/exit"
+echo 'session id: old-codex-thread' > "$FIX/pkt/turns/1/session/err"
+echo note > "$FIX/note.md"
+sh "$HERE/session.sh" "$FIX/pkt" "$FIX/note.md" > /dev/null 2>&1; RC=$?
+check "and resumes on codex by default" '[ "$RC" = 0 ] && sed -n 1p "$FIX/launches" | grep -q "^cfl-p1-s2 .* exec --color never resume old-codex-thread "'
 
 echo "review launcher"
 new_fix

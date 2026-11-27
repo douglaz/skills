@@ -290,6 +290,26 @@ check "the implementer leaves work undone only for a named obstacle, never for r
 check "the implementer runs named checks in full while other tests are suspended" \
   'grep -q "Run every check the task names as required, in full, including its tests. That is never a reason to stop. Other tests are suspended" "$FIX/runs" &&
    grep -q "For standalone builds, compile only what the task says gets deployed" "$FIX/runs"' "rc $rc: $(cat "$FIX/launch.out")"
+CODEX_RUN=$(sed -n 1p "$FIX/runs")
+check "by default the implementer is codex sol at effort high" \
+  '[[ "$CODEX_RUN" == *"codex exec --dangerously-bypass-approvals-and-sandbox -m gpt-6.2-sol -c model_reasoning_effort=high"* && "$CODEX_RUN" != *"claude -p"* ]]' "$CODEX_RUN"
+for engine in claude-opus CLAUDE codex2; do
+  runs_before=$(wc -l < "$FIX/runs")
+  (cd "$FIX/lane" && env FASTLANE_IMPL_ENGINE=$engine "$HERE/implement.sh" "$FIX/lane" i1/task.md "i1/impl-$engine" "fl-i1-$engine") > "$FIX/launch.out" 2>&1; rc=$?
+  check "an unknown implementer engine ($engine) is refused and starts nothing" \
+    '[ "$rc" = 2 ] && grep -q "FASTLANE_IMPL_ENGINE must be codex or claude" "$FIX/launch.out" && [ "$(wc -l < "$FIX/runs")" = "$runs_before" ] && [ ! -e "$FIX/lane/i1/impl-$engine" ]' "rc $rc: $(cat "$FIX/launch.out")"
+done
+(cd "$FIX/lane" && env FASTLANE_IMPL_ENGINE=claude FASTLANE_TESTS=on "$HERE/implement.sh" "$FIX/lane" i1/task.md i1/impl-claude fl-i1-claude 900) > "$FIX/launch.out" 2>&1; rc=$?
+CLAUDE_RUN=$(tail -n 1 "$FIX/runs")
+check "FASTLANE_IMPL_ENGINE=claude runs Opus at effort high in the same capped unit" \
+  '[ "$rc" = 0 ] && [[ "$CLAUDE_RUN" == *"--unit=fl-i1-claude "*"--working-directory=$FIX/lane "*"MemoryMax=16G -p MemorySwapMax=0 -p OOMPolicy=continue -p StandardInput=null -p StandardOutput=file:$FIX/lane/i1/impl-claude/answer.md -p StandardError=file:$FIX/lane/i1/impl-claude/err"* ]] &&
+   [[ "$CLAUDE_RUN" == *" -u CLAUDE_CODE_AUTO_COMPACT_WINDOW BASH_MAX_TIMEOUT_MS=3600000 "*"timeout 900 "*"claude -p Read the task file $FIX/lane/i1/task.md"*" --model claude-opus-5-5 --effort high --dangerously-skip-permissions --strict-mcp-config --mcp-config"* ]]' "rc $rc: $CLAUDE_RUN"
+check "the Claude implementer keeps its transcript and the long-session cache" \
+  '[[ "$CLAUDE_RUN" != *"--no-session-persistence"* && "$CLAUDE_RUN" != *"CLAUDE_CODE_PROMPT_CACHE_TTL"* && "$CLAUDE_RUN" != *"codex"* ]]' "$CLAUDE_RUN"
+check "the Claude implementer gets the same prompt, tests-back line included" \
+  '[[ "$CLAUDE_RUN" == *"Tests are back: run, fix, edit or add tests only as the task file says."*"Leave something undone only for a named obstacle"* ]]' "$CLAUDE_RUN"
+check "the Claude implementer is told to follow the project's AGENTS.md, which codex reads itself" \
+  '[[ "$CLAUDE_RUN" == *"Read and follow every AGENTS.md from the repository root down to $FIX/lane."* && "$CODEX_RUN" != *"AGENTS.md"* ]]' "$CLAUDE_RUN"
 check "the manager brief uses the lane caps and the Opus fallback uses its wait procedure" \
   'grep -Fq "For fastlane and cfastlane, use" "$HERE/../../delegate-to-manager/references/manager-brief-template.md" &&
    grep -Fq "section 7 for Sol resumes and section 2 for Opus relays" "$HERE/../SKILL.md" &&
