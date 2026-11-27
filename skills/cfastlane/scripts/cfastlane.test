@@ -155,6 +155,7 @@ for turn in 1 2; do
   check "turn $turn finishes independent work before relaying owner calls" '[[ "$PROMPT" == *"finish independent work, look ahead for other owner decisions and report all calls together with a recommendation and evidence for each."* ]]'
   check "turn $turn routes contradictions and runs a baseline before proposing changes" '[[ "$PROMPT" == *"Send contradictions within the packet brief, including task versus live-test instructions, to the assistant. Record preexisting gaps or defects in the handoff and continue. Before proposing a requirement change, run a baseline"* ]]'
   check "turn $turn reads the notes before each review, repair and handoff" '[[ "$PROMPT" == *"Read $FIX/pkt/notes.md if present before each review round, before each repair and before writing the handoff."* ]]'
+  check "turn $turn uses the fixed follow-up entry format" '[[ "$PROMPT" == *"Write all follow-ups in the fixed entry format in $WORK/fl/../references/prompts.md."* ]]'
   check "turn $turn uses fresh output for the first review of a new stage" '[[ "$PROMPT" == *"for each new launch, including a new stage"*"first round or a seat retry. Use a fresh output directory and tag."* ]]'
   check "turn $turn records check evidence before opening each review" '[[ "$PROMPT" == *"Before each review, put the current candidate"*"required check commands and exits in $FIX/pkt/handoff.md. Refresh checks a repair can affect before re-review."* ]]'
 done
