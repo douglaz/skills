@@ -162,7 +162,8 @@ live-run output directories each round; keep earlier findings and judgments for 
 4. **Commit** (step 5), by the assistant: read the handoff and final review round; unresolved owner
    calls return to the owner. Re-run `make-diff.sh` and confirm the sha matches what the reviewers read.
    Run `scripts/close.py PKT check`, inspect the scans, then `scripts/close.py PKT commit`.
-   It blocks banned text, disallowed paths and a session that committed by itself. After a live
+   It blocks banned text, disallowed paths, a session that committed by itself and, before
+   anything is staged, any submodule (nested ones too) with uncommitted or untracked files. After a live
    failure, repairs build on its last candidate; reviews still cover the packet from its base,
    with re-reviews focused on the delta.
 5. **Deploy and live test** (step 6): use fastlane's exact rules and `live-test.md`. Start deploy

@@ -361,8 +361,9 @@ managers.
 ```
 
 `scripts/session.sh` starts and resumes the session. `scripts/close.py` commits after its banned-text
-and allowed-path scans. `scripts/review.sh` reuses fastlane's panel; `scripts/receipt.py` records
-post-live evidence for close-out. `scripts/meter.py` reads Codex and Claude transcripts and reports
+and allowed-path scans, and refuses any submodule with uncommitted or untracked files.
+`scripts/review.sh` reuses fastlane's panel; `scripts/receipt.py` records post-live evidence for
+close-out. `scripts/meter.py` reads Codex and Claude transcripts and reports
 new tokens (uncached input plus output), separating the combined session from reviewer seats by its
 recorded session ID; report other usage separately or name missing measurements.
 It reuses `fastlane`'s `launch-unit.sh`, `wait.sh`, `make-diff.sh` and `review.sh`, so install both.
