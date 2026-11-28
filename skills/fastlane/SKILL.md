@@ -252,6 +252,8 @@ the owner a proposal.
 
 Keep only surviving entries. Convert any free-form entries to the fixed format before filing.
 Search open beads and add `Existing: ID` when you confirm an earlier bead covers the same defect.
+Use `Existing:` only for a true duplicate: an entry that adds scope to an open bead is filed as its
+own entry and names the related bead in its body.
 With `br` and a tracked export, read [beads-jsonl-path](../beads-jsonl-path/SKILL.md) and run
 `/path/to/fastlane/scripts/file-followups.py /path/to/followups.md` from the intended worktree. The script checks
 the export, creates one bead per entry, flushes and verifies each addition, and prints its ID.
