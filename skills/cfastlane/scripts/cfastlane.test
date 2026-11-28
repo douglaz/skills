@@ -137,6 +137,61 @@ M=$FIX/pkt/manifest.json
 check "writes a manifest naming the candidate, a clean tree and the diff hash" "[ $RC = 0 ] && grep -q '\"commit_is_candidate\": true' '$M' && grep -q '\"worktree_clean\": true' '$M' && grep -q \"\$(sha256sum '$FIX/pkt/diff.patch' | cut -d' ' -f1)\" '$M'"
 check "the manifest carries the evidence file's hash and content" "grep -q \"\$(sha256sum '$FIX/pkt/summary.json' | cut -d' ' -f1)\" '$M' && grep -q '\"exit\": 0' '$M'"
 
+echo "submodule refusal"
+# Origins: parent holds sub, which holds inner. Local submodules need protocol.file.allow.
+SM=$WORK/sm
+G() { git -c protocol.file.allow=always -c user.name=t -c user.email=t@t "$@"; }
+G init -q "$SM/inner"; echo inner > "$SM/inner/i.txt"; G -C "$SM/inner" add -A; G -C "$SM/inner" commit -q -m inner
+G init -q "$SM/sub"; echo sub > "$SM/sub/s.txt"; G -C "$SM/sub" submodule add -q "$SM/inner" inner 2> /dev/null
+G -C "$SM/sub" add -A; G -C "$SM/sub" commit -q -m sub
+G init -q "$SM/parent"; echo readme > "$SM/parent/README"; G -C "$SM/parent" submodule add -q "$SM/sub" sub 2> /dev/null
+G -C "$SM/parent" commit -q -m parent
+sm_case() { # [--shallow]: a fresh clone of the parent (recursive unless --shallow), its packet and a parent edit
+  FIX=$WORK/smfix; rm -rf "$FIX"; mkdir -p "$FIX/pkt"
+  if [ "${1:-}" = --shallow ]; then G clone -q "$SM/parent" "$FIX/wt"; else G clone -q --recursive "$SM/parent" "$FIX/wt" 2> /dev/null; fi
+  printf '{"name": "p1", "worktree": "%s", "identity": {"name": "Tester", "email": "t@example.org"}}\n' "$FIX/wt" > "$FIX/pkt/config.json"
+  git -C "$FIX/wt" rev-parse HEAD > "$FIX/pkt/base"
+  echo "Parent edit" > "$FIX/pkt/commit-subject.txt"
+  echo readme-2 > "$FIX/wt/README"
+  echo new > "$FIX/wt/NEW"  # untracked, so any staging before a refusal (even `add -N`) changes the index
+}
+sm_close() { # MODE: run close.py, keeping the index before and after
+  git -C "$FIX/wt" ls-files -s > "$FIX/index-before"
+  python3 -I "$HERE/close.py" "$FIX/pkt" "$1" > "$FIX/close.out" 2> "$FIX/close.err"; RC=$?
+  git -C "$FIX/wt" ls-files -s > "$FIX/index-after"
+}
+refused() { # PATH: exit 1 with a blocked line naming exactly PATH; HEAD, index and candidate untouched
+  [ "$RC" = 1 ] && [ "$(tail -n 1 "$FIX/close.err")" = "blocked: submodules with uncommitted or untracked files: $1" ] &&
+    [ "$(git -C "$FIX/wt" rev-parse HEAD)" = "$(cat "$FIX/pkt/base")" ] &&
+    cmp -s "$FIX/index-before" "$FIX/index-after" && [ ! -e "$FIX/pkt/candidate" ]
+}
+committed() { # exit 0, a new parent commit recorded as the candidate
+  [ "$RC" = 0 ] && [ "$(git -C "$FIX/wt" rev-parse HEAD)" != "$(cat "$FIX/pkt/base")" ] &&
+    [ "$(cat "$FIX/pkt/candidate")" = "$(git -C "$FIX/wt" rev-parse HEAD)" ]
+}
+for mode in check commit; do
+  sm_case; echo dirty > "$FIX/wt/sub/s.txt"
+  sm_close "$mode"; check "$mode mode refuses a modified tracked file in a submodule, naming it" 'refused sub'
+  sm_case; echo stray > "$FIX/wt/sub/new.txt"
+  sm_close "$mode"; check "$mode mode refuses an untracked file in a submodule, naming it" 'refused sub'
+done
+sm_case; echo dirty > "$FIX/wt/sub/inner/i.txt"
+sm_close commit; check "a dirty nested submodule is named by its path from the parent" 'refused sub/inner'
+sm_case; echo stray > "$FIX/wt/sub/inner/new.txt"
+sm_close check; check "an untracked file in a nested submodule is named by its nested path" 'refused sub/inner'
+sm_case; git -C "$FIX/wt" config -f .gitmodules submodule.sub.ignore all; echo dirty > "$FIX/wt/sub/s.txt"
+sm_close commit; check "a .gitmodules ignore = all does not hide a modified submodule file" 'refused sub'
+sm_case; git -C "$FIX/wt" config submodule.sub.ignore dirty; echo stray > "$FIX/wt/sub/new.txt"
+sm_close commit; check "a config ignore = dirty does not hide an untracked submodule file" 'refused sub'
+sm_case
+sm_close commit; check "a clean submodule still commits" 'committed'
+sm_case; echo sub-2 > "$FIX/wt/sub/s.txt"; G -C "$FIX/wt/sub" commit -q -am "sub 2"
+sm_close commit
+check "a gitlink moved over a clean submodule commits and records the new submodule commit" \
+  'committed && [ "$(git -C "$FIX/wt" ls-tree HEAD sub | cut -d" " -f3 | cut -f1)" = "$(git -C "$FIX/wt/sub" rev-parse HEAD)" ]'
+sm_case --shallow
+sm_close commit; check "an uninitialized submodule does not block" 'committed'
+
 echo "session launcher"
 new_fix
 echo task > "$FIX/pkt/task.md"; rm "$FIX/pkt/meter-start" "$FIX/pkt/base"
