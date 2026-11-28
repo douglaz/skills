@@ -65,6 +65,10 @@ def launch(args):
         raise ValueError("question.md is empty")
     options = option_ids(args.brief / "options")
     seats = panel_seats(args.fable, args.neon)
+    # review.sh checks it again at launch; checking here first leaves no output directory behind.
+    if "FASTLANE_NEON_DIRS" in os.environ and subprocess.run(
+            [SCRIPTS / "neon.py", "--dirs"], stdout=subprocess.DEVNULL).returncode:
+        raise ValueError("FASTLANE_NEON_DIRS refused; see the message above")
     lenses = {}
     for seat in seats:
         path = args.brief / f"{seat}.lens.md"
