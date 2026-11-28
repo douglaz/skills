@@ -11,11 +11,13 @@ the session started from). The commit message comes from PKT/commit-subject.txt 
 PKT/commit-body.txt, which the session writes. After a repair turn, run it again: it expects HEAD
 at the commit it made last (PKT/candidate) and scans only the work added since.
 
-Blocks on: HEAD moved off the expected commit, banned text, a file outside the allowed paths, or a missing
-message. Lines that add `sorry`, an axiom or a kernel bypass are printed for the judge to look at,
-never blocked, because their meaning depends on the project.
+Blocks on: HEAD moved off the expected commit, a submodule (nested ones too, whatever its ignore setting)
+with uncommitted or untracked files, checked before anything is staged, banned text, a file outside the
+allowed paths, or a missing message. Lines that add `sorry`, an axiom or a kernel bypass are printed
+for the judge to look at, never blocked, because their meaning depends on the project.
 """
 import json
+import os
 import re
 import subprocess
 import sys
@@ -38,6 +40,35 @@ def main():
     base = candidate.read_text().strip() if candidate.exists() else base
     if git('rev-parse', 'HEAD').strip() != base:
         sys.exit(f'HEAD moved off the expected commit {base}: the session must not commit')
+
+    # A submodule's uncommitted or untracked files reach no parent commit, so refuse them before
+    # anything is staged. Each checked-out submodule, nested ones too, reports only its own files
+    # and moved gitlinks; the explicit options override any ignore setting in .gitmodules or config.
+    # Paths stay bytes until os.fsdecode, so any valid file name survives.
+    def dirty_submodules(repo, prefix):
+        found = []
+        listed = subprocess.run(['git', '-C', repo, 'ls-files', '-s', '-z'], capture_output=True, check=True).stdout
+        # `git add -A` re-adds a gitlink dropped from the index but kept in HEAD, so scan HEAD's too.
+        listed += subprocess.run(['git', '-C', repo, 'ls-tree', '-r', '-z', 'HEAD'], capture_output=True).stdout
+        paths = dict.fromkeys(os.fsdecode(e.split(b'\t', 1)[1]) for e in listed.split(b'\0')
+                              if e.startswith(b'160000 '))
+        for path in paths:
+            sub = Path(repo) / path
+            if not (sub / '.git').exists():
+                continue  # uninitialized: no files
+            if os.path.realpath(sub) != os.path.join(os.path.realpath(repo), path):
+                continue  # the path now runs through a symlink, so the checkout is not this submodule
+            status = subprocess.run(['git', '-C', str(sub), 'status', '--porcelain', '--untracked-files=all',
+                                     '--ignore-submodules=dirty'], capture_output=True, check=True).stdout
+            if status.strip():
+                found.append(prefix + path)
+            found += dirty_submodules(str(sub), prefix + path + '/')
+        return found
+
+    dirty = dirty_submodules(wt, '')
+    if dirty:
+        shown = (''.join(c if c.isprintable() else repr(c)[1:-1] for c in p) for p in dirty)  # escape \r and such
+        sys.exit('blocked: submodules with uncommitted or untracked files: ' + ', '.join(shown))
     git('add', '-A', '-N')  # so new files show in the diff
     status = git('status', '--porcelain')
     if not status.strip():
