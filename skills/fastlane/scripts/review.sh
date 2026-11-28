@@ -14,6 +14,10 @@
 # and --add-dir folders (and their subfolders): it gets the brief's lane folder (a fastlane work dir
 # or a cfastlane packet, found by its `waits` file), else the brief's folder. Keep what its brief
 # names there. An empty response is a failed seat; OUT_DIR/neon/denied-actions records refusals.
+# FASTLANE_NEON_DIRS (off when unset) names extra folders neon may read, separated by ':', each one
+# more --add-dir (e.g. "/home/me/p/other-repo:/var/tmp/notes"). When set it is checked by
+# `neon.py --dirs` before anything starts, whatever the seats: absolute existing folders in plain
+# characters only, never /, the home folder or above, or a folder inside or holding a hidden ~/.* entry.
 # Readers can't run commands: put the diff in a file (make-diff.sh) and name it in the brief.
 # FASTLANE_SEATS, for quota balancing, replaces that default (e.g. "opus sol grok"); off when unset.
 # It must name opus and astra or sol, each seat once, from opus, astra, sol, grok, neon and fable; an
@@ -49,6 +53,12 @@ fi
 WT=$1 BRIEF=$2 OUT=$3 TAG=$4; shift 4
 if [ $# -eq 0 ]; then SEATS=$(default_seats) || exit 2; set -- $SEATS; fi
 H=$(cd "$(dirname "$0")" && pwd)
+# The checked folders are plain absolute paths, so the unquoted $NEON_ADD splits into whole arguments.
+NEON_ADD=
+if [ "${FASTLANE_NEON_DIRS+set}" = set ]; then
+  dirs=$("$(command -v python3)" -I "$H/neon.py" --dirs) || exit 2
+  for d in $dirs; do NEON_ADD="$NEON_ADD --add-dir $d"; done
+fi
 [ -d "$WT" ] || { echo "no worktree $WT" >&2; exit 2; }
 [ -s "$BRIEF" ] || { echo "no review brief $BRIEF" >&2; exit 2; }
 case "$BRIEF" in /*) ;; *) BRIEF=$(pwd)/$BRIEF ;; esac
@@ -71,7 +81,7 @@ extra_seat() {
     FASTLANE_MEM=8G FASTLANE_CWD=$WT "$1" "$2" "$3" --stdout "$3/answer.md" -- \
       "$(command -v python3)" -I "$H/neon.py" "$3" -- "$TIMEOUT" "$4" "$X" -p "$5" \
       --model gemini-4-neon-high --output-format json --print-timeout "$(($4 - 10))s" \
-      --add-dir "$ND" \
+      --add-dir "$ND" $NEON_ADD \
       --settings '{"agentMode":"","permissions":{"deny":["command(*)","write_file(*)","mcp(*)"]}}'
   fi
 }

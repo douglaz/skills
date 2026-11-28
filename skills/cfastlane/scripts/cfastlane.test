@@ -29,7 +29,9 @@ cat > "$WORK/fl/review.sh" <<STUB
 #!/usr/bin/env bash
 if [ "\$1" = --seats ]; then exec "$HERE/../../fastlane/scripts/review.sh" --seats; fi
 echo "\$*" >> "\$FIX/launches"
+echo "\${FASTLANE_NEON_DIRS-unset}" >> "\$FIX/review-env"
 STUB
+ln -s "$HERE/../../fastlane/scripts/neon.py" "$WORK/fl/neon.py"
 # Model CLIs found on PATH are stubs that never reach a model; tests that run a command add their own.
 for tool in codex claude; do printf '#!/bin/sh\nexit 99\n' > "$WORK/bin/$tool"; chmod +x "$WORK/bin/$tool"; done
 cp "$HERE/../../fastlane/scripts/wait.sh" "$WORK/fl/wait.sh"
@@ -401,6 +403,33 @@ check "cfastlane review.sh refuses a list without opus before stamping or launch
   '[ "$RC" = 2 ] && grep -q "FASTLANE_SEATS must name opus" "$FIX/review.err" && [ "$(wc -l < "$FIX/launches")" = 1 ] && [ ! -e "$FIX/pkt/review-start" ]'
 env FASTLANE_SEATS="opus sol grok" sh "$HERE/review.sh" "$FIX/pkt" --out "$FIX/pkt/review-retry" --tag p1-retry astra > /dev/null 2>&1; RC=$?
 check "a named seat retry keeps working under the switch" '[ "$RC" = 0 ] && sed -n 2p "$FIX/launches" | grep -q "review-retry p1-retry astra$"'
+
+echo "neon folders"
+mkdir -p "$WORK/nhome/.gemini"
+new_fix
+echo task > "$FIX/pkt/task.md"; rm "$FIX/pkt/meter-start" "$FIX/pkt/base"
+env HOME="$WORK/nhome" FASTLANE_NEON_DIRS="$FIX/elsewhere" sh "$HERE/session.sh" "$FIX/pkt" > /dev/null 2>&1; RC=$?
+PROMPT=$(sed -n 1p "$FIX/launches")
+check "session.sh keeps a checked FASTLANE_NEON_DIRS in the packet and tells the session" \
+  '[ "$RC" = 0 ] && [ "$(cat "$FIX/pkt/neon-dirs")" = "$FIX/elsewhere" ] &&
+   [[ "$PROMPT" == *"Besides the worktree and this packet, the neon seat may read only these folders: $FIX/elsewhere (FASTLANE_NEON_DIRS, which $HERE/review.sh takes from $FIX/pkt/neon-dirs). Never edit that file."* ]]'
+review_brief
+env -u FASTLANE_NEON_DIRS sh "$HERE/review.sh" "$FIX/pkt" opus sol neon > /dev/null 2>&1; RC=$?
+check "cfastlane review.sh hands the packet's folders to fastlane's review.sh" '[ "$RC" = 0 ] && [ "$(cat "$FIX/review-env")" = "$FIX/elsewhere" ]'
+env FASTLANE_NEON_DIRS="$FIX/wt" sh "$HERE/review.sh" "$FIX/pkt" --out "$FIX/pkt/review-2" --tag p1-2 opus sol neon > /dev/null 2>&1; RC=$?
+check "a FASTLANE_NEON_DIRS set on cfastlane review.sh wins over the packet's" '[ "$RC" = 0 ] && [ "$(sed -n 2p "$FIX/review-env")" = "$FIX/wt" ]'
+mkdir -p "$FIX/pkt/turns/1/session"; echo "success exited 0" > "$FIX/pkt/turns/1/session/exit"
+echo 'session id: abc-123' > "$FIX/pkt/turns/1/session/err"; echo note > "$FIX/note.md"
+env -u FASTLANE_NEON_DIRS sh "$HERE/session.sh" "$FIX/pkt" "$FIX/note.md" > /dev/null 2>&1; RC=$?
+check "a turn without FASTLANE_NEON_DIRS removes the packet's copy and says nothing of it" \
+  '[ "$RC" = 0 ] && [ ! -e "$FIX/pkt/neon-dirs" ] && ! sed -n 2p "$FIX/launches" | grep -q "neon seat may read"'
+for dirs in elsewhere "$FIX/missing" "$WORK/nhome/.gemini" "$WORK/nhome"; do
+  new_fix
+  echo task > "$FIX/pkt/task.md"; rm "$FIX/pkt/meter-start" "$FIX/pkt/base"
+  env HOME="$WORK/nhome" FASTLANE_NEON_DIRS="$dirs" sh "$HERE/session.sh" "$FIX/pkt" > /dev/null 2> "$FIX/session.err"; RC=$?
+  check "session.sh refuses FASTLANE_NEON_DIRS='$dirs' before the turn is reserved" \
+    '[ "$RC" = 2 ] && grep -q "^FASTLANE_NEON_DIRS: " "$FIX/session.err" && [ ! -s "$FIX/launches" ] && [ ! -e "$FIX/pkt/turns" ] && [ ! -e "$FIX/pkt/base" ] && [ ! -e "$FIX/pkt/neon-dirs" ]'
+done
 
 echo "review launcher"
 new_fix

@@ -20,7 +20,8 @@
 # a different CFASTLANE_ENGINE. Both engines record "session id: ID" in the turn's err.
 # Model: CFASTLANE_MODEL (default gpt-6.2-sol, or claude-opus-5-5 for claude); effort is always high.
 # Seats: FASTLANE_SEATS, when set, is checked by fastlane's review.sh and written into the turn's
-# prompt, so the session launches, waits on and counts only those seats.
+# prompt, so the session launches, waits on and counts only those seats. FASTLANE_NEON_DIRS, when set,
+# is checked by fastlane's neon.py and kept in PKT/neon-dirs for this skill's review.sh.
 # Timeout: CFASTLANE_TIMEOUT seconds (default 21600).
 # Caps, exit file and the disk floor come from fastlane's launch-unit.sh.
 set -eu
@@ -65,6 +66,13 @@ NAME=$("$PY" -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["name"])
 WT=$("$PY" -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["worktree"])' "$PKT/config.json")
 case "$NAME" in ''|*[!A-Za-z0-9._-]*) echo "config name: letters, digits and . _ - only" >&2; exit 2 ;; esac
 [ -d "$WT" ] || { echo "no worktree $WT" >&2; exit 2; }
+# FASTLANE_NEON_DIRS, checked here first, reaches the session's reviews through PKT/neon-dirs, which
+# this skill's review.sh reads; each turn writes or removes it, as each turn's prompt names the seats.
+NEON_DIRS=
+if [ "${FASTLANE_NEON_DIRS+set}" = set ]; then
+  "$PY" -I "$F/neon.py" --dirs > /dev/null || exit 2
+  NEON_DIRS=$FASTLANE_NEON_DIRS
+fi
 mkdir -p "$PKT/turns"
 N=1; while [ -e "$PKT/turns/$N" ]; do N=$((N + 1)); done
 if [ "$N" -gt 1 ]; then
@@ -122,8 +130,12 @@ if [ -n "$SEATS" ]; then
   [ "$PROBES" = grok ] || P="$P Read neon-missing from the same output as grok-missing, and name a missing neon in the report like grok. Neon never counts toward the failed-seat rule's two."
   P="$P The failed-seat rule needs at least two of the seated ones among opus, astra and sol ($WAITS) to answer."
 fi
+if [ -n "$NEON_DIRS" ]; then
+  P="$P Besides the worktree and this packet, the neon seat may read only these folders: $NEON_DIRS (FASTLANE_NEON_DIRS, which $H/review.sh takes from $PKT/neon-dirs). Never edit that file."
+fi
 T=$PKT/turns/$N
 mkdir -p "$T/session"  # the turn exists from here on, whatever the launch does
+if [ -n "$NEON_DIRS" ]; then printf '%s\n' "$NEON_DIRS" > "$PKT/neon-dirs"; else rm -f "$PKT/neon-dirs"; fi
 printf '%s\n' "$ENGINE" > "$T/session/engine"
 TO=${CFASTLANE_TIMEOUT:-21600}
 if [ "$ENGINE" = claude ]; then

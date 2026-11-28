@@ -13,6 +13,11 @@ H=$(cd "$(dirname "$0")" && pwd)
 F=${CFASTLANE_FASTLANE_SCRIPTS:-$H/../../fastlane/scripts}
 [ -x "$F/review.sh" ] || { echo "fastlane scripts not found at $F (install the fastlane skill beside this one)" >&2; exit 2; }
 PKT=$(cd "$1" && pwd); shift
+# session.sh keeps the caller's FASTLANE_NEON_DIRS in PKT/neon-dirs, since the session's unit does not
+# inherit the environment; a value set here wins. Fastlane's review.sh checks it before launching.
+if [ "${FASTLANE_NEON_DIRS+set}" != set ] && [ -s "$PKT/neon-dirs" ]; then
+  FASTLANE_NEON_DIRS=$(cat "$PKT/neon-dirs"); export FASTLANE_NEON_DIRS
+fi
 OUT=$PKT/review TAG=
 while [ $# -gt 0 ]; do
   case $1 in

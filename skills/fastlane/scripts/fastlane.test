@@ -320,6 +320,63 @@ for mode in failed empty; do
     '[ "$rc" = 0 ] && grep -q "neon missing: one-word probe did not answer" "$FIX/lane/review/neon-missing" && [ ! -d "$FIX/lane/review/neon" ] && [ "$(wc -l < "$FIX/lane/waits")" = 2 ]' "rc $rc: $(cat "$FIX/review.out")"
 done
 
+# --- FASTLANE_NEON_DIRS: extra folders neon may read, named by the caller ------------------------
+# A fake home with model config and credential entries, one of them a link to a folder outside it.
+NH=$WORK/nhome NX=$(cd -P "$WORK" && pwd)/nx
+mkdir -p "$NH/.gemini" "$NH/.grok/sub" "$NH/.ssh" "$NH/p/repo" "$NX/sib" "$NX/notes" "$NX/out/claude-real/x" "$NX/sp ace"
+ln -s "$NX/out/claude-real" "$NH/.claude"; ln -s "$NX/sib" "$NX/sib-link"; ln -s "$NH/.gemini" "$NX/gem-link"
+ln -s "$NX/sp ace" "$NX/space-link"
+: > "$NX/sib/file"
+nd() { env HOME="$NH" FASTLANE_NEON_DIRS="$1" "$HERE/neon.py" --dirs 2> "$WORK/nd.err"; }
+out=$(env -u FASTLANE_NEON_DIRS HOME="$NH" "$HERE/neon.py" --dirs 2>&1); rc=$?
+check "unset FASTLANE_NEON_DIRS names no folder" '[ "$rc" = 0 ] && [ -z "$out" ]' "rc $rc: $out"
+out=$(nd "$NX/sib:$NX/sib-link:$NH/p/repo/"); rc=$?
+check "FASTLANE_NEON_DIRS prints each folder resolved, a sibling checkout under home included" \
+  '[ "$rc" = 0 ] && [ "$out" = "$(printf "%s\n" "$NX/sib" "$NX/sib" "$(cd -P "$NH/p/repo" && pwd)")" ]' "rc $rc: $out $(cat "$WORK/nd.err")"
+while IFS='|' read -r entry why; do
+  out=$(nd "$entry"); rc=$?
+  check "FASTLANE_NEON_DIRS='$entry' is refused: $why" \
+    '[ "$rc" = 2 ] && [ -z "$out" ] && grep -q "^FASTLANE_NEON_DIRS: .*$why" "$WORK/nd.err"' "rc $rc: $out $(cat "$WORK/nd.err")"
+done <<EOF
+|an empty entry
+$NX/sib:|an empty entry
+rel/dir|not an absolute path
+$NX/missing|not an existing folder
+$NX/sib/file|not an existing folder
+$NX/sp ace|plain paths only
+$NX/space-link|resolves to $NX/sp ace, not a plain path
+/|holds the home folder
+$NH|holds the home folder
+$WORK|holds the home folder
+$NH/.gemini|a no-read location
+$NH/.grok/sub|a no-read location
+$NH/.ssh|a no-read location
+$NX/gem-link|a no-read location
+$NX/out/claude-real/x|a no-read location
+$NX/out|a no-read location
+$NX/notes:$NH/p/../.ssh|a no-read location
+EOF
+# A home that can be entered but not listed hides where its entries lead: refuse rather than guess.
+mkdir -p "$WORK/shut/.gemini/sub"; chmod 311 "$WORK/shut"
+out=$(env HOME="$WORK/shut" FASTLANE_NEON_DIRS="$NX/notes" "$HERE/neon.py" --dirs 2> "$WORK/nd.err"); rc=$?
+out2=$(env HOME="$WORK/shut" FASTLANE_NEON_DIRS="$WORK/shut/.gemini/sub" "$HERE/neon.py" --dirs 2>> "$WORK/nd.err"); rc2=$?
+chmod 755 "$WORK/shut"
+check "a home folder that cannot be listed refuses FASTLANE_NEON_DIRS, ~/.gemini/sub included" \
+  '[ "$rc" = 2 ] && [ "$rc2" = 2 ] && [ -z "$out$out2" ] && [ "$(grep -c "^FASTLANE_NEON_DIRS: cannot list $WORK/shut to check the no-read locations" "$WORK/nd.err")" = 2 ]' "rc $rc $rc2: $(cat "$WORK/nd.err")"
+new_fix
+echo good > "$FIX/probe-mode"; echo brief > "$FIX/lane/brief.md"
+env HOME="$NH" FASTLANE_NEON_DIRS="$NX/sib-link:$NX/notes" "$HERE/review.sh" "$FIX/lane" "$FIX/lane/brief.md" "$FIX/lane/review" dirs opus sol neon > "$FIX/review.out" 2>&1; rc=$?
+check "each FASTLANE_NEON_DIRS folder becomes one more --add-dir on both neon calls, and only there" \
+  '[ "$rc" = 0 ] && [ "$(grep -c -- "--add-dir $FIX/lane --add-dir $NX/sib --add-dir $NX/notes --settings {" "$FIX/runs")" = 2 ] &&
+   [ "$(grep -c -- "$NX" "$FIX/runs")" = 2 ] && [ -f "$FIX/lane/review/neon/unit" ]' "rc $rc: $(cat "$FIX/runs")"
+for seats in 'opus sol neon' 'opus sol'; do
+  new_fix
+  echo good > "$FIX/probe-mode"; echo brief > "$FIX/lane/brief.md"
+  env HOME="$NH" FASTLANE_NEON_DIRS="$NX/notes:$NH/.gemini" "$HERE/review.sh" "$FIX/lane" "$FIX/lane/brief.md" "$FIX/lane/review" dirs $seats > "$FIX/review.out" 2>&1; rc=$?
+  check "a refused FASTLANE_NEON_DIRS starts nothing, whatever the seats ($seats)" \
+    '[ "$rc" = 2 ] && grep -q "FASTLANE_NEON_DIRS: $NH/.gemini: inside or holding a no-read location" "$FIX/review.out" && [ ! -s "$FIX/runs" ] && [ ! -e "$FIX/lane/review" ]' "rc $rc: $(cat "$FIX/review.out")"
+done
+
 # --- neon.py with a stub agy that prints the CLI's JSON ------------------------------------------
 mkdir -p "$WORK/agybin"
 cat > "$WORK/agybin/agy" <<'STUB'
@@ -330,6 +387,8 @@ case $NEON_MODE in
   answer) echo '{"conversation_id":"c1","status":"SUCCESS","response":"[P2] [PRODUCT] a.sh:1: claim","duration_seconds":3,"num_turns":2,"usage":{"total_tokens":9}}' ;;
   denied-answer) echo '{"status":"SUCCESS","response":"No findings.","denied_actions":[{"tool":"run_command","command":"git diff"}]}' ;;
   denied-empty) echo '{"status":"SUCCESS","response":"","denied_actions":[{"tool":"write_file"}]}' ;;
+  # agy 1.5.6 and 1.5.13 on a file outside the worktree and --add-dir folders: no path is recorded.
+  denied-read) echo '{"status":"SUCCESS","response":"","num_turns":1,"denied_actions":[{"action":"read_file","display_name":"ReadFile"}]}' ;;
   empty) echo '{"status":"SUCCESS","response":"   "}' ;;
   no-response) echo '{"status":"SUCCESS"}' ;;
   signed-out) echo 'Sign in at https://example.invalid/device' >&2
@@ -354,6 +413,11 @@ check "a denied action with an answer still counts, and is recorded" \
 neon denied-empty; rc=$?
 check "a denied action that leaves an empty response is a failed seat, recorded" \
   '[ "$rc" = 1 ] && [ ! -s "$NEON_FIX/answer.md" ] && grep -q write_file "$NEON_FIX/denied-actions" && grep -q "empty response" "$NEON_FIX/err"' "rc $rc: $(cat "$NEON_FIX/err")"
+check "an empty response after a denied write does not blame the readable folders" '! grep -q "FASTLANE_NEON_DIRS" "$NEON_FIX/err"' "$(cat "$NEON_FIX/err")"
+neon denied-read; rc=$?
+check "an empty response after a denied read_file says a file outside the readable folders was probably named, and names the setting" \
+  '[ "$rc" = 1 ] && [ ! -s "$NEON_FIX/answer.md" ] && grep -q read_file "$NEON_FIX/denied-actions" &&
+   grep -q "^neon: empty response, a failed seat: agy denied a read_file, so its brief probably named a file outside the readable folders (the worktree, the brief.s lane folder and FASTLANE_NEON_DIRS); name that file.s folder in FASTLANE_NEON_DIRS$" "$NEON_FIX/err"' "rc $rc: $(cat "$NEON_FIX/err")"
 for mode in empty no-response not-json; do
   neon "$mode"; rc=$?
   check "neon.py fails the seat on $mode output (agy exited 0)" '[ "$rc" = 1 ] && [ ! -s "$NEON_FIX/answer.md" ]' "rc $rc: $(cat "$NEON_FIX/err")"
@@ -464,6 +528,17 @@ mkdir "$FIX/question"; echo 'Ship A or B?' > "$FIX/question/question.md"; printf
 env PATH="$WORK/noagy:${NOAGY%:}" "$HERE/decision-panel.py" launch "$FIX/lane" "$FIX/question" "$FIX/lane/decision" gone --neon > "$FIX/decision.out" 2>&1; rc=$?
 check "a decision panel with agy missing records neon missing and still launches" \
   '[ "$rc" = 0 ] && [ -s "$FIX/lane/decision/neon-missing" ] && [ ! -e "$FIX/lane/decision/neon" ] && [ -f "$FIX/lane/decision/launch-complete" ]' "rc $rc: $(cat "$FIX/decision.out")"
+new_fix
+echo good > "$FIX/probe-mode"
+mkdir "$FIX/question"; echo 'Ship A or B?' > "$FIX/question/question.md"; printf 'A\nB\n' > "$FIX/question/options"
+env HOME="$NH" FASTLANE_NEON_DIRS="$NX/notes" "$HERE/decision-panel.py" launch "$FIX/lane" "$FIX/question" "$FIX/lane/decision" dirs --neon > "$FIX/decision.out" 2>&1; rc=$?
+check "a decision panel's neon reads the FASTLANE_NEON_DIRS folders too" \
+  '[ "$rc" = 0 ] && grep -q -- "--unit=fastlane-dirs-neon .*--add-dir $FIX/lane --add-dir $NX/notes --settings {" "$FIX/runs"' "rc $rc: $(cat "$FIX/runs")"
+new_fix
+mkdir "$FIX/question"; echo 'Ship A or B?' > "$FIX/question/question.md"; printf 'A\nB\n' > "$FIX/question/options"
+env HOME="$NH" FASTLANE_NEON_DIRS=/ "$HERE/decision-panel.py" launch "$FIX/lane" "$FIX/question" "$FIX/lane/decision" dirs --neon > "$FIX/decision.out" 2>&1; rc=$?
+check "a decision panel refuses a bad FASTLANE_NEON_DIRS and starts nothing" \
+  '[ "$rc" = 2 ] && grep -q "FASTLANE_NEON_DIRS: /: holds the home folder" "$FIX/decision.out" && [ ! -s "$FIX/runs" ] && [ ! -e "$FIX/lane/decision" ]' "rc $rc: $(cat "$FIX/decision.out")"
 
 # --- combined packet integration with the real shared launcher and wait ------------------------
 new_fix
@@ -483,6 +558,20 @@ check "wait.sh consumes a combined session exit and clears its packet record" \
 "$LU" --kind deploy packet-deploy "$FIX/packet/deploy" -- /bin/true > "$FIX/launch.out" 2>&1; rc=$?
 check "packet-root live unit blocks deployment through the same busy check" \
   '[ "$rc" = 3 ] && grep -q "live unit packet-live is active" "$FIX/launch.out"' "rc $rc: $(cat "$FIX/launch.out")"
+# The session's unit inherits no FASTLANE_NEON_DIRS: session.sh keeps it in the packet for review.sh.
+new_fix
+echo good > "$FIX/probe-mode"
+mkdir -p "$FIX/packet" "$FIX/wt"
+: > "$FIX/packet/waits"; echo task > "$FIX/packet/task.md"
+git -C "$FIX/wt" init -q
+git -C "$FIX/wt" -c user.name=t -c user.email=t@t commit -q --allow-empty -m base
+printf '{"name":"packet","worktree":"%s"}\n' "$FIX/wt" > "$FIX/packet/config.json"
+sed -n '/^# Review iN:/,/^```$/ { /^```$/d; p; }' "$HERE/../references/prompts.md" > "$FIX/packet/review-brief.md"
+env HOME="$NH" FASTLANE_NEON_DIRS="$NX/notes" "$HERE/../../cfastlane/scripts/session.sh" "$FIX/packet" > "$FIX/session.out" 2>&1; rc=$?
+env -u FASTLANE_NEON_DIRS HOME="$NH" "$HERE/../../cfastlane/scripts/review.sh" "$FIX/packet" opus sol neon > "$FIX/review.out" 2>&1; rc2=$?
+check "a review the session launches through cfastlane review.sh gives neon the session's FASTLANE_NEON_DIRS" \
+  '[ "$rc" = 0 ] && [ "$rc2" = 0 ] && [ "$(cat "$FIX/packet/neon-dirs")" = "$NX/notes" ] &&
+   [ "$(grep -c -- "--add-dir $FIX/packet --add-dir $NX/notes --settings {" "$FIX/runs")" = 2 ]' "rc $rc $rc2: $(cat "$FIX/session.out" "$FIX/review.out" "$FIX/runs")"
 
 # --- the implementer prompt ---------------------------------------------------------------------
 new_fix
