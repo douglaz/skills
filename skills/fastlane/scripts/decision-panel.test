@@ -21,10 +21,15 @@ write_ballot() {
 check_tally() {
   local name=$1 counts=$2 expected=$3
   shift 3
-  local seats=(opus astra sol grok fable) seat state index=0 actual rc
+  # PANEL_SEATS, when set, is the launch's seats file; states then follow its seats in order.
+  local seats=(${PANEL_SEATS:-opus astra sol grok fable}) seat state index=0 actual rc prefix= lines=2
   rm -rf "$WORK/panel"
   mkdir "$WORK/panel"
   printf 'A\nB\nC\n' > "$WORK/panel/options"
+  if [ -n "${PANEL_SEATS:-}" ]; then
+    echo "$PANEL_SEATS" > "$WORK/panel/seats"
+    if [[ " $PANEL_SEATS " != *" astra "* ]]; then prefix=$'Not seated: astra\n' lines=3; fi
+  fi
   touch "$WORK/panel/launch-complete"
   for state in "$@"; do
     seat=${seats[index++]}
@@ -43,8 +48,8 @@ check_tally() {
   if [ "$expected" != OWNER_DECISION ]; then
     expected="$expected accepted under the owner's 2026-11-05 panel rule"
   fi
-  expected=$(printf 'Counts (%s answering): %s\nVERDICT: %s' "${counts%% *}" "${counts#* }" "$expected")
-  if [ "$rc" = 0 ] && [ "$actual" = "$expected" ] && [ "$(tail -n 2 "$WORK/panel/synthesis.md")" = "$expected" ]; then
+  expected=$(printf '%sCounts (%s answering): %s\nVERDICT: %s' "$prefix" "${counts%% *}" "${counts#* }" "$expected")
+  if [ "$rc" = 0 ] && [ "$actual" = "$expected" ] && [ "$(tail -n "$lines" "$WORK/panel/synthesis.md")" = "$expected" ]; then
     PASS=$((PASS+1)); printf '  ok   %s\n' "$name"
   else
     FAIL=$((FAIL+1)); printf '  FAIL %s (exit %s)\n       expected: %s\n       actual: %s\n' "$name" "$rc" "$expected" "$actual"
@@ -141,6 +146,29 @@ if [ "$rc" = 0 ] && [[ "$actual" == *"Counts (2 answering): A=1 B=1 C=0"* ]]; th
 else
   FAIL=$((FAIL+1)); printf '  FAIL a launcher error discarded a completed ballot (exit %s): %s\n' "$rc" "$actual"
 fi
+
+PANEL_SEATS="opus astra sol grok"
+check_tally 'a full seats file keeps the full panel rule' '4 A=3 B=1 C=0' A A A B A
+check_tally 'a full seats file still sends 3 of 4 against opus to the owner' '4 A=3 B=1 C=0' OWNER_DECISION B A A A
+PANEL_SEATS="opus sol grok fable"
+check_tally 'astra unseated: 3 of 3 accept' '3 A=3 B=0 C=0' A A A A
+check_tally 'astra unseated: 2 of 3 with opus accept' '3 A=2 B=1 C=0' A A B A
+check_tally 'astra unseated: 2 of 3 with opus in the minority go to the owner' '3 A=2 B=1 C=0' OWNER_DECISION B A A
+check_tally 'astra unseated: 3 of 4 with grok seated and opus accept' '4 A=3 B=1 C=0' A A A B A
+check_tally 'astra unseated: 3 of 4 with opus in the minority go to the owner' '4 A=3 B=1 C=0' OWNER_DECISION B A A A
+check_tally 'astra unseated: 2 of 4 go to the owner' '4 A=2 B=2 C=0' OWNER_DECISION A A B B
+check_tally 'astra unseated: 2 of 2 with opus accept' '2 A=2 B=0 C=0' A A A
+check_tally 'astra unseated: opus alone goes to the owner' '1 A=1 B=0 C=0' OWNER_DECISION A failed
+check_tally 'astra unseated: 2 of 2 without opus go to the owner' '2 A=2 B=0 C=0' OWNER_DECISION failed A A
+check_tally 'astra unseated: 3 of 3 without opus go to the owner' '3 A=3 B=0 C=0' OWNER_DECISION - A A A
+check_tally 'astra unseated: 2 of 3 with opus missing go to the owner' '3 A=2 B=1 C=0' OWNER_DECISION failed A A B
+if grep -qx -- '- astra was not seated.' "$WORK/panel/synthesis.md" &&
+   grep -qx -- '- opus had no valid completed ballot.' "$WORK/panel/synthesis.md"; then
+  PASS=$((PASS+1)); printf '  ok   an unseated astra is not seated, a failed opus is missing\n'
+else
+  FAIL=$((FAIL+1)); printf '  FAIL an unseated astra is not seated, a failed opus is missing\n'
+fi
+unset PANEL_SEATS
 
 echo "passed $PASS, failed $FAIL"
 [[ "$FAIL" == 0 ]]

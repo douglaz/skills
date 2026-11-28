@@ -2,7 +2,8 @@
 # review.sh PKT [--out OUT_DIR] [--tag TAG] [SEAT...]
 #
 # Launch the packet's independent reviewers on PKT/review-brief.md. Seats default to:
-# opus astra sol grok (when available). Optional fable is never waited on.
+# opus astra sol grok (when available), or fastlane's FASTLANE_SEATS list when that is set.
+# Optional fable is never waited on.
 # Each PKT/review/SEAT gets unit, err, exit and answer.md; units are named fastlane-NAME-SEAT.
 # Stamps PKT/review-start, which `meter.py PKT --phase review` counts from.
 # Retries/re-reviews use fresh --out and --tag values; never move an active seat's directory.
@@ -22,7 +23,8 @@ while [ $# -gt 0 ]; do
     *) break ;;
   esac
 done
-[ $# -gt 0 ] || set -- opus astra sol grok
+# Without named seats, take fastlane's default: FASTLANE_SEATS when set, checked before anything starts.
+if [ $# -eq 0 ]; then SEATS=$("$F/review.sh" --seats) || exit 2; set -- $SEATS; fi
 [ -s "$PKT/review-brief.md" ] || { echo "no $PKT/review-brief.md" >&2; exit 2; }
 [ ! -e "$OUT" ] || { echo "$OUT exists: use a fresh --out and --tag for a retry or re-review" >&2; exit 3; }
 PY=$(command -v python3)

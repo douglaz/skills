@@ -10,7 +10,29 @@
 # Grok: grok-4.7, effort high, 8G; probe is bounded at 90 seconds. On probe failure,
 # OUT_DIR/grok-missing records why; no grok reader starts and nothing waits on that seat.
 # Readers can't run commands: put the diff in a file (make-diff.sh) and name it in the brief.
+# FASTLANE_SEATS, for quota balancing, replaces that default (e.g. "opus sol grok"); off when unset.
+# It must name opus and astra or sol, each seat once, from opus, astra, sol, grok and fable; an
+# empty or other list is refused before anything starts. Seats named on the command line win.
+# `review.sh --seats` prints the default seats after those checks.
 set -eu
+default_seats() {
+  [ "${FASTLANE_SEATS+set}" = set ] || { echo opus astra sol grok; return 0; }
+  list=
+  set -f
+  for s in $FASTLANE_SEATS; do
+    case $s in opus|astra|sol|grok|fable) ;; *) echo "FASTLANE_SEATS: unknown seat $s (opus, astra, sol, grok, fable)" >&2; return 2 ;; esac
+    case " $list " in *" $s "*) echo "FASTLANE_SEATS: $s is named twice" >&2; return 2 ;; esac
+    list=$list${list:+ }$s
+  done
+  set +f
+  case " $list " in *' opus '*) ;; *) echo "FASTLANE_SEATS must name opus (unset it for the default seats): '$FASTLANE_SEATS'" >&2; return 2 ;; esac
+  case " $list " in *' astra '*|*' sol '*) ;; *) echo "FASTLANE_SEATS must name astra or sol besides opus: '$FASTLANE_SEATS'" >&2; return 2 ;; esac
+  echo "$list"
+}
+if [ "${1:-}" = --seats ]; then
+  [ $# -eq 1 ] || { echo "usage: $0 --seats" >&2; exit 2; }
+  default_seats; exit
+fi
 # The decision-panel entry point supplies its own brief and optional seat lenses.
 DECISION=no
 if [ "${1:-}" = --decision ]; then
@@ -20,7 +42,7 @@ if [ "${1:-}" = --decision ]; then
 fi
 [ $# -ge 4 ] || { echo "usage: $0 WORKTREE BRIEF_FILE OUT_DIR TAG [SEAT...]" >&2; exit 2; }
 WT=$1 BRIEF=$2 OUT=$3 TAG=$4; shift 4
-[ $# -gt 0 ] || set -- opus astra sol grok
+if [ $# -eq 0 ]; then SEATS=$(default_seats) || exit 2; set -- $SEATS; fi
 H=$(cd "$(dirname "$0")" && pwd)
 [ -d "$WT" ] || { echo "no worktree $WT" >&2; exit 2; }
 [ -s "$BRIEF" ] || { echo "no review brief $BRIEF" >&2; exit 2; }

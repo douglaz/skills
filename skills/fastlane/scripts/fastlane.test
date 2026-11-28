@@ -11,6 +11,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 PASS=0; FAIL=0
+unset FASTLANE_SEATS  # the default seats unless a check sets the switch
 
 mkdir -p "$WORK/bin"
 cat > "$WORK/bin/systemctl" <<'STUB'
@@ -219,6 +220,31 @@ for mode in failed empty; do
     '[ "$rc" = 0 ] && [ -s "$FIX/lane/review/grok-missing" ] && [ ! -d "$FIX/lane/review/grok" ] && [ "$(wc -l < "$FIX/lane/waits")" = 3 ]' "rc $rc: $(cat "$FIX/review.out")"
 done
 
+# --- the FASTLANE_SEATS switch -----------------------------------------------------------------
+out=$(env -u FASTLANE_SEATS "$HERE/review.sh" --seats 2>&1); rc=$?
+check "unset FASTLANE_SEATS keeps the default seats" '[ "$rc" = 0 ] && [ "$out" = "opus astra sol grok" ]' "rc $rc: $out"
+out=$(env FASTLANE_SEATS=' opus  sol grok fable ' "$HERE/review.sh" --seats 2>&1); rc=$?
+check "--seats prints the switch's list in its own order" '[ "$rc" = 0 ] && [ "$out" = "opus sol grok fable" ]' "rc $rc: $out"
+new_fix
+echo good > "$FIX/probe-mode"; echo brief > "$FIX/lane/brief.md"
+env FASTLANE_SEATS="opus sol grok" "$HERE/review.sh" "$FIX/lane" "$FIX/lane/brief.md" "$FIX/lane/review" panel > "$FIX/review.out" 2>&1; rc=$?
+check "FASTLANE_SEATS=\"opus sol grok\" launches opus, sol and grok, and no astra" \
+  '[ "$rc" = 0 ] && [ "$(wc -l < "$FIX/runs")" = 4 ] && [ -f "$FIX/lane/review/opus/unit" ] && [ -f "$FIX/lane/review/sol/unit" ] && [ -f "$FIX/lane/review/grok/unit" ] && [ ! -e "$FIX/lane/review/astra" ] && ! grep -q astra "$FIX/runs"' "rc $rc: $(cat "$FIX/review.out")"
+check "the switch records waits only for the seats it launched" \
+  '[ "$(wc -l < "$FIX/lane/waits")" = 3 ] && ! grep -q astra "$FIX/lane/waits"' "$(cat "$FIX/lane/waits")"
+new_fix
+echo brief > "$FIX/lane/brief.md"
+env FASTLANE_SEATS="opus sol grok" "$HERE/review.sh" "$FIX/lane" "$FIX/lane/brief.md" "$FIX/lane/review" retry astra > "$FIX/review.out" 2>&1; rc=$?
+check "seats named on the command line replace the switch" \
+  '[ "$rc" = 0 ] && [ "$(wc -l < "$FIX/runs")" = 1 ] && [ -f "$FIX/lane/review/astra/unit" ] && [ ! -e "$FIX/lane/review/opus" ]' "rc $rc: $(cat "$FIX/review.out")"
+for seats in '' ' ' 'sol grok' 'astra sol grok fable' 'opus grok' 'opus fable' 'opus gpt sol' 'opus sol,grok' 'opus sol opus' '*'; do
+  new_fix
+  echo empty > "$FIX/probe-mode"; echo brief > "$FIX/lane/brief.md"
+  env FASTLANE_SEATS="$seats" "$HERE/review.sh" "$FIX/lane" "$FIX/lane/brief.md" "$FIX/lane/review" panel > "$FIX/review.out" 2>&1; rc=$?
+  check "FASTLANE_SEATS='$seats' is refused before anything starts" \
+    '[ "$rc" = 2 ] && grep -q "FASTLANE_SEATS" "$FIX/review.out" && [ ! -s "$FIX/runs" ] && [ ! -e "$FIX/lane/review" ]' "rc $rc: $(cat "$FIX/review.out")"
+done
+
 # --- decision-panel integration with the shared seats and waits --------------------------------
 new_fix
 echo post-submit-error > "$FIX/probe-mode"
@@ -261,6 +287,33 @@ done
 check "collect succeeds without waiting on active fable" \
   '[ "$rc" = 0 ] && [ -f "$FIX/active/fastlane-decide-fable" ] && grep -qx "Counts (4 answering): A=4 B=0" "$FIX/collect.out"' \
   "rc $rc: $(cat "$FIX/collect.out")"
+
+new_fix
+echo good > "$FIX/probe-mode"
+mkdir "$FIX/question"
+printf 'Which should we ship? A (today) or B (tomorrow)?\n' > "$FIX/question/question.md"
+printf 'A\nB\n' > "$FIX/question/options"
+OUT="$FIX/lane/decision"
+env FASTLANE_SEATS="opus sol grok" "$HERE/decision-panel.py" launch "$FIX/lane" "$FIX/question" "$OUT" seated > "$FIX/decision.out" 2>&1; rc=$?
+check "under FASTLANE_SEATS a decision panel leaves astra unseated" \
+  '[ "$rc" = 0 ] && [ "$(wc -l < "$FIX/runs")" = 4 ] && [ ! -e "$OUT/astra" ] && ! grep -q astra "$FIX/runs" &&
+   [ "$(cat "$OUT/seats")" = "opus sol grok" ] && [ -f "$OUT/launch-complete" ]' "rc $rc: $(cat "$FIX/decision.out")"
+for seat in opus sol grok; do
+  printf 'PICK: A\nRANKING: A B\nCAN LIVE WITH: A\nARGUMENT: A is ready.\n' > "$OUT/$seat/answer.md"
+  echo 'success exited 0' > "$OUT/$seat/exit"
+done
+"$HERE/decision-panel.py" collect 0 "$OUT" > "$FIX/collect.out" 2>&1; rc=$?
+check "collect waits on the seated readers only and reports astra as not seated" \
+  '[ "$rc" = 0 ] && [ "$(tail -n 3 "$FIX/collect.out")" = "$(printf "Not seated: astra\nCounts (3 answering): A=3 B=0\nVERDICT: A accepted under the owner'"'"'s 2026-11-05 panel rule")" ] &&
+   grep -qx -- "- astra was not seated." "$OUT/synthesis.md"' "rc $rc: $(cat "$FIX/collect.out")"
+for seats in 'opus astra grok' 'opus sol' 'opus astra sol' 'opus grok'; do
+  new_fix
+  echo empty > "$FIX/probe-mode"
+  mkdir "$FIX/question"; echo 'Ship A or B?' > "$FIX/question/question.md"; printf 'A\nB\n' > "$FIX/question/options"
+  env FASTLANE_SEATS="$seats" "$HERE/decision-panel.py" launch "$FIX/lane" "$FIX/question" "$FIX/lane/decision" bad > "$FIX/decision.out" 2>&1; rc=$?
+  check "a decision panel refuses FASTLANE_SEATS='$seats' and starts nothing" \
+    '[ "$rc" = 2 ] && grep -q FASTLANE_SEATS "$FIX/decision.out" && [ ! -s "$FIX/runs" ] && [ ! -e "$FIX/lane/decision" ]' "rc $rc: $(cat "$FIX/decision.out")"
+done
 
 # --- combined packet integration with the real shared launcher and wait ------------------------
 new_fix

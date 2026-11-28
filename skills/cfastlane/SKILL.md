@@ -147,6 +147,7 @@ live-run output directories each round; keep earlier findings and judgments for 
    Read `<review-output>/grok-missing` if present. Never use an earlier round's exits.
    To add fable, name all five seats:
    `scripts/review.sh PKT opus astra sol grok fable`; never include fable in the wait.
+   For quota balancing, `FASTLANE_SEATS="opus sol grok"` on `session.sh` (off by default; opus and astra or sol required) names those seats in the session's prompt, and its waits and the failed-seat rule then cover only the seated ones.
    For a failed seat's one retry, run `scripts/review.sh PKT --out PKT/review-retry-N
    --tag <fresh-tag> <seat>` and wait on that output directory's seat. Keep active seats in
    place; do not move their directories or wait for optional fable to end.

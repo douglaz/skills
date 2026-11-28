@@ -150,6 +150,7 @@ returns at once. `launch-unit.sh` also guards the host and the lane:
    - Run `scripts/review.sh <worktree> iN/review-brief.md iN/review <tag>` for opus, astra, sol and grok when
      available. To add fable, name all five:
      `scripts/review.sh <worktree> iN/review-brief.md iN/review <tag> opus astra sol grok fable`.
+   - For quota balancing, `FASTLANE_SEATS="opus sol grok"` sets the default seats of `review.sh` and decision panels (off by default; opus and astra or sol required; a panel may leave out only astra), and the waits and the failed-seat rule then cover only the seated ones.
    - Grok is available only if its bounded one-word `grok -p` probe answers. Otherwise `iN/review/grok-missing`
      records the missing seat: name it in the report, never wait on it and never block on it.
    - Wait on the required seats: `scripts/wait.sh <deadline_seconds> iN/review/opus iN/review/astra iN/review/sol`, adding
@@ -333,7 +334,7 @@ including when the decision goes to the owner. Later collections return the publ
 Each ballot gives a pick, a full ranking, the options the reader can live with, and its strongest
 argument. The tally counts picks from valid, completed ballots, including fable if ready when collected.
 A limit line, a failed unit or a missing answer contributes no vote. A unanimous nonempty panel is
-accepted. A split of 2 of 3, 3 of 4 or 4 of 5 is accepted only when opus picked the majority option.
+accepted; without astra, only when opus is in it and at least two answered. A split of 2 of 3, 3 of 4 or 4 of 5 is accepted only when opus picked the majority option.
 Other splits and an empty panel go to the owner. Collect prints the counts and verdict and writes
 `OUT_DIR/synthesis.md` with each pick and argument. When recording an accepted pick, name any narrowing
 or widening of an earlier owner pick.
