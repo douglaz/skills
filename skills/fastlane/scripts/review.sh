@@ -9,9 +9,14 @@
 #         FASTLANE_ASTRA_MODEL (gpt-6.2-astra), FASTLANE_SOL_MODEL (gpt-6.2-sol). Effort high.
 # Grok: grok-4.7, effort high, 8G; probe is bounded at 90 seconds. On probe failure,
 # OUT_DIR/grok-missing records why; no grok reader starts and nothing waits on that seat.
+# Neon (optional, never a default seat): agy with gemini-4-neon-high, 8G, JSON output read by
+# neon.py, session settings that deny commands, file writes and MCP tools; probed and reported missing (OUT_DIR/neon-missing) like grok. agy reads only the worktree
+# and --add-dir folders (and their subfolders): it gets the brief's lane folder (a fastlane work dir
+# or a cfastlane packet, found by its `waits` file), else the brief's folder. Keep what its brief
+# names there. An empty response is a failed seat; OUT_DIR/neon/denied-actions records refusals.
 # Readers can't run commands: put the diff in a file (make-diff.sh) and name it in the brief.
 # FASTLANE_SEATS, for quota balancing, replaces that default (e.g. "opus sol grok"); off when unset.
-# It must name opus and astra or sol, each seat once, from opus, astra, sol, grok and fable; an
+# It must name opus and astra or sol, each seat once, from opus, astra, sol, grok, neon and fable; an
 # empty or other list is refused before anything starts. Seats named on the command line win.
 # `review.sh --seats` prints the default seats after those checks.
 set -eu
@@ -20,7 +25,7 @@ default_seats() {
   list=
   set -f
   for s in $FASTLANE_SEATS; do
-    case $s in opus|astra|sol|grok|fable) ;; *) echo "FASTLANE_SEATS: unknown seat $s (opus, astra, sol, grok, fable)" >&2; return 2 ;; esac
+    case $s in opus|astra|sol|grok|neon|fable) ;; *) echo "FASTLANE_SEATS: unknown seat $s (opus, astra, sol, grok, neon, fable)" >&2; return 2 ;; esac
     case " $list " in *" $s "*) echo "FASTLANE_SEATS: $s is named twice" >&2; return 2 ;; esac
     list=$list${list:+ }$s
   done
@@ -51,6 +56,38 @@ mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 CODEX=$HOME/.npm-global/bin/codex; [ -x "$CODEX" ] || CODEX=$(command -v codex)
 CLAUDE=$HOME/.npm-global/bin/claude; [ -x "$CLAUDE" ] || CLAUDE=$(command -v claude)
 TIMEOUT=$(command -v timeout) ENV=$(command -v env)
+# extra_seat LAUNCHER UNIT DIR SECONDS PROMPT: start seat $s (grok or neon, binary $X) in an 8G unit.
+extra_seat() {
+  if [ "$s" = grok ]; then
+    FASTLANE_MEM=8G FASTLANE_CWD=$WT "$1" "$2" "$3" --stdout "$3/answer.md" -- \
+      "$TIMEOUT" "$4" "$X" --no-auto-update -p "$5" \
+      --model grok-4.7 --effort high --output-format plain --always-approve --sandbox off \
+      --no-subagents --no-memory --disable-web-search \
+      --disallowed-tools "search_replace,write,search_tool,use_tool" --tools "read_file,grep,list_dir"
+  else
+    # Headless agy starts in Auto mode, which edits files and runs commands unasked. These session-only
+    # settings make it a reader: Default mode, and deny rules for commands, file writes and MCP tools.
+    # Never skip its permissions.
+    FASTLANE_MEM=8G FASTLANE_CWD=$WT "$1" "$2" "$3" --stdout "$3/answer.md" -- \
+      "$(command -v python3)" -I "$H/neon.py" "$3" -- "$TIMEOUT" "$4" "$X" -p "$5" \
+      --model gemini-4-neon-high --output-format json --print-timeout "$(($4 - 10))s" \
+      --add-dir "$ND" \
+      --settings '{"agentMode":"","permissions":{"deny":["command(*)","write_file(*)","mcp(*)"]}}'
+  fi
+}
+# neon_dir: the folder agy may read besides the worktree: the lane folder (the nearest folder at or
+# above the brief's that holds a `waits` file, as launch-unit.sh finds it), else the brief's folder.
+# The brief's folder is resolved physically, as the file check above resolved it, so the walk starts
+# from an absolute path and ends at /.
+neon_dir() {
+  d=$(cd -P "$(dirname "$BRIEF")" && pwd -P) || return 1
+  b=$d
+  while [ ! -f "$d/waits" ]; do
+    if [ "$d" = / ]; then printf '%s\n' "$b"; return 0; fi
+    d=$(dirname "$d")
+  done
+  printf '%s\n' "$d"
+}
 launch_reader() {
   "$H/launch-unit.sh" "$@" || {
     rc=$?
@@ -65,12 +102,12 @@ wait_probe() {
 for s in "$@"; do
   D=$OUT/$s U=fastlane-$TAG-$s
   if [ "$DECISION" = yes ]; then
-    P="Read the decision brief $BRIEF in full first and answer its question in the specified format. Read project files for context. Use commands only to read files. Do not edit files, change git state, or run builds or tests. Do not read credential files or the model config folders ~/.claude, ~/.codex, ~/.grok."
+    P="Read the decision brief $BRIEF in full first and answer its question in the specified format. Read project files for context. Use commands only to read files. Do not edit files, change git state, or run builds or tests. Do not read credential files or the model config folders ~/.claude, ~/.codex, ~/.grok, ~/.gemini."
     if [ -s "$OUT/$s.lens.md" ]; then
       P="$P Also read $OUT/$s.lens.md for your lens. Keep the brief's answer format."
     fi
   else
-    P="You are a code reviewer in a fast lane. Read the review brief $BRIEF in full first and follow it. You are read-only: never edit files, commit, check out, stash, reset or clean, and never run builds or tests. Do not read credential files or the model config folders ~/.claude, ~/.codex, ~/.grok."
+    P="You are a code reviewer in a fast lane. Read the review brief $BRIEF in full first and follow it. You are read-only: never edit files, commit, check out, stash, reset or clean, and never run builds or tests. Do not read credential files or the model config folders ~/.claude, ~/.codex, ~/.grok, ~/.gemini."
   fi
   case $s in
     opus|fable)
@@ -85,31 +122,28 @@ for s in "$@"; do
       FASTLANE_CWD=$WT launch_reader "$U" "$D" -- \
         "$TIMEOUT" 5400 "$CODEX" exec --skip-git-repo-check --sandbox read-only \
         -m "$M" -c model_reasoning_effort=high -o "$D/answer.md" "$P" ;;
-    grok)
-      GROK=$(command -v grok) || GROK=
-      if [ -z "$GROK" ]; then
-        echo "grok missing: executable unavailable" | tee "$OUT/grok-missing"
+    grok|neon)
+      if [ "$s" = grok ]; then X=$(command -v grok) || X=; WORD=GROK_OK
+      else X=$(command -v agy) || X=; WORD=NEON_OK; fi
+      if [ -z "$X" ]; then
+        echo "$s missing: executable unavailable" | tee "$OUT/$s-missing"
         continue
       fi
-      PROBE=$OUT/grok-probe
+      if [ "$s" = neon ] && ! ND=$(neon_dir); then
+        echo "neon missing: cannot resolve the brief's folder" | tee "$OUT/neon-missing"
+        continue
+      fi
+      PROBE=$OUT/$s-probe
       probe_rc=0
-      FASTLANE_MEM=8G FASTLANE_CWD=$WT "$H/launch-unit.sh" "$U-probe" "$PROBE" --stdout "$PROBE/answer.md" -- \
-        "$TIMEOUT" 90 "$GROK" --no-auto-update -p "Reply with exactly one word: GROK_OK" \
-        --model grok-4.7 --effort high --output-format plain --always-approve --sandbox off \
-        --no-subagents --no-memory --disable-web-search \
-        --disallowed-tools "search_replace,write,search_tool,use_tool" --tools "read_file,grep,list_dir" || probe_rc=$?
+      extra_seat "$H/launch-unit.sh" "$U-probe" "$PROBE" 90 "Reply with exactly one word: $WORD" || probe_rc=$?
       if [ "$probe_rc" -ne 0 ] && [ "$DECISION" = no ]; then exit "$probe_rc"; fi
       # In decision mode, a failed status query can leave a probe still running.
       if { [ "$probe_rc" -eq 0 ] || [ -s "$PROBE/unit" ]; } &&
-        wait_probe && grep -qx 'GROK_OK' "$PROBE/answer.md"; then
-        FASTLANE_MEM=8G FASTLANE_CWD=$WT launch_reader "$U" "$D" --stdout "$D/answer.md" -- \
-          "$TIMEOUT" 5400 "$GROK" --no-auto-update -p "$P" \
-          --model grok-4.7 --effort high --output-format plain --always-approve --sandbox off \
-          --no-subagents --no-memory --disable-web-search \
-          --disallowed-tools "search_replace,write,search_tool,use_tool" --tools "read_file,grep,list_dir"
+        wait_probe && grep -qx "$WORD" "$PROBE/answer.md"; then
+        extra_seat launch_reader "$U" "$D" 5400 "$P"
       else
-        echo "grok missing: one-word probe did not answer; see $PROBE" | tee "$OUT/grok-missing"
+        echo "$s missing: one-word probe did not answer; see $PROBE" | tee "$OUT/$s-missing"
       fi ;;
-    *) echo "unknown seat $s (opus, astra, sol, grok, fable)" >&2; exit 2 ;;
+    *) echo "unknown seat $s (opus, astra, sol, grok, neon, fable)" >&2; exit 2 ;;
   esac
 done

@@ -148,6 +148,7 @@ live-run output directories each round; keep earlier findings and judgments for 
    To add fable, name all five seats:
    `scripts/review.sh PKT opus astra sol grok fable`; never include fable in the wait.
    For quota balancing, `FASTLANE_SEATS="opus sol grok"` on `session.sh` (off by default; opus and astra or sol required) names those seats in the session's prompt, and its waits and the failed-seat rule then cover only the seated ones.
+   Fastlane's optional neon seat (`agy`, off by default) joins only when named, for example `FASTLANE_SEATS="opus sol grok neon"`; it is probed, waited on and reported missing like grok, and never counts toward the failed-seat rule's two.
    For a failed seat's one retry, run `scripts/review.sh PKT --out PKT/review-retry-N
    --tag <fresh-tag> <seat>` and wait on that output directory's seat. Keep active seats in
    place; do not move their directories or wait for optional fable to end.

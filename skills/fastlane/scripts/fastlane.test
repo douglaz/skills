@@ -36,12 +36,13 @@ for a in "$@"; do
     StandardOutput=file:*) out=${a#StandardOutput=file:} ;;
   esac
 done
-case $unit in *-grok-probe)
-  d=$(dirname "$out")
+case $unit in *-grok-probe|*-neon-probe)
+  d=$(dirname "$out") word=GROK_OK
+  case $unit in *-neon-probe) word=NEON_OK ;; esac
   case $(cat "$FIX/probe-mode") in
-    good) echo GROK_OK > "$out"; echo 'success exited 0' > "$d/exit" ;;
+    good) echo "$word" > "$out"; echo 'success exited 0' > "$d/exit" ;;
     empty) : > "$out"; echo 'success exited 0' > "$d/exit" ;;
-    failed) echo GROK_OK > "$out"; echo 'exit-code exited 1' > "$d/exit" ;;
+    failed) echo "$word" > "$out"; echo 'exit-code exited 1' > "$d/exit" ;;
     post-submit-error) printf '%s\n' "$out" "$unit" > "$FIX/probe-answer"; exit 0 ;;
   esac
   rm "$FIX/active/$unit"
@@ -66,7 +67,7 @@ cat > "$WORK/bin/df" <<'STUB'
 #!/usr/bin/env bash
 printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\nfake 999999999 1 %s 1%% /\n' "$(cat "$FIX/free-kb")"
 STUB
-for tool in codex claude grok; do
+for tool in codex claude grok agy; do
   printf '#!/bin/sh\nexit 99\n' > "$WORK/bin/$tool"
   chmod +x "$WORK/bin/$tool"
 done
@@ -245,6 +246,122 @@ for seats in '' ' ' 'sol grok' 'astra sol grok fable' 'opus grok' 'opus fable' '
     '[ "$rc" = 2 ] && grep -q "FASTLANE_SEATS" "$FIX/review.out" && [ ! -s "$FIX/runs" ] && [ ! -e "$FIX/lane/review" ]' "rc $rc: $(cat "$FIX/review.out")"
 done
 
+# --- the optional neon seat (agy is a stub; the systemd-run stub never runs it) -------------------
+new_fix
+echo good > "$FIX/probe-mode"; echo brief > "$FIX/lane/brief.md"
+"$HERE/review.sh" "$FIX/lane" "$FIX/lane/brief.md" "$FIX/lane/review" panel > "$FIX/review.out" 2>&1; rc=$?
+check "neon is never a default seat, even with agy on PATH" \
+  '[ "$rc" = 0 ] && [ -x "$WORK/bin/agy" ] && ! grep -q -- "-neon\|agy" "$FIX/runs" && ! ls "$FIX/lane/review" | grep -q neon' "rc $rc: $(cat "$FIX/runs")"
+out=$(env FASTLANE_SEATS='opus sol neon' "$HERE/review.sh" --seats 2>&1); rc=$?
+check "FASTLANE_SEATS accepts neon" '[ "$rc" = 0 ] && [ "$out" = "opus sol neon" ]' "rc $rc: $out"
+for seats in 'neon sol' 'opus neon' 'opus grok neon fable' 'opus sol neon neon'; do
+  out=$(env FASTLANE_SEATS="$seats" "$HERE/review.sh" --seats 2>&1); rc=$?
+  check "neon never stands in for opus, astra or sol: FASTLANE_SEATS='$seats' is refused" '[ "$rc" = 2 ] && grep -q FASTLANE_SEATS <<<"$out"' "rc $rc: $out"
+done
+new_fix
+echo good > "$FIX/probe-mode"; echo brief > "$FIX/lane/brief.md"
+env FASTLANE_SEATS="opus sol neon" "$HERE/review.sh" "$FIX/lane" "$FIX/lane/brief.md" "$FIX/lane/review" panel > "$FIX/review.out" 2>&1; rc=$?
+NEON_PROBE=$(grep -- "--unit=fastlane-panel-neon-probe " "$FIX/runs") NEON_RUN=$(grep -- "--unit=fastlane-panel-neon " "$FIX/runs")
+# Headless agy defaults to Auto mode, which writes and runs commands: these settings make it a reader.
+NEON_SETTINGS='{"agentMode":"","permissions":{"deny":["command(*)","write_file(*)","mcp(*)"]}}'
+check "a named neon seat is probed, then launched beside opus and sol, and waited on" \
+  '[ "$rc" = 0 ] && [ "$(wc -l < "$FIX/runs")" = 4 ] && [ -f "$FIX/lane/review/neon/unit" ] && [ ! -e "$FIX/lane/review/neon-missing" ] &&
+   grep -qx NEON_OK "$FIX/lane/review/neon-probe/answer.md" && [ "$(wc -l < "$FIX/lane/waits")" = 3 ] && grep -q "| fastlane-panel-neon |" "$FIX/lane/waits"' "rc $rc: $(cat "$FIX/review.out")"
+check "the neon probe runs agy headless with JSON output, the high model id and a 90 s bound" \
+  '[[ "$NEON_PROBE" == *"MemoryMax=8G -p MemorySwapMax=0 -p OOMPolicy=continue -p StandardInput=null -p StandardOutput=file:$FIX/lane/review/neon-probe/answer.md "* &&
+     "$NEON_PROBE" == *" -I $HERE/neon.py $FIX/lane/review/neon-probe -- "*"timeout 90 $WORK/bin/agy -p Reply with exactly one word: NEON_OK --model gemini-4-neon-high --output-format json --print-timeout 80s --add-dir $FIX/lane --settings $NEON_SETTINGS" ]]' "$NEON_PROBE"
+check "the neon reader gets the review prompt, the lane folder (a whole work dir or packet) and the 5400 s seat bound" \
+  '[[ "$NEON_RUN" == *"StandardOutput=file:$FIX/lane/review/neon/answer.md "* &&
+     "$NEON_RUN" == *" -I $HERE/neon.py $FIX/lane/review/neon -- "*"timeout 5400 $WORK/bin/agy -p You are a code reviewer in a fast lane. Read the review brief $FIX/lane/brief.md"*"~/.gemini. --model gemini-4-neon-high --output-format json --print-timeout 5390s --add-dir $FIX/lane --settings $NEON_SETTINGS" ]]' "$NEON_RUN"
+check "both neon calls end with the reader settings: Default mode, commands, file writes and MCP denied" \
+  '[[ "$NEON_PROBE" == *" --settings $NEON_SETTINGS" && "$NEON_RUN" == *" --settings $NEON_SETTINGS" ]]' "$NEON_RUN"
+check "neon never skips permissions, plans, or sets a separate effort" \
+  '[[ "$NEON_PROBE$NEON_RUN" != *"--dangerously-skip-permissions"* && "$NEON_PROBE$NEON_RUN" != *" --mode "* && "$NEON_PROBE$NEON_RUN" != *"--effort"* ]]' "$NEON_RUN"
+check "every reader prompt names ~/.gemini in the no-read list" \
+  '[ "$(grep -c -- "~/.grok, ~/.gemini." "$FIX/runs")" = 3 ]' "$(cat "$FIX/runs")"
+new_fix
+echo good > "$FIX/probe-mode"; echo brief > "$FIX/lane/brief.md"
+"$HERE/review.sh" "$FIX/lane" "$FIX/lane/brief.md" "$FIX/lane/review" pair opus neon > "$FIX/review.out" 2>&1; rc=$?
+check "neon named on the command line seats it (the proof's opus neon review)" \
+  '[ "$rc" = 0 ] && [ "$(wc -l < "$FIX/runs")" = 3 ] && [ -f "$FIX/lane/review/opus/unit" ] && [ -f "$FIX/lane/review/neon/unit" ]' "rc $rc: $(cat "$FIX/review.out")"
+# agy reads only the worktree and --add-dir folders: neon gets the brief's lane folder, else its folder.
+for where in i3 i3/deep elsewhere; do
+  new_fix
+  echo good > "$FIX/probe-mode"; mkdir -p "$FIX/lane/$where" "$FIX/elsewhere"
+  brief=$FIX/lane/$where/review-brief.md want=$FIX/lane
+  if [ "$where" = elsewhere ]; then brief=$FIX/elsewhere/review-brief.md want=$FIX/elsewhere; fi
+  echo brief > "$brief"
+  "$HERE/review.sh" "$FIX/lane" "$brief" "$FIX/lane/review" reach neon > "$FIX/review.out" 2>&1; rc=$?
+  check "a brief in $where gives neon --add-dir $want, never a folder above it" \
+    '[ "$rc" = 0 ] && [ "$(grep -c -- "--add-dir $want --settings {" "$FIX/runs")" = 2 ]' "rc $rc: $(cat "$FIX/runs")"
+done
+# A relative brief through a symlinked working directory: the file check resolves `..` physically.
+new_fix
+echo good > "$FIX/probe-mode"; mkdir -p "$FIX/lane/sub" "$FIX/lane/i4"; echo brief > "$FIX/lane/i4/review-brief.md"
+rm -f "$WORK/cur"; ln -s "$FIX/lane/sub" "$WORK/cur"
+(cd "$WORK/cur" && timeout 60 "$HERE/review.sh" "$FIX/lane" ../i4/review-brief.md "$FIX/lane/review" sym neon) > "$FIX/review.out" 2>&1; rc=$?
+check "a brief reached through a symlink and .. still finds its lane, without hanging" \
+  '[ "$rc" = 0 ] && [ "$(grep -c -- "--add-dir $FIX/lane --settings {" "$FIX/runs")" = 2 ]' "rc $rc: $(cat "$FIX/review.out")"
+# The stubs without agy, then PATH without any folder that has one (agy may be installed here).
+mkdir -p "$WORK/noagy"
+for f in "$WORK/bin"/*; do [ "${f##*/}" = agy ] || ln -s "$f" "$WORK/noagy/"; done
+NOAGY=$(IFS=:; for d in $PATH; do [ -x "$d/agy" ] || printf '%s:' "$d"; done)
+new_fix
+echo good > "$FIX/probe-mode"; echo brief > "$FIX/lane/brief.md"
+env PATH="$WORK/noagy:${NOAGY%:}" FASTLANE_SEATS="opus sol neon" "$HERE/review.sh" "$FIX/lane" "$FIX/lane/brief.md" "$FIX/lane/review" panel > "$FIX/review.out" 2>&1; rc=$?
+check "without agy on PATH neon is a missing seat: reported, never launched or waited on" \
+  '[ "$rc" = 0 ] && grep -qx "neon missing: executable unavailable" "$FIX/lane/review/neon-missing" && [ ! -e "$FIX/lane/review/neon" ] &&
+   [ ! -e "$FIX/lane/review/neon-probe" ] && [ "$(wc -l < "$FIX/runs")" = 2 ] && [ "$(wc -l < "$FIX/lane/waits")" = 2 ]' "rc $rc: $(cat "$FIX/review.out")"
+for mode in failed empty; do
+  new_fix
+  echo "$mode" > "$FIX/probe-mode"; echo brief > "$FIX/lane/brief.md"
+  env FASTLANE_SEATS="opus sol neon" "$HERE/review.sh" "$FIX/lane" "$FIX/lane/brief.md" "$FIX/lane/review" panel > "$FIX/review.out" 2>&1; rc=$?
+  check "$mode neon probe (signed out, refused) is reported missing and leaves no reader to wait on" \
+    '[ "$rc" = 0 ] && grep -q "neon missing: one-word probe did not answer" "$FIX/lane/review/neon-missing" && [ ! -d "$FIX/lane/review/neon" ] && [ "$(wc -l < "$FIX/lane/waits")" = 2 ]' "rc $rc: $(cat "$FIX/review.out")"
+done
+
+# --- neon.py with a stub agy that prints the CLI's JSON ------------------------------------------
+mkdir -p "$WORK/agybin"
+cat > "$WORK/agybin/agy" <<'STUB'
+#!/bin/sh
+printf '%s\n' "$*" > "$NEON_FIX/args"
+wc -c > "$NEON_FIX/stdin-bytes"
+case $NEON_MODE in
+  answer) echo '{"conversation_id":"c1","status":"SUCCESS","response":"[P2] [PRODUCT] a.sh:1: claim","duration_seconds":3,"num_turns":2,"usage":{"total_tokens":9}}' ;;
+  denied-answer) echo '{"status":"SUCCESS","response":"No findings.","denied_actions":[{"tool":"run_command","command":"git diff"}]}' ;;
+  denied-empty) echo '{"status":"SUCCESS","response":"","denied_actions":[{"tool":"write_file"}]}' ;;
+  empty) echo '{"status":"SUCCESS","response":"   "}' ;;
+  no-response) echo '{"status":"SUCCESS"}' ;;
+  signed-out) echo 'Sign in at https://example.invalid/device' >&2
+    echo '{"status":"ERROR","error":"authentication failed or timed out","response":""}'; exit 1 ;;
+  not-json) echo 'plain text' ;;
+esac
+STUB
+chmod +x "$WORK/agybin/agy"
+neon() { # MODE: run neon.py on the stub with stdin from a non-empty file
+  NEON_FIX=$WORK/neon-$1; rm -rf "$NEON_FIX"; mkdir -p "$NEON_FIX"; echo stdin > "$NEON_FIX/stdin"
+  env NEON_FIX="$NEON_FIX" NEON_MODE="$1" "$HERE/neon.py" "$NEON_FIX" -- "$WORK/agybin/agy" -p "a prompt" --output-format json \
+    < "$NEON_FIX/stdin" > "$NEON_FIX/answer.md" 2> "$NEON_FIX/err"
+}
+neon answer; rc=$?
+check "neon.py prints the response, keeps the raw JSON, passes arguments through and closes stdin" \
+  '[ "$rc" = 0 ] && [ "$(cat "$NEON_FIX/answer.md")" = "[P2] [PRODUCT] a.sh:1: claim" ] && grep -q "\"conversation_id\":\"c1\"" "$NEON_FIX/agy.json" &&
+   [ "$(cat "$NEON_FIX/args")" = "-p a prompt --output-format json" ] && [ "$(cat "$NEON_FIX/stdin-bytes")" = 0 ] && [ ! -e "$NEON_FIX/denied-actions" ]' "rc $rc: $(cat "$NEON_FIX/err")"
+neon denied-answer; rc=$?
+check "a denied action with an answer still counts, and is recorded" \
+  '[ "$rc" = 0 ] && [ "$(cat "$NEON_FIX/answer.md")" = "No findings." ] && grep -q run_command "$NEON_FIX/denied-actions" &&
+   grep -q "neon: agy denied 1 action(s)" "$NEON_FIX/err"' "rc $rc: $(cat "$NEON_FIX/err")"
+neon denied-empty; rc=$?
+check "a denied action that leaves an empty response is a failed seat, recorded" \
+  '[ "$rc" = 1 ] && [ ! -s "$NEON_FIX/answer.md" ] && grep -q write_file "$NEON_FIX/denied-actions" && grep -q "empty response" "$NEON_FIX/err"' "rc $rc: $(cat "$NEON_FIX/err")"
+for mode in empty no-response not-json; do
+  neon "$mode"; rc=$?
+  check "neon.py fails the seat on $mode output (agy exited 0)" '[ "$rc" = 1 ] && [ ! -s "$NEON_FIX/answer.md" ]' "rc $rc: $(cat "$NEON_FIX/err")"
+done
+neon signed-out; rc=$?
+check "a signed-out agy (exit 1, status ERROR) fails the seat and names the error" \
+  '[ "$rc" = 1 ] && [ ! -s "$NEON_FIX/answer.md" ] && grep -q "agy error: authentication failed or timed out" "$NEON_FIX/err" && grep -q "status ERROR" "$NEON_FIX/err"' "rc $rc: $(cat "$NEON_FIX/err")"
+
 # --- decision-panel integration with the shared seats and waits --------------------------------
 new_fix
 echo post-submit-error > "$FIX/probe-mode"
@@ -314,6 +431,39 @@ for seats in 'opus astra grok' 'opus sol' 'opus astra sol' 'opus grok'; do
   check "a decision panel refuses FASTLANE_SEATS='$seats' and starts nothing" \
     '[ "$rc" = 2 ] && grep -q FASTLANE_SEATS "$FIX/decision.out" && [ ! -s "$FIX/runs" ] && [ ! -e "$FIX/lane/decision" ]' "rc $rc: $(cat "$FIX/decision.out")"
 done
+
+new_fix
+echo good > "$FIX/probe-mode"
+mkdir "$FIX/question"; echo 'Ship A or B?' > "$FIX/question/question.md"; printf 'A\nB\n' > "$FIX/question/options"
+OUT="$FIX/lane/decision"
+"$HERE/decision-panel.py" launch "$FIX/lane" "$FIX/question" "$OUT" neon --neon > "$FIX/decision.out" 2>&1; rc=$?
+check "--neon seats the optional neon seat after the required ones" \
+  '[ "$rc" = 0 ] && [ "$(cat "$OUT/seats")" = "opus astra sol grok neon" ] && [ -f "$OUT/neon/unit" ] && [ -f "$OUT/launch-complete" ] &&
+   grep -q -- "--unit=fastlane-neon-neon .*neon.py $OUT/neon -- .*agy -p Read the decision brief $OUT/brief.md.*~/.gemini. --model gemini-4-neon-high --output-format json --print-timeout 5390s --add-dir $FIX/lane --settings {" "$FIX/runs"' "rc $rc: $(cat "$FIX/decision.out")"
+for seat in opus astra sol grok; do
+  printf 'PICK: A\nRANKING: A B\nCAN LIVE WITH: A\nARGUMENT: A is ready.\n' > "$OUT/$seat/answer.md"
+  echo 'success exited 0' > "$OUT/$seat/exit"
+done
+"$HERE/decision-panel.py" collect 0 "$OUT" > "$FIX/collect.out" 2>&1; rc=$?
+check "collect waits on a launched neon like grok" '[ "$rc" = 124 ] && [ ! -e "$OUT/synthesis.md" ]' "rc $rc: $(cat "$FIX/collect.out")"
+printf 'PICK: B\nRANKING: B A\nCAN LIVE WITH: A B\nARGUMENT: B is safer.\n' > "$OUT/neon/answer.md"
+echo 'success exited 0' > "$OUT/neon/exit"
+"$HERE/decision-panel.py" collect 0 "$OUT" > "$FIX/collect.out" 2>&1; rc=$?
+check "neon's ballot counts: 4 of 5 with opus accept" \
+  '[ "$rc" = 0 ] && grep -qx "Counts (5 answering): A=4 B=1" "$FIX/collect.out" && grep -q "^VERDICT: A accepted" "$FIX/collect.out" &&
+   grep -qx -- "- neon picked B. B is safer." "$OUT/synthesis.md"' "rc $rc: $(cat "$FIX/collect.out")"
+new_fix
+echo good > "$FIX/probe-mode"
+mkdir "$FIX/question"; echo 'Ship A or B?' > "$FIX/question/question.md"; printf 'A\nB\n' > "$FIX/question/options"
+env FASTLANE_SEATS="opus sol grok neon" "$HERE/decision-panel.py" launch "$FIX/lane" "$FIX/question" "$FIX/lane/decision" seated > "$FIX/decision.out" 2>&1; rc=$?
+check "FASTLANE_SEATS with neon seats it in a decision panel too" \
+  '[ "$rc" = 0 ] && [ "$(cat "$FIX/lane/decision/seats")" = "opus sol grok neon" ] && [ -f "$FIX/lane/decision/neon/unit" ]' "rc $rc: $(cat "$FIX/decision.out")"
+new_fix
+echo good > "$FIX/probe-mode"
+mkdir "$FIX/question"; echo 'Ship A or B?' > "$FIX/question/question.md"; printf 'A\nB\n' > "$FIX/question/options"
+env PATH="$WORK/noagy:${NOAGY%:}" "$HERE/decision-panel.py" launch "$FIX/lane" "$FIX/question" "$FIX/lane/decision" gone --neon > "$FIX/decision.out" 2>&1; rc=$?
+check "a decision panel with agy missing records neon missing and still launches" \
+  '[ "$rc" = 0 ] && [ -s "$FIX/lane/decision/neon-missing" ] && [ ! -e "$FIX/lane/decision/neon" ] && [ -f "$FIX/lane/decision/launch-complete" ]' "rc $rc: $(cat "$FIX/decision.out")"
 
 # --- combined packet integration with the real shared launcher and wait ------------------------
 new_fix
