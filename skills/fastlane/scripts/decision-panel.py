@@ -138,8 +138,8 @@ def tally(out, options):
     if total:
         pick, votes = counts.most_common(1)[0]
         opus_agrees = "opus" in answers and answers["opus"][0] == pick
-        # Without astra, opus must be in the majority even when every answer agrees.
-        if ((votes == total and (opus_agrees or not unseated))
+        # Without astra, a unanimous vote needs opus in it and at least two answers.
+        if ((votes == total and (not unseated or (opus_agrees and total >= 2)))
                 or (opus_agrees and (votes, total) in {(2, 3), (3, 4), (4, 5)})):
             verdict = f"{pick} accepted under the owner's 2026-11-05 panel rule"
 

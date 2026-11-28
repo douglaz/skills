@@ -334,7 +334,7 @@ including when the decision goes to the owner. Later collections return the publ
 Each ballot gives a pick, a full ranking, the options the reader can live with, and its strongest
 argument. The tally counts picks from valid, completed ballots, including fable if ready when collected.
 A limit line, a failed unit or a missing answer contributes no vote. A unanimous nonempty panel is
-accepted; without astra, only when opus is in it. A split of 2 of 3, 3 of 4 or 4 of 5 is accepted only when opus picked the majority option.
+accepted; without astra, only when opus is in it and at least two answered. A split of 2 of 3, 3 of 4 or 4 of 5 is accepted only when opus picked the majority option.
 Other splits and an empty panel go to the owner. Collect prints the counts and verdict and writes
 `OUT_DIR/synthesis.md` with each pick and argument. When recording an accepted pick, name any narrowing
 or widening of an earlier owner pick.
