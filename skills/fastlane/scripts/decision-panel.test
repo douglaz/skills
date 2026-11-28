@@ -168,7 +168,33 @@ if grep -qx -- '- astra was not seated.' "$WORK/panel/synthesis.md" &&
 else
   FAIL=$((FAIL+1)); printf '  FAIL an unseated astra is not seated, a failed opus is missing\n'
 fi
+
+# Optional neon counts like grok: the same rule over the larger count, no new ratio.
+PANEL_SEATS="opus astra sol grok neon"
+check_tally 'neon seated: all five agree' '5 A=5 B=0 C=0' A A A A A A
+check_tally 'neon seated: 4 of 5 with opus accept' '5 A=4 B=1 C=0' A A A A A B
+check_tally 'neon seated: 4 of 5 with opus in the minority go to the owner' '5 A=4 B=1 C=0' OWNER_DECISION B A A A A
+check_tally 'neon seated: 3 of 5 with opus go to the owner' '5 A=3 B=2 C=0' OWNER_DECISION A A A B B
+check_tally 'neon seated, grok missing: 3 of 4 with opus accept' '4 A=3 B=1 C=0' A A A B - A
+check_tally 'neon seated, neon failed: 3 of 4 with opus accept' '4 A=3 B=1 C=0' A A A B A failed
+if grep -qx -- '- neon had no valid completed ballot.' "$WORK/panel/synthesis.md"; then
+  PASS=$((PASS+1)); printf '  ok   a seated neon without a ballot is reported missing\n'
+else
+  FAIL=$((FAIL+1)); printf '  FAIL a seated neon without a ballot is reported missing\n'
+fi
+PANEL_SEATS="opus sol grok neon"
+check_tally 'astra unseated, neon seated: 3 of 4 with opus accept' '4 A=3 B=1 C=0' A A A B A
+check_tally 'astra unseated, neon seated: 2 of 4 go to the owner' '4 A=2 B=2 C=0' OWNER_DECISION A A B B
+PANEL_SEATS="opus astra sol grok neon fable"
+check_tally 'neon and fable seated: six agree' '6 A=6 B=0 C=0' A A A A A A A
+check_tally 'neon and fable seated: 5 of 6 has no owner ratio and goes to the owner' '6 A=5 B=1 C=0' OWNER_DECISION A A A A A B
 unset PANEL_SEATS
+check_tally 'without a seats file neon is not a seat' '5 A=5 B=0 C=0' A A A A A A
+if ! grep -q neon "$WORK/panel/synthesis.md"; then
+  PASS=$((PASS+1)); printf '  ok   an unseated neon is left out of the synthesis\n'
+else
+  FAIL=$((FAIL+1)); printf '  FAIL an unseated neon is left out of the synthesis\n'
+fi
 
 echo "passed $PASS, failed $FAIL"
 [[ "$FAIL" == 0 ]]

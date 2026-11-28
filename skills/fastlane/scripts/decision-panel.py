@@ -14,7 +14,8 @@ import time
 
 SCRIPTS = Path(__file__).resolve().parent
 REQUIRED = ("opus", "astra", "sol", "grok")
-SEATS = (*REQUIRED, "fable")
+SEATS = (*REQUIRED, "fable")  # what a launch seated before the seats file listed its seats
+WAITED = (*REQUIRED, "neon")  # optional neon, once seated, is waited on like grok
 FIELDS = ("PICK", "RANKING", "CAN LIVE WITH", "ARGUMENT")
 
 
@@ -26,22 +27,24 @@ def option_ids(path):
     return options
 
 
-def panel_seats(fable):
-    """The seats to launch: all of REQUIRED, or without astra when FASTLANE_SEATS leaves it out."""
-    if "FASTLANE_SEATS" not in os.environ:
-        return SEATS if fable else REQUIRED
-    # review.sh owns the switch's checks and prints the accepted list.
-    listed = subprocess.run(
-        [SCRIPTS / "review.sh", "--seats"], stdout=subprocess.PIPE, text=True,
-    )
-    if listed.returncode:
-        raise ValueError("FASTLANE_SEATS refused; see the message above")
-    names = listed.stdout.split()
-    required = tuple(seat for seat in REQUIRED if seat in names)
-    if required not in (REQUIRED, ("opus", "sol", "grok")):
-        raise ValueError("FASTLANE_SEATS: a decision panel seats opus, sol and grok,"
-                         f" with astra optional, plus optional fable: {' '.join(names)}")
-    return (*required, "fable") if fable or "fable" in names else required
+def panel_seats(fable, neon=False):
+    """The seats to launch: all of REQUIRED, or without astra when FASTLANE_SEATS leaves it out,
+    then optional neon and fable when named by flag or by FASTLANE_SEATS."""
+    names, required = [], REQUIRED
+    if "FASTLANE_SEATS" in os.environ:
+        # review.sh owns the switch's checks and prints the accepted list.
+        listed = subprocess.run(
+            [SCRIPTS / "review.sh", "--seats"], stdout=subprocess.PIPE, text=True,
+        )
+        if listed.returncode:
+            raise ValueError("FASTLANE_SEATS refused; see the message above")
+        names = listed.stdout.split()
+        required = tuple(seat for seat in REQUIRED if seat in names)
+        if required not in (REQUIRED, ("opus", "sol", "grok")):
+            raise ValueError("FASTLANE_SEATS: a decision panel seats opus, sol and grok,"
+                             f" with astra optional, plus optional neon and fable: {' '.join(names)}")
+    optional = (("neon",) if neon or "neon" in names else ()) + (("fable",) if fable or "fable" in names else ())
+    return (*required, *optional)
 
 
 def seated(out):
@@ -61,7 +64,7 @@ def launch(args):
     if not question:
         raise ValueError("question.md is empty")
     options = option_ids(args.brief / "options")
-    seats = panel_seats(args.fable)
+    seats = panel_seats(args.fable, args.neon)
     lenses = {}
     for seat in seats:
         path = args.brief / f"{seat}.lens.md"
@@ -147,7 +150,7 @@ def tally(out, options):
     result = f"Not seated: {' '.join(unseated)}\n" if unseated else ""
     result += f"Counts ({total} answering): {counts_line}\nVERDICT: {verdict}\n"
     synthesis = ["# Decision panel", ""]
-    for seat in SEATS:
+    for seat in (*REQUIRED, *(("neon",) if "neon" in seats else ()), "fable"):
         if seat in answers:
             pick, argument = answers[seat]
             synthesis.append(f"- {seat} picked {pick}. {argument}")
@@ -161,9 +164,9 @@ def tally(out, options):
 
 def wait_for_readers(out, deadline_seconds):
     end = time.monotonic() + min(deadline_seconds, 3300)
-    # Wait on each seated required seat so a gone unit cannot end the wait for the others.
+    # Wait on each seated required seat, and neon, so a gone unit cannot end the wait for the others.
     seats = seated(out)
-    for seat in (seat for seat in REQUIRED if seat in seats):
+    for seat in (seat for seat in WAITED if seat in seats):
         directory = out / seat
         # A launch error can be reported after systemd has already started the unit.
         if not (directory / "unit").is_file():
@@ -220,7 +223,8 @@ def main():
     start.add_argument("out", type=Path, help="fresh output directory")
     start.add_argument("tag", help="fresh unit name suffix")
     start.add_argument("--fable", action="store_true", help="include optional fable")
-    finish = commands.add_parser("collect", help="wait for required seats, then write synthesis.md")
+    start.add_argument("--neon", action="store_true", help="include optional neon (agy), waited on like grok")
+    finish = commands.add_parser("collect", help="wait for required seats and neon, then write synthesis.md")
     finish.add_argument("deadline_seconds", type=int, help="wait in seconds, capped at 3300")
     finish.add_argument("out", type=Path)
     args = parser.parse_args()

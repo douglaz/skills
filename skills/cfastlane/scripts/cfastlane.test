@@ -319,6 +319,16 @@ echo 'session id: abc-123' > "$FIX/pkt/turns/1/session/err"; echo note > "$FIX/n
 env FASTLANE_SEATS="opus astra grok" sh "$HERE/session.sh" "$FIX/pkt" "$FIX/note.md" > /dev/null 2>&1; RC=$?
 PROMPT=$(sed -n 2p "$FIX/launches")
 check "a resume carries the switch's seats too" '[ "$RC" = 0 ] && [[ "$PROMPT" == *"review seats are opus astra grok."*"Wait only on the seats a round launched: opus astra,"* ]]'
+check "without neon in the list the prompt never mentions it" '! grep -qi " neon" "$FIX/launches"'
+new_fix
+echo task > "$FIX/pkt/task.md"; rm "$FIX/pkt/meter-start" "$FIX/pkt/base"
+env FASTLANE_SEATS="opus sol grok neon" sh "$HERE/session.sh" "$FIX/pkt" > /dev/null 2>&1; RC=$?
+PROMPT=$(sed -n 1p "$FIX/launches")
+check "a list with neon names it on launches and says it is probed" '[ "$RC" = 0 ] && [[ "$PROMPT" == *"run $HERE/review.sh $FIX/pkt opus sol grok neon (it probes grok and neon)"* ]]'
+check "neon is waited on like grok, only when launched, and reported missing like grok" \
+  '[[ "$PROMPT" == *"Wait only on the seats a round launched: opus sol, plus grok and neon, each only when that round launched it; never wait on a seat that was not launched. Read neon-missing from the same output as grok-missing, and name a missing neon in the report like grok."* ]]'
+check "neon never counts toward the failed-seat rule" \
+  '[[ "$PROMPT" == *"Neon never counts toward the failed-seat rule'"'"'s two. The failed-seat rule needs at least two of the seated ones among opus, astra and sol (opus sol) to answer."* ]]'
 for seats in '' 'sol grok' 'opus grok' 'opus sol gpt'; do
   new_fix
   echo task > "$FIX/pkt/task.md"; rm "$FIX/pkt/meter-start" "$FIX/pkt/base"

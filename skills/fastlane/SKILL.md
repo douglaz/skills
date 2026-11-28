@@ -272,6 +272,7 @@ P0/P1 keeps its own priority with `review-preexisting` for older defects or `rev
 | sol | codex `gpt-6.2-sol` | `codex exec --sandbox read-only` |
 | grok (when available) | `grok-4.7` | `grok -p`, 8G, no swap, stdin from `/dev/null`; one-word probe first |
 | fable (optional) | `claude-fable-5-2` | like opus; never waited on; a limit line is a missing seat |
+| neon (optional, off by default) | `gemini-4-neon-high` | `agy -p --output-format json` through `scripts/neon.py`, 8G, made a reader per run with `--settings` (Default agent mode; commands, file writes and MCP denied: headless agy otherwise starts in Auto mode, which edits and runs commands), never skipping its permissions, reading only the worktree and the brief's lane folder (the work dir or packet holding `waits`, else the brief's folder), so keep what its brief names there; seated only when named (`review.sh` seats, `FASTLANE_SEATS`, or the panel's `--neon`); probed, reported missing and waited on like grok, never counted toward the two of opus, astra and sol; an empty response is a failed seat, and `neon/denied-actions` records what agy refused |
 
 - Override a model with the `FASTLANE_*_MODEL` variables the scripts list.
 - Every seat runs at effort high, never xhigh, grok included.
@@ -282,7 +283,7 @@ P0/P1 keeps its own priority with `review-preexisting` for older defects or `rev
   and `use_tool` also removes MCP discovery and invocation, which survive the built-in allowlist.
   Its probe and reader each run in their own 8G unit with no swap and stdin from `/dev/null`.
 - Readers must not run commands. The review brief gives them the diff file, and they read the repo for context.
-- Reader no-read list: credential files and model config folders `~/.claude`, `~/.codex`, `~/.grok`.
+- Reader no-read list: credential files and model config folders `~/.claude`, `~/.codex`, `~/.grok`, `~/.gemini`.
 
 **Waits.** `wait.sh DEADLINE_SECONDS DIR...` waits until every DIR has an exit file. The deadline is in
 seconds, capped at 3300. Pass `3300` for 55 minutes. Its exit codes are:

@@ -59,7 +59,7 @@ finished": an implementer reads that as leave to stop before trying.
 Read-only review. Don't edit files, commit, or run builds or tests. Check the handoff for the
 commands and exits of checks the task requires. Respect the task's suspension of other tests.
 Do not read credential files or model config folders
-`~/.claude`, `~/.codex`, `~/.grok`.
+`~/.claude`, `~/.codex`, `~/.grok`, `~/.gemini`.
 
 ## What the change is for
 <the task's goal and the live failure it fixes, in plain words; link iN/task.md>
